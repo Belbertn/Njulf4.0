@@ -609,7 +609,28 @@ namespace Njulf.Rendering.Data
         BlurredAo = 2,
         FinalAo = 3,
         ReconstructedNormal = 4,
-        LinearDepth = 5
+        LinearDepth = 5,
+        RawGtaoVisibility = 6,
+        GtaoHorizonContribution = 7,
+        RawGtaoBentNormal = 8,
+        FilteredGtaoBentNormal = 9,
+        GtaoTemporalConfidence = 10,
+        GtaoHistoryRejection = 11,
+        FinalGtao = 12
+    }
+
+    public enum GtaoQualityPreset : uint
+    {
+        Low = 0,
+        Balanced = 1,
+        High = 2
+    }
+
+    public enum AmbientOcclusionBentNormalMode : uint
+    {
+        Off = 0,
+        EnvironmentOnly = 1,
+        EnvironmentAndDdgi = 2
     }
 
     public enum AmbientOcclusionForwardSamplingMode : uint
@@ -746,7 +767,14 @@ namespace Njulf.Rendering.Data
         C5HistoryRejectionReason = 64,
         C5TraceDistanceHitValidity = 65,
         C5TileActivity = 66,
-        C5B3Footprint = 67
+        C5B3Footprint = 67,
+        /// <summary>
+        /// Surface-aware receiver-cache admission. Green is accepted; magenta
+        /// is invalid/non-finite; red is depth/position; orange is plane;
+        /// blue is normal; yellow is insufficient support. Every non-green
+        /// fragment executes the exact fallback.
+        /// </summary>
+        DdgiReceiverCacheRejection = 68
     }
 
     public enum AntiAliasingMode : uint
@@ -1491,6 +1519,11 @@ namespace Njulf.Rendering.Data
         public bool ReceiveGlobalIllumination { get; set; } = true;
         public bool SampleReflections { get; set; } = true;
         public bool SortPerMeshlet { get; set; } = true;
+        /// <summary>
+        /// Qualification candidate for bounded transparent material runs. The
+        /// universal one-list draw remains the default and rollback path.
+        /// </summary>
+        public bool PipelinePartitioningEnabled { get; set; }
         public ThickTransmissionMode ThickTransmissionMode { get; set; } =
             ThickTransmissionMode.RayQuery;
         public DispersionMode DispersionMode { get; set; } = DispersionMode.Off;
@@ -2246,6 +2279,7 @@ namespace Njulf.Rendering.Data
 
     public sealed class AmbientOcclusionSettings
     {
+        private AmbientOcclusionMode _mode = AmbientOcclusionMode.Ssao;
         private float _resolutionScale = 0.5f;
         private float _radius = 0.75f;
         private float _intensity = 1.0f;
@@ -2255,9 +2289,68 @@ namespace Njulf.Rendering.Data
         private int _blurRadius = 2;
         private float _depthSigma = 2.0f;
         private float _normalSigma = 32.0f;
+        private GtaoQualityPreset _gtaoQualityPreset =
+            GtaoQualityPreset.Balanced;
+        private float _gtaoThickness = 0.15f;
+        private float _gtaoFalloff = 1.0f;
+        private AmbientOcclusionBentNormalMode _bentNormalMode =
+            AmbientOcclusionBentNormalMode.Off;
 
         public bool Enabled { get; set; } = true;
-        public AmbientOcclusionMode Mode { get; set; } = AmbientOcclusionMode.Ssao;
+        public AmbientOcclusionMode Mode
+        {
+            get => _mode;
+            set => _mode = Enum.IsDefined(value)
+                ? value
+                : AmbientOcclusionMode.Ssao;
+        }
+
+        public GtaoQualityPreset GtaoQualityPreset
+        {
+            get => _gtaoQualityPreset;
+            set => _gtaoQualityPreset = Enum.IsDefined(value)
+                ? value
+                : GtaoQualityPreset.Balanced;
+        }
+
+        public float GtaoThickness
+        {
+            get => _gtaoThickness;
+            set => _gtaoThickness = Clamp(value, 0.01f, 1.0f);
+        }
+
+        public float GtaoFalloff
+        {
+            get => _gtaoFalloff;
+            set => _gtaoFalloff = Clamp(value, 0.1f, 4.0f);
+        }
+
+        public AmbientOcclusionBentNormalMode BentNormalMode
+        {
+            get => _bentNormalMode;
+            set => _bentNormalMode = Enum.IsDefined(value)
+                ? value
+                : AmbientOcclusionBentNormalMode.Off;
+        }
+
+        public AmbientOcclusionBentNormalMode EffectiveBentNormalMode =>
+            Enabled && Mode == AmbientOcclusionMode.Gtao
+                ? BentNormalMode
+                : AmbientOcclusionBentNormalMode.Off;
+
+        public int EffectiveGtaoDirectionCount => GtaoQualityPreset switch
+        {
+            GtaoQualityPreset.Low => 2,
+            GtaoQualityPreset.High => 6,
+            _ => 4
+        };
+
+        public int EffectiveGtaoStepCount => GtaoQualityPreset switch
+        {
+            GtaoQualityPreset.Low => 4,
+            GtaoQualityPreset.High => 8,
+            _ => 6
+        };
 
         public float ResolutionScale
         {
@@ -2411,6 +2504,9 @@ namespace Njulf.Rendering.Data
         public const SimpleDdgiNearFieldResidualQualityPreset
             DefaultSimpleDdgiNearFieldResidualQualityPreset =
                 SimpleDdgiNearFieldResidualQualityPreset.Balanced;
+        public const SimpleDdgiReceiverCacheMode
+            DefaultSimpleDdgiReceiverCacheMode =
+                SimpleDdgiReceiverCacheMode.Exact;
 
         private float _indirectIntensity = 1.0f;
         private float _environmentFallbackIntensity = 1.0f;
@@ -2577,6 +2673,8 @@ namespace Njulf.Rendering.Data
         private GiCausticMode _giCausticMode = DefaultGiCausticMode;
         private SimpleDdgiNearFieldResidualMode _simpleDdgiNearFieldResidualMode =
             DefaultSimpleDdgiNearFieldResidualMode;
+        private SimpleDdgiReceiverCacheMode _simpleDdgiReceiverCacheMode =
+            DefaultSimpleDdgiReceiverCacheMode;
         private SimpleDdgiNearFieldResidualQualityPreset
             _simpleDdgiNearFieldResidualQualityPreset =
                 DefaultSimpleDdgiNearFieldResidualQualityPreset;
@@ -2942,6 +3040,17 @@ namespace Njulf.Rendering.Data
         /// and the environment owns the missing energy.
         /// </summary>
         public bool SimpleDdgiStructuredGatherEnabled { get; set; } = true;
+        /// <summary>
+        /// Selects the exact receiver oracle or a cache mode. Surface-aware
+        /// spatial caching remains an explicit qualification candidate until
+        /// its correctness and total-cost promotion gates pass. Runtime
+        /// capability/resource failures always resolve back to exact.
+        /// </summary>
+        public SimpleDdgiReceiverCacheMode SimpleDdgiReceiverCacheMode
+        {
+            get => _simpleDdgiReceiverCacheMode;
+            set => _simpleDdgiReceiverCacheMode = value.Sanitize();
+        }
         public SimpleDdgiLayoutAdmissionMode SimpleDdgiLayoutAdmissionMode { get; set; } = SimpleDdgiLayoutAdmissionMode.Degrade;
         /// <summary>
         /// Uses SH projection for irradiance while retaining the reference
@@ -3107,6 +3216,14 @@ namespace Njulf.Rendering.Data
         /// cannot exceed the limits carried by its admitted evidence entry.
         /// </summary>
         public bool SimpleDdgiNearFieldResidualAdvancedOverridesEnabled { get; set; }
+
+        /// <summary>
+        /// Enables the bounded C5 tile scheduler/checkerboard path. Explicit
+        /// HiZAdaptive presets may use it directly; AutoQualified still requires
+        /// authenticated candidate evidence.
+        /// </summary>
+        public bool SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled
+            { get; set; }
 
         public float SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters
         {
@@ -4268,13 +4385,10 @@ namespace Njulf.Rendering.Data
             (ActiveContentDependentFeatures & DdgiContentFeature.ManyLightSampling) != 0;
 
         /// <summary>
-        /// Resolves the skinned representation used by DDGI. Complete-field
-        /// tail certification requires a frozen transport operator, so a live
-        /// current-pose BLAS cannot participate while certified transport is
-        /// enabled. In that configuration the bind-pose proxy remains in the
-        /// ray scene instead of continually invalidating the certified field.
-        /// Current-pose transport remains available as an explicit
-        /// non-certified diagnostics/conformance mode.
+        /// Resolves the skinned representation used by DDGI. During the short
+        /// frozen tail audit, stable-identity pose invalidations are coalesced
+        /// and applied immediately after the immutable cached solve completes;
+        /// the live BLAS therefore does not weaken the certificate's operator.
         /// </summary>
         public DdgiSkinnedGeometryMode EffectiveDdgiSkinnedGeometryMode
         {
@@ -4284,14 +4398,6 @@ namespace Njulf.Rendering.Data
                         DdgiContentFeature.CurrentPoseGeometry) == 0)
                 {
                     return DdgiSkinnedGeometryMode.Excluded;
-                }
-
-                if (DdgiSkinnedGeometryMode ==
-                        DdgiSkinnedGeometryMode.CurrentPose &&
-                    SimpleDdgiTransportV2Enabled &&
-                    SimpleDdgiTransportTailCertificationEnabled)
-                {
-                    return DdgiSkinnedGeometryMode.ConservativeProxy;
                 }
 
                 return DdgiSkinnedGeometryMode;
@@ -5295,7 +5401,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 20;
+        public const int SerializationVersion = 22;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5353,6 +5459,12 @@ namespace Njulf.Rendering.Data
         public bool UseSecondaryCommandBuffers { get; set; } = true;
         public bool UseCameraDependentCpuScenePayload { get; set; } = true;
         public bool UseCpuMeshletFrustumCulling { get; set; } = true;
+        /// <summary>
+        /// Enables conservative one-sided solid meshlet backface rejection.
+        /// Invalid or legacy cone records remain visible and therefore fail
+        /// closed without disabling the preset-selected path.
+        /// </summary>
+        public bool MeshletNormalConeCullingEnabled { get; set; }
 
         public RenderSettings()
         {
@@ -5429,6 +5541,46 @@ namespace Njulf.Rendering.Data
                     ? GlobalIlluminationSettings
                         .DefaultSimpleDdgiNearFieldResidualMode
                     : SimpleDdgiNearFieldResidualMode.Off;
+
+            // Candidate promotion is tiered so each production feature is on
+            // in at least one compatible profile.  Bent-normal irradiance is
+            // normal-dependent and therefore remains paired with exact DDGI;
+            // DdgiHigh retains the temporal surface-aware cache as its
+            // performance-oriented receiver path.
+            AmbientOcclusion.Mode = preset == RenderQualityPreset.Low
+                ? AmbientOcclusionMode.Disabled
+                : AmbientOcclusionMode.Gtao;
+            AmbientOcclusion.BentNormalMode = preset switch
+            {
+                RenderQualityPreset.High =>
+                    AmbientOcclusionBentNormalMode.EnvironmentOnly,
+                RenderQualityPreset.Ultra =>
+                    AmbientOcclusionBentNormalMode.EnvironmentAndDdgi,
+                _ => AmbientOcclusionBentNormalMode.Off
+            };
+            GlobalIllumination.SimpleDdgiReceiverCacheMode = preset switch
+            {
+                RenderQualityPreset.Medium or RenderQualityPreset.DdgiHigh =>
+                    SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                _ => SimpleDdgiReceiverCacheMode.Exact
+            };
+            GlobalIllumination
+                .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled =
+                preset is RenderQualityPreset.High or
+                    RenderQualityPreset.DdgiHigh or
+                    RenderQualityPreset.Ultra;
+            MeshletNormalConeCullingEnabled = true;
+            Transparency.PipelinePartitioningEnabled = true;
+
+            AmbientOcclusion.GtaoQualityPreset = preset switch
+            {
+                RenderQualityPreset.Low => GtaoQualityPreset.Low,
+                RenderQualityPreset.Medium => GtaoQualityPreset.Low,
+                RenderQualityPreset.High => GtaoQualityPreset.Balanced,
+                RenderQualityPreset.DdgiHigh => GtaoQualityPreset.High,
+                RenderQualityPreset.Ultra => GtaoQualityPreset.High,
+                _ => GtaoQualityPreset.Balanced
+            };
 
             switch (preset)
             {
@@ -5974,6 +6126,11 @@ namespace Njulf.Rendering.Data
             // persists the bounded transparent scene-reflection ray budget.
             // Version 20 independently bounds transparent SSR Hi-Z samples;
             // missing values inherit the selected preset's safe budget.
+            // Version 21 persists the distinct GTAO preset and its safe,
+            // default-off bent-normal lighting gate. Version 22 promotes the
+            // preset-owned GTAO/bent-normal, receiver-cache, C5 local scheduling,
+            // meshlet cone, and transparency partition defaults while retaining
+            // explicit current-schema overrides.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -5984,6 +6141,7 @@ namespace Njulf.Rendering.Data
             public AntiAliasingMode AntiAliasingMode { get; init; } = AntiAliasingMode.SmaaMedium;
             public bool BloomEnabled { get; init; } = true;
             public bool AmbientOcclusionEnabled { get; init; } = true;
+            public AmbientOcclusionFile? AmbientOcclusion { get; init; }
             public EnvironmentFile? Environment { get; init; }
             public GlobalIlluminationFile? GlobalIllumination { get; init; }
             public bool FogEnabled { get; init; }
@@ -5994,6 +6152,7 @@ namespace Njulf.Rendering.Data
             [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
             public bool? ShadowsEnabled { get; init; }
             public bool ParticlesEnabled { get; init; } = true;
+            public bool? MeshletNormalConeCullingEnabled { get; init; }
             public TransparencySettingsFile? Transparency { get; init; }
             public bool? TransparentReceiveGlobalIllumination { get; init; }
             public bool? DecalReceiveGlobalIllumination { get; init; }
@@ -6019,6 +6178,8 @@ namespace Njulf.Rendering.Data
                     AntiAliasingMode = settings.AntiAliasing.Mode,
                     BloomEnabled = settings.Bloom.Enabled,
                     AmbientOcclusionEnabled = settings.AmbientOcclusion.Enabled,
+                    AmbientOcclusion = AmbientOcclusionFile.FromSettings(
+                        settings.AmbientOcclusion),
                     Environment = EnvironmentFile.FromSettings(settings.Environment),
                     GlobalIllumination = GlobalIlluminationFile.FromSettings(settings.GlobalIllumination),
                     FogEnabled = settings.Fog.Enabled,
@@ -6027,6 +6188,8 @@ namespace Njulf.Rendering.Data
                     Reflections = ReflectionSettingsFile.FromSettings(settings.Reflections),
                     Shadows = ShadowSettingsFile.FromSettings(settings.Shadows),
                     ParticlesEnabled = settings.Particles.Enabled,
+                    MeshletNormalConeCullingEnabled =
+                        settings.MeshletNormalConeCullingEnabled,
                     Transparency = TransparencySettingsFile.FromSettings(
                         settings.Transparency),
                     TransparentReceiveGlobalIllumination =
@@ -6053,7 +6216,18 @@ namespace Njulf.Rendering.Data
                 settings.AutoExposure.Enabled = AutoExposureEnabled;
                 settings.AntiAliasing.Mode = AntiAliasingMode;
                 settings.Bloom.Enabled = BloomEnabled;
-                settings.AmbientOcclusion.Enabled = AmbientOcclusionEnabled;
+                if (Version.GetValueOrDefault() >= 21 &&
+                    AmbientOcclusion != null)
+                {
+                    AmbientOcclusion.ApplyTo(
+                        settings.AmbientOcclusion,
+                        Version.GetValueOrDefault());
+                }
+                else
+                {
+                    settings.AmbientOcclusion.Enabled =
+                        AmbientOcclusionEnabled;
+                }
                 Environment?.ApplyTo(settings.Environment);
                 GlobalIllumination?.ApplyTo(
                     settings.GlobalIllumination,
@@ -6098,9 +6272,17 @@ namespace Njulf.Rendering.Data
                     settings.Shadows.DirectionalSoftAngularDiameterScale = 1f;
                 }
                 settings.Particles.Enabled = ParticlesEnabled;
+                if (Version.GetValueOrDefault() >= 22 &&
+                    MeshletNormalConeCullingEnabled.HasValue)
+                {
+                    settings.MeshletNormalConeCullingEnabled =
+                        MeshletNormalConeCullingEnabled.Value;
+                }
                 if (Version.GetValueOrDefault() >= 18 && Transparency != null)
                 {
-                    Transparency.ApplyTo(settings.Transparency);
+                    Transparency.ApplyTo(
+                        settings.Transparency,
+                        Version.GetValueOrDefault());
                 }
                 else if (TransparentReceiveGlobalIllumination.HasValue)
                 {
@@ -6123,6 +6305,89 @@ namespace Njulf.Rendering.Data
                 AsyncCompute.ApplyTo(settings.AsyncCompute, missingModeMeansDisabled: !Version.HasValue || Version.Value < 3);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
                 settings.Diagnostics.DdgiForwardEstimateCountersEnabled = DdgiForwardEstimateCountersEnabled;
+            }
+        }
+
+        private sealed record AmbientOcclusionFile
+        {
+            public bool Enabled { get; init; } = true;
+            public AmbientOcclusionMode Mode { get; init; } =
+                AmbientOcclusionMode.Ssao;
+            public float ResolutionScale { get; init; } = 0.5f;
+            public float Radius { get; init; } = 0.75f;
+            public float Intensity { get; init; } = 1.0f;
+            public float Bias { get; init; } = 0.03f;
+            public float Power { get; init; } = 1.2f;
+            public int SampleCount { get; init; } = 16;
+            public int BlurRadius { get; init; } = 2;
+            public float DepthSigma { get; init; } = 2.0f;
+            public float NormalSigma { get; init; } = 32.0f;
+            public bool UseSceneNormals { get; init; }
+            public AmbientOcclusionDebugView DebugView { get; init; }
+            public GtaoQualityPreset GtaoQualityPreset { get; init; } =
+                GtaoQualityPreset.Balanced;
+            public float GtaoThickness { get; init; } = 0.15f;
+            public float GtaoFalloff { get; init; } = 1.0f;
+            public AmbientOcclusionBentNormalMode BentNormalMode { get; init; }
+
+            public static AmbientOcclusionFile FromSettings(
+                AmbientOcclusionSettings settings) => new()
+            {
+                Enabled = settings.Enabled,
+                Mode = settings.Mode,
+                ResolutionScale = settings.ResolutionScale,
+                Radius = settings.Radius,
+                Intensity = settings.Intensity,
+                Bias = settings.Bias,
+                Power = settings.Power,
+                SampleCount = settings.SampleCount,
+                BlurRadius = settings.BlurRadius,
+                DepthSigma = settings.DepthSigma,
+                NormalSigma = settings.NormalSigma,
+                UseSceneNormals = settings.UseSceneNormals,
+                DebugView = settings.DebugView,
+                GtaoQualityPreset = settings.GtaoQualityPreset,
+                GtaoThickness = settings.GtaoThickness,
+                GtaoFalloff = settings.GtaoFalloff,
+                BentNormalMode = settings.BentNormalMode
+            };
+
+            public void ApplyTo(
+                AmbientOcclusionSettings settings,
+                int sourceVersion)
+            {
+                settings.Enabled = Enabled;
+                settings.ResolutionScale = ResolutionScale;
+                settings.Radius = Radius;
+                settings.Intensity = Intensity;
+                settings.Bias = Bias;
+                settings.Power = Power;
+                settings.SampleCount = SampleCount;
+                settings.BlurRadius = BlurRadius;
+                settings.DepthSigma = DepthSigma;
+                settings.NormalSigma = NormalSigma;
+                settings.UseSceneNormals = UseSceneNormals;
+                settings.DebugView = Enum.IsDefined(DebugView)
+                    ? DebugView
+                    : AmbientOcclusionDebugView.None;
+                settings.GtaoThickness = GtaoThickness;
+                settings.GtaoFalloff = GtaoFalloff;
+                // Schema 21 wrote SSAO/Balanced/Off even when those values were
+                // only the former conservative defaults. Let the selected preset
+                // own those fields during promotion. A non-SSAO request remains
+                // an intentional legacy override.
+                if (sourceVersion >= 22 || Mode != AmbientOcclusionMode.Ssao)
+                {
+                    settings.Mode = Enum.IsDefined(Mode)
+                        ? Mode
+                        : AmbientOcclusionMode.Ssao;
+                    settings.GtaoQualityPreset = Enum.IsDefined(GtaoQualityPreset)
+                        ? GtaoQualityPreset
+                        : GtaoQualityPreset.Balanced;
+                    settings.BentNormalMode = Enum.IsDefined(BentNormalMode)
+                        ? BentNormalMode
+                        : AmbientOcclusionBentNormalMode.Off;
+                }
             }
         }
 
@@ -6362,6 +6627,7 @@ namespace Njulf.Rendering.Data
             public int? SceneReflectionRayTaskBudget { get; init; }
             public int? SceneReflectionSsrSampleBudget { get; init; }
             public bool SortPerMeshlet { get; init; } = true;
+            public bool? PipelinePartitioningEnabled { get; init; }
             public int MaxTransparentMeshlets { get; init; } = 262_144;
             public float AlphaDiscardThreshold { get; init; } = 0.001f;
             public ThickTransmissionMode ThickTransmissionMode { get; init; } =
@@ -6396,6 +6662,8 @@ namespace Njulf.Rendering.Data
                 SceneReflectionSsrSampleBudget =
                     settings.SceneReflectionSsrSampleBudget,
                 SortPerMeshlet = settings.SortPerMeshlet,
+                PipelinePartitioningEnabled =
+                    settings.PipelinePartitioningEnabled,
                 MaxTransparentMeshlets = settings.MaxTransparentMeshlets,
                 AlphaDiscardThreshold = settings.AlphaDiscardThreshold,
                 ThickTransmissionMode = settings.ThickTransmissionMode,
@@ -6414,7 +6682,9 @@ namespace Njulf.Rendering.Data
                     settings.ThickTransmissionMemoryBudgetBytes
             };
 
-            public void ApplyTo(TransparencySettings settings)
+            public void ApplyTo(
+                TransparencySettings settings,
+                int sourceVersion)
             {
                 settings.Enabled = Enabled;
                 settings.Mode = Enum.IsDefined(Mode)
@@ -6435,6 +6705,12 @@ namespace Njulf.Rendering.Data
                         SceneReflectionSsrSampleBudget.Value;
                 }
                 settings.SortPerMeshlet = SortPerMeshlet;
+                if (PipelinePartitioningEnabled == true ||
+                    sourceVersion >= 22 && PipelinePartitioningEnabled.HasValue)
+                {
+                    settings.PipelinePartitioningEnabled =
+                        PipelinePartitioningEnabled.Value;
+                }
                 settings.MaxTransparentMeshlets = MaxTransparentMeshlets;
                 settings.AlphaDiscardThreshold = AlphaDiscardThreshold;
                 settings.ThickTransmissionMode =
@@ -6747,6 +7023,11 @@ namespace Njulf.Rendering.Data
             public bool SimpleDdgiThinSurfaceTransmissionEnabled { get; init; }
             public bool SimpleDdgiAutomaticProbeDensityEnabled { get; init; } = true;
             public bool SimpleDdgiStructuredGatherEnabled { get; init; } = true;
+            public SimpleDdgiReceiverCacheMode? SimpleDdgiReceiverCacheMode
+            {
+                get;
+                init;
+            }
             public SimpleDdgiLayoutAdmissionMode SimpleDdgiLayoutAdmissionMode { get; init; } = SimpleDdgiLayoutAdmissionMode.Degrade;
             public bool SimpleDdgiReducedBlendEnabled { get; init; }
             // Nullable representation controls preserve the selected quality
@@ -6777,6 +7058,8 @@ namespace Njulf.Rendering.Data
             public SimpleDdgiNearFieldResidualQualityPreset?
                 SimpleDdgiNearFieldResidualQualityPreset { get; init; }
             public bool? SimpleDdgiNearFieldResidualAdvancedOverridesEnabled { get; init; }
+            public bool? SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled
+                { get; init; }
             public float? SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters { get; init; }
             public int? SimpleDdgiNearFieldResidualRaysPerPixel { get; init; }
             public int? SimpleDdgiNearFieldResidualFilterIterationCount { get; init; }
@@ -6995,6 +7278,8 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiThinSurfaceTransmissionEnabled = settings.SimpleDdgiThinSurfaceTransmissionEnabled,
                     SimpleDdgiAutomaticProbeDensityEnabled = settings.SimpleDdgiAutomaticProbeDensityEnabled,
                     SimpleDdgiStructuredGatherEnabled = settings.SimpleDdgiStructuredGatherEnabled,
+                    SimpleDdgiReceiverCacheMode =
+                        settings.SimpleDdgiReceiverCacheMode,
                     SimpleDdgiLayoutAdmissionMode = settings.SimpleDdgiLayoutAdmissionMode,
                     SimpleDdgiReducedBlendEnabled = settings.SimpleDdgiReducedBlendEnabled,
                     SimpleDdgiSampledAtlasEnabled = settings.SimpleDdgiSampledAtlasEnabled,
@@ -7031,6 +7316,8 @@ namespace Njulf.Rendering.Data
                         settings.SimpleDdgiNearFieldResidualQualityPreset,
                     SimpleDdgiNearFieldResidualAdvancedOverridesEnabled =
                         settings.SimpleDdgiNearFieldResidualAdvancedOverridesEnabled,
+                    SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled =
+                        settings.SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled,
                     SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters =
                         settings.SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters,
                     SimpleDdgiNearFieldResidualRaysPerPixel =
@@ -7287,6 +7574,14 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiThinSurfaceTransmissionEnabled = SimpleDdgiThinSurfaceTransmissionEnabled;
                 settings.SimpleDdgiAutomaticProbeDensityEnabled = SimpleDdgiAutomaticProbeDensityEnabled;
                 settings.SimpleDdgiStructuredGatherEnabled = SimpleDdgiStructuredGatherEnabled;
+                if (SimpleDdgiReceiverCacheMode.HasValue &&
+                    (sourceVersion >= 22 ||
+                     SimpleDdgiReceiverCacheMode.Value.Sanitize() !=
+                     global::Njulf.Rendering.Data.SimpleDdgiReceiverCacheMode.Exact))
+                {
+                    settings.SimpleDdgiReceiverCacheMode =
+                        SimpleDdgiReceiverCacheMode.Value.Sanitize();
+                }
                 settings.SimpleDdgiLayoutAdmissionMode = SimpleDdgiLayoutAdmissionMode;
                 settings.SimpleDdgiReducedBlendEnabled = SimpleDdgiReducedBlendEnabled;
                 if (SimpleDdgiSampledAtlasEnabled.HasValue)
@@ -7388,6 +7683,13 @@ namespace Njulf.Rendering.Data
                 {
                     settings.SimpleDdgiNearFieldResidualAdvancedOverridesEnabled =
                         SimpleDdgiNearFieldResidualAdvancedOverridesEnabled.Value;
+                }
+                if (SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled.HasValue &&
+                    (sourceVersion >= 22 ||
+                     SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled.Value))
+                {
+                    settings.SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled =
+                        SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled.Value;
                 }
                 if (SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters.HasValue)
                 {

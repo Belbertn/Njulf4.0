@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
 
@@ -10,9 +11,10 @@ namespace Njulf.Rendering.Pipeline;
 
 /// <summary>
 /// Records one bounded cache-only DDGI transaction immediately before forward
-/// shading. It never dispatches a ray-query shader, never consumes the normal
-/// frame budget, and leaves source-cache ownership pending for the ordinary
-/// post-forward transaction.
+/// shading. With complete timing and contraction evidence it may execute up to
+/// four private cached sweeps. It never dispatches a ray-query shader, never
+/// consumes the normal frame budget, and leaves source-cache ownership pending
+/// for the ordinary post-forward transaction.
 /// </summary>
 public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
 {
@@ -24,6 +26,7 @@ public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
     private readonly SimpleDdgiTracePass _tracePass;
     private readonly SimpleDdgiRelocateClassifyPass _relocateClassifyPass;
     private readonly SimpleDdgiDirectionalRadiancePass _directionalRadiancePass;
+    private readonly SimpleDdgiAcceleratedSolvePass _acceleratedSolvePass;
     private readonly SimpleDdgiTransportPass _transportPass;
     private readonly SimpleDdgiBlendPass _blendPass;
     private readonly SimpleDdgiPublishPass _publishPass;
@@ -39,6 +42,7 @@ public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
         SimpleDdgiTracePass tracePass,
         SimpleDdgiRelocateClassifyPass relocateClassifyPass,
         SimpleDdgiDirectionalRadiancePass directionalRadiancePass,
+        SimpleDdgiAcceleratedSolvePass acceleratedSolvePass,
         SimpleDdgiTransportPass transportPass,
         SimpleDdgiBlendPass blendPass,
         SimpleDdgiPublishPass publishPass,
@@ -55,6 +59,8 @@ public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
             throw new ArgumentNullException(nameof(relocateClassifyPass));
         _directionalRadiancePass = directionalRadiancePass ??
             throw new ArgumentNullException(nameof(directionalRadiancePass));
+        _acceleratedSolvePass = acceleratedSolvePass ??
+            throw new ArgumentNullException(nameof(acceleratedSolvePass));
         _transportPass = transportPass ??
             throw new ArgumentNullException(nameof(transportPass));
         _blendPass = blendPass ?? throw new ArgumentNullException(nameof(blendPass));
@@ -115,6 +121,24 @@ public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
         if (budget == 0u)
             return;
 
+        int sweepCount = ResolvePrivateSweepCount(sceneData);
+        uint compactScratchBaseWord = layout.CandidateInput.OffsetWords;
+        ulong compactScratchBytes = checked(
+            layout.UpdateRecords.Offset - layout.CandidateInput.Offset);
+        const ulong compactIrradianceBytesPerProbe =
+            SimpleDdgiVolumeManager.IrradianceTexelsPerProbe *
+            SimpleDdgiVolumeManager.IrradianceTexelsPerProbe * 2UL *
+            sizeof(uint);
+        uint compactScratchProbeCapacity = checked((uint)Math.Min(
+            compactScratchBytes / compactIrradianceBytesPerProbe,
+            uint.MaxValue));
+        if (sweepCount > 1)
+        {
+            budget = Math.Min(budget, compactScratchProbeCapacity);
+            if (budget == 0u)
+                sweepCount = 1;
+        }
+
         Silk.NET.Vulkan.Buffer arena =
             _volumeManager.GpuScheduler.GetArenaVkBuffer();
         ulong controlOffset = checked(
@@ -141,8 +165,18 @@ public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
             _schedulePass.Execute(cmd, frameIndex, sceneData);
             _tracePass.ExecuteCacheReuseOnly(cmd, sceneData);
             _relocateClassifyPass.Execute(cmd, frameIndex, sceneData);
-            _transportPass.Execute(cmd, frameIndex, sceneData);
-            _blendPass.Execute(cmd, frameIndex, sceneData);
+            bool privateMultiSweepExecuted = sweepCount > 1 &&
+                _acceleratedSolvePass.TryExecuteUrgentPrivateSolve(
+                    cmd,
+                    sceneData,
+                    sweepCount,
+                    compactScratchBaseWord,
+                    budget);
+            if (!privateMultiSweepExecuted)
+            {
+                _transportPass.Execute(cmd, frameIndex, sceneData);
+                _blendPass.Execute(cmd, frameIndex, sceneData);
+            }
             _directionalRadiancePass.Execute(cmd, frameIndex, sceneData);
 
             // Canonical publish is a producer-completion gate in resident mode.
@@ -191,6 +225,35 @@ public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
     public override void Cleanup()
     {
         // Child passes retain ownership and are cleaned up by the render graph.
+    }
+
+    private int ResolvePrivateSweepCount(SceneRenderingData sceneData)
+    {
+        SimpleDdgiTransportTailSummary summary =
+            _volumeManager.TransportTailSummary;
+        if (!summary.IsComplete || !summary.HasFiniteEvidence)
+            return 1;
+
+        long previousFrameGpuMicroseconds =
+            RendererDiagnosticsAssembler.CalculateGpuFrameMicroseconds(
+                sceneData);
+        long targetFrameGpuMicroseconds = checked((long)Math.Round(
+            _settings.DynamicResolution.TargetFrameMilliseconds * 1000.0f));
+        long estimatedAdditionalSweepMicroseconds =
+            sceneData.GpuSimpleDdgiUrgentRelightMicroseconds > 0L
+                ? sceneData.GpuSimpleDdgiUrgentRelightMicroseconds
+                : checked(
+                    sceneData.GpuSimpleDdgiTransportMicroseconds +
+                    sceneData.GpuSimpleDdgiBlendMicroseconds);
+
+        return SimpleDdgiUrgentRelightPolicy.ResolveSweepCount(
+            _volumeManager.TransportAcceleratedSweepCount,
+            summary.FixedPointDefect,
+            Math.Max(summary.Tolerance, 0.0001f),
+            summary.CertifiedContractionBound,
+            previousFrameGpuMicroseconds,
+            targetFrameGpuMicroseconds,
+            estimatedAdditionalSweepMicroseconds);
     }
 
     private void InsertArenaBarrier(

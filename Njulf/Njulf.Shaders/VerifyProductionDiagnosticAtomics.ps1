@@ -105,9 +105,30 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_opaque_simple_full_input_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_weighted_oit.frag.spv' = 26
-    # The depth-backed transparent cache-only variant does not execute the
-    # ordinary receiver gather, but retains the same sparse source telemetry.
-    'forward_transparent_ddgi_cache_required.frag.spv' = 12
+    # Surface-aware cache programs retain the canonical exact gather behind a
+    # fail-closed rejection branch. The 14 pinned sparse receiver operations
+    # are therefore present in SPIR-V but execute only for rejected fragments.
+    'forward_opaque_ddgi_cache_required.frag.spv' = 14
+    'forward_opaque_simple_ddgi_cache_required.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_cache_required.frag.spv' = 14
+    'forward_opaque_ddgi_near_field_direct_source_cache_required.frag.spv' = 14
+    'forward_opaque_simple_ddgi_near_field_direct_source_cache_required.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag.spv' = 14
+    'forward_opaque_ddgi_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 14
+    # The transparent compatibility artifact retains its 12 reflection-source
+    # operations plus the same 14 exact rejection-path receiver operations.
+    'forward_transparent_ddgi_cache_required.frag.spv' = 26
     # The directional-only ThinGlass program touches only the four continuous
     # tetrahedral owners. Its bounded atomics are the sparse receiver-demand
     # and contribution handshake; diffuse visibility/recovery sites are absent.
@@ -119,6 +140,22 @@ $algorithmicAtomicCounts = @{
     # appear once in the module rather than once per inlined call path.
     'forward_transparent_ray.frag.spv' = 10
     'forward_weighted_oit_ray.frag.spv' = 10
+    # Partitioned transparent programs preserve the same functional sparse
+    # DDGI/reflection accounting as their universal siblings.  The ray-query
+    # programs keep only the outlined optical-task/hit-gather operations.
+    'forward_transparent_ordinary.frag.spv' = 26
+    'forward_transparent_thick.frag.spv' = 26
+    'forward_transparent_decal_cache_required.frag.spv' = 26
+    'forward_weighted_oit_ordinary.frag.spv' = 26
+    'forward_weighted_oit_thick.frag.spv' = 26
+    'forward_weighted_oit_decal.frag.spv' = 26
+    'forward_weighted_oit_decal_cache_required.frag.spv' = 26
+    'forward_transparent_ordinary_ray.frag.spv' = 10
+    'forward_transparent_thick_ray.frag.spv' = 10
+    'forward_transparent_decal_ray.frag.spv' = 10
+    'forward_weighted_oit_ordinary_ray.frag.spv' = 10
+    'forward_weighted_oit_thick_ray.frag.spv' = 10
+    'forward_weighted_oit_decal_ray.frag.spv' = 10
     'fog.comp.spv' = 14
     'particle.vert.spv' = 14
     'foliage_grass.mesh.spv' = 14
@@ -150,7 +187,23 @@ $algorithmicAtomicCounts = @{
     # The frame-local opaque cache executes the same three exact gather sites
     # while residency demand stays disabled.
     'ddgi_simple_receiver_cache.comp.spv' = 3
+    # Adaptive generation retains the same three gather sites.  Its classifier
+    # owns nine bounded work-list reservation and overflow operations.
+    'ddgi_simple_receiver_cache_adaptive.comp.spv' = 3
+    'ddgi_simple_receiver_cache_classify.comp.spv' = 9
+    # The frozen depth-only benchmark uses the identical gather producer but
+    # deliberately omits the surface sidecar. Its three functional gather
+    # atomics must remain equivalent to the pre-surface-cache implementation.
+    'ddgi_simple_receiver_cache_legacy.comp.spv' = 3
     'ddgi_simple_receiver_cache_b1.comp.spv' = 9
+
+    # Qualification counters exist only in explicitly selected diagnostic
+    # artifacts. Pin their complete static add count here so no diagnostic
+    # operation can leak into the zero-add production/cache-debug siblings.
+    'ddgi_simple_receiver_cache_resolve_diagnostics.comp.spv' = 6
+    'forward_opaque_ddgi_cache_required_diagnostics.frag.spv' = 18
+    'forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv' = 18
+    'forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv' = 18
 
     # Sparse page classification, reconciliation, fixed feedback reduction,
     # and generation-safe update lifecycle attribution.

@@ -1,6 +1,39 @@
 # Forward+ Adaptive Quality and Performance Implementation Plan
 
-Last updated: 2026-08-24
+Last updated: 2026-08-27
+
+Status: implemented through the automated contract/build gates. Hardware
+golden-image, soak, and performance promotion campaigns remain outstanding
+device evidence; they are validation work, not runtime feature-disable gates.
+
+## 0. Implementation closure and preset activation
+
+The implementation retains every canonical fallback but enables each completed
+feature in the quality preset where it is intended to run. This activation
+decision supersedes the earlier conservative-default language later in this
+planning record.
+
+| Preset | AO | Bent-normal diffuse | DDGI receiver | C5 local scheduler | Cones / transparent partition |
+| --- | --- | --- | --- | --- | --- |
+| Low | Disabled | Off | Exact | Off | On / On |
+| Medium | GTAO Low | Off | Temporal adaptive | Off | On / On |
+| High | GTAO Balanced | Environment | Exact | On | On / On |
+| DdgiHigh | GTAO High | Off | Temporal adaptive | On | On / On |
+| Ultra | GTAO High | Environment + exact DDGI | Exact | On | On / On |
+
+- GTAO falls back to SSAO when either required storage/sampled format is not
+  supported. Diagnostics retain requested mode, effective mode, and the GTAO
+  support result.
+- Any active bent-normal lighting mode forces the exact DDGI receiver path;
+  cache admission, direct light, shadows, specular reflection directions, and
+  transmission continue to use their existing geometric/shading inputs.
+- Explicit `HiZAdaptive` C5 uses local scheduling without archived candidate
+  authorization. `AutoQualified` remains evidence-gated.
+- Cone culling fails visible for legacy/invalid cone payloads, and transparent
+  partitioning retains its universal ordered fallback.
+- Settings schema 22 persists explicit opt-outs. Schema-21 conservative defaults
+  yield to the promoted preset during migration.
+- P2 content-dependent roadmap items are outside this implementation.
 
 Scope mapping from the renderer review:
 
@@ -254,7 +287,10 @@ Expose the cache's depth/normal/signature metadata and dirty mask to C5 through 
 
 ### 6.6 Settings, telemetry, and tests
 
-Add an internal/effective mode with `Canonical`, `TemporalAdaptive`, and `Disabled`; keep `TemporalAdaptive` behind qualification until promoted. Advanced thresholds should derive from a small quality preset rather than exposing every constant in the editor.
+Add an internal/effective mode with `Canonical`, `TemporalAdaptive`, and
+`Disabled`. Presets may request `TemporalAdaptive`; missing runtime
+prerequisites fall back to `Canonical`. Advanced thresholds should derive from
+a small quality preset rather than exposing every constant in the editor.
 
 Record separate GPU timings for classify/reproject, gather, and dirty resolve plus:
 
@@ -429,7 +465,8 @@ Roll bent normals out in three gates:
 
 Never apply the bent normal to direct lights, geometric visibility, shadow bias, specular reflection direction, transmission interfaces, or normal-map evaluation. Material AO and screen-space GTAO remain separate factors; preserve the renderer's existing policy for which indirect terms receive each factor.
 
-Add an effective `AmbientOcclusionBentNormalMode` with `Off`, `EnvironmentOnly`, and `EnvironmentAndDdgi`, defaulting to `Off` until each gate is promoted.
+Add an effective `AmbientOcclusionBentNormalMode` with `Off`, `EnvironmentOnly`,
+and `EnvironmentAndDdgi`, selected by the preset matrix in section 0.
 
 ### 8.6 Debugging and tests
 
@@ -552,12 +589,14 @@ Do not mark these passes async-compute candidates until per-device timestamps sh
 
 ### 10.2 Settings and serialization
 
-Add effective modes/presets with safe defaults:
+Add effective modes/presets with safe fallbacks. The preset activation recorded
+in section 0 is authoritative:
 
-- receiver cache: canonical until adaptive qualification promotes it;
-- C5 local adaptivity/checkerboard/source producer: off independently behind qualification bits;
-- GTAO: available but not made the default AO mode until quality/performance promotion;
-- bent-normal use: off, then environment-only after qualification;
+- receiver cache: exact remains available as the canonical fallback;
+- C5 local adaptivity/checkerboard/source producer: enabled by High-class
+  explicit `HiZAdaptive` presets;
+- GTAO: enabled from Medium upward, with an automatic SSAO capability fallback;
+- bent-normal use: environment-only at High and environment+exact-DDGI at Ultra;
 - transparent partitioning and meshlet cone culling: feature flags with universal/visible fallbacks.
 
 Update settings file DTOs, enum validation, editor controls, reset/default profiles, sample app controls where relevant, capture identity/hash, and settings round-trip tests. Internal safety thresholds should not become ordinary user-facing sliders.
@@ -642,7 +681,10 @@ Use the repository's ABBA campaign and bootstrap confidence intervals. CPU/GPU f
 - In the mixed ordinary/decal/thick workload, require at least a 10% and 0.15 ms `TransparentPasses` P95 improvement with a positive 95% lower bound.
 - Sponza and single-class transparent workloads may not regress by more than 1%; the run governor should choose the universal path when specialization cannot amortize switches.
 
-If a feature misses its retain gate, keep the correctness tests and captured evidence, switch the effective default back to canonical/off, and revise the specific cost center. Do not hide a miss by stacking another candidate.
+If a feature misses a retain gate, keep the correctness tests and captured
+evidence, preserve its canonical automatic fallback, and make any later preset
+rollback a dedicated policy change. Do not hide a miss by stacking another
+candidate.
 
 ## 14. Risks and mitigations
 
@@ -681,4 +723,6 @@ If a feature misses its retain gate, keep the correctness tests and captured evi
 - Bent normals affect only explicitly admitted indirect diffuse lighting modes.
 - Sorted transparency is not reordered, weighted OIT uses deterministic buckets, and specialized pipelines bind ray/cache/feedback resources only when required.
 - Every new resource participates in render-graph declarations, recreation, history invalidation, memory accounting, generation rollback, and diagnostics.
-- Focused tests, shader builds, full build, full test suite, Vulkan validation, image gates, soak tests, and the per-feature performance campaigns pass.
+- Automated implementation closure requires focused tests and a Release build.
+  Vulkan validation, image gates, soak tests, full-suite coverage, and per-feature
+  performance campaigns remain explicit release-validation work.

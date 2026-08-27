@@ -364,6 +364,7 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.GpuVolumetricFogNoiseMicroseconds}/{diagnostics.GpuVolumetricFogSourceCullMicroseconds}/{diagnostics.GpuVolumetricFogMediumMicroseconds}/{diagnostics.GpuVolumetricFogTransmittanceMicroseconds}/{diagnostics.GpuVolumetricFogDdgiBounceMicroseconds}/{diagnostics.GpuVolumetricFogLightingCacheMicroseconds}/{diagnostics.GpuVolumetricFogMultipleScatteringMicroseconds}/{diagnostics.GpuVolumetricFogTemporalMicroseconds}/{diagnostics.GpuVolumetricFogIntegrateMicroseconds}/{diagnostics.GpuVolumetricFogResolveMicroseconds}/{diagnostics.GpuVolumetricFogCompositeMicroseconds}us.");
         Console.WriteLine(
             $"Frame diagnostics AO: enabled={diagnostics.AmbientOcclusionEnabled}, mode={diagnostics.AmbientOcclusionMode}, " +
+            $"gtaoPreset={diagnostics.GtaoQualityPreset}, bentNormal={diagnostics.AmbientOcclusionBentNormalMode}, historyValid={diagnostics.GtaoHistoryValid}, " +
             $"size={diagnostics.AmbientOcclusionWidth}x{diagnostics.AmbientOcclusionHeight}, format={diagnostics.AmbientOcclusionFormat}, " +
             $"scale={diagnostics.AmbientOcclusionResolutionScale:F2}, radius={diagnostics.AmbientOcclusionRadius:F2}, " +
             $"intensity={diagnostics.AmbientOcclusionIntensity:F2}, bias={diagnostics.AmbientOcclusionBias:F3}, " +

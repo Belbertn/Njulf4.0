@@ -188,10 +188,11 @@ foreach ($moduleName in $receiverModuleNames) {
     }
 }
 
-# The screen-space cache is the production Sparse forward fast path. Its
-# fragment artifacts bind one fixed set-2 storage buffer and issue one aligned
-# vector read; paired GI-disabled controls declare and read none. Neither kind may
-# retain the exact gather graph or its paging/source/compute-state protocol.
+# The screen-space cache is the production Sparse forward fast path. Surface-aware
+# fragments first read one fixed set-2/binding-1 uvec2 sidecar entry. Accepted
+# fragments then read the matching set-2/binding-0 uvec4 radiance entry; rejected
+# fragments retain the exact three-gather fallback and its paging protocol. Paired
+# GI-disabled controls declare and execute none of those paths.
 foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControlModuleNames)) {
     $modulePath = Join-Path $resolvedDirectory $moduleName
     $validation = (& $spirvVal --target-env vulkan1.3 $modulePath 2>&1) -join [Environment]::NewLine
@@ -213,6 +214,11 @@ foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControl
     $sourceCacheConstants = [regex]::Matches(
         $disassembly,
         '%(?:u?int)_' + $sourceCacheIndex + '\b').Count
+    $exactReceiverAccesses = [regex]::Matches(
+        $disassembly,
+        '(?m)^\s*%\w+\s*=\s*Op(?:InBounds)?AccessChain\s+' +
+        '%\w+\s+%BindlessStorageVectorBuffers\s+%uint_' +
+        $receiverIndex + '\b').Count
     $cacheDescriptorSetCount = [regex]::Matches(
         $disassembly,
         '(?m)^\s*OpDecorate\s+%ForwardDdgiReceiverCache\s+' +
@@ -221,10 +227,24 @@ foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControl
         $disassembly,
         '(?m)^\s*OpDecorate\s+%ForwardDdgiReceiverCache\s+' +
         'Binding\s+0\s*$').Count
+    $surfaceDescriptorSetCount = [regex]::Matches(
+        $disassembly,
+        '(?m)^\s*OpDecorate\s+%ForwardDdgiReceiverSurface\s+' +
+        'DescriptorSet\s+2\s*$').Count
+    $surfaceBindingCount = [regex]::Matches(
+        $disassembly,
+        '(?m)^\s*OpDecorate\s+%ForwardDdgiReceiverSurface\s+' +
+        'Binding\s+1\s*$').Count
     $cacheEntryAccesses = [regex]::Matches(
         $disassembly,
         '(?m)^\s*(?<result>%\w+)\s*=\s*Op(?:InBounds)?AccessChain\s+' +
-        '%\w+\s+%ForwardDdgiReceiverCache\b')
+        '%\w+\s+%ForwardDdgiReceiverCache\s+%int_0\s+' +
+        '(?<index>%\w+)\s*$')
+    $surfaceEntryAccesses = [regex]::Matches(
+        $disassembly,
+        '(?m)^\s*(?<result>%\w+)\s*=\s*Op(?:InBounds)?AccessChain\s+' +
+        '%\w+\s+%ForwardDdgiReceiverSurface\s+%int_0\s+' +
+        '(?<index>%\w+)\s*$')
     $cacheEntryReadCount = 0
     foreach ($cacheEntryAccess in $cacheEntryAccesses) {
         $entryPointerId = [regex]::Escape(
@@ -233,12 +253,20 @@ foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControl
             $disassembly,
             '\bOpLoad\s+%v4uint\s+' + $entryPointerId + '\b').Count
     }
-    $cacheEfficientAddressCount = 0
-    foreach ($cacheEntryAccess in $cacheEntryAccesses) {
-        $prefixStart = [Math]::Max(0, $cacheEntryAccess.Index - 1200)
+    $surfaceEntryReadCount = 0
+    foreach ($surfaceEntryAccess in $surfaceEntryAccesses) {
+        $entryPointerId = [regex]::Escape(
+            $surfaceEntryAccess.Groups['result'].Value)
+        $surfaceEntryReadCount += [regex]::Matches(
+            $disassembly,
+            '\bOpLoad\s+%v2uint\s+' + $entryPointerId + '\b').Count
+    }
+    $surfaceEfficientAddressCount = 0
+    foreach ($surfaceEntryAccess in $surfaceEntryAccesses) {
+        $prefixStart = [Math]::Max(0, $surfaceEntryAccess.Index - 1200)
         $addressPrefix = $disassembly.Substring(
             $prefixStart,
-            $cacheEntryAccess.Index - $prefixStart)
+            $surfaceEntryAccess.Index - $prefixStart)
         if ([regex]::IsMatch(
                 $addressPrefix,
                 '\bOpShiftRightLogical\s+%v2uint\b') -and
@@ -248,36 +276,57 @@ foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControl
             -not [regex]::IsMatch(
                 $addressPrefix,
                 '\bOpUDiv\b')) {
-            $cacheEfficientAddressCount++
+            $surfaceEfficientAddressCount++
         }
-    }
-
-    if ($atomicInstructions -ne 0) {
-        $violations.Add("${moduleName}: found $atomicInstructions forbidden atomic instruction(s)")
-    }
-    if ($receiverConstants -ne 0 -or
-        $computeStateConstants -ne 0 -or
-        $sourceCacheConstants -ne 0) {
-        $violations.Add(
-            "${moduleName}: retained exact gather ABI constants " +
-            "receiver=$receiverConstants computeState=$computeStateConstants sourceCache=$sourceCacheConstants")
     }
 
     $isCacheModule = $receiverCacheFragmentModuleNames -contains $moduleName
     $expectedCacheSamples = if ($isCacheModule) { 1 } else { 0 }
-    if ($cacheDescriptorSetCount -ne $expectedCacheSamples -or
-        $cacheBindingCount -ne $expectedCacheSamples) {
+    $expectedExactReceiverConstants = if ($isCacheModule) { 4 } else { 0 }
+    $expectedExactReceiverAccesses = if ($isCacheModule) { 3 } else { 0 }
+    $expectedAtomicInstructions = if ($isCacheModule) { 29 } else { 0 }
+
+    if ($atomicInstructions -ne $expectedAtomicInstructions) {
         $violations.Add(
-            "${moduleName}: found $cacheDescriptorSetCount set-2 and $cacheBindingCount binding-0 receiver-cache decoration(s), expected $expectedCacheSamples each")
+            "${moduleName}: found $atomicInstructions exact-fallback atomic instruction(s), expected $expectedAtomicInstructions")
+    }
+    if ($receiverConstants -ne $expectedExactReceiverConstants -or
+        $exactReceiverAccesses -ne $expectedExactReceiverAccesses -or
+        $computeStateConstants -ne 0 -or
+        $sourceCacheConstants -ne 0) {
+        $violations.Add(
+            "${moduleName}: exact fallback ABI mismatch " +
+            "receiverConstants=$receiverConstants receiverAccesses=$exactReceiverAccesses " +
+            "computeState=$computeStateConstants sourceCache=$sourceCacheConstants; expected " +
+            "receiverConstants=$expectedExactReceiverConstants receiverAccesses=$expectedExactReceiverAccesses computeState=0 sourceCache=0")
+    }
+    if ($cacheDescriptorSetCount -ne $expectedCacheSamples -or
+        $cacheBindingCount -ne $expectedCacheSamples -or
+        $surfaceDescriptorSetCount -ne $expectedCacheSamples -or
+        $surfaceBindingCount -ne $expectedCacheSamples) {
+        $violations.Add(
+            "${moduleName}: found radiance set=$cacheDescriptorSetCount binding0=$cacheBindingCount and " +
+            "surface set=$surfaceDescriptorSetCount binding1=$surfaceBindingCount decoration(s), expected $expectedCacheSamples each")
     }
     if ($cacheEntryAccesses.Count -ne $expectedCacheSamples -or
-        $cacheEntryReadCount -ne $expectedCacheSamples) {
+        $cacheEntryReadCount -ne $expectedCacheSamples -or
+        $surfaceEntryAccesses.Count -ne $expectedCacheSamples -or
+        $surfaceEntryReadCount -ne $expectedCacheSamples) {
         $violations.Add(
-            "${moduleName}: found $($cacheEntryAccesses.Count) receiver-cache entry access(es) and $cacheEntryReadCount raw aligned uvec4 read(s), expected $expectedCacheSamples each")
+            "${moduleName}: found radiance accesses=$($cacheEntryAccesses.Count)/uvec4 reads=$cacheEntryReadCount and " +
+            "surface accesses=$($surfaceEntryAccesses.Count)/uvec2 reads=$surfaceEntryReadCount, expected $expectedCacheSamples each")
     }
-    if ($cacheEfficientAddressCount -ne $expectedCacheSamples) {
+    if ($surfaceEfficientAddressCount -ne $expectedCacheSamples) {
         $violations.Add(
-            "${moduleName}: found $cacheEfficientAddressCount division-free receiver-cache address(es), expected $expectedCacheSamples")
+            "${moduleName}: found $surfaceEfficientAddressCount division-free receiver-surface address(es), expected $expectedCacheSamples")
+    }
+    if ($isCacheModule -and
+        $cacheEntryAccesses.Count -eq 1 -and
+        $surfaceEntryAccesses.Count -eq 1 -and
+        $cacheEntryAccesses[0].Groups['index'].Value -ne
+            $surfaceEntryAccesses[0].Groups['index'].Value) {
+        $violations.Add(
+            "${moduleName}: radiance and receiver-surface sidecar reads do not use the same cache entry address")
     }
 }
 
@@ -288,15 +337,27 @@ if ($LASTEXITCODE -ne 0) {
     throw "spirv-val failed for '$resolvePath': $resolveValidation"
 }
 $resolveDisassembly = Read-SpirvDisassembly -ModulePath $resolvePath
-$resolveOutputAccesses = [regex]::Matches(
+$resolveRadianceOutputAccesses = [regex]::Matches(
     $resolveDisassembly,
     '(?m)^\s*(?<result>%\w+)\s*=\s*Op(?:InBounds)?AccessChain\s+' +
     '%\w+\s+%ReceiverCacheOutput\b')
-$resolveOutputWrites = 0
-foreach ($resolveOutputAccess in $resolveOutputAccesses) {
+$resolveSurfaceOutputAccesses = [regex]::Matches(
+    $resolveDisassembly,
+    '(?m)^\s*(?<result>%\w+)\s*=\s*Op(?:InBounds)?AccessChain\s+' +
+    '%\w+\s+%ReceiverSurfaceOutput\b')
+$resolveRadianceOutputWrites = 0
+foreach ($resolveOutputAccess in $resolveRadianceOutputAccesses) {
     $outputPointerId = [regex]::Escape(
         $resolveOutputAccess.Groups['result'].Value)
-    $resolveOutputWrites += [regex]::Matches(
+    $resolveRadianceOutputWrites += [regex]::Matches(
+        $resolveDisassembly,
+        '\bOpStore\s+' + $outputPointerId + '\s+%\w+\b').Count
+}
+$resolveSurfaceOutputWrites = 0
+foreach ($resolveOutputAccess in $resolveSurfaceOutputAccesses) {
+    $outputPointerId = [regex]::Escape(
+        $resolveOutputAccess.Groups['result'].Value)
+    $resolveSurfaceOutputWrites += [regex]::Matches(
         $resolveDisassembly,
         '\bOpStore\s+' + $outputPointerId + '\s+%\w+\b').Count
 }
@@ -307,18 +368,26 @@ $setTwoMatches = [regex]::Matches(
     $resolveDisassembly,
     '(?m)^\s*OpDecorate\s+(?<id>%\w+)\s+DescriptorSet\s+2\s*$')
 $setTwoBindingZeroCount = 0
+$setTwoBindingOneCount = 0
 foreach ($setTwoMatch in $setTwoMatches) {
     $setTwoId = [regex]::Escape($setTwoMatch.Groups['id'].Value)
     $setTwoBindingZeroCount += [regex]::Matches(
         $resolveDisassembly,
         '(?m)^\s*OpDecorate\s+' + $setTwoId + '\s+Binding\s+0\s*$').Count
+    $setTwoBindingOneCount += [regex]::Matches(
+        $resolveDisassembly,
+        '(?m)^\s*OpDecorate\s+' + $setTwoId + '\s+Binding\s+1\s*$').Count
 }
-if ($resolveOutputAccesses.Count -ne 1 -or
-    $resolveOutputWrites -ne 1 -or
-    $setTwoBindingZeroCount -ne 1) {
+if ($resolveRadianceOutputAccesses.Count -ne 4 -or
+    $resolveRadianceOutputWrites -ne 4 -or
+    $resolveSurfaceOutputAccesses.Count -ne 4 -or
+    $resolveSurfaceOutputWrites -ne 4 -or
+    $setTwoBindingZeroCount -ne 1 -or
+    $setTwoBindingOneCount -ne 1) {
     $violations.Add(
-        "${receiverCacheResolveModuleName}: found $($resolveOutputAccesses.Count) output access(es), " +
-        "$resolveOutputWrites aligned write(s), and $setTwoBindingZeroCount set-2/binding-0 output(s), expected one each")
+        "${receiverCacheResolveModuleName}: found radiance accesses=$($resolveRadianceOutputAccesses.Count)/writes=$resolveRadianceOutputWrites, " +
+        "surface accesses=$($resolveSurfaceOutputAccesses.Count)/writes=$resolveSurfaceOutputWrites, " +
+        "set-2 binding0=$setTwoBindingZeroCount/binding1=$setTwoBindingOneCount; expected 4/4, 4/4, and one each")
 }
 if ($resolveAtomics -ne 0) {
     $violations.Add(
@@ -343,5 +412,5 @@ if ($violations.Count -ne 0) {
 }
 
 Write-Host "Validated and verified $($receiverModuleNames.Count) production Simple-DDGI receiver modules use exactly one compact uvec4 load per inlined gather site, the exact bounded paging-demand/B1 contribution atomic protocol, no compute-state/source-cache access, and no obsolete SSGI artifact."
-Write-Host "Validated $($receiverCacheFragmentModuleNames.Count) cache-required forward modules each perform one aligned fixed set-2 FP16 receiver-cache vector read; the $($giDisabledControlModuleNames.Count) paired controls contain no cache descriptor or read, and all six exclude exact gather ABI resources and atomics."
-Write-Host "Validated the receiver-cache resolve publishes exactly one aligned set-2/binding-0 FP16 cache-buffer write path and contains no atomics."
+Write-Host "Validated $($receiverCacheFragmentModuleNames.Count) cache-required forward modules each perform one aligned set-2/binding-1 receiver-surface admission read, conditionally read the matching binding-0 FP16 radiance entry, and retain the exact three-gather fallback; the $($giDisabledControlModuleNames.Count) paired controls contain none of those paths."
+Write-Host "Validated the receiver-cache resolve publishes all four deterministic radiance and receiver-surface write paths through set-2 bindings 0 and 1 and contains no atomics."

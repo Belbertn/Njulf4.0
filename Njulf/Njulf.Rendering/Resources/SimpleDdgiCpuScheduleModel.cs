@@ -82,6 +82,12 @@ public static class SimpleDdgiSchedulerAbi
     // transport-topology generation used to accept delayed summaries while the
     // camera moves.
     public const int FeedbackTransportTopologyGenerationOffsetWords = 998;
+    public const int FeedbackAdaptiveSavedRayRingOffsetWords = 999;
+    public const int FeedbackAdaptiveMaximumErrorRingOffsetWords = 1002;
+    public const int FeedbackAdaptiveSavedRayContentOffsetWords = 1005;
+    public const int FeedbackAdaptiveMaximumErrorContentOffsetWords = 1009;
+    public const int AdaptiveRayRingBucketCount = 3;
+    public const int AdaptiveRayContentBucketCount = 4;
     public const int FeedbackLivenessWordCount =
         (int)SimpleDdgiSchedulerWorkClass.Count + 3;
     public const uint PhysicalGenerationMask = 0x00ff_ffffu;

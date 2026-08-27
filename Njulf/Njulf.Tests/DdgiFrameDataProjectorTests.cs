@@ -63,6 +63,7 @@ public sealed class DdgiFrameDataProjectorTests
                 default,
                 ReceiverCacheBufferBytes: 0UL,
                 ReceiverGatherBufferBytes: 0UL,
+                ReceiverSurfaceSidecarBytes: 0UL,
                 evidence));
 
         Assert.Multiple(() =>

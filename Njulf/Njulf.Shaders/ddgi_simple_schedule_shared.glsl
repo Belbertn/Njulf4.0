@@ -38,6 +38,8 @@ const uint SIMPLE_DDGI_PROBE_STATE_WORDS = 8u;
 const uint SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS = 12u;
 const uint SIMPLE_DDGI_SCHEDULER_UPDATE_WORDS = 10u;
 const uint SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS = 15u;
+const uint SIMPLE_DDGI_SCHEDULER_QUADRATURE_WITNESS_VALID = 1u << 31u;
+const float SIMPLE_DDGI_SCHEDULER_QUADRATURE_ERROR_THRESHOLD = 0.05;
 // The transaction-private relocation proposal reuses the existing 48-byte
 // relocation/classification storage ABI. Commit is a scheduler-only shader,
 // so mirror that stride here rather than depending on the producer header.
@@ -290,9 +292,9 @@ const uint SIMPLE_DDGI_SCHEDULER_TRANSACTION_INVALIDATION_WITHOUT_SOURCE =
     1u << 9u;
 
 // The 4 KiB feedback region contains a 64-word header followed by 896 lane
-// cursors. Words 960..1023 are intentionally spare; copy the ten exceptional
-// commit counters and two active-participant mutation witnesses there without
-// growing either the arena or readback buffers.
+// cursors. Its fixed tail carries bounded scheduler, convergence, receiver,
+// and adaptive-cardinality evidence without growing either the arena or the
+// delayed readback buffers.
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_COMMIT_FAILURE_OFFSET = 960u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_TRANSACTION_PREDICATE_OFFSET = 970u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_MISSING_COMPLETION_OFFSET = 971u;
@@ -306,6 +308,10 @@ const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_RESIDUAL_PROPAGATION_OFFSET = 986u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_URGENT_RELIGHT_OFFSET = 990u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_RECEIVER_CONTRIBUTION_OFFSET = 994u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_TRANSPORT_TOPOLOGY_OFFSET = 998u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_SAVED_RING_OFFSET = 999u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_ERROR_RING_OFFSET = 1002u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_SAVED_CONTENT_OFFSET = 1005u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_ERROR_CONTENT_OFFSET = 1009u;
 
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_RESET = 0u;
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_CLASSIFY = 1u;
@@ -885,7 +891,29 @@ uint SchedulerAdaptiveBaselineSourceRays(uint volumeIndex)
     return SchedulerAdaptiveMaximumSourceRays(volumeIndex);
 }
 
+bool SchedulerReadQuadratureWitness(
+    uint probeIndex,
+    out float quadratureError)
+{
+    quadratureError = 1.0;
+    // During a frozen tail audit this word carries the exact solve epoch. Ray
+    // cardinality is immutable until the audit completes or is invalidated.
+    if (SchedulerTailCertification())
+        return false;
+
+    uint stateBase = pc.SchedulerProbeStateOffsetWords +
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    uint packed = SchedulerArenaRead(stateBase + 9u);
+    if ((packed & SIMPLE_DDGI_SCHEDULER_QUADRATURE_WITNESS_VALID) == 0u)
+        return false;
+    quadratureError = uintBitsToFloat(
+        packed & ~SIMPLE_DDGI_SCHEDULER_QUADRATURE_WITNESS_VALID);
+    return !isnan(quadratureError) && !isinf(quadratureError) &&
+        quadratureError >= 0.0 && quadratureError <= 1.0;
+}
+
 bool SchedulerAdaptivePromotionDue(
+    uint probeIndex,
     uint volumeIndex,
     uint sourceRayCount,
     float residual,
@@ -894,13 +922,15 @@ bool SchedulerAdaptivePromotionDue(
     if (sourceRayCount == 0u)
         return false;
     uint maximum = SchedulerAdaptiveMaximumSourceRays(volumeIndex);
-    if (sourceRayCount >= maximum)
+    if (sourceRayCount >= maximum || SchedulerTailCertification())
         return false;
     // Turning adaptation off must repair any previously committed short
     // sequence instead of leaving its noisy estimate frozen indefinitely.
     if (!SchedulerAdaptiveRayCardinality())
         return true;
-    if (sourceRayCount < SchedulerAdaptiveBaselineSourceRays(volumeIndex))
+    float quadratureError;
+    if (!SchedulerReadQuadratureWitness(probeIndex, quadratureError) ||
+        quadratureError > SIMPLE_DDGI_SCHEDULER_QUADRATURE_ERROR_THRESHOLD)
         return true;
     float tolerance = max(uintBitsToFloat(SchedulerFrame(39u)), 1.0e-7);
     return stableUpdates != 0u && !isnan(residual) && !isinf(residual) &&
@@ -926,6 +956,22 @@ uint SchedulerResolveAdaptiveSourceRayCount(
     if (!sourceWork)
         return min(current, maximum);
 
+    // Visibility, geometry, topology, and source-cache repairs rebuild the
+    // complete directional sequence immediately. Radiometric cache relights
+    // are handled below because their immutable cache owns only the currently
+    // committed prefix and must issue no additional primary rays.
+    if ((candidateReasons & (
+            SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
+            SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY |
+            SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID |
+            SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY |
+            SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY)) != 0u &&
+        (candidateReasons &
+            SIMPLE_DDGI_SCHEDULER_REASON_RADIOMETRIC_RELIGHT) == 0u)
+    {
+        return maximum;
+    }
+
     // Relight transactions must re-evaluate the exact committed sequence;
     // topology/repair transactions preserve its size. Resizing is an explicit
     // routine source transaction selected by classify below.
@@ -949,12 +995,16 @@ uint SchedulerResolveAdaptiveSourceRayCount(
         float residual = ReadStorageFloatUniform(
             pc.ProbeStateBufferIndex,
             probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS + 7u);
-        uint baseline = SchedulerAdaptiveBaselineSourceRays(volumeIndex);
-        if (current < baseline)
-            return SchedulerAdaptivePromoteSourceRays(volumeIndex, current);
         float tolerance = max(uintBitsToFloat(SchedulerFrame(39u)), 1.0e-7);
         uint demotionRequirement = max(SchedulerFrame(30u) * 4u, 8u);
-        if (current > baseline && stableUpdates >= demotionRequirement &&
+        float quadratureError;
+        bool quadratureCertified = SchedulerReadQuadratureWitness(
+            probeIndex,
+            quadratureError) &&
+            quadratureError <=
+                SIMPLE_DDGI_SCHEDULER_QUADRATURE_ERROR_THRESHOLD;
+        if (current > SchedulerAdaptiveMinimumSourceRays(volumeIndex) &&
+            stableUpdates >= demotionRequirement && quadratureCertified &&
             !isnan(residual) && !isinf(residual) &&
             residual <= tolerance * 0.25)
         {
@@ -1881,7 +1931,9 @@ void SchedulerWriteOutcome(
     // particular, a cached-solver update must not erase an already valid
     // source cache or advance its routine-source timestamp.
     SchedulerArenaWrite(base + 10u, updateFlags);
-    SchedulerArenaWrite(base + 11u, max(rayInvocationCount, 1u));
+    // The bounded count occupies the low half; blend transactionally appends
+    // its quantized quadrature witness in the otherwise unused high half.
+    SchedulerArenaWrite(base + 11u, max(rayInvocationCount, 1u) & 0xffffu);
     // Producer completion counters. Trace uses word 12; transport uses word 13.
     // These cannot carry transaction metadata because every ray atomically
     // increments them before CommitLocal validates the outcome.

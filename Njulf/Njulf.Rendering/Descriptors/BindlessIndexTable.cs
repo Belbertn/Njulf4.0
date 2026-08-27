@@ -872,9 +872,16 @@ namespace Njulf.Rendering.Descriptors
             SimpleDdgiSampledVisibilityTextureBase +
             MaxSimpleDdgiSampledAtlasTextureGroups;
 
+        /// <summary>Filtered full-resolution GTAO bent-normal payload.</summary>
+        public const int GtaoFilteredTexture =
+            OpaqueSceneColorSnapshotTexture + 1;
+
+        /// <summary>Selected full-resolution GTAO diagnostic visualization.</summary>
+        public const int GtaoDebugTexture = GtaoFilteredTexture + 1;
+
         /// <summary>First dynamically allocated material texture index</summary>
         public const int FirstDynamicTextureIndex =
-            OpaqueSceneColorSnapshotTexture + 1;
+            GtaoDebugTexture + 1;
 
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
@@ -904,8 +911,20 @@ namespace Njulf.Rendering.Descriptors
         public const int ForwardMaterialDataBuffer =
             AreaRayShadowMaskBufferFrame1 + 1;
 
-        public const int StaticBufferCount =
+        /// <summary>
+        /// Eight-byte surface identities parallel to the frame-0 reduced
+        /// Simple-DDGI gather lattice. Appended so published indices remain
+        /// stable.
+        /// </summary>
+        public const int SimpleDdgiReceiverGatherSurfaceBufferBase =
             ForwardMaterialDataBuffer + 1;
+
+        /// <summary>Frame-1 reduced-gather receiver surface identities.</summary>
+        public const int SimpleDdgiReceiverGatherSurfaceBufferFrame1 =
+            SimpleDdgiReceiverGatherSurfaceBufferBase + 1;
+
+        public const int StaticBufferCount =
+            SimpleDdgiReceiverGatherSurfaceBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -937,6 +956,8 @@ namespace Njulf.Rendering.Descriptors
                     MaterialDataBuffer => nameof(MaterialDataBuffer),
                     MaterialExtensionDataBuffer => nameof(MaterialExtensionDataBuffer),
                     ForwardMaterialDataBuffer => nameof(ForwardMaterialDataBuffer),
+                    SimpleDdgiReceiverGatherSurfaceBufferBase => nameof(SimpleDdgiReceiverGatherSurfaceBufferBase),
+                    SimpleDdgiReceiverGatherSurfaceBufferFrame1 => nameof(SimpleDdgiReceiverGatherSurfaceBufferFrame1),
                     SceneMeshMetadataBuffer => nameof(SceneMeshMetadataBuffer),
                     VertexBuffer => nameof(VertexBuffer),
                     IndexBuffer => nameof(IndexBuffer),

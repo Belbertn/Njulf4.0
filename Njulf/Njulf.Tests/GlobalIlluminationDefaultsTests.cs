@@ -10,28 +10,104 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class GlobalIlluminationDefaultsTests
 {
-    [TestCase(RenderQualityPreset.Low, true)]
-    [TestCase(RenderQualityPreset.Medium, true)]
-    [TestCase(RenderQualityPreset.High, false)]
-    [TestCase(RenderQualityPreset.Ultra, false)]
-    [TestCase(RenderQualityPreset.DdgiHigh, false)]
-    public void QualityPresets_SelectReceiverCacheOnlyWithValidOwnership(
-        RenderQualityPreset preset,
-        bool expectedCacheConsumption)
+    [Test]
+    public void ReceiverCacheMode_DdgiHighDefaultsTemporalAndExactRemainsSelectable()
+    {
+        var settings = new RenderSettings();
+        Assert.That(
+            settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+            Is.EqualTo(SimpleDdgiReceiverCacheMode.TemporalAdaptive));
+
+        settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+            SimpleDdgiReceiverCacheMode.Exact;
+        Assert.That(
+            settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+            Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
+    }
+
+    [TestCase(RenderQualityPreset.Low)]
+    [TestCase(RenderQualityPreset.Medium)]
+    [TestCase(RenderQualityPreset.High)]
+    [TestCase(RenderQualityPreset.Ultra)]
+    [TestCase(RenderQualityPreset.DdgiHigh)]
+    public void SurfaceAwareReceiverCache_IsExplicitAndExactRemainsAuthoritative(
+        RenderQualityPreset preset)
     {
         Assert.Multiple(() =>
         {
             Assert.That(
                 ForwardPlusPass.ShouldConsumeSimpleDdgiReceiverCache(
                     preset,
-                    forceForBenchmark: false),
-                Is.EqualTo(expectedCacheConsumption));
+                    SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial,
+                    forceLegacyBenchmark: false,
+                    forceExact: false),
+                Is.True);
             Assert.That(
                 ForwardPlusPass.ShouldConsumeSimpleDdgiReceiverCache(
                     preset,
-                    forceForBenchmark: true),
+                    SimpleDdgiReceiverCacheMode.Exact,
+                    forceLegacyBenchmark: false,
+                    forceExact: false),
+                Is.False);
+            Assert.That(
+                ForwardPlusPass.ShouldConsumeSimpleDdgiReceiverCache(
+                    preset,
+                    SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial,
+                    forceLegacyBenchmark: false,
+                    forceExact: true),
+                Is.False);
+            Assert.That(
+                ForwardPlusPass.ShouldConsumeSimpleDdgiReceiverCache(
+                    preset,
+                    SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial,
+                    forceLegacyBenchmark: true,
+                    forceExact: false),
                 Is.True);
+            Assert.That(
+                ForwardPlusPass.ShouldConsumeSimpleDdgiReceiverCache(
+                    preset,
+                    SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial,
+                    forceLegacyBenchmark: true,
+                    forceExact: true),
+                Is.False,
+                "The exact oracle must win conflicting capture controls.");
+
+            var presetSettings = new RenderSettings();
+            presetSettings.ApplyQualityPreset(preset);
+            SimpleDdgiReceiverCacheMode expected = preset is
+                RenderQualityPreset.Medium or RenderQualityPreset.DdgiHigh
+                    ? SimpleDdgiReceiverCacheMode.TemporalAdaptive
+                    : SimpleDdgiReceiverCacheMode.Exact;
+            Assert.That(
+                presetSettings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+                Is.EqualTo(expected));
         });
+    }
+
+    [Test]
+    public void ReceiverCacheMode_RoundTripsExplicitLegacyBenchmarkIntent()
+    {
+        string path = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"render-settings-receiver-cache-{Guid.NewGuid():N}.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark;
+            settings.Save(path);
+
+            Assert.That(
+                RenderSettings.Load(path).GlobalIllumination
+                    .SimpleDdgiReceiverCacheMode,
+                Is.EqualTo(
+                    SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark));
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     [Test]

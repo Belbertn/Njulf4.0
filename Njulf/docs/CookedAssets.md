@@ -54,7 +54,7 @@ increasing `sequence`, stable event/stage/outcome names, and separate
 fields. Progress configuration is diagnostic only: it is not included in cook
 identity, reports, or the asset database.
 
-Mesh payloads contain renderer-ready streams plus deterministic meshlet LOD0/1/2, simplified to approximately 100%, 50%, and 20% triangle density. Win-x64 and linux-x64 use meshoptimizer encoding; other RIDs use zstd until a compatible native decoder is available.
+Mesh payloads contain renderer-ready streams plus deterministic meshlet LOD0/1/2, simplified to approximately 100%, 50%, and 20% triangle density. Mesh format 1.4 stores a 64-byte meshlet record with a full-precision cosine geometric-normal cone and the unique `(axis = 0, cutoff = -1)` disabled sentinel. Format 1.3's earlier sine cutoff is converted conservatively while loading; versions 1.0-1.2 retain their 48-byte record and are expanded with disabled cones. Recooking is required to obtain the corrected authored cone directly. Win-x64 and linux-x64 use meshoptimizer encoding; other RIDs use zstd until a compatible native decoder is available.
 
 Textures default to semantic BC formats in plain, non-supercompressed KTX2 containers: BC7 for color/data, BC5 for normal maps, BC4 for scalar maps, and BC6H for HDR. Full mip chains and color-correct filtering are generated offline. macOS currently selects RGBA8 pending an ASTC target profile. Use `--texture-format rgba8` when an uncompressed diagnostic output is useful.
 

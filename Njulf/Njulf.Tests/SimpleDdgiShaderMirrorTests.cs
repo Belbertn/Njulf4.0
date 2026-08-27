@@ -749,9 +749,15 @@ namespace Njulf.Tests
             string resolve = ReadRepoText(
                 "Njulf.Shaders",
                 "ddgi_simple_receiver_cache_resolve.comp");
+            string legacyResolve = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_receiver_cache_resolve_legacy.comp");
             string cacheSampling = ReadRepoText(
                 "Njulf.Shaders",
                 "forward_ddgi_receiver_cache.glsl");
+            string receiverSurface = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_receiver_surface.glsl");
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
             string pass = ReadRepoText(
                 "Njulf.Rendering",
@@ -839,7 +845,11 @@ namespace Njulf.Tests
                 Assert.That(cacheSampling, Does.Contain(
                     "layout(std430, set = 2, binding = 0) readonly buffer ForwardDdgiReceiverCacheBlock"));
                 Assert.That(cacheSampling, Does.Contain(
-                    "uvec4 packed = ForwardDdgiReceiverCache.Entries[entryIndex]"));
+                    "layout(std430, set = 2, binding = 1) readonly buffer ForwardDdgiReceiverSurfaceBlock"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "uvec2 surface = ForwardDdgiReceiverSurface.Entries[result.EntryIndex]"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "result.Packed = ForwardDdgiReceiverCache.Entries[entryIndex]"));
                 Assert.That(cacheSampling, Does.Contain(
                     "FORWARD_DDGI_RECEIVER_CACHE_SCALE = 2u"));
                 Assert.That(cacheSampling, Does.Contain(
@@ -855,7 +865,9 @@ namespace Njulf.Tests
                 Assert.That(resolve, Does.Contain(
                     "layout(std430, set = 2, binding = 0) writeonly buffer ReceiverCacheOutputBlock"));
                 Assert.That(resolve, Does.Contain(
-                    "depthCode = packed.w & 0x3ffu"));
+                    "layout(std430, set = 2, binding = 1) writeonly buffer ReceiverSurfaceOutputBlock"));
+                Assert.That(resolve, Does.Contain(
+                    "result.DepthCode = packed.w & 0x3ffu"));
                 Assert.That(cache, Does.Contain(
                     "EncodeReceiverCacheMetadata("));
                 Assert.That(cache, Does.Contain(
@@ -865,7 +877,7 @@ namespace Njulf.Tests
                 Assert.That(resolve, Does.Contain(
                     "float IndirectSpecularVisibility;"));
                 Assert.That(resolve, Does.Contain(
-                    "EncodeResolvedReceiverCacheMetadata(resolved)"));
+                    "EncodeResolvedReceiverCacheMetadata("));
                 Assert.That(cacheSampling, Does.Contain(
                     "SampleForwardDdgiReceiverCacheRoughSpecularVisibility("));
                 Assert.That(forward, Does.Contain(
@@ -875,27 +887,33 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain(
                     "min(standardGrazing, broadDielectricGrazing)"));
                 Assert.That(resolve, Does.Contain(
-                    "candidateDepthCode > bestDepthCode"));
+                    "SelectResolvedRepresentativeSurface("));
                 Assert.That(resolve, Does.Contain(
-                    "SelectResolvedReceiverDepthCode("));
+                    "CandidateMatchesRepresentative("));
                 Assert.That(resolve, Does.Contain(
-                    "ReceiverCacheDepthCompatibility("));
+                    "SimpleDdgiReceiverSurfaceEvaluateDecoded("));
+                Assert.That(resolve, Does.Contain(
+                    "candidate.WorldPosition"));
+                Assert.That(resolve, Does.Contain(
+                    "representative.WorldPosition"));
                 Assert.That(resolve, Does.Contain(
                     "BindlessTextures[nonuniformEXT(pc.DepthTextureIndex)]"));
                 Assert.That(resolve, Does.Contain(
-                    "result.DepthCode = receiverDepthCode"));
+                    "result.DepthCode = 1u"));
                 Assert.That(resolve, Does.Contain(
                     "ReceiverCacheOutput.Entries[entryIndex] = uvec4("));
+                Assert.That(resolve, Does.Contain(
+                    "ReceiverSurfaceOutput.Entries[entryIndex] = representativeSurface.Packed"));
                 Assert.That(resolve, Does.Contain(
                     "resolved.DdgiIrradiance *= RECEIVER_CACHE_INV_PI"));
                 Assert.That(resolve, Does.Contain(
                     "resolved.EnvironmentIrradiance *= RECEIVER_CACHE_INV_PI"));
                 Assert.That(resolve, Does.Contain(
-                    "resolvedCoord.y * pc.CacheWidth"));
+                    "resolvedCoordinate.y * pc.CacheWidth"));
                 Assert.That(resolve, Does.Contain(
-                    "TryLoadGatherSample("));
+                    "TryLoadGatherCandidate("));
                 Assert.That(resolve, Does.Contain(
-                    "ReceiverCacheGatherSample ResolveGatherSample(ivec2 requestedCoord)"));
+                    "ResolveCompatibleGatherCandidate("));
                 Assert.That(resolve, Does.Contain(
                     "vec2 latticePosition ="));
                 Assert.That(resolve, Does.Not.Contain(
@@ -914,10 +932,20 @@ namespace Njulf.Tests
                     "uvec4 Packed;"));
                 Assert.That(cacheSampling, Does.Contain(
                     "ForwardDdgiReceiverCacheEnvironmentIrradiance("));
+                Assert.That(cacheSampling, Does.Contain(
+                    "ForwardDdgiReceiverCacheAdmissionDebugColor("));
+                Assert.That(cacheSampling, Does.Contain(
+                    "SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_NORMAL"));
                 Assert.That(forward, Does.Contain(
                     "ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *"));
                 Assert.That(forward, Does.Contain(
-                    "SampleForwardDdgiReceiverCache("));
+                    "EvaluateForwardDdgiReceiverCacheAdmission("));
+                Assert.That(forward, Does.Contain(
+                    "!receiverCacheAccepted ||"));
+                Assert.That(forward, Does.Contain(
+                    "precomputedSimpleDdgiGather = SampleSimpleDdgiGather("));
+                Assert.That(forward, Does.Contain(
+                    "cachedGather = LoadForwardDdgiReceiverCache("));
                 Assert.That(cache, Does.Contain(
                     "EvaluateEnvironmentDiffuseIrradiance(environment, normal)"));
                 Assert.That(forward, Does.Contain(
@@ -926,6 +954,14 @@ namespace Njulf.Tests
                     "#include \"forward_ddgi_receiver_cache.glsl\""));
                 Assert.That(cacheSampling, Does.Not.Contain(
                     "ReadStorageAlignedUVec4Uniform("));
+                Assert.That(receiverSurface, Does.Contain(
+                    "SIMPLE_DDGI_RECEIVER_SURFACE_ABI_VERSION = 1u"));
+                Assert.That(receiverSurface, Does.Contain(
+                    "SIMPLE_DDGI_RECEIVER_SURFACE_DEPTH_MASK = 0x00ffffffu"));
+                Assert.That(receiverSurface, Does.Contain(
+                    "SimpleDdgiReceiverSurfaceEvaluateFragment("));
+                Assert.That(cache, Does.Contain(
+                    "StoreReceiverSurface(entryIndex, receiverSurface)"));
                 Assert.That(pass, Does.Contain(
                     "private const int FramesInFlight = 2;"));
                 Assert.That(pass, Does.Contain(
@@ -941,9 +977,35 @@ namespace Njulf.Tests
                 Assert.That(pass, Does.Contain(
                     "SimpleDdgiReceiverCacheEntryBytes = 16u"));
                 Assert.That(pass, Does.Contain(
+                    "SimpleDdgiReceiverSurfaceEntryBytes = 8u"));
+                Assert.That(pass, Does.Contain(
                     "PackSimpleDdgiReceiverCacheResolveDimensions("));
                 Assert.That(pass, Does.Contain(
-                    "SimpleDdgiReceiverGatherEntryBytes = 16u"));
+                    "SimpleDdgiReceiverGatherEntryBytes = 80u"));
+                Assert.That(cache, Does.Contain(
+                    "#define SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER 1"));
+                Assert.That(cache, Does.Contain(
+                    "RECEIVER_GATHER_ENTRY_WORDS = 20u"));
+                Assert.That(cache, Does.Contain(
+                    "StoreReceiverDirectionalCoefficients("));
+                Assert.That(cacheSampling, Does.Contain(
+                    "SampleForwardDdgiCompactDirectionalRadiance("));
+                Assert.That(cacheSampling, Does.Contain(
+                    "FORWARD_DDGI_DIRECTIONAL_GATHER_ENTRY_WORDS = 20u"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "pushConstants.CurrentFrameIndex"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "entryWord + FORWARD_DDGI_DIRECTIONAL_FRAME_WORD) !="));
+                Assert.That(cacheSampling, Does.Contain(
+                    "ddgiFrameIndex"));
+                Assert.That(forward, Does.Contain(
+                    "receiverCompactDirectionalResolved ="));
+                Assert.That(forward, Does.Contain(
+                    "!receiverCompactDirectionalResolved"));
+                Assert.That(resolve, Does.Contain(
+                    "RECEIVER_GATHER_ENTRY_WORDS = 20u"));
+                Assert.That(pass, Does.Contain(
+                    "BufferMemoryBarrierCount = 4"));
                 Assert.That(pass, Does.Contain(
                     "DstStageMask = PipelineStageFlags2.FragmentShaderBit"));
                 Assert.That(pass, Does.Contain(
@@ -959,6 +1021,14 @@ namespace Njulf.Tests
                 Assert.That(pass, Does.Contain(
                     "private readonly BufferHandle[] _simpleDdgiReceiverCacheBuffers"));
                 Assert.That(pass, Does.Contain(
+                    "private readonly BufferHandle[] _simpleDdgiReceiverCacheSurfaceBuffers"));
+                Assert.That(pass, Does.Contain(
+                    "private readonly BufferHandle[] _simpleDdgiReceiverGatherSurfaceBuffers"));
+                Assert.That(pass, Does.Contain(
+                    "_bufferManager.DestroyBuffer(\n                            _simpleDdgiReceiverCacheSurfaceBuffers[i])"));
+                Assert.That(pass, Does.Contain(
+                    "_bufferManager.DestroyBuffer(\n                            _simpleDdgiReceiverGatherSurfaceBuffers[i])"));
+                Assert.That(pass, Does.Contain(
                     "_simpleDdgiReceiverCacheConsumerSets[frameIndex]"));
                 Assert.That(pass, Does.Contain(
                     "BindSimpleDdgiReceiverCacheBuffer(cmd, frameIndex)"));
@@ -972,6 +1042,18 @@ namespace Njulf.Tests
                     "-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_DDGI_RECEIVER_CACHE=1"));
                 Assert.That(shaderProject, Does.Contain(
                     "forward_opaque_simple_full_input_ddgi_cache_required.frag"));
+                Assert.That(shaderProject, Does.Contain(
+                    "ddgi_simple_receiver_cache_legacy.comp"));
+                Assert.That(shaderProject, Does.Contain(
+                    "forward_opaque_ddgi_cache_debug.frag"));
+                Assert.That(legacyResolve, Does.Contain(
+                    "ReceiverCacheDepthCompatibility("));
+                Assert.That(legacyResolve, Does.Not.Contain(
+                    "ReceiverSurfaceOutputBlock"));
+                Assert.That(meshPipeline, Does.Contain(
+                    "TryResolveReceiverCacheLegacyPipeline("));
+                Assert.That(meshPipeline, Does.Contain(
+                    "TryResolveReceiverCacheDebugPipeline("));
             });
         }
 
@@ -2170,7 +2252,7 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("EvaluateEnvironmentTransportIrradiance(environment, safeNormal)"));
                 Assert.That(forward, Does.Contain("diffuseIbl = EvaluateGiDiffuseFromIrradiance("));
                 Assert.That(forward,
-                    Does.Contain("vec3 irradiance = EvaluateEnvironmentDiffuseIrradiance(environment, normal);"));
+                    Does.Contain("vec3 irradiance = EvaluateEnvironmentDiffuseIrradiance(\n        environment,\n        diffuseIndirectNormal);"));
                 Assert.That(simpleManager,
                     Does.Contain("_settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f"));
                 Assert.That(simpleManager, Does.Contain("_transportSourceCacheRayCapacity != sourceCacheRayCapacity"));
@@ -2780,6 +2862,10 @@ namespace Njulf.Tests
                     "return SchedulerAdaptiveMaximumSourceRays(volumeIndex);"));
                 Assert.That(shared, Does.Contain(
                     "return SchedulerAdaptiveBaselineSourceRays(volumeIndex);"));
+                Assert.That(shared, Does.Contain(
+                    "SchedulerReadQuadratureWitness("));
+                Assert.That(shared, Does.Contain(
+                    "SIMPLE_DDGI_SCHEDULER_QUADRATURE_ERROR_THRESHOLD"));
                 Assert.That(shared, Does.Contain(
                     "if (!SchedulerAdaptiveRayCardinality())\n        return true;"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_SCHEDULER_CANDIDATE_WORDS = 4u"));

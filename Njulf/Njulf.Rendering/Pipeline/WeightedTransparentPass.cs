@@ -14,6 +14,7 @@ namespace Njulf.Rendering.Pipeline
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;
+        private readonly ForwardPlusPass _forwardPlusPass;
         private readonly RaySceneDescriptorBank? _raySceneDescriptors;
 
         private readonly ISimpleDdgiReceiverFeedbackCapture?
@@ -25,12 +26,15 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
             RenderTargetManager renderTargets,
+            ForwardPlusPass forwardPlusPass,
             RaySceneDescriptorBank? raySceneDescriptors = null,
             ISimpleDdgiReceiverFeedbackCapture? receiverFeedbackRuntime = null)
             : base("WeightedTransparentPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _forwardPlusPass = forwardPlusPass ??
+                throw new ArgumentNullException(nameof(forwardPlusPass));
             _raySceneDescriptors = raySceneDescriptors;
             _receiverFeedbackRuntime = receiverFeedbackRuntime;
         }
@@ -50,6 +54,12 @@ namespace Njulf.Rendering.Pipeline
         {
             if (!ShouldExecute(frameIndex, sceneData))
                 return;
+
+            if (sceneData.TransparentPipelinePartitioningEnabled &&
+                TryExecutePartitioned(cmd, frameIndex, sceneData))
+            {
+                return;
+            }
 
             bool rayVariantRequired =
                 sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
@@ -219,6 +229,284 @@ namespace Njulf.Rendering.Pipeline
                     "receiver-feedback-weighted-oit-completion-failed:" +
                     completionReason);
             }
+        }
+
+        private bool TryExecutePartitioned(
+            CommandBuffer cmd,
+            int frameIndex,
+            SceneRenderingData sceneData)
+        {
+            sceneData.TransparentPipelinePartitioningEffective = false;
+            sceneData.TransparentPipelineRunCount = 0;
+            sceneData.TransparentPipelineAverageRunLength = 0;
+            sceneData.TransparentPipelineMaximumRunLength = 0;
+            sceneData.TransparentPipelineBindCount = 0;
+            sceneData.TransparentPipelineUniversalFallbackCount = 0;
+            sceneData.TransparentPipelineRayMeshletsAvoided = 0;
+            sceneData.TransparentPipelineDecalCacheMeshlets = 0;
+            sceneData.TransparentPipelineFallbackReason = string.Empty;
+
+            if (sceneData.DebugViewMode != 0u ||
+                sceneData.TransparencyDebugView !=
+                    TransparencyDebugView.None ||
+                sceneData.DecalDebugView != DecalDebugView.None ||
+                sceneData.AmbientOcclusionDebugView !=
+                    AmbientOcclusionDebugView.None)
+            {
+                SetPartitionFallback(
+                    sceneData,
+                    "transparent-run-debug-view-requires-universal");
+                return false;
+            }
+
+            bool exactFeedbackRequired =
+                _receiverFeedbackRuntime?.IsPendingOwnedProducerRequired(
+                    frameIndex,
+                    SimpleDdgiReceiverFeedbackProducer
+                        .TransparentWeightedOit) == true;
+            bool transparentLayeredRayRequired =
+                sceneData.DirectionalShadowFramePlan
+                    .TransparentReceiverPolicy ==
+                DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery;
+            bool decalLayeredRayRequired =
+                sceneData.DirectionalShadowFramePlan.DecalReceiverPolicy ==
+                DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery;
+            var options = new TransparentRunPlanningOptions(
+                sceneData.TransparencyMode,
+                transparentLayeredRayRequired,
+                decalLayeredRayRequired,
+                sceneData.EffectiveThickTransmissionMode ==
+                    ThickTransmissionMode.RayQuery,
+                TransparentForwardPass.RequiresSceneReflectionRayVariant(
+                    sceneData),
+                exactFeedbackRequired,
+                _forwardPlusPass
+                    .CanConsumeSimpleDdgiReceiverCacheForCurrentView &&
+                sceneData.DecalReceiveGlobalIllumination);
+            Span<TransparentDrawRun> runs = stackalloc TransparentDrawRun[
+                TransparentDrawRunPlanner.DefaultMaximumRunCount];
+            if (!TransparentDrawRunPlanner.TryBuildRuns(
+                    sceneData.TransparentMaterialRuns,
+                    sceneData.TransparentMeshletCount,
+                    options,
+                    runs,
+                    out int runCount,
+                    out string fallbackReason))
+            {
+                SetPartitionFallback(sceneData, fallbackReason);
+                return false;
+            }
+
+            Span<PipelineObjects.TransparentPipelineSelection> selections =
+                stackalloc PipelineObjects.TransparentPipelineSelection[
+                    TransparentDrawRunPlanner.DefaultMaximumRunCount];
+            Span<uint> packedDrawRanges = stackalloc uint[
+                TransparentDrawRunPlanner.DefaultMaximumRunCount];
+            bool anyRayRun = false;
+            int maximumRunLength = 0;
+            int rayMeshletsAvoided = 0;
+            int decalCacheMeshlets = 0;
+            for (int index = 0; index < runCount; index++)
+            {
+                TransparentDrawRun run = runs[index];
+                if (!_meshPipeline.TryResolveTransparentPipeline(
+                        run.PipelineKey,
+                        out selections[index],
+                        out string pipelineFailure))
+                {
+                    SetPartitionFallback(
+                        sceneData,
+                        "transparent-run-pipeline-unavailable:" +
+                        pipelineFailure);
+                    return false;
+                }
+                if (!GPUForwardPushConstants.TryPackTransparentDrawRange(
+                        BindlessIndex.TransparentMeshletDrawBufferBase,
+                        checked((uint)run.FirstDraw),
+                        out packedDrawRanges[index]))
+                {
+                    SetPartitionFallback(
+                        sceneData,
+                        "transparent-run-range-not-representable");
+                    return false;
+                }
+
+                anyRayRun |= run.PipelineKey.RaySceneRequired;
+                if (!run.PipelineKey.RaySceneRequired &&
+                    (transparentLayeredRayRequired ||
+                     decalLayeredRayRequired ||
+                     options.ThickTransmissionRayQueryEnabled ||
+                     options.ReflectionRayQueryEnabled))
+                {
+                    rayMeshletsAvoided += run.DrawCount;
+                }
+                if (run.PipelineKey.DecalReceiverCacheRequired)
+                    decalCacheMeshlets += run.DrawCount;
+                maximumRunLength = Math.Max(
+                    maximumRunLength,
+                    run.DrawCount);
+            }
+
+            if (anyRayRun &&
+                _raySceneDescriptors?.IsAvailable != true)
+            {
+                SetPartitionFallback(
+                    sceneData,
+                    "transparent-run-ray-descriptors-unavailable");
+                return false;
+            }
+
+            if (sceneData.TransparentReceiveGlobalIllumination ||
+                anyRayRun ||
+                sceneData.DecalReceiveGlobalIllumination)
+            {
+                PublishComputeStorageToFragment(cmd);
+            }
+
+            Extent2D renderExtent = _renderTargets.SceneColor.Extent;
+            SetFullViewportAndScissor(cmd, renderExtent);
+            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
+            _renderTargets.WeightedOitAccumulation
+                .TransitionToColorAttachment(cmd);
+            _renderTargets.WeightedOitRevealage
+                .TransitionToColorAttachment(cmd);
+
+            var colorAttachments = stackalloc RenderingAttachmentInfo[2];
+            colorAttachments[0] = ColorAttachment(
+                _renderTargets.WeightedOitAccumulation.View,
+                ImageLayout.ColorAttachmentOptimal,
+                AttachmentLoadOp.Clear,
+                AttachmentStoreOp.Store,
+                new ClearValue(new ClearColorValue(
+                    0.0f,
+                    0.0f,
+                    0.0f,
+                    0.0f)));
+            colorAttachments[1] = ColorAttachment(
+                _renderTargets.WeightedOitRevealage.View,
+                ImageLayout.ColorAttachmentOptimal,
+                AttachmentLoadOp.Clear,
+                AttachmentStoreOp.Store,
+                new ClearValue(new ClearColorValue(
+                    0.0f,
+                    0.0f,
+                    0.0f,
+                    0.0f)));
+            var depthAttachment = DepthAttachment(
+                _renderTargets.SceneDepth.View,
+                ImageLayout.DepthStencilReadOnlyOptimal,
+                AttachmentLoadOp.Load,
+                AttachmentStoreOp.Store);
+            var renderingInfo = new RenderingInfo
+            {
+                SType = StructureType.RenderingInfo,
+                RenderArea = new Rect2D
+                {
+                    Offset = new Offset2D { X = 0, Y = 0 },
+                    Extent = renderExtent
+                },
+                LayerCount = 1,
+                ColorAttachmentCount = 2,
+                PColorAttachments = colorAttachments,
+                PDepthAttachment = &depthAttachment,
+                PStencilAttachment = null
+            };
+            _context.KhrDynamicRendering.CmdBeginRendering(
+                cmd,
+                &renderingInfo);
+
+            GPUForwardPushConstants pushConstants =
+                TransparentForwardPushConstants.Create(
+                    sceneData,
+                    _meshPipeline.Settings.Transparency);
+            uint pushConstantSize =
+                (uint)Marshal.SizeOf<GPUForwardPushConstants>();
+            PipelineObjects.TransparentPipelineSelection previous = default;
+            bool hasPreviousSelection = false;
+            int pipelineBindCount = 0;
+            for (int index = 0; index < runCount; index++)
+            {
+                TransparentDrawRun run = runs[index];
+                PipelineObjects.TransparentPipelineSelection selection =
+                    selections[index];
+                if (!hasPreviousSelection ||
+                    selection.Pipeline.Handle != previous.Pipeline.Handle ||
+                    selection.Layout.Handle != previous.Layout.Handle ||
+                    selection.BindRayScene != previous.BindRayScene ||
+                    selection.BindReceiverCache !=
+                        previous.BindReceiverCache)
+                {
+                    _context.Api.CmdBindPipeline(
+                        cmd,
+                        PipelineBindPoint.Graphics,
+                        selection.Pipeline);
+                    BindBindlessStorageAndTextures(
+                        cmd,
+                        selection.Layout);
+                    if (selection.BindReceiverCache)
+                    {
+                        _forwardPlusPass
+                            .BindSimpleDdgiReceiverCacheBuffer(
+                                cmd,
+                                frameIndex);
+                    }
+                    if (selection.BindRayScene)
+                    {
+                        _raySceneDescriptors!.Bind(
+                            cmd,
+                            PipelineBindPoint.Graphics,
+                            selection.Layout,
+                            frameIndex);
+                    }
+
+                    previous = selection;
+                    hasPreviousSelection = true;
+                    pipelineBindCount++;
+                }
+
+                pushConstants.MeshletDrawCount =
+                    checked((uint)run.DrawCount);
+                pushConstants.MeshletDrawBufferBaseIndex =
+                    packedDrawRanges[index];
+                _context.Api.CmdPushConstants(
+                    cmd,
+                    selection.Layout,
+                    ShaderStageFlags.MeshBitExt |
+                    ShaderStageFlags.FragmentBit |
+                    ShaderStageFlags.TaskBitExt,
+                    0,
+                    pushConstantSize,
+                    &pushConstants);
+                _context.ExtMeshShader.CmdDrawMeshTask(
+                    cmd,
+                    checked((uint)run.DrawCount),
+                    1,
+                    1);
+            }
+
+            _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            sceneData.ThinGlassDirectionalOnlyPipelineEnabled = 0;
+            sceneData.TransparentPipelinePartitioningEffective = true;
+            sceneData.TransparentPipelineRunCount = runCount;
+            sceneData.TransparentPipelineAverageRunLength =
+                sceneData.TransparentMeshletCount / runCount;
+            sceneData.TransparentPipelineMaximumRunLength =
+                maximumRunLength;
+            sceneData.TransparentPipelineBindCount = pipelineBindCount;
+            sceneData.TransparentPipelineRayMeshletsAvoided =
+                rayMeshletsAvoided;
+            sceneData.TransparentPipelineDecalCacheMeshlets =
+                decalCacheMeshlets;
+            return true;
+        }
+
+        private static void SetPartitionFallback(
+            SceneRenderingData sceneData,
+            string reason)
+        {
+            sceneData.TransparentPipelinePartitioningEffective = false;
+            sceneData.TransparentPipelineUniversalFallbackCount = 1;
+            sceneData.TransparentPipelineFallbackReason = reason;
         }
 
         private bool TrySelectExactFeedbackPipeline(

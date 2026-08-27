@@ -167,7 +167,7 @@ public sealed class DdgiContentDependentContractsTests
     }
 
     [Test]
-    public void CertifiedTransport_UsesStableSkinnedProxy()
+    public void CertifiedTransport_PreservesQualifiedCurrentPoseMode()
     {
         var settings = new GlobalIlluminationSettings
         {
@@ -177,12 +177,13 @@ public sealed class DdgiContentDependentContractsTests
         };
 
         Assert.That(settings.EffectiveDdgiSkinnedGeometryMode,
-            Is.EqualTo(DdgiSkinnedGeometryMode.ConservativeProxy));
+            Is.EqualTo(DdgiSkinnedGeometryMode.CurrentPose));
 
-        settings.SimpleDdgiTransportTailCertificationEnabled = false;
+        settings.ApplyContentDependentReleaseQualification(
+            DdgiContentFeature.None);
 
         Assert.That(settings.EffectiveDdgiSkinnedGeometryMode,
-            Is.EqualTo(DdgiSkinnedGeometryMode.CurrentPose));
+            Is.EqualTo(DdgiSkinnedGeometryMode.Excluded));
     }
 
     [Test]

@@ -43,4 +43,149 @@ namespace Njulf.Rendering.Resources
         public ulong SourceIdentifier { get; init; }
     }
 
+    /// <summary>
+    /// Holds only stable-identity transform invalidations while Transport V2 is
+    /// auditing its immutable source-cache operator. Repeated animation events
+    /// are coalesced into one swept region per source and released as soon as the
+    /// audit leaves its frozen phase. Unsupported events and capacity overflow
+    /// fail closed by releasing all retained work immediately.
+    /// </summary>
+    internal sealed class SimpleDdgiFrozenTailInvalidationBuffer
+    {
+        internal const int MaximumDeferredSourceCount = 1_024;
+
+        private readonly List<DdgiDirtyRegion> _deferred =
+            new(MaximumDeferredSourceCount);
+        private readonly List<DdgiDirtyRegion> _releaseScratch =
+            new(MaximumDeferredSourceCount);
+
+        public int DeferredCount => _deferred.Count;
+        public bool DeferredCurrentFrame { get; private set; }
+        public bool ReleasedDeferredThisFrame { get; private set; }
+
+        public IReadOnlyList<DdgiDirtyRegion>? Resolve(
+            bool auditFrozen,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions)
+        {
+            DeferredCurrentFrame = false;
+            ReleasedDeferredThisFrame = false;
+            _releaseScratch.Clear();
+
+            if (!auditFrozen)
+                return ReleaseWith(dirtyRegions);
+            if (dirtyRegions == null || dirtyRegions.Count == 0)
+                return null;
+
+            for (int i = 0; i < dirtyRegions.Count; i++)
+            {
+                if (!CanDefer(dirtyRegions[i]))
+                    return ReleaseWith(dirtyRegions);
+            }
+
+            for (int i = 0; i < dirtyRegions.Count; i++)
+            {
+                DdgiDirtyRegion current = dirtyRegions[i];
+                int existingIndex = FindDeferredSource(current.SourceIdentifier);
+                if (existingIndex >= 0)
+                {
+                    _deferred[existingIndex] = Merge(
+                        _deferred[existingIndex],
+                        current);
+                    continue;
+                }
+
+                if (_deferred.Count >= MaximumDeferredSourceCount)
+                    return ReleaseWith(dirtyRegions);
+                _deferred.Add(current);
+            }
+
+            DeferredCurrentFrame = true;
+            return null;
+        }
+
+        internal static bool CanDefer(in DdgiDirtyRegion region) =>
+            region.Reason == DdgiDirtyReason.TransformChanged &&
+            region.SourceIdentifier != 0UL &&
+            IsFinite(region.Bounds) &&
+            IsFinite(region.OldWorldBounds) &&
+            IsFinite(region.NewWorldBounds) &&
+            IsFinite(region.InfluenceBounds);
+
+        internal static DdgiDirtyRegion Merge(
+            in DdgiDirtyRegion previous,
+            in DdgiDirtyRegion current)
+        {
+            BoundingBox influence = Union(
+                previous.InfluenceBounds,
+                current.InfluenceBounds);
+            return new DdgiDirtyRegion(
+                influence,
+                DdgiDirtyReason.TransformChanged)
+            {
+                OldWorldBounds = previous.OldWorldBounds,
+                NewWorldBounds = current.NewWorldBounds,
+                InfluenceBounds = influence,
+                ReasonFlags = previous.ReasonFlags |
+                    current.ReasonFlags |
+                    1u << (int)DdgiDirtyReason.TransformChanged,
+                Priority = Math.Max(previous.Priority, current.Priority),
+                SourceRevision = Math.Max(
+                    previous.SourceRevision,
+                    current.SourceRevision),
+                SourceIdentifier = previous.SourceIdentifier
+            };
+        }
+
+        private IReadOnlyList<DdgiDirtyRegion>? ReleaseWith(
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions)
+        {
+            if (_deferred.Count == 0)
+                return dirtyRegions;
+
+            _releaseScratch.AddRange(_deferred);
+            if (dirtyRegions != null)
+            {
+                for (int i = 0; i < dirtyRegions.Count; i++)
+                    _releaseScratch.Add(dirtyRegions[i]);
+            }
+            _deferred.Clear();
+            ReleasedDeferredThisFrame = true;
+            return _releaseScratch;
+        }
+
+        private int FindDeferredSource(ulong sourceIdentifier)
+        {
+            for (int i = 0; i < _deferred.Count; i++)
+            {
+                if (_deferred[i].SourceIdentifier == sourceIdentifier)
+                    return i;
+            }
+            return -1;
+        }
+
+        private static bool IsFinite(in BoundingBox bounds) =>
+            IsFinite(bounds.Min.X) &&
+            IsFinite(bounds.Min.Y) &&
+            IsFinite(bounds.Min.Z) &&
+            IsFinite(bounds.Max.X) &&
+            IsFinite(bounds.Max.Y) &&
+            IsFinite(bounds.Max.Z);
+
+        private static bool IsFinite(float value) =>
+            !float.IsNaN(value) && !float.IsInfinity(value);
+
+        private static BoundingBox Union(
+            in BoundingBox left,
+            in BoundingBox right) =>
+            new(
+                new(
+                    MathF.Min(left.Min.X, right.Min.X),
+                    MathF.Min(left.Min.Y, right.Min.Y),
+                    MathF.Min(left.Min.Z, right.Min.Z)),
+                new(
+                    MathF.Max(left.Max.X, right.Max.X),
+                    MathF.Max(left.Max.Y, right.Max.Y),
+                    MathF.Max(left.Max.Z, right.Max.Z)));
+    }
+
 }

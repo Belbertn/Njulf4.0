@@ -24,6 +24,8 @@ public sealed class SampleDebugViewCycleTests
             Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.MaterialTransportHitProvenance));
             Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.FarFieldOccupancySlice));
             Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.FarFieldSunShadow));
+            Assert.That(visited, Does.Contain(
+                GlobalIlluminationDebugView.DdgiReceiverCacheRejection));
             if (RendererBuildFeatures.DdgiVisualDebugViewsCompiled)
             {
                 Assert.That(visited, Does.Contain(GlobalIlluminationDebugView.DdgiIrradiance));

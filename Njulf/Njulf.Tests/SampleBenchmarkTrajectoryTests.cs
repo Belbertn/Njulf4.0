@@ -13,6 +13,7 @@ public sealed class SampleBenchmarkTrajectoryTests
     [TestCase("bistro-loop", SampleBenchmarkTrajectoryKind.BistroLoop, 240, true)]
     [TestCase("sponza-low", SampleBenchmarkTrajectoryKind.SponzaLow, 1, false)]
     [TestCase("sponza-high", SampleBenchmarkTrajectoryKind.SponzaHigh, 1, false)]
+    [TestCase("sponza-receiver-cache-incident", SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident, 1, false)]
     [TestCase("sponza-horizontal", SampleBenchmarkTrajectoryKind.SponzaHorizontal, 300, true)]
     [TestCase("sponza-vertical", SampleBenchmarkTrajectoryKind.SponzaVertical, 960, true)]
     public void NamedContracts_ParseWithLockedFrameCounts(
@@ -37,6 +38,25 @@ public sealed class SampleBenchmarkTrajectoryTests
                     parsed,
                     SampleBistroQualityCaptureVariant.SunScaleStep),
                 Does.Match("^sha256:[0-9a-f]{64}$"));
+        });
+    }
+
+    [Test]
+    public void ReceiverCacheIncidentTrajectory_PreservesReportedCamera()
+    {
+        SampleBenchmarkCameraPose pose = SampleBenchmarkTrajectory.ResolveCamera(
+            SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident,
+            0,
+            SampleBistroQualityCaptureVariant.SunScaleStep)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pose.Name, Is.EqualTo("SponzaReceiverCacheCurtainMasonryIncident"));
+            Assert.That(pose.Position.X, Is.EqualTo(5.423569f));
+            Assert.That(pose.Position.Y, Is.EqualTo(1.5170902f));
+            Assert.That(pose.Position.Z, Is.EqualTo(1.0029265f));
+            Assert.That(pose.Yaw, Is.EqualTo(-1.3008178f));
+            Assert.That(pose.Pitch, Is.EqualTo(-0.55801713f));
         });
     }
 

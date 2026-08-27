@@ -9,6 +9,8 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 const uint SIMPLE_DDGI_BLEND_FLAG_SHARED_RAY_CACHE = 1u << 3;
 const uint SIMPLE_DDGI_BLEND_FLAG_REDUCED_COMPLEXITY = 1u << 5;
+const uint SIMPLE_DDGI_BLEND_SOLVE_COMPACT_READ = 1u << 21u;
+const uint SIMPLE_DDGI_BLEND_SOLVE_COMPACT_WRITE = 1u << 22u;
 const uint SIMPLE_DDGI_BLEND_SWEEP_INDEX_SHIFT = 28u;
 const float SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_MEAN_SPACING = 1.0;
 const float SIMPLE_DDGI_BOOTSTRAP_VISIBILITY_STDDEV_SPACING = 0.5;
@@ -38,6 +40,8 @@ shared uint SharedSimpleGuidingMaintenanceCount;
 shared uint SharedSimpleGuidingMixtureCount;
 #endif
 shared float SharedSimpleIrradianceDelta[64];
+shared vec4 SharedSimpleQuadratureFull[64];
+shared vec4 SharedSimpleQuadraturePrefix[64];
 // The reduced path projects only low-frequency irradiance. Visibility remains
 // the exact directional ray-by-texel estimator because sparse octahedral splats
 // create zero-moment holes and probe-aligned shadow bands.
@@ -170,6 +174,119 @@ uint SimpleDdgiIrradianceWriteBuffer(SimpleDdgiParams params)
         (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
         ? pc.TransportWriteIrradianceAtlasBufferIndex
         : pc.IrradianceAtlasBufferIndex;
+}
+
+uint SimpleDdgiBlendOutcomeIndex = 0u;
+
+vec4 ReadSimpleDdgiBlendIrradianceTexel(
+    uint bufferIndex,
+    uint physicalProbeIndex,
+    uint texelIndex,
+    uint texelsPerProbe)
+{
+    if ((pc.Flags & SIMPLE_DDGI_BLEND_SOLVE_COMPACT_READ) != 0u)
+    {
+        return ReadSimpleDdgiIrradianceTexelAtOffset(
+            pc.SchedulerArenaBufferIndex,
+            pc.DispatchQueueOffset,
+            SimpleDdgiBlendOutcomeIndex,
+            texelIndex,
+            texelsPerProbe);
+    }
+    return ReadSimpleDdgiIrradianceTexel(
+        bufferIndex,
+        physicalProbeIndex,
+        texelIndex,
+        texelsPerProbe);
+}
+
+void WriteSimpleDdgiBlendIrradianceTexel(
+    uint bufferIndex,
+    uint physicalProbeIndex,
+    uint texelIndex,
+    uint texelsPerProbe,
+    vec4 value)
+{
+    if ((pc.Flags & SIMPLE_DDGI_BLEND_SOLVE_COMPACT_WRITE) != 0u)
+    {
+        WriteSimpleDdgiIrradianceTexelAtOffset(
+            pc.SchedulerArenaBufferIndex,
+            pc.DispatchQueueOffset,
+            SimpleDdgiBlendOutcomeIndex,
+            texelIndex,
+            texelsPerProbe,
+            value);
+        return;
+    }
+    WriteSimpleDdgiIrradianceTexel(
+        bufferIndex,
+        physicalProbeIndex,
+        texelIndex,
+        texelsPerProbe,
+        value);
+}
+
+void PublishSimpleDdgiQuadratureWitness(
+    SimpleDdgiProbeUpdate update,
+    uint rayCount)
+{
+    uint local = gl_LocalInvocationID.x;
+    uint boundedRayCount = min(rayCount, SIMPLE_DDGI_MAX_RAYS_PER_PROBE);
+    uint prefixRayCount = max(boundedRayCount / 2u, 1u);
+    vec4 fullMoment = vec4(0.0);
+    vec4 prefixMoment = vec4(0.0);
+    for (uint ray = local; ray < boundedRayCount; ray += gl_WorkGroupSize.x)
+    {
+        float luminance = SimpleDdgiLuminance(
+            SharedSimpleRayRadianceDistance[ray].rgb);
+        vec3 direction = normalize(
+            SharedSimpleRayDirectionHit[ray].xyz);
+        vec4 directionalMoment = vec4(luminance * direction, luminance);
+        fullMoment += directionalMoment;
+        if (ray < prefixRayCount)
+            prefixMoment += directionalMoment;
+    }
+    SharedSimpleQuadratureFull[local] = fullMoment;
+    SharedSimpleQuadraturePrefix[local] = prefixMoment;
+    barrier();
+
+    if (local == 0u)
+    {
+        vec4 full = vec4(0.0);
+        vec4 prefix = vec4(0.0);
+        for (uint lane = 0u; lane < gl_WorkGroupSize.x; lane++)
+        {
+            full += SharedSimpleQuadratureFull[lane];
+            prefix += SharedSimpleQuadraturePrefix[lane];
+        }
+        full /= float(max(boundedRayCount, 1u));
+        prefix /= float(prefixRayCount);
+        float energyFloor = max(max(full.w, prefix.w) * 0.05, 1.0e-4);
+        vec4 scale = max(max(abs(full), abs(prefix)), vec4(energyFloor));
+        vec4 relativeError = abs(full - prefix) / scale;
+        float error = clamp(max(
+            max(relativeError.x, relativeError.y),
+            max(relativeError.z, relativeError.w)), 0.0, 1.0);
+        // Outcome word 11 reserves its low half for the bounded ray count.
+        // Encode 1..65535 in the high half (zero means unmeasured) to keep the
+        // 60-byte shipping outcome ABI and scheduler memory cap unchanged.
+        uint quantized = (!isnan(error) && !isinf(error) &&
+                boundedRayCount >= 2u)
+            ? min(uint(round(error * 65534.0)) + 1u, 65535u)
+            : 0u;
+        uint countAndWitness = ReadStorageWordUniform(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords +
+                update.outcomeIndex *
+                    SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS + 11u);
+        WriteStorageWordUniform(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords +
+                update.outcomeIndex *
+                    SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS + 11u,
+            (countAndWitness & 0xffffu) | (quantized << 16u));
+    }
+    barrier();
 }
 
 void LoadSimpleRayCache(
@@ -422,7 +539,7 @@ float BlendIrradianceTexel(
 
     uint irradianceReadBuffer = SimpleDdgiIrradianceReadBuffer(params);
     uint irradianceWriteBuffer = SimpleDdgiIrradianceWriteBuffer(params);
-    vec4 previous = ReadSimpleDdgiIrradianceTexel(irradianceReadBuffer, physicalProbeIndex, texel, params.irradianceTexels);
+    vec4 previous = ReadSimpleDdgiBlendIrradianceTexel(irradianceReadBuffer, physicalProbeIndex, texel, params.irradianceTexels);
     if (weightSum <= 0.000001)
     {
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_ZERO_RAY_WEIGHT_PROBE_COUNTER, 1u);
@@ -434,12 +551,12 @@ float BlendIrradianceTexel(
             // Certified V2 must instead publish the positive operator's zero
             // result below: preserving an arbitrary prior value is an identity
             // branch that is neither contractive nor equal to the frozen audit.
-            WriteSimpleDdgiIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, previous);
+            WriteSimpleDdgiBlendIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, previous);
             return 0.0;
         }
         if (freshUpdate)
         {
-            WriteSimpleDdgiIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, vec4(0.0));
+            WriteSimpleDdgiBlendIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, vec4(0.0));
             return 1.0;
         }
     }
@@ -484,7 +601,7 @@ float BlendIrradianceTexel(
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_NONZERO_IRRADIANCE_PROBE_COUNTER, 1u);
     if (probeHysteresis > 0.0001 && previous.w > 0.0001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
-    WriteSimpleDdgiIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, blended);
+    WriteSimpleDdgiBlendIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, blended);
     if (previous.w <= 0.0001)
         return 1.0;
     return (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
@@ -898,10 +1015,10 @@ float BlendReducedIrradianceTexel(
         1.0);
     uint irradianceReadBuffer = SimpleDdgiIrradianceReadBuffer(params);
     uint irradianceWriteBuffer = SimpleDdgiIrradianceWriteBuffer(params);
-    vec4 previous = ReadSimpleDdgiIrradianceTexel(irradianceReadBuffer, physicalProbeIndex, texel, params.irradianceTexels);
+    vec4 previous = ReadSimpleDdgiBlendIrradianceTexel(irradianceReadBuffer, physicalProbeIndex, texel, params.irradianceTexels);
     if (freshUpdate && SimpleDdgiLuminance(irradiance) <= 0.000001)
     {
-        WriteSimpleDdgiIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, vec4(0.0));
+        WriteSimpleDdgiBlendIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, vec4(0.0));
         return 1.0;
     }
     float texelHysteresis = SimpleDdgiAdaptiveIrradianceHysteresis(params, previous, irradiance, probeHysteresis, maintenanceUpdate);
@@ -911,7 +1028,7 @@ float BlendReducedIrradianceTexel(
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_NONZERO_IRRADIANCE_PROBE_COUNTER, 1u);
     if (probeHysteresis > 0.0001 && previous.w > 0.0001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
-    WriteSimpleDdgiIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, blended);
+    WriteSimpleDdgiBlendIrradianceTexel(irradianceWriteBuffer, physicalProbeIndex, texel, params.irradianceTexels, blended);
     if (previous.w <= 0.0001)
         return 1.0;
     return (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u
@@ -936,6 +1053,21 @@ void main()
         return;
 
     SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, localProbeOffset);
+    SimpleDdgiBlendOutcomeIndex = update.outcomeIndex;
+    bool compactSolverBank = (pc.Flags &
+        (SIMPLE_DDGI_BLEND_SOLVE_COMPACT_READ |
+            SIMPLE_DDGI_BLEND_SOLVE_COMPACT_WRITE)) != 0u;
+    if (compactSolverBank &&
+        (pc.DispatchProbeCount == 0u ||
+            update.outcomeIndex >= pc.DispatchProbeCount))
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
+        return;
+    }
     uint probeIndex = update.probeIndex;
     if (probeIndex >= params.probeCount)
     {
@@ -1021,14 +1153,14 @@ void main()
         initialState.activeWeight <= 0.001;
     if (inactiveProbe)
     {
-        if (!firstSweepFirstColor)
+        if (!firstSweepFirstColor && !compactSolverBank)
             return;
 
         uint irradianceWriteBuffer = SimpleDdgiIrradianceWriteBuffer(params);
         uint irradianceTexelCount = params.irradianceTexels * params.irradianceTexels;
         for (uint texel = local; texel < irradianceTexelCount; texel += gl_WorkGroupSize.x)
         {
-            WriteSimpleDdgiIrradianceTexel(
+            WriteSimpleDdgiBlendIrradianceTexel(
                 irradianceWriteBuffer,
                 physicalProbeIndex,
                 texel,
@@ -1101,7 +1233,7 @@ void main()
     // a full retry traces from the committed position.
     if ((initialState.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u)
     {
-        if (!firstSweepFirstColor)
+        if (!firstSweepFirstColor && !compactSolverBank)
             return;
 
         // The V2 target is intentionally private until the entire update is
@@ -1116,8 +1248,8 @@ void main()
             uint texelCount = params.irradianceTexels * params.irradianceTexels;
             for (uint texel = local; texel < texelCount; texel += gl_WorkGroupSize.x)
             {
-                vec4 canonical = ReadSimpleDdgiIrradianceTexel(readBuffer, physicalProbeIndex, texel, params.irradianceTexels);
-                WriteSimpleDdgiIrradianceTexel(writeBuffer, physicalProbeIndex, texel, params.irradianceTexels, canonical);
+                vec4 canonical = ReadSimpleDdgiBlendIrradianceTexel(readBuffer, physicalProbeIndex, texel, params.irradianceTexels);
+                WriteSimpleDdgiBlendIrradianceTexel(writeBuffer, physicalProbeIndex, texel, params.irradianceTexels, canonical);
             }
             uint visibilityTexelCount = params.visibilityTexels * params.visibilityTexels;
             for (uint texel = local; texel < visibilityTexelCount; texel += gl_WorkGroupSize.x)
@@ -1278,6 +1410,12 @@ void main()
             }
         }
         return;
+    }
+
+    if (gpuScheduler && firstSweepFirstColor &&
+        SimpleDdgiUpdateRequiresSourceRefresh(update))
+    {
+        PublishSimpleDdgiQuadratureWitness(update, projectionRayCount);
     }
 
     if (local == 0u && (!transportV2Active || firstSweepFirstColor))

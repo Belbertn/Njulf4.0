@@ -680,6 +680,49 @@ public sealed unsafe class AccelerationStructureManagerTests
     }
 
     [Test]
+    public void DynamicRayScenePolicy_CapsMixedFoliageWithoutIdlingSkinnedCapacity()
+    {
+        DdgiDynamicRayScenePolicy policy =
+            DdgiDynamicRayScenePolicy.LegacyBaseline with
+            {
+                SkinnedGeometryMode = DdgiSkinnedGeometryMode.CurrentPose,
+                FoliageGeometryMode =
+                    DdgiFoliageGeometryMode.AuthoredAndProceduralProxy,
+                DynamicStorageBudgetBytes = 64UL * 1024UL * 1024UL,
+                MaximumBuildsPerFrame = 8,
+                MaximumPrimitivesPerFrame = 80_000
+            };
+
+        DdgiDynamicBlasContentBudget skinned = policy.ResolveContentBudget(
+            DdgiDynamicBlasContentClass.CurrentPoseSkinned,
+            mixedContent: true);
+        DdgiDynamicBlasContentBudget foliage = policy.ResolveContentBudget(
+            DdgiDynamicBlasContentClass.ProceduralFoliage,
+            mixedContent: true);
+        DdgiDynamicBlasContentBudget foliageOnly = policy.ResolveContentBudget(
+            DdgiDynamicBlasContentClass.ProceduralFoliage,
+            mixedContent: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(skinned.StorageBudgetBytes,
+                Is.EqualTo(64UL * 1024UL * 1024UL));
+            Assert.That(skinned.MaximumBuildsPerFrame, Is.EqualTo(8));
+            Assert.That(skinned.MaximumPrimitivesPerFrame, Is.EqualTo(80_000));
+            Assert.That(foliage.StorageBudgetBytes,
+                Is.EqualTo(16UL * 1024UL * 1024UL));
+            Assert.That(foliage.MaximumBuildsPerFrame, Is.EqualTo(2));
+            Assert.That(foliage.MaximumPrimitivesPerFrame, Is.EqualTo(20_000));
+            Assert.That(foliageOnly.StorageBudgetBytes,
+                Is.EqualTo(skinned.StorageBudgetBytes));
+            Assert.That(foliageOnly.MaximumBuildsPerFrame,
+                Is.EqualTo(skinned.MaximumBuildsPerFrame));
+            Assert.That(foliageOnly.MaximumPrimitivesPerFrame,
+                Is.EqualTo(skinned.MaximumPrimitivesPerFrame));
+        });
+    }
+
+    [Test]
     public void ResidencyPolicy_SkipsNearestSelectionWhenStaticAdmissionIsUnbounded()
     {
         var unbounded = new AccelerationStructureResidencyPolicy(

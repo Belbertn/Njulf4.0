@@ -180,7 +180,16 @@ namespace Njulf.Rendering.Pipeline
         // Full-resolution packed visibility for up to four scheduled area lights.
         AreaRayShadowMask,
         // Sparse per-tile DDGI cohort records. Appended to preserve capture IDs.
-        HybridReflectionDdgiCohorts
+        HybridReflectionDdgiCohorts,
+        // C5 V14 persistent 16-byte tile scheduler records.
+        NearFieldResidualSchedulerHistory,
+        // Distinct GTAO resources are append-only so existing capture IDs stay
+        // stable and the SSAO resource contract remains untouched.
+        GtaoRaw,
+        GtaoSpatialScratch,
+        GtaoHistory,
+        GtaoGeometryHistory,
+        GtaoFiltered
     }
 
     public enum RenderGraphResourceKind

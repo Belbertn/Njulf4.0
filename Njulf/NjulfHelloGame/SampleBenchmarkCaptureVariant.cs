@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
 
@@ -25,6 +26,8 @@ public static class SampleBenchmarkCaptureVariant
     public const string ForwardGiEnabled = "forward-gi-enabled";
     public const string ForwardGiDisabled = "forward-gi-disabled";
     public const string ForwardGiExact = "forward-gi-exact";
+    public const string ForwardGiSurfaceDiagnostics =
+        "forward-gi-surface-diagnostics";
     public const string AmbientOcclusionDisabled =
         "ambient-occlusion-disabled";
     public const string AmbientOcclusionRaw = "ambient-occlusion-raw";
@@ -72,6 +75,7 @@ public static class SampleBenchmarkCaptureVariant
         settings.Diagnostics.SuppressForwardGiGatherForBenchmark = false;
         settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark = false;
         settings.Diagnostics.ForceExactForwardGiGatherForBenchmark = false;
+        settings.Diagnostics.DdgiForwardEstimateCountersEnabled = false;
         settings.Shadows.ForceStaticCascadeCacheRefresh = false;
         settings.AmbientOcclusion.DebugView = AmbientOcclusionDebugView.None;
         settings.Reflections.DebugView = ReflectionDebugView.None;
@@ -115,6 +119,24 @@ public static class SampleBenchmarkCaptureVariant
                 return normalized;
             case ForwardGiExact:
                 settings.Diagnostics.ForceExactForwardGiGatherForBenchmark = true;
+                return normalized;
+            case ForwardGiSurfaceDiagnostics:
+                settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                    SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial;
+                settings.GlobalIllumination.GiCausticMode =
+                    GiCausticMode.Off;
+                settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
+                    SimpleDdgiNearFieldResidualMode.Off;
+                settings.GlobalIllumination.SimpleDdgiDirectionalRadianceMode =
+                    SimpleDdgiDirectionalRadianceMode.Off;
+                settings.GlobalIllumination.SimpleDdgiGlossyTransportMode =
+                    SimpleDdgiGlossyTransportMode.Off;
+                settings.Diagnostics.DdgiForwardEstimateCountersEnabled = true;
+                // Qualification counter artifacts intentionally own the
+                // ordinary SceneColor contract. Keep this diagnostic variant
+                // isolated from C4/C5 and directional/hybrid-reflection MRT
+                // production.
+                settings.Reflections.Enabled = false;
                 return normalized;
             case ForwardGiDisabled:
                 settings.Diagnostics.SuppressForwardGiGatherForBenchmark = true;
@@ -202,7 +224,8 @@ public static class SampleBenchmarkCaptureVariant
             DecalShadowsDisabled or TransparentGiDisabled or
             TransparentShadowsDisabled or FarFieldGated or FarFieldForcedOld or
             TailJacobi or TailAccelerated or ForwardGiEnabled or
-            ForwardGiDisabled or ForwardGiExact or ReflectionsDisabled or
+            ForwardGiDisabled or ForwardGiExact or
+            ForwardGiSurfaceDiagnostics or ReflectionsDisabled or
             AmbientOcclusionDisabled or AmbientOcclusionRaw or
             AmbientOcclusionBlurred or AmbientOcclusionFinal or
             AmbientOcclusionUnblurred or MaterialOcclusion or
@@ -238,6 +261,7 @@ public static class SampleBenchmarkCaptureVariant
             $"{TransparentShadowsDisabled}, {FarFieldGated}, {FarFieldForcedOld}, " +
             $"{TailJacobi}, {TailAccelerated}, " +
             $"{ForwardGiEnabled}, {ForwardGiDisabled}, {ForwardGiExact}, " +
+            $"{ForwardGiSurfaceDiagnostics}, " +
             $"{AmbientOcclusionDisabled}, {AmbientOcclusionRaw}, " +
             $"{AmbientOcclusionBlurred}, {AmbientOcclusionFinal}, " +
             $"{AmbientOcclusionUnblurred}, {MaterialOcclusion}, " +

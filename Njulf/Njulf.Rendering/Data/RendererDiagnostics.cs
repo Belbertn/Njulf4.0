@@ -537,8 +537,13 @@ namespace Njulf.Rendering.Data
         string FogFormat,
         long GpuFogMicroseconds,
         int AmbientOcclusionEnabled,
+        AmbientOcclusionMode RequestedAmbientOcclusionMode,
         AmbientOcclusionMode AmbientOcclusionMode,
+        int GtaoRuntimeSupported,
         AmbientOcclusionDebugView AmbientOcclusionDebugView,
+        AmbientOcclusionBentNormalMode AmbientOcclusionBentNormalMode,
+        GtaoQualityPreset GtaoQualityPreset,
+        int GtaoHistoryValid,
         AmbientOcclusionForwardSamplingMode AmbientOcclusionForwardSamplingMode,
         int AmbientOcclusionForwardDepthAwareSamples,
         uint AmbientOcclusionWidth,
@@ -781,6 +786,17 @@ namespace Njulf.Rendering.Data
         public int TransparentSortCandidateCount { get; init; }
         public long TransparentSortMicroseconds { get; init; }
         public int TransparentOverflowCount { get; init; }
+        public int TransparentPipelinePartitioningEnabled { get; init; }
+        public int TransparentPipelinePartitioningEffective { get; init; }
+        public int TransparentPipelineRunCount { get; init; }
+        public int TransparentPipelineAverageRunLength { get; init; }
+        public int TransparentPipelineMaximumRunLength { get; init; }
+        public int TransparentPipelineBindCount { get; init; }
+        public int TransparentPipelineUniversalFallbackCount { get; init; }
+        public int TransparentPipelineRayMeshletsAvoided { get; init; }
+        public int TransparentPipelineDecalCacheMeshlets { get; init; }
+        public string TransparentPipelineFallbackReason { get; init; } =
+            string.Empty;
         public int StaticInstanceBatchCount { get; init; }
         public int StaticInstanceCount { get; init; }
         public int VisibleStaticInstanceCount { get; init; }
@@ -1353,6 +1369,11 @@ namespace Njulf.Rendering.Data
         public int ForwardOpaquePipelineCacheEntryCount { get; init; }
         public int NormalConeEligibleOpaqueMeshletCount { get; init; }
         public int DoubleSidedOpaqueMeshletCount { get; init; }
+        public bool MeshletNormalConeCullingEnabled { get; init; }
+        public int MeshletNormalConeCandidateCount { get; init; }
+        public int MeshletNormalConeTestedCount { get; init; }
+        public int MeshletNormalConeRejectedCount { get; init; }
+        public int MeshletNormalConeInvalidCount { get; init; }
         public int ForwardMeshOnlyIndirectDrawCount { get; init; }
         public int DepthMeshOnlyIndirectDrawCount { get; init; }
         public int DirectionalShadowMeshOnlyIndirectDrawCount { get; init; }
@@ -1420,6 +1441,18 @@ namespace Njulf.Rendering.Data
         public long GpuForwardGiGatherMicroseconds { get; init; }
         /// <summary>Exclusive opaque Simple-DDGI receiver-cache compute dispatch.</summary>
         public long GpuSimpleDdgiReceiverCacheMicroseconds { get; init; }
+        /// <summary>
+        /// Requested/effective receiver-cache identity, surface ABI thresholds,
+        /// memory, and optional fence-complete rejection evidence.
+        /// </summary>
+        public SimpleDdgiReceiverCacheDiagnostics SimpleDdgiReceiverCache
+        {
+            get;
+            init;
+        } = SimpleDdgiReceiverCacheDiagnostics.Exact(
+            SimpleDdgiReceiverCacheMode.Exact,
+            SimpleDdgiReceiverCacheFallbackReason.ExactRequested,
+            "receiver-cache diagnostics unavailable");
         /// <summary>0 unavailable; 1 inclusive forward draw scope.</summary>
         public int GpuForwardGiGatherTimingCoverage { get; init; }
         /// <summary>
@@ -1519,6 +1552,11 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiFullRayProbeUpdateCount { get; init; }
         public int SimpleDdgiMaintenanceRayProbeUpdateCount { get; init; }
         public ulong SimpleDdgiAdaptiveRaySavedRaysPerFrame { get; init; }
+        public SimpleDdgiAdaptiveRayEvidence SimpleDdgiAdaptiveRayEvidence
+        {
+            get;
+            init;
+        }
         public int SimpleDdgiNearFullRayProbeUpdateCount { get; init; }
         public int SimpleDdgiMidFullRayProbeUpdateCount { get; init; }
         public int SimpleDdgiFarFullRayProbeUpdateCount { get; init; }
@@ -2403,8 +2441,14 @@ namespace Njulf.Rendering.Data
             FogFormat: string.Empty,
             GpuFogMicroseconds: 0,
             AmbientOcclusionEnabled: 0,
+            RequestedAmbientOcclusionMode: AmbientOcclusionMode.Disabled,
             AmbientOcclusionMode: AmbientOcclusionMode.Disabled,
+            GtaoRuntimeSupported: 0,
             AmbientOcclusionDebugView: AmbientOcclusionDebugView.None,
+            AmbientOcclusionBentNormalMode:
+                AmbientOcclusionBentNormalMode.Off,
+            GtaoQualityPreset: GtaoQualityPreset.Balanced,
+            GtaoHistoryValid: 0,
             AmbientOcclusionForwardSamplingMode: AmbientOcclusionForwardSamplingMode.Disabled,
             AmbientOcclusionForwardDepthAwareSamples: 0,
             AmbientOcclusionWidth: 0,

@@ -45,6 +45,52 @@ public sealed class PerformanceSnapshotWriterTests
     }
 
     [Test]
+    public void GlobalIlluminationSnapshot_PreservesReceiverCacheQualificationEvidence()
+    {
+        SimpleDdgiReceiverCacheDiagnostics receiverCache =
+            SimpleDdgiReceiverCacheDiagnostics.Active(
+                SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial,
+                SimpleDdgiReceiverCacheFallbackReason
+                    .TemporalAdaptiveUnavailable,
+                "spatial fallback",
+                radianceBytes: 4_096,
+                surfaceSidecarBytes: 2_048,
+                pipelineArtifact: "receiver-cache-surface-v1") with
+            {
+                CounterReadbackValid = 1,
+                ResolveCandidateCount = 100,
+                ResolveValidCount = 80,
+                ForwardCandidateCount = 1_000,
+                ForwardAcceptedCount = 750,
+                ForwardNormalRejectCount = 125,
+                ExactFallbackFragmentCount = 250
+            };
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            SimpleDdgiReceiverCache = receiverCache
+        };
+
+        PerformanceGlobalIlluminationSnapshot snapshot =
+            PerformanceSnapshotWriter.CreateGlobalIlluminationSnapshot(
+                diagnostics);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.SimpleDdgiReceiverCache,
+                Is.EqualTo(receiverCache));
+            Assert.That(snapshot.SimpleDdgiReceiverCache.SurfaceAbiVersion,
+                Is.EqualTo(SimpleDdgiReceiverSurfaceAbi.Version));
+            Assert.That(snapshot.SimpleDdgiReceiverCache.AcceptedPercentage,
+                Is.EqualTo(75.0));
+            Assert.That(snapshot.SimpleDdgiReceiverCache
+                .ExactFallbackPercentage, Is.EqualTo(25.0));
+            Assert.That(snapshot.SimpleDdgiReceiverCache.TimingEligible,
+                Is.False);
+        });
+    }
+
+    [Test]
     public void SnapshotAndMemoryAudit_PreserveAuthoritativePackedStorageEvidence()
     {
         SimpleDdgiStorageDiagnostics storage =

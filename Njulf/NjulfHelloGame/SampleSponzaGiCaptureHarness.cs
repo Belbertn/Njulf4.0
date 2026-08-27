@@ -343,7 +343,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v22";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v23";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1920;
@@ -389,6 +389,23 @@ public sealed class SampleSponzaGiCaptureContract
     };
 
     private static readonly SampleSponzaGiCaptureContract DefaultContract = CreateDefault();
+
+    /// <summary>
+    /// Exact camera that exposed the depth-only receiver-cache curtain/masonry
+    /// regression on 2026-08-26. Keep this immutable bookmark in the repository
+    /// so exact and candidate captures can replay the incident byte-for-byte.
+    /// </summary>
+    public static SampleSponzaGiCameraBookmark ReceiverCacheIncidentBookmark
+    {
+        get;
+    } = new(
+        "SponzaReceiverCacheCurtainMasonryIncident",
+        new Vector3(5.423569f, 1.5170902f, 1.0029265f),
+        -1.3008178f,
+        -0.55801713f,
+        MathF.PI / 3.2f,
+        0.05f,
+        250.0f);
 
     public string SchemaVersion { get; }
     public SampleSceneKind SceneKind { get; }
@@ -1465,9 +1482,9 @@ public sealed class SampleSponzaGiCaptureContract
         if (ReceiverRois.Count != 11)
             throw new InvalidOperationException(
                 "The closure capture requires the established coverage ROIs plus the former clipmap/reflection transition strip.");
-        if (Outputs.Count != 28)
+        if (Outputs.Count != 29)
             throw new InvalidOperationException(
-                "The closure capture requires the twenty-eight locked beauty/A-B/direct/GI and sparse-residency attribution outputs.");
+                "The closure capture requires the twenty-nine locked beauty/A-B/direct/GI, sparse-residency attribution, and receiver-cache rejection outputs.");
 
         ValidateDistinctNames(ReceiverRois.Select(static roi => roi.Name), "receiver ROI");
         ValidateDistinctNames(Outputs.Select(static output => output.Name), "output");
@@ -1542,7 +1559,7 @@ public sealed class SampleSponzaGiCaptureContract
             "data-confidence", "directional-support", "confidence-chain",
             "probe-state", "probe-index", "ray-budget"
             , "visibility-moments", "probe-relocation", "probe-residency",
-            "residency-fallback", "page-age", "physical-page"
+            "residency-fallback", "page-age", "physical-page", "receiver-cache-rejection"
         ];
         if (!Outputs.Select(static output => output.Name).OrderBy(static value => value, StringComparer.Ordinal).SequenceEqual(
                 requiredOutputs.OrderBy(static value => value, StringComparer.Ordinal), StringComparer.Ordinal))
@@ -1700,6 +1717,7 @@ public sealed class SampleSponzaGiCaptureContract
                 new SampleSponzaGiCaptureOutput("residency-fallback", "residency-fallback", GlobalIlluminationDebugView.DdgiResidencyFallback, false, "Coherent coarse fallback used while fine data is absent or warming."),
                 new SampleSponzaGiCaptureOutput("page-age", "page-age", GlobalIlluminationDebugView.DdgiPageAge, false, "Sparse-page age and publication latency attribution."),
                 new SampleSponzaGiCaptureOutput("physical-page", "physical-page", GlobalIlluminationDebugView.DdgiPhysicalPage, false, "Virtual-to-physical sparse-page identity."),
+                new SampleSponzaGiCaptureOutput("receiver-cache-rejection", "receiver-cache-rejection", GlobalIlluminationDebugView.DdgiReceiverCacheRejection, false, "Surface-aware cache admission and exact-fallback reason."),
                 // Keep the destructive A/B reference last. Disabling GI changes
                 // the ray-scene content epoch; placing this ahead of the DDGI
                 // views sampled a newly re-enabled field after only three

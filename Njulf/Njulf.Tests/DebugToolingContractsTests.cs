@@ -105,7 +105,9 @@ namespace Njulf.Tests
                 ("DDGI area-light sampling", RendererDiagnosticsBuffer.DdgiAreaLightCounterBase,
                     RendererDiagnosticsBuffer.DdgiAreaLightCounterCount),
                 ("transparent reflections", RendererDiagnosticsBuffer.TransparentReflectionCounterBase,
-                    RendererDiagnosticsBuffer.TransparentReflectionCounterCount)
+                    RendererDiagnosticsBuffer.TransparentReflectionCounterCount),
+                ("simple DDGI receiver cache", RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterBase,
+                    RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -174,8 +176,10 @@ namespace Njulf.Tests
                     Is.EqualTo(RendererDiagnosticsBuffer.TransparentReflectionCounterBase));
                 Assert.That(RendererDiagnosticsBuffer.TransparentReflectionCounterCount,
                     Is.EqualTo(16));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterCount,
+                    Is.EqualTo(17));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
-                    Is.EqualTo(RendererDiagnosticsBuffer.TransparentReflectionCounterBase + 16));
+                    Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterBase + 17));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount *
                                             sizeof(uint)));
@@ -220,6 +224,10 @@ namespace Njulf.Tests
                     "TRANSPARENT_REFLECTION_SSR_RESERVED_SAMPLE_COUNTER ="));
                 Assert.That(commonShader, Does.Contain(
                     "TRANSPARENT_REFLECTION_RAY_EXACT_BUDGET_REJECT_COUNTER ="));
+                Assert.That(commonShader, Does.Contain(
+                    "SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE ="));
+                Assert.That(commonShader, Does.Contain(
+                    "SIMPLE_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_COUNTER ="));
                 Assert.That(simpleSharedShader, Does.Contain(
                     "void RecordSimpleDdgiVolumeEnergyEvidence("));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -237,6 +245,49 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.CounterBufferSize,
                     Is.EqualTo((ulong)nextExpectedStart * sizeof(uint)));
             });
+        }
+
+        [Test]
+        public void RendererDiagnosticsBuffer_ReceiverCacheCountersRequireMarkerAndUseStableOffsets()
+        {
+            var words = new uint[RendererDiagnosticsBuffer.CounterCount];
+
+            SimpleDdgiReceiverCacheGpuCounters unavailable =
+                RendererDiagnosticsBuffer.DecodeSimpleDdgiReceiverCacheCounters(words);
+
+            int counterBase = RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterBase;
+            words[counterBase] = 1u;
+            for (int offset = 1; offset < RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterCount; offset++)
+                words[counterBase + offset] = (uint)(100 + offset);
+
+            SimpleDdgiReceiverCacheGpuCounters decoded =
+                RendererDiagnosticsBuffer.DecodeSimpleDdgiReceiverCacheCounters(words);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(unavailable.ReadbackValid, Is.Zero);
+                Assert.That(decoded.ReadbackValid, Is.EqualTo(1));
+                Assert.That(decoded.ResolveCandidateCount, Is.EqualTo(101ul));
+                Assert.That(decoded.ResolveValidCount, Is.EqualTo(102ul));
+                Assert.That(decoded.ResolveInvalidOrNonFiniteRejectCount, Is.EqualTo(103ul));
+                Assert.That(decoded.ResolveDepthOrPositionRejectCount, Is.EqualTo(104ul));
+                Assert.That(decoded.ResolvePlaneRejectCount, Is.EqualTo(105ul));
+                Assert.That(decoded.ResolveNormalRejectCount, Is.EqualTo(106ul));
+                Assert.That(decoded.ResolveInsufficientSupportRejectCount, Is.EqualTo(107ul));
+                Assert.That(decoded.ForwardCandidateCount, Is.EqualTo(108ul));
+                Assert.That(decoded.ForwardAcceptedCount, Is.EqualTo(109ul));
+                Assert.That(decoded.ForwardInvalidOrNonFiniteRejectCount, Is.EqualTo(110ul));
+                Assert.That(decoded.ForwardDepthOrPositionRejectCount, Is.EqualTo(111ul));
+                Assert.That(decoded.ForwardPlaneRejectCount, Is.EqualTo(112ul));
+                Assert.That(decoded.ForwardNormalRejectCount, Is.EqualTo(113ul));
+                Assert.That(decoded.ForwardInsufficientSupportRejectCount, Is.EqualTo(114ul));
+                Assert.That(decoded.ExactFallbackFragmentCount, Is.EqualTo(115ul));
+                Assert.That(decoded.LegacyFragmentCount, Is.EqualTo(116ul));
+            });
+
+            Assert.Throws<ArgumentException>(() =>
+                RendererDiagnosticsBuffer.DecodeSimpleDdgiReceiverCacheCounters(
+                    new uint[RendererDiagnosticsBuffer.CounterCount - 1]));
         }
 
         [Test]

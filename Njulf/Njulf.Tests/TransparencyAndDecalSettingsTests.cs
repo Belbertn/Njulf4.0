@@ -24,6 +24,9 @@ public sealed class TransparencyAndDecalSettingsTests
             Assert.That(settings.Transparency.SceneReflectionSsrSampleBudget,
                 Is.EqualTo(4_194_304));
             Assert.That(settings.Transparency.SortPerMeshlet, Is.True);
+            Assert.That(
+                settings.Transparency.PipelinePartitioningEnabled,
+                Is.True);
             Assert.That(settings.Transparency.MaxTransparentMeshlets, Is.EqualTo(262144));
             Assert.That(settings.Transparency.AlphaDiscardThreshold, Is.EqualTo(0.001f));
         });

@@ -970,6 +970,8 @@ namespace Njulf.Rendering.Resources
         // certified V2 publication when tail certification is enabled.
         private readonly SimpleDdgiTransportSolveController _transportSolveController =
             new(GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
+        private readonly SimpleDdgiFrozenTailInvalidationBuffer
+            _frozenTailInvalidationBuffer = new();
         private SimpleDdgiTransportTailSummary _transportTailSummary =
             SimpleDdgiTransportTailSummary.Empty;
         private int _transportAuditProbeCursor;
@@ -5328,6 +5330,19 @@ namespace Njulf.Rendering.Resources
                 }
 
                 phaseStart = Stopwatch.GetTimestamp();
+                bool mayDeferAnimatedTransformInvalidation =
+                    gi.SimpleDdgiRegionalInvalidationEnabled &&
+                    gi.SimpleDdgiTransportV2Enabled &&
+                    gi.SimpleDdgiTransportTailCertificationEnabled &&
+                    gi.EffectiveDdgiSkinnedGeometryMode ==
+                        DdgiSkinnedGeometryMode.CurrentPose &&
+                    _transportSolveController.Phase ==
+                        SimpleDdgiTransportPhase.AuditFrozen;
+                dirtyRegions = _frozenTailInvalidationBuffer.Resolve(
+                    mayDeferAnimatedTransformInvalidation,
+                    dirtyRegions);
+                bool deferredAnimatedTransformInvalidation =
+                    _frozenTailInvalidationBuffer.DeferredCurrentFrame;
                 BoundingBox sceneBounds = ExpandBounds(
                     ResolveSceneBounds(scene, sceneContentRevision),
                     gi.SimpleDdgiRingBaseSpacing * 1.5f);
@@ -5424,7 +5439,10 @@ namespace Njulf.Rendering.Resources
                     gi,
                     lightingSignature,
                     dirtyReasonFlags,
-                    suppressSignatureBoost: hasRegionalDirtyWork && !requiresGlobalInvalidation,
+                    suppressSignatureBoost:
+                        (hasRegionalDirtyWork ||
+                         deferredAnimatedTransformInvalidation) &&
+                        !requiresGlobalInvalidation,
                     cohortLightingTransition,
                     sourceRefreshMode,
                     sourceRelightScale ?? Vector3.One);

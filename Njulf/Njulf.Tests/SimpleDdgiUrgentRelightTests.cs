@@ -224,6 +224,39 @@ public sealed class SimpleDdgiUrgentRelightTests
     }
 
     [Test]
+    public void SweepPolicy_IsEvidenceBoundedAndFailsClosed()
+    {
+        static int Resolve(
+            float residual = 0.08f,
+            float tolerance = 0.01f,
+            float contraction = 0.5f,
+            long frame = 10_000L,
+            long target = 12_000L,
+            long sweep = 100L,
+            int maximum = 4) =>
+            SimpleDdgiUrgentRelightPolicy.ResolveSweepCount(
+                maximum,
+                residual,
+                tolerance,
+                contraction,
+                frame,
+                target,
+                sweep);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Resolve(), Is.EqualTo(4));
+            Assert.That(Resolve(residual: 0.015f), Is.EqualTo(2));
+            Assert.That(Resolve(frame: 11_850L), Is.EqualTo(2));
+            Assert.That(Resolve(frame: 12_000L), Is.EqualTo(1));
+            Assert.That(Resolve(sweep: 0L), Is.EqualTo(1));
+            Assert.That(Resolve(residual: float.NaN), Is.EqualTo(1));
+            Assert.That(Resolve(contraction: 1.0f), Is.EqualTo(1));
+            Assert.That(Resolve(maximum: 99), Is.LessThanOrEqualTo(4));
+        });
+    }
+
+    [Test]
     public void Telemetry_IsFrameStampedAndCannotReportMoreCommitsThanAdmissions()
     {
         const uint frame = 0x12345u;

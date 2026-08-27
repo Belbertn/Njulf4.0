@@ -16,6 +16,26 @@ namespace Njulf.Tests;
 public sealed class SampleSponzaGiCaptureHarnessTests
 {
     [Test]
+    public void ReceiverCacheIncidentBookmark_PreservesRegressionCamera()
+    {
+        SampleSponzaGiCameraBookmark camera =
+            SampleSponzaGiCaptureContract.ReceiverCacheIncidentBookmark;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(camera.Name,
+                Is.EqualTo("SponzaReceiverCacheCurtainMasonryIncident"));
+            Assert.That(camera.Position.X, Is.EqualTo(5.423569f));
+            Assert.That(camera.Position.Y, Is.EqualTo(1.5170902f));
+            Assert.That(camera.Position.Z, Is.EqualTo(1.0029265f));
+            Assert.That(camera.Yaw, Is.EqualTo(-1.3008178f));
+            Assert.That(camera.Pitch, Is.EqualTo(-0.55801713f));
+            Assert.That(camera.NearPlane, Is.EqualTo(0.05f));
+            Assert.That(camera.FarPlane, Is.EqualTo(250.0f));
+        });
+    }
+
+    [Test]
     public void LiveReceiverHealth_RejectsTheZeroResidencyFlatField()
     {
         SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
@@ -198,11 +218,11 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
             Assert.That(contract.MotionTraversalFrameCount, Is.EqualTo(300));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v22"));
+                Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v23"));
             Assert.That(SampleSponzaGiTemporalTrace.SchemaVersion,
                 Is.EqualTo("simple-ddgi-sponza-temporal-trace/v6"));
             Assert.That(SampleSponzaGiTemporalTrace.Capacity, Is.EqualTo(960));
-            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_164));
+                Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_170));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
             Assert.That(contract.LowBookmark.Pitch, Is.EqualTo(-0.16f));
@@ -258,7 +278,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "probe-residency",
                 "residency-fallback",
                 "page-age",
-                "physical-page"
+                "physical-page",
+                "receiver-cache-rejection"
             }));
             SampleSponzaGiCaptureOutput directOnly = contract.Outputs.Single(static output => output.Name == "direct-only");
             Assert.That(directOnly.DisableGlobalIllumination, Is.True);

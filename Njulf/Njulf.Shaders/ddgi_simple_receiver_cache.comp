@@ -6,7 +6,21 @@
 #define NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION 0
 #endif
 
+#ifndef NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+#define NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE 0
+#endif
+
+#ifndef NJULF_DDGI_RECEIVER_CACHE_LEGACY
+#define NJULF_DDGI_RECEIVER_CACHE_LEGACY 0
+#endif
+
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
+#define SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER 1
+#endif
+
 #include "common.glsl"
+#include "ddgi_receiver_surface.glsl"
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
 #include "ddgi_receiver_feedback_source_abi.glsl"
 #include "ddgi_receiver_feedback_producer.glsl"
@@ -36,7 +50,35 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+layout(std430, set = 2, binding = 7) readonly buffer ReceiverGatherWorkBlock
+{
+    uvec2 Entries[];
+} ReceiverGatherWork;
+
+layout(std430, set = 2, binding = 9) readonly buffer ReceiverAdaptiveControlBlock
+{
+    uint Words[];
+} ReceiverAdaptiveControl;
+
+layout(std430, set = 2, binding = 10) buffer ReceiverGatherStampBlock
+{
+    uint Entries[];
+} ReceiverGatherStamps;
+#endif
+
 const float RECEIVER_NORMAL_RELATIVE_EPSILON = 0.000001;
+#if NJULF_DDGI_RECEIVER_CACHE_LEGACY
+const uint RECEIVER_GATHER_ENTRY_WORDS = 4u;
+#else
+// Four canonical irradiance/metadata words followed by 27 signed FP16 L2
+// coefficient lanes, a confidence word, and an exact frame stamp.
+const uint RECEIVER_GATHER_ENTRY_WORDS = 20u;
+const uint RECEIVER_GATHER_DIRECTIONAL_COEFFICIENT_WORD = 4u;
+const uint RECEIVER_GATHER_DIRECTIONAL_COEFFICIENT_WORDS = 14u;
+const uint RECEIVER_GATHER_DIRECTIONAL_SUPPORT_WORD = 18u;
+const uint RECEIVER_GATHER_DIRECTIONAL_FRAME_WORD = 19u;
+#endif
 
 shared SimpleDdgiParams ReceiverSharedParams;
 shared GPUEnvironmentData ReceiverSharedEnvironment;
@@ -57,6 +99,7 @@ layout(push_constant) uniform SimpleDdgiReceiverCachePushBlock
     uint FeedbackSamplePeriod;
     uint FeedbackSamplePhase;
     uint FeedbackMaximumOwnersPerTile;
+    uint SurfaceBufferIndex;
 } pc;
 
 bool ReceiverCacheFinite(vec3 value)
@@ -260,17 +303,118 @@ vec3 ReconstructReceiverNormal(ivec2 pixel, vec3 worldPosition, vec3 viewDirecti
 
 void StoreReceiverCacheSample(uint entryIndex, uvec4 packed)
 {
-    uint word = entryIndex * 4u;
+    uint word = entryIndex * RECEIVER_GATHER_ENTRY_WORDS;
     WriteStorageWordUniform(pc.CacheBufferIndex, word + 0u, packed.x);
     WriteStorageWordUniform(pc.CacheBufferIndex, word + 1u, packed.y);
     WriteStorageWordUniform(pc.CacheBufferIndex, word + 2u, packed.z);
     WriteStorageWordUniform(pc.CacheBufferIndex, word + 3u, packed.w);
 }
 
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+float ReceiverDirectionalCoefficientValue(
+    vec3 coefficients[9],
+    uint valueIndex,
+    inout bool finite)
+{
+    float value = SimpleDdgiRadianceShCoefficientValue(
+        coefficients,
+        valueIndex);
+    bool valueFinite = !isnan(value) && !isinf(value);
+    finite = finite && valueFinite;
+    return valueFinite
+        ? clamp(
+            value,
+            -SIMPLE_DDGI_RADIANCE_SH_MAXIMUM_FINITE_HALF,
+            SIMPLE_DDGI_RADIANCE_SH_MAXIMUM_FINITE_HALF)
+        : 0.0;
+}
+
+void StoreReceiverDirectionalCoefficients(
+    uint entryIndex,
+    SimpleDdgiGatherResult gather,
+    float radiometricOwnership)
+{
+    uint baseWord = entryIndex * RECEIVER_GATHER_ENTRY_WORDS;
+    bool finite = true;
+    for (uint word = 0u;
+         word < RECEIVER_GATHER_DIRECTIONAL_COEFFICIENT_WORDS;
+         word++)
+    {
+        uint firstValueIndex = word * 2u;
+        float first = ReceiverDirectionalCoefficientValue(
+            gather.directionalCoefficients,
+            firstValueIndex,
+            finite);
+        float second = firstValueIndex + 1u < 27u
+            ? ReceiverDirectionalCoefficientValue(
+                gather.directionalCoefficients,
+                firstValueIndex + 1u,
+                finite)
+            : 0.0;
+        WriteStorageWordUniform(
+            pc.CacheBufferIndex,
+            baseWord + RECEIVER_GATHER_DIRECTIONAL_COEFFICIENT_WORD + word,
+            packHalf2x16(vec2(first, second)));
+    }
+
+    float support = finite
+        ? clamp(
+            gather.directionalRadianceSupport * radiometricOwnership,
+            0.0,
+            1.0)
+        : 0.0;
+    WriteStorageWordUniform(
+        pc.CacheBufferIndex,
+        baseWord + RECEIVER_GATHER_DIRECTIONAL_SUPPORT_WORD,
+        packHalf2x16(vec2(support, 0.0)));
+    WriteStorageWordUniform(
+        pc.CacheBufferIndex,
+        baseWord + RECEIVER_GATHER_DIRECTIONAL_FRAME_WORD,
+        ReceiverSharedParams.frameIndex);
+}
+
+void InvalidateReceiverDirectionalCoefficients(uint entryIndex)
+{
+    uint baseWord = entryIndex * RECEIVER_GATHER_ENTRY_WORDS;
+    WriteStorageWordUniform(
+        pc.CacheBufferIndex,
+        baseWord + RECEIVER_GATHER_DIRECTIONAL_SUPPORT_WORD,
+        0u);
+    WriteStorageWordUniform(
+        pc.CacheBufferIndex,
+        baseWord + RECEIVER_GATHER_DIRECTIONAL_FRAME_WORD,
+        ReceiverSharedParams.frameIndex);
+}
+#endif
+
+void StoreReceiverSurface(uint entryIndex, uvec2 packed)
+{
+    uint word = entryIndex * 2u;
+    WriteStorageWordUniform(pc.SurfaceBufferIndex, word + 0u, packed.x);
+    WriteStorageWordUniform(pc.SurfaceBufferIndex, word + 1u, packed.y);
+}
+
 uvec4 EmptyReceiverCacheSample()
 {
     // A zero ten-bit depth code is reserved for invalid/empty entries.
     return uvec4(0u);
+}
+
+void StoreInvalidReceiverCacheEntry(uint entryIndex)
+{
+    StoreReceiverCacheSample(entryIndex, EmptyReceiverCacheSample());
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+    InvalidateReceiverDirectionalCoefficients(entryIndex);
+#endif
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+    StoreReceiverSurface(
+        entryIndex,
+        SimpleDdgiReceiverSurfaceInvalid());
+#endif
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+    ReceiverGatherStamps.Entries[entryIndex] =
+        ReceiverAdaptiveControl.Words[3];
+#endif
 }
 
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
@@ -411,7 +555,8 @@ uint EncodeReceiverCacheMetadata(
     float indirectSpecularVisibility,
     uint residencyFlags)
 {
-    // The gather entry remains sixteen bytes. Its metadata word carries a
+    // The canonical radiance prefix remains sixteen bytes. Its metadata word
+    // carries a
     // 10-bit reverse-Z code, 10-bit rough-reflection visibility, and the two
     // 6-bit roughness-band edges consumed by the native cache shader:
     // [ depth:10 | visibility:10 | minimum:6 | full:6 ].
@@ -442,7 +587,15 @@ void main()
     // partial edge group. Bounds checks therefore remain below this point.
     barrier();
 
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+    uint workIndex = gl_WorkGroupID.x * 64u + gl_LocalInvocationIndex;
+    uint workCount = ReceiverAdaptiveControl.Words[0];
+    if (workIndex >= workCount)
+        return;
+    uvec2 cacheCoord = ReceiverGatherWork.Entries[workIndex];
+#else
     uvec2 cacheCoord = gl_GlobalInvocationID.xy;
+#endif
     if (any(greaterThanEqual(cacheCoord, uvec2(pc.CacheWidth, pc.CacheHeight))))
         return;
 
@@ -456,7 +609,7 @@ void main()
             worldPosition,
             receiverDepth))
     {
-        StoreReceiverCacheSample(entryIndex, EmptyReceiverCacheSample());
+        StoreInvalidReceiverCacheEntry(entryIndex);
         return;
     }
 
@@ -464,7 +617,7 @@ void main()
     float cameraDistance = length(viewVector);
     if (!(cameraDistance > 0.00001) || isnan(cameraDistance) || isinf(cameraDistance))
     {
-        StoreReceiverCacheSample(entryIndex, EmptyReceiverCacheSample());
+        StoreInvalidReceiverCacheEntry(entryIndex);
         return;
     }
 
@@ -473,7 +626,29 @@ void main()
         receiverPixel,
         worldPosition,
         viewDirection);
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+    uvec2 representativeOffset = uvec2(receiverPixel) -
+        cacheCoord * max(pc.ReceiverScale, 1u);
+    uvec2 receiverSurface = SimpleDdgiReceiverSurfacePack(
+        normal,
+        receiverDepth,
+        representativeOffset);
+    if ((receiverSurface.y & SIMPLE_DDGI_RECEIVER_SURFACE_DEPTH_MASK) == 0u)
+    {
+        StoreInvalidReceiverCacheEntry(entryIndex);
+        return;
+    }
+#endif
     SimpleDdgiParams params = ReceiverSharedParams;
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+    // Coefficients remain signed and direction-independent on the coarse
+    // lattice. The query roughness only admits the existing directional field;
+    // the fragment applies its exact GGX band scales after surface rejection.
+    SetSimpleDdgiDirectionalRadianceQuery(
+        reflect(-viewDirection, normal),
+        SimpleDdgiRoughSpecularFullWeightRoughness(
+            params.residencyFlags));
+#endif
     SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(
         params,
         worldPosition,
@@ -551,6 +726,17 @@ void main()
                 receiverDepth,
                 indirectSpecularVisibility,
                 params.residencyFlags)));
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+    StoreReceiverDirectionalCoefficients(
+        entryIndex,
+        gather,
+        ownership);
+    StoreReceiverSurface(entryIndex, receiverSurface);
+#endif
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+    ReceiverGatherStamps.Entries[entryIndex] =
+        ReceiverAdaptiveControl.Words[3];
+#endif
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
     EmitExactReceiverFeedbackProducer(
         gather,

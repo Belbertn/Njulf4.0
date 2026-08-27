@@ -14,6 +14,21 @@
 #define FORWARD_THIN_GLASS_ONLY 0
 #endif
 
+#ifndef FORWARD_TRANSPARENT_ROLE_ORDINARY
+#define FORWARD_TRANSPARENT_ROLE_ORDINARY 0
+#endif
+#ifndef FORWARD_TRANSPARENT_ROLE_DECAL
+#define FORWARD_TRANSPARENT_ROLE_DECAL 0
+#endif
+#ifndef FORWARD_TRANSPARENT_ROLE_THICK
+#define FORWARD_TRANSPARENT_ROLE_THICK 0
+#endif
+#if FORWARD_TRANSPARENT_ROLE_ORDINARY + \
+    FORWARD_TRANSPARENT_ROLE_DECAL + \
+    FORWARD_TRANSPARENT_ROLE_THICK > 1
+#error "Only one transparent material role may be compiled at a time."
+#endif
+
 #if defined(FORWARD_OPAQUE) || defined(FORWARD_SIMPLE_OPAQUE) || \
     NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
 #define FORWARD_TRANSPARENT_REFLECTIONS_ACTIVE 0
@@ -118,6 +133,18 @@ layout(early_fragment_tests) in;
 #endif
 
 #include "common.glsl"
+
+#ifndef NJULF_GTAO_BENT_NORMAL_LIGHTING
+#if defined(FORWARD_DDGI_RECEIVER_CACHE_REQUIRED) && \
+    FORWARD_DDGI_RECEIVER_CACHE_REQUIRED
+// Bent-normal lighting deliberately compiles out of the receiver-cache hot
+// artifacts. Runtime policy selects the exact gather whenever bent lighting
+// is requested, so these variants retain their previous instruction stream.
+#define NJULF_GTAO_BENT_NORMAL_LIGHTING 0
+#else
+#define NJULF_GTAO_BENT_NORMAL_LIGHTING 1
+#endif
+#endif
 #include "area_lighting.glsl"
 #include "directional_csm_sampling.glsl"
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
@@ -128,9 +155,6 @@ layout(early_fragment_tests) in;
 #endif
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
 #include "hybrid_reflection_payload.glsl"
-#endif
-#if FORWARD_DDGI_RECEIVER_CACHE
-#include "forward_ddgi_receiver_cache.glsl"
 #endif
 #include "gi_material_transport.glsl"
 #include "dielectric_transport.glsl"
@@ -152,8 +176,13 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
 // Reflections consume the stable low-frequency L1 prefix. The full L2 record
 // remains the producer/transport representation, while SSR and ray queries
-// provide the high-frequency scene detail that L1 deliberately omits.
+// provide the high-frequency scene detail that L1 deliberately omits. The
+// surface-aware cache is the exception: its common path projects full L2 into
+// the compact lattice, so rejected fragments retain a matching full-L2 exact
+// fallback rather than crossing representation at cache boundaries.
+#if !FORWARD_DDGI_RECEIVER_CACHE
 #define SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER 1
+#endif
 #if FORWARD_THIN_GLASS_ONLY
 // Window panes commonly overlap in screen space. One residency touch per 8x8
 // tile retains transparent-only pages without issuing the same atomic for
@@ -193,6 +222,9 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #define NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA 1
 #endif
 #include "ddgi_simple_shared.glsl"
+#if FORWARD_DDGI_RECEIVER_CACHE
+#include "forward_ddgi_receiver_cache.glsl"
+#endif
 #if NJULF_DDGI_VISUAL_DEBUG_VIEWS
 #undef NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
 #endif
@@ -205,7 +237,9 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
 #undef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
 #undef SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
+#if !FORWARD_DDGI_RECEIVER_CACHE
 #undef SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER
+#endif
 #if FORWARD_THIN_GLASS_ONLY
 #undef SIMPLE_DDGI_TETRAHEDRAL_DIRECTIONAL_RECEIVER
 #undef SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER
@@ -404,6 +438,7 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RESIDENCY = 126u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RESIDENCY_FALLBACK = 127u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PAGE_AGE = 128u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PHYSICAL_PAGE = 129u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RECEIVER_CACHE_REJECTION = 147u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -464,12 +499,25 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 #define FORWARD_DDGI_RECEIVER_CACHE_REQUIRED 0
 #endif
 
+#ifndef FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+#define FORWARD_DDGI_RECEIVER_CACHE_LEGACY 0
+#endif
+
+#ifndef NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW
+#define NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW 0
+#endif
+
 #ifndef FORWARD_GLOBAL_ILLUMINATION_DISABLED
 #define FORWARD_GLOBAL_ILLUMINATION_DISABLED 0
 #endif
 
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED && !FORWARD_DDGI_RECEIVER_CACHE
 #error FORWARD_DDGI_RECEIVER_CACHE_REQUIRED requires FORWARD_DDGI_RECEIVER_CACHE
+#endif
+
+#if FORWARD_DDGI_RECEIVER_CACHE_LEGACY && \
+    !FORWARD_DDGI_RECEIVER_CACHE_REQUIRED
+#error FORWARD_DDGI_RECEIVER_CACHE_LEGACY requires the cache-required artifact
 #endif
 
 #if FORWARD_DDGI_RECEIVER_CACHE && !NJULF_DDGI_DETAILED_COUNTERS && !NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
@@ -489,8 +537,8 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 // constant runtime branch) prevents parameter-buffer reads, sparse receiver
 // demand atomics, far-field fallback code, and debug-only gather paths from
 // consuming registers or instruction-cache space in the performance pair.
-#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE || \
-    FORWARD_GLOBAL_ILLUMINATION_DISABLED || FORWARD_THIN_GLASS_ONLY
+#if FORWARD_GLOBAL_ILLUMINATION_DISABLED || FORWARD_THIN_GLASS_ONLY || \
+    FORWARD_DDGI_RECEIVER_CACHE_LEGACY
 #define FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE 1
 #else
 #define FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE 0
@@ -513,7 +561,12 @@ uint ForwardAmbientOcclusionEnabled()
 
 uint ForwardAmbientOcclusionDebugView()
 {
-    return (pc.Push.DebugAndAoFlags >> 16u) & 0xffu;
+    return (pc.Push.DebugAndAoFlags >> 16u) & 0x3fu;
+}
+
+uint ForwardAmbientOcclusionBentNormalMode()
+{
+    return (pc.Push.DebugAndAoFlags >> 22u) & 0x03u;
 }
 
 uint ForwardTransparentReceiveShadows()
@@ -663,7 +716,8 @@ bool ForwardTryReserveThickTransmissionTask()
 
 bool ForwardLayeredReceiverAcceptsShadows(bool geometryDecal)
 {
-    if (pc.Push.MeshletDrawBufferBaseIndex !=
+    if (ForwardDrawBufferBaseIndex(
+            pc.Push.MeshletDrawBufferBaseIndex) !=
         uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX))
         return true;
     return geometryDecal
@@ -958,6 +1012,55 @@ float SampleScreenSpaceAo()
         return 1.0;
     return SampleScreenSpaceAoDirect();
 }
+
+#if NJULF_GTAO_BENT_NORMAL_LIGHTING
+vec3 DecodeGtaoOctahedralNormal(vec2 encoded)
+{
+    vec2 oct = clamp(encoded, vec2(-1.0), vec2(1.0));
+    vec3 normal = vec3(oct, 1.0 - abs(oct.x) - abs(oct.y));
+    if (normal.z < 0.0)
+    {
+        normal.xy = (vec2(1.0) - abs(normal.yx)) * sign(normal.xy);
+    }
+    float lengthSquared = dot(normal, normal);
+    return lengthSquared > 1.0e-8
+        ? normal * inversesqrt(lengthSquared)
+        : vec3(0.0, 0.0, 1.0);
+}
+
+bool TryResolveIndirectDiffuseNormal(
+    vec3 shadingNormal,
+    out vec3 resolvedNormal)
+{
+    resolvedNormal = shadingNormal;
+    if (ForwardAmbientOcclusionBentNormalMode() == 0u)
+        return false;
+    vec2 uv = clamp(
+        gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)),
+        vec2(0.0),
+        vec2(1.0));
+    vec4 payload = textureLod(
+        BindlessTextures[nonuniformEXT(GTAO_FILTERED_TEXTURE_INDEX)],
+        uv,
+        0.0);
+    if (any(isnan(payload)) || any(isinf(payload)) || payload.w <= 0.0)
+        return false;
+    vec3 viewBentNormal = DecodeGtaoOctahedralNormal(payload.xy);
+    vec3 worldBentNormal = MulRowMajor(
+        vec4(viewBentNormal, 0.0),
+        pc.Push.InverseViewMatrix).xyz;
+    float lengthSquared = dot(worldBentNormal, worldBentNormal);
+    if (lengthSquared <= 1.0e-8)
+        return false;
+    worldBentNormal *= inversesqrt(lengthSquared);
+    float hemisphere = dot(worldBentNormal, shadingNormal);
+    if (hemisphere <= 0.0)
+        return false;
+    resolvedNormal = normalize(mix(shadingNormal, worldBentNormal,
+        smoothstep(0.0, 0.25, hemisphere)));
+    return true;
+}
+#endif
 
 struct DdgiSampleResult
 {
@@ -3655,6 +3758,7 @@ void EvaluateIbl(
     float reflectionSchedulingRoughness,
     vec3 dielectricF0,
     vec3 normal,
+    vec3 diffuseIndirectNormal,
     vec3 geometricNormal,
     vec3 viewDirection,
     float ambientOcclusion,
@@ -3698,7 +3802,9 @@ void EvaluateIbl(
     // so its irradiance result is identically zero as well.
     diffuseIbl = vec3(0.0);
 #else
-    vec3 irradiance = EvaluateEnvironmentDiffuseIrradiance(environment, normal);
+    vec3 irradiance = EvaluateEnvironmentDiffuseIrradiance(
+        environment,
+        diffuseIndirectNormal);
     // Diffuse IBL is an irradiance-derived radiance field.  AO is applied once by
     // indirect composition to the environment-owned share; DDGI retains its own
     // probe visibility instead of receiving a second screen-space occlusion term.
@@ -5033,8 +5139,12 @@ void main()
             fragMaterialIndex,
             material);
     }
-#if FORWARD_THIN_GLASS_ONLY
+#if FORWARD_THIN_GLASS_ONLY || \
+    FORWARD_TRANSPARENT_ROLE_ORDINARY || \
+    FORWARD_TRANSPARENT_ROLE_THICK
     const bool geometryDecal = false;
+#elif FORWARD_TRANSPARENT_ROLE_DECAL
+    const bool geometryDecal = true;
 #else
     bool geometryDecal = GiMaterialHasFlag(
         material.TransportFlags,
@@ -5154,6 +5264,7 @@ void main()
                 material.NormalOffsetScale,
                 material.TextureRotations.y))
         : geometricNormal;
+    vec3 diffuseIndirectNormal = normal;
     vec3 ddgiNormal = geometricNormal;
     vec3 viewDirection = normalize(pc.Push.CameraPosition - fragWorldPosition);
 
@@ -5264,6 +5375,22 @@ void main()
     const bool thinGiTransport = true;
     const bool thinGlass = true;
     const bool volumeGiTransport = false;
+#elif FORWARD_TRANSPARENT_ROLE_DECAL
+    const bool thinGiTransport = false;
+    const bool thinGlass = false;
+    const bool volumeGiTransport = false;
+#elif FORWARD_TRANSPARENT_ROLE_THICK
+    const bool thinGiTransport = false;
+    const bool thinGlass = false;
+    const bool volumeGiTransport = true;
+#elif FORWARD_TRANSPARENT_ROLE_ORDINARY
+    bool thinGiTransport = GiMaterialHasFlag(
+        material.TransportFlags,
+        GI_MATERIAL_THIN_SURFACE_TRANSMISSION);
+    bool thinGlass = GiMaterialHasFlag(
+        material.TransportFlags,
+        GI_MATERIAL_THIN_GLASS);
+    const bool volumeGiTransport = false;
 #else
     bool thinGiTransport = GiMaterialHasFlag(
         material.TransportFlags,
@@ -5276,8 +5403,12 @@ void main()
         GI_MATERIAL_VOLUME_TRANSMISSION);
 #endif
     bool rasterTransmissionEnabled =
+#if FORWARD_TRANSPARENT_ROLE_DECAL
+        false;
+#else
         (material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION) != 0u &&
         (!thinGiTransport || thinGlass);
+#endif
 
     if (hasMaterialExtension)
     {
@@ -5662,6 +5793,16 @@ void main()
 
     vec3 diffuseReflectance = canonicalDiffuseReflectance;
 
+#if NJULF_GTAO_BENT_NORMAL_LIGHTING
+    // Resolve only after material-debug and unlit early-outs. The sample is
+    // shared by environment diffuse and, at Ultra, the exact DDGI lookup.
+    bool bentNormalValid = TryResolveIndirectDiffuseNormal(
+        normal,
+        diffuseIndirectNormal);
+    if (ForwardAmbientOcclusionBentNormalMode() == 2u && bentNormalValid)
+        ddgiNormal = diffuseIndirectNormal;
+#endif
+
     vec3 diffuseIbl = vec3(0.0);
     vec3 specularIbl = vec3(0.0);
     bool reflectionDebugActive = false;
@@ -5682,7 +5823,42 @@ void main()
     vec3 ddgiDirectionalRadiance = vec3(0.0);
     float ddgiDirectionalConfidence = 0.0;
     float indirectSpecularVisibility = 1.0;
-#if !FORWARD_GLOBAL_ILLUMINATION_DISABLED && !FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+#if FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+    ForwardDdgiReceiverCacheAdmission receiverCacheAdmission;
+    receiverCacheAdmission.EntryIndex = ForwardDdgiReceiverCacheEntryIndex(
+        gl_FragCoord.xy,
+        pc.Push.ScreenDimensions);
+    receiverCacheAdmission.Reason = SIMPLE_DDGI_RECEIVER_SURFACE_ACCEPTED;
+    bool receiverCacheAccepted = true;
+    RecordLegacyForwardDdgiReceiverCacheAdmission(
+        pc.Push.CurrentFrameIndex);
+#else
+    ForwardDdgiReceiverCacheAdmission receiverCacheAdmission =
+        EvaluateForwardDdgiReceiverCacheAdmission(
+            gl_FragCoord.xy,
+            gl_FragCoord.z,
+            fragWorldPosition,
+            geometricNormal,
+            pc.Push);
+    bool receiverCacheAccepted =
+        ForwardDdgiReceiverCacheAdmissionAccepted(receiverCacheAdmission);
+    RecordForwardDdgiReceiverCacheAdmission(
+        pc.Push.CurrentFrameIndex,
+        receiverCacheAdmission.Reason);
+#endif
+    ForwardDdgiReceiverCacheSample cachedGather;
+    cachedGather.Packed = uvec4(0u);
+#if NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW
+    WriteForwardColor(vec4(
+        ForwardDdgiReceiverCacheAdmissionDebugColor(
+            receiverCacheAdmission.Reason),
+        1.0));
+    return;
+#endif
+#endif
+#if !FORWARD_GLOBAL_ILLUMINATION_DISABLED && \
+    !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
     bool directionalGlobalIlluminationEnabled = geometryDecal
         ? ForwardDecalGlobalIlluminationEnabled()
         : ForwardGlobalIlluminationEnabled() != 0u;
@@ -5715,7 +5891,39 @@ void main()
                 (SIMPLE_DDGI_FLAG_ENABLED |
                  SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) &&
             directionalParams.probeCount > 0u;
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+        bool receiverCompactDirectionalResolved = !directionalConfigured;
+        if (receiverCacheAccepted && directionalConfigured)
+        {
+            vec3 compactDirectionalRadiance;
+            float compactDirectionalConfidence;
+            receiverCompactDirectionalResolved =
+                SampleForwardDdgiCompactDirectionalRadiance(
+                    gl_FragCoord.xy,
+                    gl_FragCoord.z,
+                    fragWorldPosition,
+                    ddgiNormal,
+                    reflect(-viewDirection, normal),
+                    roughness,
+                    directionalMode,
+                    directionalParams.frameIndex,
+                    pc.Push,
+                    compactDirectionalRadiance,
+                    compactDirectionalConfidence);
+            if (receiverCompactDirectionalResolved)
+            {
+                ddgiDirectionalRadiance = compactDirectionalRadiance *
+                    max(directionalParams.indirectIntensity, 0.0);
+                ddgiDirectionalConfidence = compactDirectionalConfidence;
+            }
+        }
+        bool exactGatherRequired =
+            !receiverCacheAccepted ||
+            !receiverCompactDirectionalResolved;
+        if (exactGatherRequired && diffuseGatherRequired)
+#else
         if (diffuseGatherRequired)
+#endif
         {
             if (directionalConfigured)
             {
@@ -6038,18 +6246,17 @@ void main()
     }
 
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
-    // One packed read supplies both the rough-reflection visibility used by
-    // IBL and the diffuse fields consumed immediately afterwards. Deferring
-    // this until the direct-light loop has finished keeps the packed value out
-    // of that loop's live register set and satisfies the one-load cache ABI.
-    ForwardDdgiReceiverCacheSample cachedGather =
-        SampleForwardDdgiReceiverCache(
-            gl_FragCoord.xy,
-            pc.Push.ScreenDimensions);
-    indirectSpecularVisibility =
-        SampleForwardDdgiReceiverCacheRoughSpecularVisibility(
-            cachedGather,
-            roughness);
+    if (receiverCacheAccepted)
+    {
+        // Keep the radiance record out of the direct-light loop. Rejected
+        // fragments never issue this sixteen-byte load.
+        cachedGather = LoadForwardDdgiReceiverCache(
+            receiverCacheAdmission.EntryIndex);
+        indirectSpecularVisibility =
+            SampleForwardDdgiReceiverCacheRoughSpecularVisibility(
+                cachedGather,
+                roughness);
+    }
 #endif
 
     EvaluateIbl(
@@ -6060,6 +6267,7 @@ void main()
         reflectionSchedulingRoughness,
         dielectricF0,
         normal,
+        diffuseIndirectNormal,
         geometricNormal,
         viewDirection,
         indirectAo,
@@ -6071,6 +6279,22 @@ void main()
         specularIbl,
         reflectionDebugActive,
         reflectionDebugColor);
+
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+    if (!receiverCacheAccepted && environment.Enabled != 0u)
+    {
+        // EvaluateIbl deliberately skips diffuse environment work in the
+        // accepted cache path. A rejected fragment restores the exact
+        // environment owner from the same normal/material inputs.
+        vec3 exactEnvironmentIrradiance =
+            EvaluateEnvironmentDiffuseIrradiance(
+                environment,
+                diffuseIndirectNormal);
+        diffuseIbl = EvaluateGiDiffuseFromIrradiance(
+            exactEnvironmentIrradiance,
+            diffuseReflectance);
+    }
+#endif
 
 #if !NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
     if (reflectionDebugActive)
@@ -6114,33 +6338,31 @@ void main()
     // ThinGlass participates in GI transport as a transmitting surface but
     // exposes no Lambertian raster lobe. Directional DDGI was already consumed
     // by EvaluateIbl as the default reflected-radiance source.
-#elif FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
-    // Pipeline selection is the authoritative handshake: this native program
-    // is bound only after the current-depth cache dispatch and its
-    // compute-to-fragment barrier complete. The producer scans a complete 12x12
-    // tile when its center is empty, so every opaque fragment has a
-    // representative. The cached terms already include DDGI intensity,
-    // ownership/leak attenuation, and far-field environment visibility.
-    // The material compiler clamps diffuseReflectance, material AO is already
-    // normalized above, and the producer stores finite non-negative terms.
-    // Compose the same linear transport directly so the hot consumer does not
-    // repeat those range checks for every full-resolution fragment.
-    // Load at first use to keep both cached RGB fields out of the direct-light
-    // loop's live register set. The producer already applied intensity,
-    // ownership, leak attenuation, fallback weight, far-field visibility, and
-    // the Lambert factor.
-    finalDiffuseIndirect =
-        (ForwardDdgiReceiverCacheDdgiIrradiance(cachedGather) *
-             ambientOcclusion * ddgiIndirectAo +
-         ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *
-             indirectAo) *
-        diffuseReflectance;
 #elif FORWARD_GLOBAL_ILLUMINATION_DISABLED
     // Benchmark control artifact. This is a separate native program so the
     // A/B delta measures only the incremental cache consumer work and does not
     // retain the sparse-gather graph as dead control flow.
     finalDiffuseIndirect = diffuseIbl * indirectAo;
 #else
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+    if (receiverCacheAccepted)
+    {
+        // The admitted sidecar proves that this resolved record belongs to
+        // the fragment's local receiver surface. The producer already applied
+        // intensity, ownership, leak attenuation, fallback visibility and the
+        // Lambert factor; material/AO composition remains fragment exact.
+        finalDiffuseIndirect =
+            (ForwardDdgiReceiverCacheDdgiIrradiance(cachedGather) *
+                 ambientOcclusion * ddgiIndirectAo +
+             ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *
+                 indirectAo) *
+            diffuseReflectance;
+    }
+#if !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+    else
+    {
+#endif
+#endif
     bool globalIlluminationEnabled = geometryDecal
         ? ForwardDecalGlobalIlluminationEnabled()
         : ForwardGlobalIlluminationEnabled() != 0u;
@@ -6456,6 +6678,10 @@ void main()
 #if !FORWARD_WEIGHTED_OIT && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
     WriteMaterialTransportProvenance(materialTransportProvenance);
 #endif
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE && \
+    !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+    }
+#endif
 #endif // FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE
 
     if (subsurfaceStrength > 0.0)
@@ -6466,7 +6692,8 @@ void main()
             subsurfaceStrength);
     }
 
-#if !FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE
+#if !FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE && \
+    !FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
     {
         WriteForwardColor(vec4(finalDiffuseIndirect, forwardDebugOutputAlpha));

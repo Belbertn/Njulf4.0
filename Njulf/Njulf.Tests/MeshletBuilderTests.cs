@@ -117,7 +117,7 @@ namespace Njulf.Tests
                 Assert.That(meshlet.NormalConeAxis.X, Is.EqualTo(0f).Within(1e-6f));
                 Assert.That(meshlet.NormalConeAxis.Y, Is.EqualTo(0f).Within(1e-6f));
                 Assert.That(meshlet.NormalConeAxis.Z, Is.EqualTo(1f).Within(1e-6f));
-                Assert.That(meshlet.NormalConeCutoff, Is.EqualTo(0f).Within(1e-6f));
+                Assert.That(meshlet.NormalConeCutoff, Is.EqualTo(0.99999f).Within(1e-6f));
             });
         }
 
@@ -139,7 +139,30 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(meshlet.NormalConeAxis, Is.EqualTo(Vector3.Zero));
-                Assert.That(meshlet.NormalConeCutoff, Is.EqualTo(1f));
+                Assert.That(meshlet.NormalConeCutoff, Is.EqualTo(-1f));
+            });
+        }
+
+        [Test]
+        public void BuildMeshlets_DisablesConeForDegenerateOnlyGeometry()
+        {
+            Vector3[] vertices =
+            [
+                Vector3.Zero,
+                Vector3.UnitX,
+                new(2f, 0f, 0f)
+            ];
+
+            MeshletMesh mesh = new MeshletBuilder(
+                maxTrianglesPerMeshlet: 3).BuildMeshlets(
+                vertices,
+                [0u, 1u, 2u]);
+
+            Meshlet meshlet = mesh.Meshlets.Single();
+            Assert.Multiple(() =>
+            {
+                Assert.That(meshlet.NormalConeAxis, Is.EqualTo(Vector3.Zero));
+                Assert.That(meshlet.NormalConeCutoff, Is.EqualTo(-1f));
             });
         }
 

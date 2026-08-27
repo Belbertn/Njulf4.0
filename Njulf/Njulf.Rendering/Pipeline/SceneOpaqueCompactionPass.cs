@@ -1250,6 +1250,10 @@ namespace Njulf.Rendering.Pipeline
         public uint DirectionalShadowLodFallbackCount { get; init; }
         /// <summary>LOD0 candidates deliberately removed by the selected lower-LOD range.</summary>
         public uint OpaqueLodDecimatedCount { get; init; }
+        public uint NormalConeCandidateCount { get; init; }
+        public uint NormalConeTestedCount { get; init; }
+        public uint NormalConeRejectedCount { get; init; }
+        public uint NormalConeInvalidCount { get; init; }
 
         public bool IsValid =>
             CandidateCount != 0 ||
@@ -1260,6 +1264,10 @@ namespace Njulf.Rendering.Pipeline
             HiZRejectedCount != 0 ||
             DirectionalShadowLodFallbackCount != 0 ||
             OpaqueLodDecimatedCount != 0 ||
+            NormalConeCandidateCount != 0 ||
+            NormalConeTestedCount != 0 ||
+            NormalConeRejectedCount != 0 ||
+            NormalConeInvalidCount != 0 ||
             SolidDepthCandidateCount != 0 ||
             SolidDepthEmittedCount != 0 ||
             SolidDepthOverflowCount != 0 ||
@@ -1355,7 +1363,11 @@ namespace Njulf.Rendering.Pipeline
                 ])
             {
                 DirectionalShadowLodFallbackCount = counters.DirectionalShadowLodFallbackCount,
-                OpaqueLodDecimatedCount = counters.OpaqueLodDecimatedCount
+                OpaqueLodDecimatedCount = counters.OpaqueLodDecimatedCount,
+                NormalConeCandidateCount = counters.NormalConeCandidateCount,
+                NormalConeTestedCount = counters.NormalConeTestedCount,
+                NormalConeRejectedCount = counters.NormalConeRejectedCount,
+                NormalConeInvalidCount = counters.NormalConeInvalidCount
             };
         }
 

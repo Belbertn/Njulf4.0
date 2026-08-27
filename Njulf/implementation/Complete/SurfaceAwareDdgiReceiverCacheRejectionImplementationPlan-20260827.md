@@ -1,6 +1,7 @@
 # Surface-Aware Simple-DDGI Receiver-Cache Rejection Implementation Plan
 
-- Status: Planned
+- Status: Implemented through automated contract/build gates; hardware image,
+  soak, and performance evidence remains pending
 - Date: 2026-08-27
 - Primary target: safely recover the receiver-cache performance opportunity for
   `DdgiHigh`, including `HybridRayQuery`, without reintroducing black noise
@@ -8,6 +9,21 @@
 - Related roadmap:
   [`ForwardPlusAdaptiveQualityImplementationPlan-20260824.md`](ForwardPlusAdaptiveQualityImplementationPlan-20260824.md),
   item 3A
+
+## 0. Implementation and activation note
+
+The surface-aware spatial and temporal-adaptive implementations are complete.
+`Medium` and `DdgiHigh` request `TemporalAdaptive` by default; all other presets
+retain `Exact`. Exact gathering remains the correctness oracle and is selected
+automatically for missing resources/pipelines, diagnostics that require exact
+ownership, generation or extent mismatches, and any active GTAO bent-normal
+lighting mode. This explicit preset activation supersedes the pre-promotion
+default restrictions retained later in this historical plan.
+
+No feature is suppressed to admit the cache. Cache rejection executes the exact
+gather, and requested/effective mode plus the stable fallback reason remain
+diagnostic. Device golden-image, soak, and statistically paired performance
+campaigns have not been claimed by the automated implementation pass.
 
 ## 1. Required outcome
 
@@ -27,8 +43,8 @@ The completed implementation must:
 - preserve the exact gather's radiometric ownership, leak attenuation,
   environment complement, rough-specular visibility, and finite clamps;
 - expose cache acceptance and exact-fallback evidence in performance captures;
-- keep `DdgiHigh` on exact per-fragment gathering until the correctness and
-  performance promotion gates in this plan pass.
+- keep exact per-fragment gathering as the selectable oracle and automatic
+  fail-closed fallback for every unqualified receiver.
 
 This plan addresses same-frame spatial rejection. Temporal reprojection,
 adaptive gather rates, and dirty-tile scheduling remain the separate item 3A
@@ -296,7 +312,8 @@ SurfaceAwareCandidate
 SurfaceAwareQualified
 ```
 
-- `Exact` remains the `DdgiHigh` production default during development.
+- `Exact` remains the permanent oracle; `DdgiHigh` requests the bounded
+  temporal-adaptive path and falls back to exact per view when required.
 - `LegacyDepthOnlyBenchmark` is diagnostic-only and must never be selected by
   a quality preset.
 - `SurfaceAwareCandidate` is enabled only by an explicit qualification control.
@@ -404,8 +421,8 @@ Performance JSON must include:
 - Add the exact incident camera as a deterministic Sponza validation case.
 - Capture exact scene-linear DDGI output, final HDR output, cache-off pipeline
   identity, and feature-state evidence.
-- Add an assertion that `DdgiHigh` remains exact unless the candidate mode is
-  explicitly requested.
+- Assert the preset matrix and prove that every rejected/unavailable
+  `DdgiHigh` cache view resolves to the exact path with a stable reason.
 
 ### Phase 1: CPU contract and sidecar ABI
 
@@ -442,9 +459,9 @@ Performance JSON must include:
 - Run statistically paired exact/candidate/legacy captures.
 - Analyze cache-pass cost, forward cost, hit rate, fallback divergence, memory,
   and whole-frame P95/P99.
-- Promote Low/Medium first if qualified, then `DdgiHigh` separately.
-- Change a preset default only in a dedicated promotion change containing the
-  approved evidence references.
+- Collect qualification evidence for Low/Medium first, then `DdgiHigh`
+  separately. The requested preset matrix is already active; evidence governs
+  release sign-off and any later threshold or rollback change.
 
 ### Phase 6: handoff to temporal/adaptive work
 
@@ -581,7 +598,7 @@ normal producer and is not part of the initial implementation.
 
 ### 10.3 Preset promotion rule
 
-`DdgiHigh` may consume `SurfaceAwareQualified` only when:
+Release qualification for `DdgiHigh` is complete only when:
 
 1. all correctness gates pass;
 2. the total-cost retain gate passes;
@@ -631,7 +648,8 @@ does not prove diffuse cache compatibility.
 - Temporal reprojection, checkerboard gather rates, dirty-tile scheduling, or
   history age policy; those remain the related adaptive-cache item.
 - Making legacy depth-only cache consumption a production fallback.
-- Promoting `DdgiHigh` before exact/candidate runtime evidence passes.
+- Removing the exact fallback or claiming release qualification before
+  exact/candidate runtime evidence passes.
 
 ## 13. Definition of done
 
@@ -644,8 +662,8 @@ does not prove diffuse cache compatibility.
 - All opaque family and advanced-output shader combinations compile and retain
   their feature outputs.
 - Automated numerical, ABI, shader, pipeline, and lifecycle tests pass.
-- The complete runtime matrix passes exact/candidate correctness gates,
-  including the original black-noise camera and temporal motion.
-- Statistically paired captures pass the total-cost performance gate.
-- `DdgiHigh` promotion occurs in a separate evidence-backed change, while exact
-  mode remains available as the permanent oracle and rollback path.
+- The requested `DdgiHigh` temporal-adaptive mode falls back to exact for every
+  unproven receiver or unavailable view, with stable diagnostics.
+- The complete runtime matrix and statistically paired captures remain required
+  before release qualification is claimed.
+- Exact mode remains available as the permanent oracle and rollback path.

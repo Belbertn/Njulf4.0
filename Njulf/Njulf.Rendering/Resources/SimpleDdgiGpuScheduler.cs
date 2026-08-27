@@ -126,6 +126,7 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     private SimpleDdgiReceiverContributionEvidence
         _lastReceiverContributionEvidence;
     private SimpleDdgiUrgentRelightEvidence _lastUrgentRelightEvidence;
+    private SimpleDdgiAdaptiveRayEvidence _lastAdaptiveRayEvidence;
     private uint _lastFeedbackTransportTopologyGeneration;
     private ulong _currentPolicyHash;
     private ulong _previousPolicyHash;
@@ -229,6 +230,14 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         {
             lock (_lock)
                 return _lastReceiverContributionEvidence;
+        }
+    }
+    public SimpleDdgiAdaptiveRayEvidence LastAdaptiveRayEvidence
+    {
+        get
+        {
+            lock (_lock)
+                return _lastAdaptiveRayEvidence;
         }
     }
 
@@ -1069,6 +1078,38 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
             _lastFeedbackTransportTopologyGeneration = feedbackWords[
                 SimpleDdgiSchedulerAbi
                     .FeedbackTransportTopologyGenerationOffsetWords];
+            int savedRingBase =
+                SimpleDdgiSchedulerAbi.FeedbackAdaptiveSavedRayRingOffsetWords;
+            int errorRingBase =
+                SimpleDdgiSchedulerAbi
+                    .FeedbackAdaptiveMaximumErrorRingOffsetWords;
+            int savedContentBase =
+                SimpleDdgiSchedulerAbi.FeedbackAdaptiveSavedRayContentOffsetWords;
+            int errorContentBase =
+                SimpleDdgiSchedulerAbi
+                    .FeedbackAdaptiveMaximumErrorContentOffsetWords;
+            _lastAdaptiveRayEvidence = new(
+                SimpleDdgiAdaptiveRayBucketEvidence.FromPacked(
+                    feedbackWords[savedRingBase + 0],
+                    feedbackWords[errorRingBase + 0]),
+                SimpleDdgiAdaptiveRayBucketEvidence.FromPacked(
+                    feedbackWords[savedRingBase + 1],
+                    feedbackWords[errorRingBase + 1]),
+                SimpleDdgiAdaptiveRayBucketEvidence.FromPacked(
+                    feedbackWords[savedRingBase + 2],
+                    feedbackWords[errorRingBase + 2]),
+                SimpleDdgiAdaptiveRayBucketEvidence.FromPacked(
+                    feedbackWords[savedContentBase + 0],
+                    feedbackWords[errorContentBase + 0]),
+                SimpleDdgiAdaptiveRayBucketEvidence.FromPacked(
+                    feedbackWords[savedContentBase + 1],
+                    feedbackWords[errorContentBase + 1]),
+                SimpleDdgiAdaptiveRayBucketEvidence.FromPacked(
+                    feedbackWords[savedContentBase + 2],
+                    feedbackWords[errorContentBase + 2]),
+                SimpleDdgiAdaptiveRayBucketEvidence.FromPacked(
+                    feedbackWords[savedContentBase + 3],
+                    feedbackWords[errorContentBase + 3]));
             int eligibleClassBase =
                 SimpleDdgiSchedulerAbi.FeedbackEligibleClassOffsetWords;
             int eligibleRingBase =

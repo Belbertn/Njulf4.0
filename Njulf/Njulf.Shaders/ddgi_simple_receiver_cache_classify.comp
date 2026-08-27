@@ -1,0 +1,828 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_receiver_surface.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(std430, set = 2, binding = 0) buffer CurrentReceiverCacheBlock
+{
+    uvec4 Entries[];
+} CurrentReceiverCache;
+
+layout(std430, set = 2, binding = 1) buffer CurrentReceiverSurfaceBlock
+{
+    uvec2 Entries[];
+} CurrentReceiverSurface;
+
+layout(std430, set = 2, binding = 2) readonly buffer PreviousReceiverCacheBlock
+{
+    uvec4 Entries[];
+} PreviousReceiverCache;
+
+layout(std430, set = 2, binding = 3) readonly buffer PreviousReceiverSurfaceBlock
+{
+    uvec2 Entries[];
+} PreviousReceiverSurface;
+
+layout(std430, set = 2, binding = 4) buffer CurrentReceiverMetadataBlock
+{
+    uvec4 Entries[];
+} CurrentReceiverMetadata;
+
+layout(std430, set = 2, binding = 5) readonly buffer PreviousReceiverMetadataBlock
+{
+    uvec4 Entries[];
+} PreviousReceiverMetadata;
+
+layout(std430, set = 2, binding = 6) buffer ReceiverTileScheduleBlock
+{
+    uvec4 Entries[];
+} ReceiverTileSchedule;
+
+layout(std430, set = 2, binding = 7) buffer ReceiverGatherWorkBlock
+{
+    uvec2 Entries[];
+} ReceiverGatherWork;
+
+layout(std430, set = 2, binding = 8) buffer ReceiverResolveTileBlock
+{
+    uvec2 Entries[];
+} ReceiverResolveTiles;
+
+layout(std430, set = 2, binding = 9) buffer ReceiverAdaptiveControlBlock
+{
+    uint Words[];
+} ReceiverAdaptiveControl;
+
+layout(std430, set = 2, binding = 10) buffer ReceiverGatherStampBlock
+{
+    uint Entries[];
+} ReceiverGatherStamps;
+
+layout(push_constant) uniform SimpleDdgiReceiverCacheAdaptivePushBlock
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndPadding;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint CacheWidth;
+    uint CacheHeight;
+    uint GatherWidth;
+    uint GatherHeight;
+    uint MotionTextureIndex;
+    uint HistoryAndPresetFlags;
+    uint FrameStamp;
+    uint SamplingPhase;
+    uint MaximumHistoryAge;
+    uint ClassifyPhase;
+} pc;
+
+const uint RECEIVER_ADAPTIVE_RATE_FULL = 0u;
+const uint RECEIVER_ADAPTIVE_RATE_HALF = 1u;
+const uint RECEIVER_ADAPTIVE_RATE_QUARTER = 2u;
+const uint RECEIVER_ADAPTIVE_RATE_REUSE = 3u;
+const uint RECEIVER_ADAPTIVE_TILE_SCALE = 8u;
+const uint RECEIVER_ADAPTIVE_GATHER_COUNT = 0u;
+const uint RECEIVER_ADAPTIVE_RESOLVE_COUNT = 1u;
+const uint RECEIVER_ADAPTIVE_OVERFLOW_FLAGS = 2u;
+const uint RECEIVER_ADAPTIVE_FRAME_STAMP = 3u;
+const uint RECEIVER_ADAPTIVE_GATHER_INDIRECT = 4u;
+const uint RECEIVER_ADAPTIVE_RESOLVE_INDIRECT = 7u;
+const uint RECEIVER_ADAPTIVE_TILE_COUNT = 10u;
+const uint RECEIVER_ADAPTIVE_ACCEPTED_COUNT = 11u;
+const uint RECEIVER_ADAPTIVE_REJECTED_COUNT = 12u;
+const uint RECEIVER_ADAPTIVE_FULL_COUNT = 13u;
+const uint RECEIVER_ADAPTIVE_HALF_COUNT = 14u;
+const uint RECEIVER_ADAPTIVE_QUARTER_COUNT = 15u;
+const uint RECEIVER_ADAPTIVE_REUSE_COUNT = 16u;
+const uint RECEIVER_ADAPTIVE_METADATA_VALID = 1u;
+const float RECEIVER_NORMAL_RELATIVE_EPSILON = 0.000001;
+
+shared uint SharedActiveCount;
+shared uint SharedOccupiedCount;
+shared uint SharedAcceptedCount;
+shared uint SharedRejectedCount;
+shared uint SharedMaximumAge;
+shared uint SharedMinimumConfidence;
+shared uint SharedMaximumDepthGradient;
+shared uint SharedMinimumNormalDot;
+shared uint SharedMaximumMotion;
+shared uint SharedSurfaceX[64];
+shared uint SharedSurfaceY[64];
+shared uint SharedSurfaceValid[64];
+
+uint DivideRoundUp(uint value, uint divisor)
+{
+    return value == 0u ? 0u : (value + divisor - 1u) / divisor;
+}
+
+uint TileWidth()
+{
+    return DivideRoundUp(pc.CacheWidth, RECEIVER_ADAPTIVE_TILE_SCALE);
+}
+
+uint TileHeight()
+{
+    return DivideRoundUp(pc.CacheHeight, RECEIVER_ADAPTIVE_TILE_SCALE);
+}
+
+bool ReconstructReceiverPosition(
+    ivec2 pixel,
+    out vec3 worldPosition,
+    out float depth)
+{
+    ivec2 extent = ivec2(int(pc.ScreenWidth), int(pc.ScreenHeight));
+    if (any(lessThan(pixel, ivec2(0))) ||
+        any(greaterThanEqual(pixel, extent)))
+    {
+        worldPosition = vec3(0.0);
+        depth = 0.0;
+        return false;
+    }
+
+    depth = texelFetch(
+        BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
+        pixel,
+        0).r;
+    if (!SimpleDdgiReceiverSurfaceFinite(depth) || depth <= 0.000001)
+    {
+        worldPosition = vec3(0.0);
+        return false;
+    }
+
+    return SimpleDdgiReceiverSurfaceReconstructPosition(
+        uvec2(pixel),
+        depth,
+        pc.InverseViewProjectionMatrix,
+        uvec2(pc.ScreenWidth, pc.ScreenHeight),
+        worldPosition);
+}
+
+bool ReconstructReceiverPosition(ivec2 pixel, out vec3 worldPosition)
+{
+    float ignoredDepth;
+    return ReconstructReceiverPosition(pixel, worldPosition, ignoredDepth);
+}
+
+bool SelectRepresentativeReceiver(
+    uvec2 cacheCoordinate,
+    out ivec2 pixel,
+    out vec3 worldPosition,
+    out float reverseZ)
+{
+    const uint scale = 2u;
+    ivec2 blockBase = ivec2(cacheCoordinate * scale);
+    ivec2 center = blockBase + ivec2(1);
+    if (ReconstructReceiverPosition(center, worldPosition, reverseZ))
+    {
+        pixel = center;
+        return true;
+    }
+
+    bool found = false;
+    float closestDepth = 0.0;
+    pixel = blockBase;
+    worldPosition = vec3(0.0);
+    reverseZ = 0.0;
+    for (uint y = 0u; y < scale; ++y)
+    for (uint x = 0u; x < scale; ++x)
+    {
+        ivec2 candidatePixel = blockBase + ivec2(int(x), int(y));
+        vec3 candidatePosition;
+        float candidateDepth;
+        if (!ReconstructReceiverPosition(
+                candidatePixel,
+                candidatePosition,
+                candidateDepth))
+        {
+            continue;
+        }
+        if (!found || candidateDepth > closestDepth)
+        {
+            found = true;
+            closestDepth = candidateDepth;
+            pixel = candidatePixel;
+            worldPosition = candidatePosition;
+            reverseZ = candidateDepth;
+        }
+    }
+    return found;
+}
+
+bool SelectScreenDerivative(
+    vec3 center,
+    bool negativeValid,
+    vec3 negativePosition,
+    bool positiveValid,
+    vec3 positivePosition,
+    out vec3 derivative)
+{
+    vec3 negativeDerivative = center - negativePosition;
+    vec3 positiveDerivative = positivePosition - center;
+    if (negativeValid && positiveValid)
+    {
+        derivative = dot(negativeDerivative, negativeDerivative) <=
+                dot(positiveDerivative, positiveDerivative)
+            ? negativeDerivative
+            : positiveDerivative;
+        return true;
+    }
+    if (negativeValid)
+    {
+        derivative = negativeDerivative;
+        return true;
+    }
+    if (positiveValid)
+    {
+        derivative = positiveDerivative;
+        return true;
+    }
+    derivative = vec3(0.0);
+    return false;
+}
+
+vec3 ReconstructReceiverNormal(
+    ivec2 pixel,
+    vec3 worldPosition,
+    vec3 viewDirection)
+{
+    vec3 leftPosition;
+    vec3 rightPosition;
+    vec3 upPosition;
+    vec3 downPosition;
+    bool leftValid = ReconstructReceiverPosition(
+        pixel + ivec2(-1, 0), leftPosition);
+    bool rightValid = ReconstructReceiverPosition(
+        pixel + ivec2(1, 0), rightPosition);
+    bool upValid = ReconstructReceiverPosition(
+        pixel + ivec2(0, -1), upPosition);
+    bool downValid = ReconstructReceiverPosition(
+        pixel + ivec2(0, 1), downPosition);
+
+    vec3 dx;
+    vec3 dy;
+    bool dxValid = SelectScreenDerivative(
+        worldPosition,
+        leftValid,
+        leftPosition,
+        rightValid,
+        rightPosition,
+        dx);
+    bool dyValid = SelectScreenDerivative(
+        worldPosition,
+        upValid,
+        upPosition,
+        downValid,
+        downPosition,
+        dy);
+
+    vec3 normal = viewDirection;
+    if (dxValid && dyValid)
+    {
+        vec3 candidate = cross(dx, dy);
+        float lengthSquared = dot(candidate, candidate);
+        float derivativeAreaSquared = max(
+            dot(dx, dx) * dot(dy, dy),
+            1.0e-30);
+        if (lengthSquared >
+                derivativeAreaSquared * RECEIVER_NORMAL_RELATIVE_EPSILON &&
+            SimpleDdgiReceiverSurfaceFinite(lengthSquared) &&
+            SimpleDdgiReceiverSurfaceFinite(derivativeAreaSquared))
+        {
+            normal = candidate * inversesqrt(lengthSquared);
+        }
+    }
+    if (dot(normal, viewDirection) < 0.0)
+        normal = -normal;
+    return normalize(normal);
+}
+
+bool BuildCurrentSurface(
+    uvec2 cacheCoordinate,
+    out uvec2 packedSurface,
+    out ivec2 representativePixel)
+{
+    vec3 worldPosition;
+    float reverseZ;
+    if (!SelectRepresentativeReceiver(
+            cacheCoordinate,
+            representativePixel,
+            worldPosition,
+            reverseZ))
+    {
+        packedSurface = SimpleDdgiReceiverSurfaceInvalid();
+        return false;
+    }
+
+    vec3 view = pc.CameraPositionAndPadding.xyz - worldPosition;
+    float viewLength = length(view);
+    if (!(viewLength > 0.00001) ||
+        !SimpleDdgiReceiverSurfaceFinite(viewLength))
+    {
+        packedSurface = SimpleDdgiReceiverSurfaceInvalid();
+        return false;
+    }
+
+    vec3 normal = ReconstructReceiverNormal(
+        representativePixel,
+        worldPosition,
+        view / viewLength);
+    uvec2 offset = uvec2(representativePixel) - cacheCoordinate * 2u;
+    packedSurface = SimpleDdgiReceiverSurfacePack(normal, reverseZ, offset);
+    return (packedSurface.y & SIMPLE_DDGI_RECEIVER_SURFACE_DEPTH_MASK) != 0u;
+}
+
+bool TryAcceptHistory(
+    uvec2 cacheCoordinate,
+    uvec2 currentSurface,
+    ivec2 representativePixel,
+    out uint previousIndex,
+    out uint previousAge,
+    out uint previousConfidence,
+    out float motionMagnitude)
+{
+    previousIndex = 0u;
+    previousAge = 0u;
+    previousConfidence = 0u;
+    motionMagnitude = 1.0;
+    if ((pc.HistoryAndPresetFlags & 1u) == 0u)
+        return false;
+
+    vec2 motion = texelFetch(
+        BindlessTextures[nonuniformEXT(pc.MotionTextureIndex)],
+        representativePixel,
+        0).xy;
+    if (any(isnan(motion)) || any(isinf(motion)))
+        return false;
+    motionMagnitude = length(motion);
+
+    vec2 currentUv = (vec2(representativePixel) + vec2(0.5)) /
+        vec2(max(pc.ScreenWidth, 1u), max(pc.ScreenHeight, 1u));
+    vec2 previousUv = currentUv - motion;
+    if (any(lessThan(previousUv, vec2(0.0))) ||
+        any(greaterThanEqual(previousUv, vec2(1.0))))
+    {
+        return false;
+    }
+
+    uvec2 previousPixel = uvec2(floor(previousUv *
+        vec2(pc.ScreenWidth, pc.ScreenHeight)));
+    uvec2 previousCacheCoordinate = previousPixel / 2u;
+    if (any(greaterThanEqual(
+            previousCacheCoordinate,
+            uvec2(pc.CacheWidth, pc.CacheHeight))))
+    {
+        return false;
+    }
+
+    previousIndex = previousCacheCoordinate.y * pc.CacheWidth +
+        previousCacheCoordinate.x;
+    uvec4 metadata = PreviousReceiverMetadata.Entries[previousIndex];
+    if ((metadata.z & RECEIVER_ADAPTIVE_METADATA_VALID) == 0u)
+        return false;
+
+    uvec2 previousSurface = PreviousReceiverSurface.Entries[previousIndex];
+    SimpleDdgiReceiverSurface currentDecoded;
+    SimpleDdgiReceiverSurface previousDecoded;
+    if (!SimpleDdgiReceiverSurfaceDecode(currentSurface, currentDecoded) ||
+        !SimpleDdgiReceiverSurfaceDecode(previousSurface, previousDecoded))
+    {
+        return false;
+    }
+
+    float relativeDepth = abs(
+        currentDecoded.ReverseZ - previousDecoded.ReverseZ) /
+        max(max(currentDecoded.ReverseZ, previousDecoded.ReverseZ),
+            SIMPLE_DDGI_RECEIVER_SURFACE_MINIMUM_REVERSE_Z);
+    if (!SimpleDdgiReceiverSurfaceFinite(relativeDepth) ||
+        relativeDepth > SIMPLE_DDGI_RECEIVER_SURFACE_MAXIMUM_RELATIVE_DEPTH ||
+        dot(currentDecoded.GeometricNormal, previousDecoded.GeometricNormal) <
+            SIMPLE_DDGI_RECEIVER_SURFACE_MINIMUM_NORMAL_DOT)
+    {
+        return false;
+    }
+
+    previousAge = (metadata.z >> 8u) & 0xffu;
+    previousConfidence = (metadata.z >> 16u) & 0xffu;
+    return previousAge < max(pc.MaximumHistoryAge, 1u) &&
+        previousConfidence != 0u;
+}
+
+void ResolvePresetThresholds(
+    out float fullDepth,
+    out float fullNormal,
+    out float fullMotion,
+    out float halfDepth,
+    out float halfNormal,
+    out float halfMotion,
+    out float quarterDepth,
+    out float quarterNormal,
+    out float quarterMotion,
+    out float minimumReuseConfidence)
+{
+    uint preset = (pc.HistoryAndPresetFlags >> 8u) & 0xffu;
+    if (preset == 0u)
+    {
+        fullDepth = 0.10; fullNormal = 0.82; fullMotion = 0.050;
+        halfDepth = 0.060; halfNormal = 0.90; halfMotion = 0.025;
+        quarterDepth = 0.025; quarterNormal = 0.96;
+        quarterMotion = 0.010; minimumReuseConfidence = 0.55;
+    }
+    else if (preset == 1u)
+    {
+        fullDepth = 0.085; fullNormal = 0.85; fullMotion = 0.040;
+        halfDepth = 0.050; halfNormal = 0.92; halfMotion = 0.020;
+        quarterDepth = 0.020; quarterNormal = 0.97;
+        quarterMotion = 0.008; minimumReuseConfidence = 0.62;
+    }
+    else if (preset == 3u)
+    {
+        fullDepth = 0.055; fullNormal = 0.90; fullMotion = 0.025;
+        halfDepth = 0.030; halfNormal = 0.95; halfMotion = 0.012;
+        quarterDepth = 0.012; quarterNormal = 0.985;
+        quarterMotion = 0.004; minimumReuseConfidence = 0.75;
+    }
+    else
+    {
+        fullDepth = 0.070; fullNormal = 0.88; fullMotion = 0.030;
+        halfDepth = 0.040; halfNormal = 0.94; halfMotion = 0.015;
+        quarterDepth = 0.016; quarterNormal = 0.98;
+        quarterMotion = 0.006; minimumReuseConfidence = 0.70;
+    }
+}
+
+void ClassifyTile()
+{
+    uint lane = gl_LocalInvocationIndex;
+    if (lane == 0u)
+    {
+        SharedActiveCount = 0u;
+        SharedOccupiedCount = 0u;
+        SharedAcceptedCount = 0u;
+        SharedRejectedCount = 0u;
+        SharedMaximumAge = 0u;
+        SharedMinimumConfidence = 255u;
+        SharedMaximumDepthGradient = floatBitsToUint(0.0);
+        SharedMinimumNormalDot = floatBitsToUint(1.0);
+        SharedMaximumMotion = floatBitsToUint(0.0);
+    }
+    SharedSurfaceX[lane] = 0u;
+    SharedSurfaceY[lane] = 0u;
+    SharedSurfaceValid[lane] = 0u;
+    barrier();
+
+    uvec2 cacheCoordinate = gl_GlobalInvocationID.xy;
+    bool entryActive = all(lessThan(
+        cacheCoordinate,
+        uvec2(pc.CacheWidth, pc.CacheHeight)));
+    uint entryIndex = entryActive
+        ? cacheCoordinate.y * pc.CacheWidth + cacheCoordinate.x
+        : 0u;
+    if (entryActive)
+    {
+        atomicAdd(SharedActiveCount, 1u);
+        uvec2 currentSurface;
+        ivec2 representativePixel;
+        bool currentValid = BuildCurrentSurface(
+            cacheCoordinate,
+            currentSurface,
+            representativePixel);
+        SharedSurfaceX[lane] = currentSurface.x;
+        SharedSurfaceY[lane] = currentSurface.y;
+        SharedSurfaceValid[lane] = currentValid ? 1u : 0u;
+
+        if (!currentValid)
+        {
+            // Empty current receivers cannot shade an opaque fragment. Keep
+            // their output invalid without turning fully empty tiles into
+            // perpetual Full work.
+            CurrentReceiverCache.Entries[entryIndex] = uvec4(0u);
+            CurrentReceiverSurface.Entries[entryIndex] =
+                SimpleDdgiReceiverSurfaceInvalid();
+            CurrentReceiverMetadata.Entries[entryIndex] = uvec4(0u);
+        }
+        else
+        {
+            atomicAdd(SharedOccupiedCount, 1u);
+            uint previousIndex;
+            uint previousAge;
+            uint previousConfidence;
+            float motionMagnitude;
+            bool accepted = TryAcceptHistory(
+                cacheCoordinate,
+                currentSurface,
+                representativePixel,
+                previousIndex,
+                previousAge,
+                previousConfidence,
+                motionMagnitude);
+            atomicMax(
+                SharedMaximumMotion,
+                floatBitsToUint(clamp(motionMagnitude, 0.0, 1.0)));
+            if (accepted)
+            {
+                uint age = min(previousAge + 1u, 255u);
+                uint confidence = min(previousConfidence + 8u, 255u);
+                CurrentReceiverCache.Entries[entryIndex] =
+                    PreviousReceiverCache.Entries[previousIndex];
+                CurrentReceiverSurface.Entries[entryIndex] = currentSurface;
+                CurrentReceiverMetadata.Entries[entryIndex] = uvec4(
+                    currentSurface,
+                    RECEIVER_ADAPTIVE_METADATA_VALID |
+                        (age << 8u) |
+                        (confidence << 16u),
+                    0u);
+                atomicAdd(SharedAcceptedCount, 1u);
+                atomicMax(SharedMaximumAge, age);
+                atomicMin(SharedMinimumConfidence, confidence);
+            }
+            else
+            {
+                CurrentReceiverCache.Entries[entryIndex] = uvec4(0u);
+                CurrentReceiverSurface.Entries[entryIndex] =
+                    SimpleDdgiReceiverSurfaceInvalid();
+                CurrentReceiverMetadata.Entries[entryIndex] = uvec4(0u);
+                atomicAdd(SharedRejectedCount, 1u);
+                atomicMin(SharedMinimumConfidence, 0u);
+            }
+        }
+    }
+    barrier();
+
+    if (entryActive && SharedSurfaceValid[lane] != 0u)
+    {
+        SimpleDdgiReceiverSurface center;
+        if (SimpleDdgiReceiverSurfaceDecode(
+                uvec2(SharedSurfaceX[lane], SharedSurfaceY[lane]),
+                center))
+        {
+            uvec2 local = gl_LocalInvocationID.xy;
+            const uvec2 offsets[2] = uvec2[2](uvec2(1u, 0u), uvec2(0u, 1u));
+            for (uint neighbor = 0u; neighbor < 2u; ++neighbor)
+            {
+                uvec2 next = local + offsets[neighbor];
+                if (any(greaterThanEqual(next, uvec2(8u))))
+                    continue;
+                uint nextLane = next.y * 8u + next.x;
+                if (SharedSurfaceValid[nextLane] == 0u)
+                    continue;
+                SimpleDdgiReceiverSurface adjacent;
+                if (!SimpleDdgiReceiverSurfaceDecode(
+                        uvec2(SharedSurfaceX[nextLane], SharedSurfaceY[nextLane]),
+                        adjacent))
+                {
+                    continue;
+                }
+                float depthGradient = abs(
+                    center.ReverseZ - adjacent.ReverseZ) /
+                    max(max(center.ReverseZ, adjacent.ReverseZ),
+                        SIMPLE_DDGI_RECEIVER_SURFACE_MINIMUM_REVERSE_Z);
+                float normalDot = clamp(dot(
+                    center.GeometricNormal,
+                    adjacent.GeometricNormal), 0.0, 1.0);
+                atomicMax(
+                    SharedMaximumDepthGradient,
+                    floatBitsToUint(clamp(depthGradient, 0.0, 1.0)));
+                atomicMin(
+                    SharedMinimumNormalDot,
+                    floatBitsToUint(normalDot));
+            }
+        }
+    }
+    barrier();
+
+    if (lane != 0u)
+        return;
+
+    float maximumDepthGradient = uintBitsToFloat(
+        SharedMaximumDepthGradient);
+    float minimumNormalDot = uintBitsToFloat(SharedMinimumNormalDot);
+    float maximumMotion = uintBitsToFloat(SharedMaximumMotion);
+    float minimumConfidence = float(SharedMinimumConfidence) / 255.0;
+    float fullDepth;
+    float fullNormal;
+    float fullMotion;
+    float halfDepth;
+    float halfNormal;
+    float halfMotion;
+    float quarterDepth;
+    float quarterNormal;
+    float quarterMotion;
+    float minimumReuseConfidence;
+    ResolvePresetThresholds(
+        fullDepth, fullNormal, fullMotion,
+        halfDepth, halfNormal, halfMotion,
+        quarterDepth, quarterNormal, quarterMotion,
+        minimumReuseConfidence);
+
+    uint rate = RECEIVER_ADAPTIVE_RATE_REUSE;
+    if (SharedOccupiedCount == 0u)
+    {
+        rate = RECEIVER_ADAPTIVE_RATE_REUSE;
+    }
+    else if ((pc.HistoryAndPresetFlags & 1u) == 0u ||
+        SharedRejectedCount != 0u ||
+        SharedActiveCount == 0u ||
+        SharedMaximumAge >= max(pc.MaximumHistoryAge, 1u) ||
+        maximumDepthGradient >= fullDepth ||
+        minimumNormalDot <= fullNormal ||
+        maximumMotion >= fullMotion)
+    {
+        rate = RECEIVER_ADAPTIVE_RATE_FULL;
+    }
+    else if (maximumDepthGradient >= halfDepth ||
+             minimumNormalDot <= halfNormal ||
+             maximumMotion >= halfMotion)
+    {
+        rate = RECEIVER_ADAPTIVE_RATE_HALF;
+    }
+    else if (maximumDepthGradient >= quarterDepth ||
+             minimumNormalDot <= quarterNormal ||
+             maximumMotion >= quarterMotion ||
+             minimumConfidence < minimumReuseConfidence)
+    {
+        rate = RECEIVER_ADAPTIVE_RATE_QUARTER;
+    }
+
+    uvec2 tileCoordinate = gl_WorkGroupID.xy;
+    uint tileIndex = tileCoordinate.y * TileWidth() + tileCoordinate.x;
+    ReceiverTileSchedule.Entries[tileIndex] = uvec4(
+        rate,
+        SharedRejectedCount,
+        SharedMaximumAge,
+        packHalf2x16(vec2(maximumDepthGradient, maximumMotion)));
+    atomicAdd(
+        ReceiverAdaptiveControl.Words[
+            rate == RECEIVER_ADAPTIVE_RATE_FULL
+                ? RECEIVER_ADAPTIVE_FULL_COUNT
+                : rate == RECEIVER_ADAPTIVE_RATE_HALF
+                    ? RECEIVER_ADAPTIVE_HALF_COUNT
+                    : rate == RECEIVER_ADAPTIVE_RATE_QUARTER
+                        ? RECEIVER_ADAPTIVE_QUARTER_COUNT
+                        : RECEIVER_ADAPTIVE_REUSE_COUNT],
+        1u);
+    atomicAdd(
+        ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_ACCEPTED_COUNT],
+        SharedAcceptedCount);
+    atomicAdd(
+        ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_REJECTED_COUNT],
+        SharedRejectedCount);
+
+    if (rate != RECEIVER_ADAPTIVE_RATE_REUSE)
+    {
+        uint resolveIndex = atomicAdd(
+            ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_RESOLVE_COUNT],
+            1u);
+        uint capacity = TileWidth() * TileHeight();
+        if (resolveIndex < capacity)
+            ReceiverResolveTiles.Entries[resolveIndex] = tileCoordinate;
+        else
+            atomicOr(
+                ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_OVERFLOW_FLAGS],
+                2u);
+    }
+}
+
+uint RateForGatherCoordinate(uvec2 gatherCoordinate)
+{
+    uvec2 screenCenter = gatherCoordinate * 12u + uvec2(6u);
+    uvec2 cacheCoordinate = min(
+        screenCenter / 2u,
+        uvec2(pc.CacheWidth - 1u, pc.CacheHeight - 1u));
+    ivec2 tile = ivec2(cacheCoordinate / RECEIVER_ADAPTIVE_TILE_SCALE);
+    ivec2 extent = ivec2(TileWidth(), TileHeight());
+    uint rate = RECEIVER_ADAPTIVE_RATE_REUSE;
+    for (int y = -1; y <= 1; ++y)
+    for (int x = -1; x <= 1; ++x)
+    {
+        ivec2 candidate = tile + ivec2(x, y);
+        if (any(lessThan(candidate, ivec2(0))) ||
+            any(greaterThanEqual(candidate, extent)))
+        {
+            continue;
+        }
+        uint index = uint(candidate.y) * TileWidth() + uint(candidate.x);
+        rate = min(rate, ReceiverTileSchedule.Entries[index].x);
+    }
+    return rate;
+}
+
+void CompactGatherWork()
+{
+    uvec2 coordinate = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(
+            coordinate,
+            uvec2(pc.GatherWidth, pc.GatherHeight))))
+    {
+        return;
+    }
+
+    uint rate = RateForGatherCoordinate(coordinate);
+    bool selected = rate == RECEIVER_ADAPTIVE_RATE_FULL;
+    if (rate == RECEIVER_ADAPTIVE_RATE_HALF)
+    {
+        selected = ((coordinate.x + coordinate.y + pc.SamplingPhase) & 1u) == 0u;
+    }
+    else if (rate == RECEIVER_ADAPTIVE_RATE_QUARTER)
+    {
+        uint phase = (coordinate.x & 1u) | ((coordinate.y & 1u) << 1u);
+        selected = phase == (pc.SamplingPhase & 3u);
+    }
+    if (!selected)
+        return;
+
+    uint workIndex = atomicAdd(
+        ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_COUNT],
+        1u);
+    uint capacity = pc.GatherWidth * pc.GatherHeight;
+    if (workIndex < capacity)
+        ReceiverGatherWork.Entries[workIndex] = coordinate;
+    else
+        atomicOr(
+            ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_OVERFLOW_FLAGS],
+            1u);
+}
+
+void FinalizeIndirectArguments()
+{
+    if (gl_GlobalInvocationID.x != 0u ||
+        gl_GlobalInvocationID.y != 0u)
+    {
+        return;
+    }
+
+    uint gatherCapacity = pc.GatherWidth * pc.GatherHeight;
+    uint resolveCapacity = TileWidth() * TileHeight();
+    uint gatherCount = ReceiverAdaptiveControl.Words[
+        RECEIVER_ADAPTIVE_GATHER_COUNT];
+    uint resolveCount = ReceiverAdaptiveControl.Words[
+        RECEIVER_ADAPTIVE_RESOLVE_COUNT];
+    if (gatherCount > gatherCapacity)
+    {
+        gatherCount = gatherCapacity;
+        ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_COUNT] =
+            gatherCapacity;
+        ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_OVERFLOW_FLAGS] |= 1u;
+    }
+    if (resolveCount > resolveCapacity)
+    {
+        resolveCount = resolveCapacity;
+        ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_RESOLVE_COUNT] =
+            resolveCapacity;
+        ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_OVERFLOW_FLAGS] |= 2u;
+    }
+
+    ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_FRAME_STAMP] =
+        pc.FrameStamp;
+    ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_TILE_COUNT] =
+        resolveCapacity;
+    ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_INDIRECT + 0u] =
+        DivideRoundUp(gatherCount, 64u);
+    ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_INDIRECT + 1u] = 1u;
+    ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_INDIRECT + 2u] = 1u;
+    ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_RESOLVE_INDIRECT + 0u] =
+        resolveCount;
+    ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_RESOLVE_INDIRECT + 1u] = 1u;
+    ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_RESOLVE_INDIRECT + 2u] = 1u;
+}
+
+void SeedCanonicalHistory()
+{
+    uvec2 coordinate = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(
+            coordinate,
+            uvec2(pc.CacheWidth, pc.CacheHeight))))
+    {
+        return;
+    }
+    uint index = coordinate.y * pc.CacheWidth + coordinate.x;
+    uvec2 surface = CurrentReceiverSurface.Entries[index];
+    SimpleDdgiReceiverSurface decoded;
+    bool valid = CurrentReceiverCache.Entries[index].w != 0u &&
+        SimpleDdgiReceiverSurfaceDecode(surface, decoded);
+    CurrentReceiverMetadata.Entries[index] = valid
+        ? uvec4(surface, RECEIVER_ADAPTIVE_METADATA_VALID | (255u << 16u), 0u)
+        : uvec4(0u);
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        uvec2 tileCoordinate = gl_WorkGroupID.xy;
+        uint tileIndex = tileCoordinate.y * TileWidth() + tileCoordinate.x;
+        ReceiverTileSchedule.Entries[tileIndex] =
+            uvec4(RECEIVER_ADAPTIVE_RATE_FULL, 0u, 0u, 0u);
+    }
+}
+
+void main()
+{
+    if (pc.ClassifyPhase == 0u)
+        ClassifyTile();
+    else if (pc.ClassifyPhase == 1u)
+        CompactGatherWork();
+    else if (pc.ClassifyPhase == 2u)
+        FinalizeIndirectArguments();
+    else if (pc.ClassifyPhase == 3u)
+        SeedCanonicalHistory();
+}

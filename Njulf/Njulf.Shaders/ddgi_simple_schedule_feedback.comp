@@ -46,7 +46,11 @@ const uint SIMPLE_DDGI_FEEDBACK_RECEIVER_PROBES = 22u;
 const uint SIMPLE_DDGI_FEEDBACK_RECEIVER_COVERAGE_BUCKETS = 23u;
 const uint SIMPLE_DDGI_FEEDBACK_RECEIVER_FALLBACK_PROBES = 24u;
 const uint SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK = 25u;
-const uint SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 26u;
+const uint SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_RING = 26u;
+const uint SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_RING = 29u;
+const uint SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_CONTENT = 32u;
+const uint SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_CONTENT = 36u;
+const uint SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 40u;
 
 shared uint feedbackReduction[SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS];
 
@@ -85,6 +89,20 @@ void main()
     uint receiverCoverageBucketCount = 0u;
     uint receiverFallbackProbeCount = 0u;
     uint receiverConsumerMask = 0u;
+    uint adaptiveSavedRayRing[3];
+    uint adaptiveMaximumErrorRing[3];
+    uint adaptiveSavedRayContent[4];
+    uint adaptiveMaximumErrorContent[4];
+    for (uint ring = 0u; ring < 3u; ring++)
+    {
+        adaptiveSavedRayRing[ring] = 0u;
+        adaptiveMaximumErrorRing[ring] = 0u;
+    }
+    for (uint content = 0u; content < 4u; content++)
+    {
+        adaptiveSavedRayContent[content] = 0u;
+        adaptiveMaximumErrorContent[content] = 0u;
+    }
     uint activeProbeCount = min(SchedulerActiveProbeCount(), 32768u);
 #if SIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION
     uint receiverOffsetWordsPlusOne = ReadStorageWordUniform(
@@ -187,6 +205,46 @@ void main()
         bool inactive = classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
             (flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
             uintBitsToFloat(ReadStorageWordUniform(pc.ProbeStateBufferIndex, publicBase + 3u)) <= 0.001;
+        // Saved work is attributed only to a source refresh committed by this
+        // feedback frame. Quality error is the maximum valid current
+        // directional witness in each bucket. Missing witnesses remain zero
+        // (invalid) rather than silently certifying a short ray prefix.
+        bool adaptiveEvidenceParticipant =
+            SchedulerAdaptiveRayCardinality() &&
+            !inactive &&
+            requiredSourceRays != 0u &&
+            sourceRays != 0u &&
+            sourceRays <= requiredSourceRays;
+        if (adaptiveEvidenceParticipant)
+        {
+            uint savedRays = lastCommittedSourceRefreshFrame ==
+                    SchedulerFrameIndex()
+                ? requiredSourceRays - sourceRays
+                : 0u;
+            float quadratureError;
+            uint packedMaximumError = SchedulerReadQuadratureWitness(
+                    probeIndex,
+                    quadratureError)
+                ? SIMPLE_DDGI_SCHEDULER_QUADRATURE_WITNESS_VALID |
+                    floatBitsToUint(quadratureError)
+                : 0u;
+            uint contentClass = min(
+                SchedulerVolumeKind(sourceVolumeIndex),
+                3u);
+            adaptiveSavedRayContent[contentClass] += savedRays;
+            adaptiveMaximumErrorContent[contentClass] = max(
+                adaptiveMaximumErrorContent[contentClass],
+                packedMaximumError);
+            if (SchedulerVolumeKind(sourceVolumeIndex) ==
+                    SIMPLE_DDGI_SCHEDULER_VOLUME_KIND_RING)
+            {
+                uint ring = min(SchedulerVolumeRing(sourceVolumeIndex), 2u);
+                adaptiveSavedRayRing[ring] += savedRays;
+                adaptiveMaximumErrorRing[ring] = max(
+                    adaptiveMaximumErrorRing[ring],
+                    packedMaximumError);
+            }
+        }
         bool sourceReady = SchedulerTransportV2() && sourceVolumeValid &&
             SimpleDdgiTransportSourceReady(
                 flags,
@@ -379,6 +437,24 @@ void main()
                 SIMPLE_DDGI_FEEDBACK_RECEIVER_FALLBACK_PROBES);
         receiverConsumerMask |= SchedulerArenaRead(
             partialBase + SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK);
+        for (uint ring = 0u; ring < 3u; ring++)
+        {
+            adaptiveSavedRayRing[ring] += SchedulerArenaRead(
+                partialBase + SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_RING + ring);
+            adaptiveMaximumErrorRing[ring] = max(
+                adaptiveMaximumErrorRing[ring],
+                SchedulerArenaRead(
+                    partialBase + SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_RING + ring));
+        }
+        for (uint content = 0u; content < 4u; content++)
+        {
+            adaptiveSavedRayContent[content] += SchedulerArenaRead(
+                partialBase + SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_CONTENT + content);
+            adaptiveMaximumErrorContent[content] = max(
+                adaptiveMaximumErrorContent[content],
+                SchedulerArenaRead(
+                    partialBase + SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_CONTENT + content));
+        }
     }
 #endif
 
@@ -428,6 +504,26 @@ void main()
     atomicOr(
         feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK],
         receiverConsumerMask);
+    for (uint ring = 0u; ring < 3u; ring++)
+    {
+        atomicAdd(
+            feedbackReduction[SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_RING + ring],
+            adaptiveSavedRayRing[ring]);
+        atomicMax(
+            feedbackReduction[SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_RING + ring],
+            adaptiveMaximumErrorRing[ring]);
+    }
+    for (uint content = 0u; content < 4u; content++)
+    {
+        atomicAdd(
+            feedbackReduction[
+                SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_CONTENT + content],
+            adaptiveSavedRayContent[content]);
+        atomicMax(
+            feedbackReduction[
+                SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_CONTENT + content],
+            adaptiveMaximumErrorContent[content]);
+    }
     barrier();
 
 #if SIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION
@@ -483,6 +579,20 @@ void main()
         feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_FALLBACK_PROBES];
     receiverConsumerMask =
         feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK];
+    for (uint ring = 0u; ring < 3u; ring++)
+    {
+        adaptiveSavedRayRing[ring] = feedbackReduction[
+            SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_RING + ring];
+        adaptiveMaximumErrorRing[ring] = feedbackReduction[
+            SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_RING + ring];
+    }
+    for (uint content = 0u; content < 4u; content++)
+    {
+        adaptiveSavedRayContent[content] = feedbackReduction[
+            SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_CONTENT + content];
+        adaptiveMaximumErrorContent[content] = feedbackReduction[
+            SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_CONTENT + content];
+    }
 
     uint considered = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_CONSIDERED);
     uint eligible = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE);
@@ -749,6 +859,30 @@ void main()
     SchedulerArenaWrite(
         base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_TRANSPORT_TOPOLOGY_OFFSET,
         SchedulerTransportTopologyGeneration());
+    for (uint ring = 0u; ring < 3u; ring++)
+    {
+        SchedulerArenaWrite(
+            base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_SAVED_RING_OFFSET +
+                ring,
+            adaptiveSavedRayRing[ring]);
+        SchedulerArenaWrite(
+            base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_ERROR_RING_OFFSET +
+                ring,
+            adaptiveMaximumErrorRing[ring]);
+    }
+    for (uint content = 0u; content < 4u; content++)
+    {
+        SchedulerArenaWrite(
+            base +
+                SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_SAVED_CONTENT_OFFSET +
+                content,
+            adaptiveSavedRayContent[content]);
+        SchedulerArenaWrite(
+            base +
+                SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_ERROR_CONTENT_OFFSET +
+                content,
+            adaptiveMaximumErrorContent[content]);
+    }
     // Consume the mailbox after copying it into this frame-stamped feedback
     // record. Without this clear, an idle lane could reappear as current when
     // the compact 16-bit telemetry stamp wraps after 65,536 frames.

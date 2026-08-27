@@ -17,9 +17,8 @@ namespace Njulf.Core.Geometry
         public uint LocalTriangleOffset;
         public uint LocalTriangleCount;
         // Conservative geometric-normal cone used for whole-meshlet
-        // back-face rejection. A cutoff of 1 disables cone culling (the
-        // representation used for degenerate or wider-than-a-hemisphere
-        // clusters).
+        // back-face rejection. Valid cutoffs store cos(maximum deviation) in
+        // (0, 1]. Axis zero with cutoff -1 is the only disabled sentinel.
         public Vector3 NormalConeAxis;
         public float NormalConeCutoff;
 
@@ -35,7 +34,7 @@ namespace Njulf.Core.Geometry
             uint localTriangleOffset,
             uint localTriangleCount,
             Vector3 normalConeAxis = default,
-            float normalConeCutoff = 1.0f)
+            float normalConeCutoff = -1.0f)
         {
             BoundingSphereCenter = boundingSphereCenter;
             BoundingSphereRadius = boundingSphereRadius;

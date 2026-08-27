@@ -19,6 +19,7 @@ public enum SampleBenchmarkTrajectoryKind : byte
     BistroLoop,
     SponzaLow,
     SponzaHigh,
+    SponzaReceiverCacheIncident,
     SponzaHorizontal,
     SponzaVertical
 }
@@ -39,6 +40,8 @@ public static class SampleBenchmarkTrajectory
     public const string BistroLoopName = "bistro-loop";
     public const string SponzaLowName = "sponza-low";
     public const string SponzaHighName = "sponza-high";
+    public const string SponzaReceiverCacheIncidentName =
+        "sponza-receiver-cache-incident";
     public const string SponzaHorizontalName = "sponza-horizontal";
     public const string SponzaVerticalName = "sponza-vertical";
 
@@ -57,12 +60,15 @@ public static class SampleBenchmarkTrajectory
             BistroLoopName => SampleBenchmarkTrajectoryKind.BistroLoop,
             SponzaLowName => SampleBenchmarkTrajectoryKind.SponzaLow,
             SponzaHighName => SampleBenchmarkTrajectoryKind.SponzaHigh,
+            SponzaReceiverCacheIncidentName =>
+                SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident,
             SponzaHorizontalName => SampleBenchmarkTrajectoryKind.SponzaHorizontal,
             SponzaVerticalName => SampleBenchmarkTrajectoryKind.SponzaVertical,
             _ => throw new ArgumentException(
                 $"Unknown benchmark trajectory '{value}'. Valid values: " +
                 $"{StationaryName}, {BistroPresentationName}, {BistroLoopName}, " +
-                $"{SponzaLowName}, {SponzaHighName}, {SponzaHorizontalName}, " +
+                $"{SponzaLowName}, {SponzaHighName}, {SponzaReceiverCacheIncidentName}, " +
+                $"{SponzaHorizontalName}, " +
                 $"{SponzaVerticalName}.",
                 nameof(value))
         };
@@ -75,6 +81,8 @@ public static class SampleBenchmarkTrajectory
         SampleBenchmarkTrajectoryKind.BistroLoop => BistroLoopName,
         SampleBenchmarkTrajectoryKind.SponzaLow => SponzaLowName,
         SampleBenchmarkTrajectoryKind.SponzaHigh => SponzaHighName,
+        SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident =>
+            SponzaReceiverCacheIncidentName,
         SampleBenchmarkTrajectoryKind.SponzaHorizontal => SponzaHorizontalName,
         SampleBenchmarkTrajectoryKind.SponzaVertical => SponzaVerticalName,
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
@@ -94,6 +102,7 @@ public static class SampleBenchmarkTrajectory
         SampleBenchmarkTrajectoryKind kind) => kind is
         SampleBenchmarkTrajectoryKind.SponzaLow or
         SampleBenchmarkTrajectoryKind.SponzaHigh or
+        SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident or
         SampleBenchmarkTrajectoryKind.SponzaHorizontal or
         SampleBenchmarkTrajectoryKind.SponzaVertical;
 
@@ -167,6 +176,7 @@ public static class SampleBenchmarkTrajectory
                 new SampleBistroQualityCaptureContract(bistroVariant).Fingerprint,
             SampleBenchmarkTrajectoryKind.SponzaLow or
                 SampleBenchmarkTrajectoryKind.SponzaHigh or
+                SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident or
                 SampleBenchmarkTrajectoryKind.SponzaHorizontal or
                 SampleBenchmarkTrajectoryKind.SponzaVertical =>
                 SampleSponzaGiCaptureContract.Default.Fingerprint,
@@ -256,6 +266,8 @@ public static class SampleBenchmarkTrajectory
         {
             SampleBenchmarkTrajectoryKind.SponzaLow => sponza.LowBookmark,
             SampleBenchmarkTrajectoryKind.SponzaHigh => sponza.HighBookmark,
+            SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident =>
+                SampleSponzaGiCaptureContract.ReceiverCacheIncidentBookmark,
             SampleBenchmarkTrajectoryKind.SponzaHorizontal =>
                 sponza.SampleMotionTraversalFrame(ValidateFrameIndex(
                     kind,

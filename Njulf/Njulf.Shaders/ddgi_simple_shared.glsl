@@ -12,6 +12,9 @@
 #ifndef SIMPLE_DDGI_DIRECTION_VALIDATION
 #define SIMPLE_DDGI_DIRECTION_VALIDATION 0
 #endif
+#ifndef SIMPLE_DDGI_PRIVATE_SOLVER_GATHER
+#define SIMPLE_DDGI_PRIVATE_SOLVER_GATHER 0
+#endif
 
 #include "farfield_clipmap.glsl"
 #include "ddgi_simple_storage_abi.glsl"
@@ -39,6 +42,16 @@
 // diffuse-only result and pay no SH registers or buffer traffic.
 #ifndef SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
 #define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 0
+#endif
+// Receiver-cache compute may interpolate the signed SH coefficients without
+// choosing a fragment lobe yet. The compact screen lattice is evaluated later
+// with the fragment's exact reflection direction and roughness.
+#ifndef SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER
+#define SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER 0
+#endif
+#if SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER && \
+    !SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
+#error SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER requires the directional receiver contract
 #endif
 #ifndef SIMPLE_DDGI_DIRECTIONAL_RADIANCE_HG_PHASE
 #define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_HG_PHASE 0
@@ -1429,6 +1442,69 @@ SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffs
     update.cacheProbeBaseWordPlusOne = ReadStorageWordUniform(bufferIndex, baseWord + 11u);
     return update;
 }
+
+#if SIMPLE_DDGI_PRIVATE_SOLVER_GATHER
+// Urgent multi-sweep transport reuses scheduler candidate storage after emit.
+// Only the bounded accepted cohort exists in that compact bank; all external
+// dependencies continue to sample the immutable canonical atlas.
+bool SimpleDdgiPrivateSolverGatherActive = false;
+uint SimpleDdgiPrivateSolverArenaIndex = SIMPLE_DDGI_SCHEDULER_INVALID_INDEX;
+uint SimpleDdgiPrivateSolverUpdateQueueIndex = 0u;
+uint SimpleDdgiPrivateSolverScratchBaseWord = 0u;
+uint SimpleDdgiPrivateSolverProbeCapacity = 0u;
+
+void ConfigureSimpleDdgiPrivateSolverGather(
+    bool enabled,
+    uint arenaIndex,
+    uint updateQueueIndex,
+    uint scratchBaseWord,
+    uint probeCapacity)
+{
+    SimpleDdgiPrivateSolverGatherActive = enabled;
+    SimpleDdgiPrivateSolverArenaIndex = arenaIndex;
+    SimpleDdgiPrivateSolverUpdateQueueIndex = updateQueueIndex;
+    SimpleDdgiPrivateSolverScratchBaseWord = scratchBaseWord;
+    SimpleDdgiPrivateSolverProbeCapacity = probeCapacity;
+}
+
+bool TryResolveSimpleDdgiPrivateSolverIrradiance(
+    uint virtualProbeIndex,
+    uint texelsPerProbe,
+    out uint bufferIndex,
+    out uint probeBaseWord)
+{
+    bufferIndex = 0u;
+    probeBaseWord = 0u;
+    if (!SimpleDdgiPrivateSolverGatherActive ||
+        SimpleDdgiPrivateSolverArenaIndex ==
+            SIMPLE_DDGI_SCHEDULER_INVALID_INDEX ||
+        texelsPerProbe == 0u)
+    {
+        return false;
+    }
+
+    uint wordsPerProbe = texelsPerProbe * texelsPerProbe * 2u;
+    for (uint updateIndex = 0u;
+         updateIndex < SimpleDdgiPrivateSolverProbeCapacity;
+         updateIndex++)
+    {
+        SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(
+            SimpleDdgiPrivateSolverUpdateQueueIndex,
+            updateIndex);
+        if (update.probeIndex != virtualProbeIndex ||
+            update.outcomeIndex >= SimpleDdgiPrivateSolverProbeCapacity)
+        {
+            continue;
+        }
+
+        bufferIndex = SimpleDdgiPrivateSolverArenaIndex;
+        probeBaseWord = SimpleDdgiPrivateSolverScratchBaseWord +
+            update.outcomeIndex * wordsPerProbe;
+        return true;
+    }
+    return false;
+}
+#endif
 
 // Every ray producer performs its output write, a buffer memory barrier, and
 // then this atomic completion protocol. Only the invocation that observes the
@@ -5192,6 +5268,9 @@ struct SimpleDdgiGatherResult
     vec3 directionalRadiance;
     float directionalRadianceSupport;
     vec3 directionalNegativeReconstruction;
+#if SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER
+    vec3 directionalCoefficients[9];
+#endif
 #endif
 #if NJULF_DDGI_DETAILED_COUNTERS
     // Direct + emissive + sky source cache evaluated independently of recursive
@@ -5255,6 +5334,10 @@ SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
     result.directionalRadiance = vec3(0.0);
     result.directionalRadianceSupport = 0.0;
     result.directionalNegativeReconstruction = vec3(0.0);
+#if SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER
+    for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+        result.directionalCoefficients[coefficient] = vec3(0.0);
+#endif
 #endif
 #if NJULF_DDGI_DETAILED_COUNTERS
     result.sourceCacheIrradiance = vec3(0.0);
@@ -5633,8 +5716,14 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     ivec3 base = ivec3(baseF);
     vec3 accumulated = vec3(0.0);
 #if SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
+#if SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER
+    vec3 directionalCoefficientAccumulated[9];
+    for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+        directionalCoefficientAccumulated[coefficient] = vec3(0.0);
+#else
     vec3 directionalRadianceAccumulated = vec3(0.0);
     vec3 directionalNegativeAccumulated = vec3(0.0);
+#endif
     float directionalRadianceMass = 0.0;
     uint directionalRadianceMode =
         SimpleDdgiDirectionalRadianceMode(p.residencyFlags);
@@ -5997,8 +6086,23 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : safeNormal;
         vec4 irradiance = vec4(0.0);
 #if !SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER
+        uint irradianceBufferIndex =
+            p.publishedIrradianceAtlasBufferIndex;
+#if SIMPLE_DDGI_PRIVATE_SOLVER_GATHER
+        uint privateProbeBaseWord;
+        if (TryResolveSimpleDdgiPrivateSolverIrradiance(
+                probeIndex,
+                p.irradianceTexels,
+                irradianceBufferIndex,
+                privateProbeBaseWord))
+        {
+            atlasAddress.irradianceBaseWord = privateProbeBaseWord;
+            atlasAddress.sampledStatusFlags &=
+                ~SIMPLE_DDGI_CACHE_IRRADIANCE_MIRROR_BIT;
+        }
+#endif
         irradiance = SampleSimpleDdgiIrradianceBilinearAtAddress(
-            p.publishedIrradianceAtlasBufferIndex,
+            irradianceBufferIndex,
             atlasAddress,
             safeNormal,
             p.irradianceTexels,
@@ -6093,6 +6197,36 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
 #if SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
         if (evaluateDirectionalRadiance)
         {
+#if SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER
+            vec3 probeDirectionalCoefficients[9];
+            uint directionalValidSampleCount;
+            uint directionalQualityLevel;
+            bool directionalHasHistory;
+            if (ReadSimpleDdgiRadianceShRecord(
+                    SimpleDdgiDirectionalRadianceQueryBufferIndex,
+                    atlasProbeAddress,
+                    directionalRadianceMode,
+                    directionalSlotGeneration,
+                    probeDirectionalCoefficients,
+                    directionalValidSampleCount,
+                    directionalQualityLevel,
+                    directionalHasHistory) &&
+                directionalValidSampleCount > 0u)
+            {
+                uint coefficientCount =
+                    SimpleDdgiRadianceShCoefficientCount(
+                        directionalRadianceMode);
+                for (uint coefficient = 0u;
+                     coefficient < coefficientCount;
+                     coefficient++)
+                {
+                    directionalCoefficientAccumulated[coefficient] +=
+                        probeDirectionalCoefficients[coefficient] *
+                        selectedDirectionalWeight;
+                }
+                directionalRadianceMass += selectedDirectionalWeight;
+            }
+#else
             vec3 probeDirectionalRadiance;
             vec3 negativeReconstruction;
             if (
@@ -6132,6 +6266,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
                     negativeReconstruction * selectedDirectionalWeight;
                 directionalRadianceMass += selectedDirectionalWeight;
             }
+#endif
         }
 #endif
 #if NJULF_DDGI_DETAILED_COUNTERS && NJULF_SIMPLE_DDGI_SOURCE_CACHE_DIAGNOSTIC
@@ -6211,17 +6346,30 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
 #endif
         : vec3(0.0);
 #if SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
+#if SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER
+    result.directionalRadiance = vec3(0.0);
+    result.directionalNegativeReconstruction = vec3(0.0);
+    for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+    {
+        result.directionalCoefficients[coefficient] =
+            directionalRadianceMass > 0.000001
+                ? directionalCoefficientAccumulated[coefficient] /
+                    directionalRadianceMass
+                : vec3(0.0);
+    }
+#else
     result.directionalRadiance = directionalRadianceMass > 0.000001
         ? directionalRadianceAccumulated / directionalRadianceMass
         : vec3(0.0);
-    result.directionalRadianceSupport = directionalMass > 0.000001
-        ? clamp(directionalRadianceMass / directionalMass, 0.0, 1.0) *
-            directionalRoughnessWeight
-        : 0.0;
     result.directionalNegativeReconstruction =
         directionalRadianceMass > 0.000001
             ? directionalNegativeAccumulated / directionalRadianceMass
             : vec3(0.0);
+#endif
+    result.directionalRadianceSupport = directionalMass > 0.000001
+        ? clamp(directionalRadianceMass / directionalMass, 0.0, 1.0) *
+            directionalRoughnessWeight
+        : 0.0;
 #endif
 #if NJULF_DDGI_DETAILED_COUNTERS
     result.sourceCacheIrradiance = directionalMass > 0.000001
@@ -6427,6 +6575,17 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
         inner.directionalRadianceSupport;
     float directionalRadianceMass = outerDirectionalRadianceMass +
         innerDirectionalRadianceMass;
+#if SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER
+    vec3 directionalCoefficientAccumulated[9];
+    for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+    {
+        directionalCoefficientAccumulated[coefficient] =
+            outer.directionalCoefficients[coefficient] *
+                outerDirectionalRadianceMass +
+            inner.directionalCoefficients[coefficient] *
+                innerDirectionalRadianceMass;
+    }
+#else
     vec3 directionalRadianceAccumulated =
         outer.directionalRadiance * outerDirectionalRadianceMass +
         inner.directionalRadiance * innerDirectionalRadianceMass;
@@ -6435,6 +6594,7 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
             outerDirectionalRadianceMass +
         inner.directionalNegativeReconstruction *
             innerDirectionalRadianceMass;
+#endif
 #endif
 #if NJULF_DDGI_DETAILED_COUNTERS
     vec3 sourceCacheAccumulated = outer.sourceCacheIrradiance * outerAvailableMass +
@@ -6552,16 +6712,29 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
     }
 #endif
 #if SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
+#if SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER
+    result.directionalRadiance = vec3(0.0);
+    result.directionalNegativeReconstruction = vec3(0.0);
+    for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+    {
+        result.directionalCoefficients[coefficient] =
+            directionalRadianceMass > 0.000001
+                ? directionalCoefficientAccumulated[coefficient] /
+                    directionalRadianceMass
+                : vec3(0.0);
+    }
+#else
     result.directionalRadiance = directionalRadianceMass > 0.000001
         ? directionalRadianceAccumulated / directionalRadianceMass
         : vec3(0.0);
-    result.directionalRadianceSupport = availableMass > 0.000001
-        ? clamp(directionalRadianceMass / availableMass, 0.0, 1.0)
-        : 0.0;
     result.directionalNegativeReconstruction =
         directionalRadianceMass > 0.000001
             ? directionalNegativeAccumulated / directionalRadianceMass
             : vec3(0.0);
+#endif
+    result.directionalRadianceSupport = availableMass > 0.000001
+        ? clamp(directionalRadianceMass / availableMass, 0.0, 1.0)
+        : 0.0;
 #endif
 #if NJULF_DDGI_DETAILED_COUNTERS
     result.sourceCacheIrradiance = availableMass > 0.000001

@@ -117,7 +117,7 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(20));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(22));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));
@@ -258,6 +258,101 @@ public sealed class RenderSettingsFileIoTests
                     Is.EqualTo(DirectionalPcfRadiusMode.Constant));
                 Assert.That(loaded.DirectionalSoftAngularDiameterScale,
                     Is.EqualTo(1f));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_Schema21ConservativeDefaultsYieldToPromotedPreset()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "schema21-promotion.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
+            settings.AmbientOcclusion.Mode = AmbientOcclusionMode.Ssao;
+            settings.AmbientOcclusion.GtaoQualityPreset =
+                GtaoQualityPreset.Balanced;
+            settings.AmbientOcclusion.BentNormalMode =
+                AmbientOcclusionBentNormalMode.Off;
+            settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                SimpleDdgiReceiverCacheMode.Exact;
+            settings.GlobalIllumination
+                .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled =
+                false;
+            settings.MeshletNormalConeCullingEnabled = false;
+            settings.Transparency.PipelinePartitioningEnabled = false;
+            settings.Save(path);
+            File.WriteAllText(
+                path,
+                File.ReadAllText(path).Replace(
+                    $"\"Version\": {RenderSettings.SerializationVersion}",
+                    "\"Version\": 21",
+                    StringComparison.Ordinal));
+
+            RenderSettings loaded = RenderSettings.Load(path);
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.AmbientOcclusion.Mode,
+                    Is.EqualTo(AmbientOcclusionMode.Gtao));
+                Assert.That(loaded.AmbientOcclusion.GtaoQualityPreset,
+                    Is.EqualTo(GtaoQualityPreset.High));
+                Assert.That(loaded.GlobalIllumination
+                        .SimpleDdgiReceiverCacheMode,
+                    Is.EqualTo(SimpleDdgiReceiverCacheMode.TemporalAdaptive));
+                Assert.That(loaded.GlobalIllumination
+                        .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled,
+                    Is.True);
+                Assert.That(loaded.MeshletNormalConeCullingEnabled, Is.True);
+                Assert.That(loaded.Transparency.PipelinePartitioningEnabled,
+                    Is.True);
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void SaveLoad_Schema22PreservesExplicitPromotionOptOuts()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "schema22-opt-outs.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.AmbientOcclusion.Mode = AmbientOcclusionMode.Ssao;
+            settings.AmbientOcclusion.BentNormalMode =
+                AmbientOcclusionBentNormalMode.Off;
+            settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                SimpleDdgiReceiverCacheMode.Exact;
+            settings.GlobalIllumination
+                .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled =
+                false;
+            settings.MeshletNormalConeCullingEnabled = false;
+            settings.Transparency.PipelinePartitioningEnabled = false;
+            settings.Save(path);
+
+            RenderSettings loaded = RenderSettings.Load(path);
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.AmbientOcclusion.Mode,
+                    Is.EqualTo(AmbientOcclusionMode.Ssao));
+                Assert.That(loaded.GlobalIllumination
+                        .SimpleDdgiReceiverCacheMode,
+                    Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
+                Assert.That(loaded.GlobalIllumination
+                        .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled,
+                    Is.False);
+                Assert.That(loaded.MeshletNormalConeCullingEnabled, Is.False);
+                Assert.That(loaded.Transparency.PipelinePartitioningEnabled,
+                    Is.False);
             });
         }
         finally

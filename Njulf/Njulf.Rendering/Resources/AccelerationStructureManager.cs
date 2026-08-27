@@ -1894,12 +1894,23 @@ namespace Njulf.Rendering.Resources
         {
             _dynamicAdmissionScratch.Clear();
             _activeDynamicObjectScratch.Clear();
+            bool hasCurrentPoseSkinnedCandidates = false;
+            bool hasProceduralFoliageCandidates = false;
             for (int i = 0; i < instances.Count; i++)
             {
                 if (!instances[i].UsesDynamicBlas)
                     continue;
                 _dynamicAdmissionScratch.Add(i);
                 _activeDynamicObjectScratch.Add(instances[i].ObjectIdentity);
+                if (ResolveDynamicBlasContentClass(instances[i]) ==
+                    DdgiDynamicBlasContentClass.ProceduralFoliage)
+                {
+                    hasProceduralFoliageCandidates = true;
+                }
+                else
+                {
+                    hasCurrentPoseSkinnedCandidates = true;
+                }
             }
 
             PruneInactiveDynamicBottomLevelAccelerationStructures();
@@ -1925,10 +1936,50 @@ namespace Njulf.Rendering.Resources
             int admittedBuilds = 0;
             ulong admittedPrimitives = 0;
             ulong plannedAdditionalStorage = 0;
+            int admittedSkinnedBuilds = 0;
+            int admittedFoliageBuilds = 0;
+            ulong admittedSkinnedPrimitives = 0;
+            ulong admittedFoliagePrimitives = 0;
+            ulong plannedSkinnedStorage = 0;
+            ulong plannedFoliageStorage = 0;
+            ulong residentSkinnedStorage = 0;
+            ulong residentFoliageStorage = 0;
+            foreach (DynamicBottomLevelAccelerationStructure dynamicBlas in
+                     _dynamicBlasPool.Values)
+            {
+                if (dynamicBlas.ContentClass ==
+                    DdgiDynamicBlasContentClass.ProceduralFoliage)
+                {
+                    residentFoliageStorage = checked(
+                        residentFoliageStorage + dynamicBlas.Size);
+                }
+                else
+                {
+                    residentSkinnedStorage = checked(
+                        residentSkinnedStorage + dynamicBlas.Size);
+                }
+            }
+            bool mixedDynamicContent =
+                hasCurrentPoseSkinnedCandidates &&
+                hasProceduralFoliageCandidates;
             for (int candidate = 0; candidate < _dynamicAdmissionScratch.Count; candidate++)
             {
                 int instanceIndex = _dynamicAdmissionScratch[candidate];
                 StaticOpaqueInstance instance = instances[instanceIndex];
+                DdgiDynamicBlasContentClass contentClass =
+                    ResolveDynamicBlasContentClass(instance);
+                DdgiDynamicBlasContentBudget contentBudget =
+                    policy.ResolveContentBudget(
+                        contentClass,
+                        mixedDynamicContent);
+                int classAdmittedBuilds = contentClass ==
+                    DdgiDynamicBlasContentClass.ProceduralFoliage
+                        ? admittedFoliageBuilds
+                        : admittedSkinnedBuilds;
+                ulong classAdmittedPrimitives = contentClass ==
+                    DdgiDynamicBlasContentClass.ProceduralFoliage
+                        ? admittedFoliagePrimitives
+                        : admittedSkinnedPrimitives;
                 uint primitiveCount = instance.MeshInfo.IndexCount / 3u;
                 BufferHandle dynamicVertexBuffer =
                     ResolveDynamicVertexBuffer(instance, skinnedVertexBuffer);
@@ -1940,7 +1991,11 @@ namespace Njulf.Rendering.Resources
                     primitiveCount > 0 &&
                     admittedBuilds < policy.EffectiveMaximumBuildsPerFrame &&
                     admittedPrimitives + primitiveCount <=
-                        (ulong)policy.EffectiveMaximumPrimitivesPerFrame;
+                        (ulong)policy.EffectiveMaximumPrimitivesPerFrame &&
+                    classAdmittedBuilds <
+                        contentBudget.MaximumBuildsPerFrame &&
+                    classAdmittedPrimitives + primitiveCount <=
+                        (ulong)contentBudget.MaximumPrimitivesPerFrame;
 
                 ulong requiredStorage = 0;
                 ulong requiredScratch = 0;
@@ -1968,8 +2023,22 @@ namespace Njulf.Rendering.Resources
                     requiredScratch = hasCompatible && sizes.UpdateScratchSize > 0
                         ? sizes.UpdateScratchSize
                         : sizes.BuildScratchSize;
+                    ulong classResidentStorage = contentClass ==
+                        DdgiDynamicBlasContentClass.ProceduralFoliage
+                            ? residentFoliageStorage
+                            : residentSkinnedStorage;
+                    ulong classPlannedStorage = contentClass ==
+                        DdgiDynamicBlasContentClass.ProceduralFoliage
+                            ? plannedFoliageStorage
+                            : plannedSkinnedStorage;
+                    bool classStorageAvailable = requiredStorage == 0UL ||
+                        !WouldExceedBudget(
+                            classResidentStorage,
+                            checked(classPlannedStorage + requiredStorage),
+                            contentBudget.StorageBudgetBytes);
                     canAttempt =
                         requiredScratch <= policy.EffectiveDynamicScratchBudgetBytes &&
+                        classStorageAvailable &&
                         !WouldExceedBudget(
                             _dynamicBlasBytes,
                             checked(plannedAdditionalStorage + requiredStorage),
@@ -1978,6 +2047,26 @@ namespace Njulf.Rendering.Resources
 
                 if (!canAttempt)
                 {
+                    if (TryEvictRejectedDynamicBottomLevelAccelerationStructure(
+                            instance,
+                            out ulong removedStorage))
+                    {
+                        if (contentClass ==
+                            DdgiDynamicBlasContentClass.ProceduralFoliage)
+                        {
+                            residentFoliageStorage =
+                                residentFoliageStorage >= removedStorage
+                                    ? residentFoliageStorage - removedStorage
+                                    : 0UL;
+                        }
+                        else
+                        {
+                            residentSkinnedStorage =
+                                residentSkinnedStorage >= removedStorage
+                                    ? residentSkinnedStorage - removedStorage
+                                    : 0UL;
+                        }
+                    }
                     if (instance.GeometryClass ==
                         DdgiRayGeometryClass.ProceduralFoliageProxy)
                     {
@@ -2001,6 +2090,23 @@ namespace Njulf.Rendering.Resources
                 admittedBuilds++;
                 admittedPrimitives = checked(admittedPrimitives + primitiveCount);
                 plannedAdditionalStorage = checked(plannedAdditionalStorage + requiredStorage);
+                if (contentClass ==
+                    DdgiDynamicBlasContentClass.ProceduralFoliage)
+                {
+                    admittedFoliageBuilds++;
+                    admittedFoliagePrimitives = checked(
+                        admittedFoliagePrimitives + primitiveCount);
+                    plannedFoliageStorage = checked(
+                        plannedFoliageStorage + requiredStorage);
+                }
+                else
+                {
+                    admittedSkinnedBuilds++;
+                    admittedSkinnedPrimitives = checked(
+                        admittedSkinnedPrimitives + primitiveCount);
+                    plannedSkinnedStorage = checked(
+                        plannedSkinnedStorage + requiredStorage);
+                }
                 _lastDynamicBlasScratchBytes = Math.Max(
                     _lastDynamicBlasScratchBytes,
                     requiredScratch);
@@ -2010,6 +2116,12 @@ namespace Njulf.Rendering.Resources
                 instance.GeometryClass == DdgiRayGeometryClass.Invalid);
         }
 
+        private static DdgiDynamicBlasContentClass ResolveDynamicBlasContentClass(
+            in StaticOpaqueInstance instance) =>
+            instance.GeometryClass == DdgiRayGeometryClass.ProceduralFoliageProxy
+                ? DdgiDynamicBlasContentClass.ProceduralFoliage
+                : DdgiDynamicBlasContentClass.CurrentPoseSkinned;
+
         private static bool DynamicBuildContractMatches(
             DynamicBottomLevelAccelerationStructure existing,
             StaticOpaqueInstance instance,
@@ -2018,7 +2130,8 @@ namespace Njulf.Rendering.Resources
             existing.PrimitiveCount == primitiveCount &&
             existing.VertexStride == instance.VertexStride &&
             existing.VertexFormat == instance.VertexFormat &&
-            existing.InstanceFlags == instance.InstanceFlags;
+            existing.InstanceFlags == instance.InstanceFlags &&
+            existing.ContentClass == ResolveDynamicBlasContentClass(instance);
 
         private static StaticOpaqueInstance CreateConservativeSkinnedProxy(
             StaticOpaqueInstance instance) =>
@@ -2075,6 +2188,32 @@ namespace Njulf.Rendering.Resources
                 AdvanceResourceGeneration();
             }
             RecalculateAccelerationStructureBytes();
+        }
+
+        private bool TryEvictRejectedDynamicBottomLevelAccelerationStructure(
+            in StaticOpaqueInstance instance,
+            out ulong removedStorage)
+        {
+            DynamicBlasKey key = CreateDynamicBlasKey(instance);
+            if (!_dynamicBlasPool.Remove(
+                    key,
+                    out DynamicBottomLevelAccelerationStructure? resource))
+            {
+                removedStorage = 0UL;
+                return false;
+            }
+
+            removedStorage = resource.Size;
+            RetireAccelerationStructureResource(
+                resource.Handle,
+                resource.StorageBuffer,
+                resource.Size,
+                AccelerationStructureRetirementOwner.Dynamic);
+            _dynamicBlasBytes = _dynamicBlasBytes >= resource.Size
+                ? _dynamicBlasBytes - resource.Size
+                : 0UL;
+            AdvanceResourceGeneration();
+            return true;
         }
 
         private void EnsureDynamicBottomLevelAccelerationStructures(
@@ -2158,6 +2297,7 @@ namespace Njulf.Rendering.Resources
                             instance.VertexStride,
                             instance.VertexFormat,
                             instance.InstanceFlags,
+                            ResolveDynamicBlasContentClass(instance),
                             instance.RepresentationGeneration);
                         _dynamicBlasPool.Add(key, resource);
                         _dynamicBlasBytes = checked(_dynamicBlasBytes + storageSize);
@@ -4905,6 +5045,7 @@ namespace Njulf.Rendering.Resources
                 uint vertexStride,
                 DdgiRayVertexFormat vertexFormat,
                 GeometryInstanceFlagsKHR instanceFlags,
+                DdgiDynamicBlasContentClass contentClass,
                 ulong representationRevision)
             {
                 Handle = handle;
@@ -4915,6 +5056,7 @@ namespace Njulf.Rendering.Resources
                 VertexStride = vertexStride;
                 VertexFormat = vertexFormat;
                 InstanceFlags = instanceFlags;
+                ContentClass = contentClass;
                 RepresentationRevision = representationRevision;
             }
 
@@ -4926,6 +5068,7 @@ namespace Njulf.Rendering.Resources
             public uint VertexStride { get; }
             public DdgiRayVertexFormat VertexFormat { get; }
             public GeometryInstanceFlagsKHR InstanceFlags { get; }
+            public DdgiDynamicBlasContentClass ContentClass { get; }
             public ulong RepresentationRevision { get; set; }
             public ulong LastUsedFrameSerial { get; set; }
         }
@@ -5082,6 +5225,17 @@ namespace Njulf.Rendering.Resources
             : ulong.MaxValue;
     }
 
+    internal enum DdgiDynamicBlasContentClass
+    {
+        CurrentPoseSkinned = 0,
+        ProceduralFoliage = 1
+    }
+
+    internal readonly record struct DdgiDynamicBlasContentBudget(
+        ulong StorageBudgetBytes,
+        int MaximumBuildsPerFrame,
+        int MaximumPrimitivesPerFrame);
+
     /// <summary>
     /// Content-dependent geometry policy and hard per-frame dynamic-AS caps.
     /// The static AS residency budget remains independently owned by
@@ -5126,6 +5280,45 @@ namespace Njulf.Rendering.Resources
         internal int EffectiveMaximumBuildsPerFrame => Math.Max(0, MaximumBuildsPerFrame);
         internal int EffectiveMaximumPrimitivesPerFrame => Math.Max(0, MaximumPrimitivesPerFrame);
         internal int EffectiveDecalCandidateLimit => Math.Clamp(DecalCandidateLimit, 0, 64);
+
+        /// <summary>
+        /// When live skinned meshes and procedural foliage coexist, cap foliage
+        /// at a bounded quarter of dynamic-AS capacity. Skinned work may consume
+        /// otherwise idle capacity, so the governor remains work-conserving while
+        /// dense alpha geometry cannot dominate the shared build budget. Either
+        /// class may use the full cap when it is the only active dynamic class.
+        /// </summary>
+        internal DdgiDynamicBlasContentBudget ResolveContentBudget(
+            DdgiDynamicBlasContentClass contentClass,
+            bool mixedContent)
+        {
+            ulong storage = EffectiveDynamicStorageBudgetBytes;
+            int builds = EffectiveMaximumBuildsPerFrame;
+            int primitives = EffectiveMaximumPrimitivesPerFrame;
+            if (!mixedContent)
+            {
+                return new DdgiDynamicBlasContentBudget(
+                    storage,
+                    builds,
+                    primitives);
+            }
+
+            ulong foliageStorage = storage / 4UL;
+            int foliageBuilds = builds <= 1
+                ? 0
+                : Math.Max(1, builds / 4);
+            int foliagePrimitives = primitives / 4;
+            return contentClass ==
+                    DdgiDynamicBlasContentClass.ProceduralFoliage
+                ? new DdgiDynamicBlasContentBudget(
+                    foliageStorage,
+                    foliageBuilds,
+                    foliagePrimitives)
+                : new DdgiDynamicBlasContentBudget(
+                    storage,
+                    builds,
+                    primitives);
+        }
     }
 
     public readonly record struct RaySceneBuildPlan(

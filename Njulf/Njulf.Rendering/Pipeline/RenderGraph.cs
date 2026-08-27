@@ -1355,8 +1355,17 @@ namespace Njulf.Rendering.Pipeline
                 case "AmbientOcclusionPass":
                     sceneData.CpuAmbientOcclusionRecordMicroseconds = elapsedMicroseconds;
                     break;
+                case "GtaoPass":
+                    sceneData.CpuAmbientOcclusionRecordMicroseconds =
+                        elapsedMicroseconds;
+                    break;
                 case "AmbientOcclusionBlurPass":
                     sceneData.CpuAmbientOcclusionBlurRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "GtaoTemporalPass":
+                case "GtaoSpatialPass":
+                    sceneData.CpuAmbientOcclusionBlurRecordMicroseconds +=
+                        elapsedMicroseconds;
                     break;
                 case "TiledLightCullingPass":
                     sceneData.CpuLightCullRecordMicroseconds = elapsedMicroseconds;

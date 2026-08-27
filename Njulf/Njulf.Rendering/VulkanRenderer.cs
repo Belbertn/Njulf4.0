@@ -315,6 +315,9 @@ namespace Njulf.Rendering
         private bool _swapchainImageTransitionedThisFrame;
         private bool _lastAmbientOcclusionTargetEnabled = true;
         private float _lastAmbientOcclusionResolutionScale = 0.5f;
+        private AmbientOcclusionMode _lastAmbientOcclusionMode =
+            AmbientOcclusionMode.Ssao;
+        private bool _gtaoRuntimeSupported;
         private AntiAliasingMode _lastAntiAliasingTargetMode = AntiAliasingMode.SmaaMedium;
         private bool _lastMotionVectorTargetEnabled = true;
         private TransparencyMode _lastTransparencyTargetMode = TransparencyMode.SortedAlphaBlend;
@@ -1225,7 +1228,10 @@ namespace Njulf.Rendering
             _raySceneDescriptorBank.TryInitialize();
             _advancedGiAdmission.PublishGraphModes(
                 ResolveInitialAdvancedGiGraphModes(sceneRenderExtent));
+            _gtaoRuntimeSupported = EvaluateGtaoRuntimeSupport();
             RegisterGraphResources();
+            AmbientOcclusionMode effectiveAmbientOcclusionMode =
+                ResolveEffectiveAmbientOcclusionMode();
             bool motionVectorTargetEnabled =
                 ResolveSurfaceHistoryConsumers().RequiresMotionVectors();
             _renderTargets = new RenderTargetManager(
@@ -1251,9 +1257,11 @@ namespace Njulf.Rendering
                 giCausticScreenLayout:
                 _giCaustic.Plan.GpuLayout.ScreenResolve,
                 hybridReflectionsEnabled:
-                IsHybridReflectionTargetEnabled(Settings));
+                IsHybridReflectionTargetEnabled(Settings),
+                ambientOcclusionMode: effectiveAmbientOcclusionMode);
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAmbientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
+            _lastAmbientOcclusionMode = effectiveAmbientOcclusionMode;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
             _lastMotionVectorTargetEnabled = motionVectorTargetEnabled;
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
@@ -1687,12 +1695,39 @@ namespace Njulf.Rendering
             AddPassInstance(_forwardVisibilityCompactionPass);
 
             var ambientOcclusionPass = new AmbientOcclusionPass(
-                _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings,
+                _gtaoRuntimeSupported);
             AddPassInstance(ambientOcclusionPass);
 
             var ambientOcclusionBlurPass = new AmbientOcclusionBlurPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
             AddPassInstance(ambientOcclusionBlurPass);
+
+            var gtaoHistoryState = new GtaoHistoryState();
+            AddPassInstance(new GtaoPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                _hizDepthPyramid!,
+                Settings));
+            AddPassInstance(new GtaoTemporalPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings,
+                gtaoHistoryState));
+            AddPassInstance(new GtaoSpatialPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings));
 
             // Create tiled light culling pass
             var lightCullingPass = new TiledLightCullingPass(
@@ -1806,6 +1841,9 @@ namespace Njulf.Rendering
                     _context, _swapchain, _bindlessHeap,
                     nearFieldRuntimeProvider));
                 AddPassInstance(new SimpleDdgiNearFieldResidualPreparePass(
+                    _context, _swapchain, _bindlessHeap,
+                    nearFieldRuntimeProvider));
+                AddPassInstance(new SimpleDdgiNearFieldResidualClassifyPass(
                     _context, _swapchain, _bindlessHeap,
                     nearFieldRuntimeProvider));
                 AddPassInstance(new SimpleDdgiNearFieldResidualTracePass(
@@ -2028,6 +2066,7 @@ namespace Njulf.Rendering
                 simpleDdgiTracePass,
                 simpleDdgiRelocateClassifyPass,
                 simpleDdgiDirectionalRadiancePass,
+                simpleDdgiAcceleratedSolvePass,
                 simpleDdgiTransportPass,
                 simpleDdgiBlendPass,
                 simpleDdgiPublishPass,
@@ -2092,6 +2131,7 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 _meshPipeline,
                 _renderTargets!,
+                forwardPass,
                 _raySceneDescriptorBank,
                 _simpleDdgiReceiverFeedback);
             AddPassInstance(weightedTransparentPass);
@@ -2461,7 +2501,8 @@ namespace Njulf.Rendering
                 gi.SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters,
                 gi.SimpleDdgiNearFieldResidualRaysPerPixel,
                 gi.SimpleDdgiNearFieldResidualFilterIterationCount,
-                gi.SimpleDdgiNearFieldResidualIntensity);
+                gi.SimpleDdgiNearFieldResidualIntensity,
+                gi.SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled);
             NearFieldResidualInitializationResult result =
                 _nearFieldResidual.Initialize(
                     new NearFieldResidualInitializationRequest(
@@ -2815,6 +2856,10 @@ namespace Njulf.Rendering
             _completedDdgiAreaLightCounters =
                 _diagnosticsBuffer.GetLastCompletedDdgiAreaLightCounters(
                     _currentFrame);
+            _forwardPlusPass?.ObserveCompletedSimpleDdgiReceiverCacheCounters(
+                _diagnosticsBuffer
+                    .GetLastCompletedSimpleDdgiReceiverCacheCounters(
+                        _currentFrame));
             _debugOverlayBuilder.ObserveCompletedDdgiCounters(
                 _diagnosticsBuffer.GetLastCompletedDebugDdgiOverlayCounters(
                     _currentFrame));
@@ -3413,6 +3458,7 @@ namespace Njulf.Rendering
                                               !sceneGpuLodSelectionActive &&
                                               !sceneGpuShadowCompactionActive,
                 useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling && !sceneGpuLodSelectionActive,
+                meshletNormalConeCullingEnabled: Settings.MeshletNormalConeCullingEnabled,
                 captureSceneSubmissionValidationLists: Settings.SceneSubmission.ValidationCompareCpuGpuLists,
                 gpuLod1DistanceRatio: Settings.SceneSubmission.GpuLod1DistanceRatio,
                 gpuLod2DistanceRatio: Settings.SceneSubmission.GpuLod2DistanceRatio);
@@ -3731,6 +3777,8 @@ namespace Njulf.Rendering
             sceneData.HiZPolicyAdaptiveStatus = hiZDecision.AdaptiveStatus;
             sceneData.TransparentPassEnabled = EnableTransparentPass && Settings.Transparency.Enabled;
             sceneData.TransparencyMode = Settings.Transparency.Mode;
+            sceneData.TransparentPipelinePartitioningEnabled =
+                Settings.Transparency.PipelinePartitioningEnabled;
             sceneData.TransparencyDebugView = Settings.Transparency.DebugView;
             sceneData.TransparentReceiveShadows = Settings.Transparency.ReceiveShadows;
             sceneData.TransparentReceiveGlobalIllumination =
@@ -4232,6 +4280,8 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.DdgiResidencyFallback => 127u,
                     GlobalIlluminationDebugView.DdgiPageAge => 128u,
                     GlobalIlluminationDebugView.DdgiPhysicalPage => 129u,
+                    GlobalIlluminationDebugView.DdgiReceiverCacheRejection =>
+                        147u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -7478,9 +7528,13 @@ namespace Njulf.Rendering
             sceneData.GpuDepthPrePassMicroseconds = timings.GetGpuMicrosecondsOrZero("DepthPrePass");
             sceneData.GpuMotionVectorMicroseconds = timings.GetGpuMicrosecondsOrZero("MotionVectorPass");
             sceneData.GpuHiZBuildMicroseconds = timings.GetGpuMicrosecondsOrZero("HiZBuildPass");
-            sceneData.GpuAmbientOcclusionMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionPass");
+            sceneData.GpuAmbientOcclusionMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("AmbientOcclusionPass") +
+                timings.GetGpuMicrosecondsOrZero("GtaoPass");
             sceneData.GpuAmbientOcclusionBlurMicroseconds =
-                timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass");
+                timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass") +
+                timings.GetGpuMicrosecondsOrZero("GtaoTemporalPass") +
+                timings.GetGpuMicrosecondsOrZero("GtaoSpatialPass");
             sceneData.GpuOpacityMicromapBuildMicroseconds =
                 timings.GetGpuMicrosecondsOrZero(
                     "OpacityMicromapBuildPass");
@@ -7952,6 +8006,8 @@ namespace Njulf.Rendering
                             .SimpleDdgiReceiverCacheBufferBytes ?? 0UL,
                         _forwardPlusPass?
                             .SimpleDdgiReceiverGatherBufferTotalBytes ?? 0UL,
+                        _forwardPlusPass?
+                            .SimpleDdgiReceiverSurfaceSidecarTotalBytes ?? 0UL,
                         _simpleDdgiFrameEvidence));
                 ApplyReflectionRecaptureIntent(
                     sceneData,
@@ -10089,6 +10145,10 @@ namespace Njulf.Rendering
                 sceneData.SceneSubmissionGpuCompactedOpaqueMeshletCount = ClampUIntToInt(counters.EmittedCount);
                 sceneData.SceneSubmissionGpuOpaqueFrustumRejectedCount = ClampUIntToInt(counters.FrustumRejectedCount);
                 sceneData.SceneSubmissionGpuOpaqueOverflowCount = ClampUIntToInt(counters.OverflowCount);
+                sceneData.MeshletNormalConeCandidateCount = ClampUIntToInt(counters.NormalConeCandidateCount);
+                sceneData.MeshletNormalConeTestedCount = ClampUIntToInt(counters.NormalConeTestedCount);
+                sceneData.MeshletNormalConeRejectedCount = ClampUIntToInt(counters.NormalConeRejectedCount);
+                sceneData.MeshletNormalConeInvalidCount = ClampUIntToInt(counters.NormalConeInvalidCount);
                 sceneData.ForwardOcclusionTestedMeshletsGpu = ClampUIntToInt(counters.HiZTestedCount);
                 sceneData.ForwardOcclusionCulledMeshletsGpu = ClampUIntToInt(counters.HiZRejectedCount);
                 sceneData.SceneSubmissionGpuIndirectMeshletTaskCount =
@@ -10411,6 +10471,7 @@ namespace Njulf.Rendering
             {
                 SimpleDdgiNearFieldResidualGpuPassNames.Reset,
                 SimpleDdgiNearFieldResidualGpuPassNames.Prepare,
+                SimpleDdgiNearFieldResidualGpuPassNames.Classify,
                 SimpleDdgiNearFieldResidualGpuPassNames.Trace,
                 SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
                 SimpleDdgiNearFieldResidualGpuPassNames.Finalize,
@@ -10455,6 +10516,8 @@ namespace Njulf.Rendering
 
             bool aoEnabled = Settings.AmbientOcclusion.Enabled;
             float ambientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
+            AmbientOcclusionMode effectiveAmbientOcclusionMode =
+                ResolveEffectiveAmbientOcclusionMode();
             AntiAliasingMode aaMode = Settings.AntiAliasing.EffectiveMode;
             bool motionVectorTargetEnabled =
                 ResolveSurfaceHistoryConsumers().RequiresMotionVectors();
@@ -10478,6 +10541,7 @@ namespace Njulf.Rendering
             bool featureTargetsChanged =
                 _lastAmbientOcclusionTargetEnabled != aoEnabled ||
                 MathF.Abs(_lastAmbientOcclusionResolutionScale - ambientOcclusionResolutionScale) > 0.0001f ||
+                _lastAmbientOcclusionMode != effectiveAmbientOcclusionMode ||
                 _lastAntiAliasingTargetMode != aaMode ||
                 _lastMotionVectorTargetEnabled != motionVectorTargetEnabled ||
                 _lastTransparencyTargetMode != Settings.Transparency.Mode ||
@@ -10526,7 +10590,8 @@ namespace Njulf.Rendering
                 fogTargetEnabled,
                 weightedOitTargetEnabled,
                 materialTransportProvenanceTargetEnabled,
-                hybridReflectionTargetEnabled);
+                hybridReflectionTargetEnabled,
+                effectiveAmbientOcclusionMode);
             if (forwardAttachmentProfileChanged)
             {
                 _meshPipeline?.Recreate(
@@ -10552,6 +10617,7 @@ namespace Njulf.Rendering
                 AsyncComputeTimingResetKind.RenderTargetsOrSwapchain);
             _lastAmbientOcclusionTargetEnabled = aoEnabled;
             _lastAmbientOcclusionResolutionScale = ambientOcclusionResolutionScale;
+            _lastAmbientOcclusionMode = effectiveAmbientOcclusionMode;
             _lastAntiAliasingTargetMode = aaMode;
             _lastMotionVectorTargetEnabled = motionVectorTargetEnabled;
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
@@ -10745,7 +10811,8 @@ namespace Njulf.Rendering
                 IsFogTargetEnabled(Settings),
                 IsWeightedOitTargetEnabled(Settings),
                 IsMaterialTransportProvenanceTargetEnabled(Settings),
-                IsHybridReflectionTargetEnabled(Settings));
+                IsHybridReflectionTargetEnabled(Settings),
+                ResolveEffectiveAmbientOcclusionMode());
             CompleteNearFieldResidualGenerationAfterTargetRecreate();
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.DepthTexture,
@@ -10760,6 +10827,7 @@ namespace Njulf.Rendering
             RegisterSceneRenderTextures();
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAmbientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
+            _lastAmbientOcclusionMode = ResolveEffectiveAmbientOcclusionMode();
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
             _lastMotionVectorTargetEnabled =
                 ResolveSurfaceHistoryConsumers().RequiresMotionVectors();
@@ -10948,7 +11016,33 @@ namespace Njulf.Rendering
                 directionalRaySoftActive:
                 Settings.Shadows.RequestedDirectionalShadowMode ==
                 DirectionalShadowMode.RayQuerySoft,
-                reflectionActive: IsHybridReflectionTargetEnabled(Settings));
+                reflectionActive: IsHybridReflectionTargetEnabled(Settings),
+                simpleDdgiReceiverCacheActive:
+                Settings.GlobalIllumination.SimpleDdgiReceiverCacheMode ==
+                    SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                ambientOcclusionGtaoActive:
+                Settings.AmbientOcclusion.Enabled &&
+                ResolveEffectiveAmbientOcclusionMode() ==
+                    AmbientOcclusionMode.Gtao);
+
+        private AmbientOcclusionMode ResolveEffectiveAmbientOcclusionMode() =>
+            AmbientOcclusionPass.ResolveEffectiveMode(
+                Settings.AmbientOcclusion.Mode,
+                _gtaoRuntimeSupported);
+
+        private bool EvaluateGtaoRuntimeSupport()
+        {
+            const FormatFeatureFlags storageSampled =
+                FormatFeatureFlags.SampledImageBit |
+                FormatFeatureFlags.StorageImageBit;
+            return HasFormatFeatures(
+                       RenderTargetManager.GtaoRadianceFormat,
+                       storageSampled |
+                       FormatFeatureFlags.SampledImageFilterLinearBit) &&
+                   HasFormatFeatures(
+                       RenderTargetManager.GtaoGeometryHistoryFormat,
+                       storageSampled);
+        }
 
         private void RegisterBloomTextures()
         {
@@ -11037,6 +11131,16 @@ namespace Njulf.Rendering
                     whiteView,
                     _bindlessHeap.ScreenSampler,
                     imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                _bindlessHeap.RegisterTexture(
+                    BindlessIndex.GtaoFilteredTexture,
+                    whiteView,
+                    _bindlessHeap.ScreenSampler,
+                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                _bindlessHeap.RegisterTexture(
+                    BindlessIndex.GtaoDebugTexture,
+                    whiteView,
+                    _bindlessHeap.ScreenSampler,
+                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
                 return;
             }
 
@@ -11049,6 +11153,18 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.AmbientOcclusionBlurredTexture,
                 _renderTargets.AmbientOcclusionBlurred.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.GtaoFilteredTexture,
+                _renderTargets.GtaoFiltered.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.GtaoDebugTexture,
+                _renderTargets.GtaoSpatialScratch.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
         }

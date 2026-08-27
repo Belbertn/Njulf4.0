@@ -17,11 +17,9 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     /// Increment when any C5 GPU field, binding meaning, source ownership rule,
     /// or history-reuse rule changes.
     /// </summary>
-    // V13 makes the per-tile stream authoritative. A dedicated finalize
-    // dispatch reduces complete trace/temporal records into the header and
-    // publishes the completion marker last. It also separates estimator
-    // proposals from rays that actually entered the Hi-Z traversal.
-    public const uint Version = 0x4335_000Du;
+    // V14 gives trace and resolve coverage independent compact lists and adds
+    // a separate double-buffered 16-byte per-tile scheduler history.
+    public const uint Version = 0x4335_000Eu;
 
     public const uint DirectDiffuseTraceSourceTerm = 1u << 0;
     public const uint EmissiveTraceSourceTerm = 1u << 1;
@@ -73,6 +71,7 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     public const uint MaximumSurfaceTableEntryCount = 65_534u;
     public const uint InvalidSurfaceToken = 0xffffu;
     public const uint PreparePushConstantByteCount = 48u;
+    public const uint ClassifyPushConstantByteCount = 96u;
     public const uint FrequencySeparationPushConstantByteCount = 48u;
     public const uint IndirectDispatchArgumentByteCount = 12u;
     public const uint IndirectStageCount = 8u;
@@ -96,11 +95,10 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     /// receiver metadata, and final canonical scene-color descriptors are
     /// externally owned by the renderer integration.
     /// </summary>
-    // V13 retains the existing descriptor layout: no third hit-metadata
-    // descriptor, plus four prepared receiver images, the frame-buffered
-    // surface table, and the compacted
-    // active-tile/indirect arena: 17 - 1 + 6 = 22.
-    public const uint BaseOwnedDescriptorCount = 22u;
+    // V14 appends two persistent scheduler-history buffers. Disabled local
+    // adaptivity never dispatches their classifier, but generation accounting
+    // remains complete and deterministic.
+    public const uint BaseOwnedDescriptorCount = 24u;
     public const uint FilterScratchDescriptorCount = 2u;
 
     public static bool HasOnlyAllowedTraceSources(uint sourceTerms) =>
@@ -141,6 +139,18 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
             (nameof(GPUSimpleDdgiNearFieldResidualPreparePushConstants.TileCapacity), 24),
             (nameof(GPUSimpleDdgiNearFieldResidualPreparePushConstants.NearPlane), 32),
             (nameof(GPUSimpleDdgiNearFieldResidualPreparePushConstants.IndirectStageCount), 44));
+        Verify<GPUSimpleDdgiNearFieldResidualClassifyPushConstants>(
+            ClassifyPushConstantByteCount,
+            (nameof(GPUSimpleDdgiNearFieldResidualClassifyPushConstants.AbiVersion), 0),
+            (nameof(GPUSimpleDdgiNearFieldResidualClassifyPushConstants.TileCapacity), 12),
+            (nameof(GPUSimpleDdgiNearFieldResidualClassifyPushConstants.HistoryEpoch), 20),
+            (nameof(GPUSimpleDdgiNearFieldResidualClassifyPushConstants.SchedulerEpoch), 32),
+            (nameof(GPUSimpleDdgiNearFieldResidualClassifyPushConstants.MaximumHistoryOnlyAge), 44),
+            (nameof(GPUSimpleDdgiNearFieldResidualClassifyPushConstants.HighMotion), 52),
+            (nameof(GPUSimpleDdgiNearFieldResidualClassifyPushConstants.LowConfidence), 68),
+            (nameof(GPUSimpleDdgiNearFieldResidualClassifyPushConstants.InterleavedConfidenceDecay), 76),
+            (nameof(GPUSimpleDdgiNearFieldResidualClassifyPushConstants.ReceiverCacheMetadataAvailable), 80));
+        SimpleDdgiNearFieldResidualAdaptiveAbi.VerifyManagedLayout();
         Verify<GPUSimpleDdgiNearFieldResidualTelemetryHeader>(
             TelemetryHeaderByteCount,
             (nameof(GPUSimpleDdgiNearFieldResidualTelemetryHeader.Magic), 0),
@@ -267,7 +277,8 @@ public enum SimpleDdgiNearFieldResidualGpuFlags : uint
     InvalidAndMissOutputsZeroed = 1u << 7,
     CompositeUsesValidResidualOnly = 1u << 8,
     FoliageMotionVectorsValid = 1u << 9,
-    SourceLightingEpochChanged = 1u << 10
+    SourceLightingEpochChanged = 1u << 10,
+    LocalAdaptiveScheduling = 1u << 11
 }
 
 /// <summary>
@@ -352,6 +363,36 @@ public struct GPUSimpleDdgiNearFieldResidualPreparePushConstants
     public float FarPlane;
     public uint ActiveTileHeaderWords;
     public uint IndirectStageCount;
+}
+
+/// <summary>96-byte local scheduler/classifier push block.</summary>
+[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 96)]
+public struct GPUSimpleDdgiNearFieldResidualClassifyPushConstants
+{
+    public uint AbiVersion;
+    public uint TraceWidth;
+    public uint TraceHeight;
+    public uint TileCapacity;
+    public SimpleDdgiNearFieldResidualGpuFlags Flags;
+    public uint HistoryEpoch;
+    public uint FrameSerialLow;
+    public uint FrameSerialHigh;
+    public uint SchedulerEpoch;
+    public uint MaximumRaysPerPixel;
+    public uint NormalRaysPerPixel;
+    public uint MaximumHistoryOnlyAge;
+    public uint ForcedRefreshPeriod;
+    public float HighMotion;
+    public float HighVariance;
+    public float ActiveEnergy;
+    public float PerceptualEnergyFloor;
+    public float LowConfidence;
+    public float HistoryOnlyConfidenceDecay;
+    public float InterleavedConfidenceDecay;
+    public uint ReceiverCacheMetadataAvailable;
+    public uint FullWidth;
+    public uint FullHeight;
+    public uint Reserved23;
 }
 
 /// <summary>Fixed 128-byte identity, trace, compaction, and proposal header.</summary>
@@ -575,6 +616,14 @@ public static class SimpleDdgiNearFieldResidualGpuBindings
     public const uint PrepareFoliagePatches = 14u;
     public const uint PrepareFoliageClusters = 15u;
 
+    public const uint ClassifyPreparedDepthFootprint = 0u;
+    public const uint ClassifyPreparedReceiverPayload = 1u;
+    public const uint ClassifyPreparedMotion = 2u;
+    public const uint ClassifySchedulerHistoryRead = 3u;
+    public const uint ClassifySchedulerHistoryWrite = 4u;
+    public const uint ClassifyActiveTilesAndIndirect = 5u;
+    public const uint ClassifyTileRecords = 6u;
+
     public const uint TraceDirectDiffuseEmissiveSource = 0u;
     public const uint TraceHiZ = 1u;
     public const uint TracePreparedDepthFootprint = 2u;
@@ -587,6 +636,7 @@ public static class SimpleDdgiNearFieldResidualGpuBindings
     public const uint TraceActiveTiles = 9u;
     public const uint TraceFullReceiverPayload = 10u;
     public const uint TraceSourceLuminance = 11u;
+    public const uint TraceSchedulerHistory = 12u;
 
     public const uint TemporalRawResidual = 0u;
     public const uint TemporalCurrentMetadata = 1u;
@@ -609,6 +659,8 @@ public static class SimpleDdgiNearFieldResidualGpuBindings
     public const uint TemporalCurrentFullPayload = 18u;
     public const uint TemporalFrameConstants = 19u;
     public const uint TemporalSurfaceTable = 20u;
+    public const uint TemporalPreparedDepthFootprint = 21u;
+    public const uint TemporalSchedulerHistory = 22u;
 
     public const uint FinalizeTileRecords = 0u;
 

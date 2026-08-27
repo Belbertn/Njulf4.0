@@ -6,9 +6,10 @@
 // C5 is intentionally a separate, opt-in ABI.  These stages are not part of
 // the global bindless contract until the renderer has explicitly created the
 // source attachment, history identity resources, barriers, and dispatch path.
-// V13 makes complete per-tile records the sole source for header summaries.
+// V14 separates trace work from resolve coverage and owns a distinct 16-byte
+// double-buffered scheduler history.
 // Keep this in lockstep with SimpleDdgiNearFieldResidualGpuAbi.
-const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000du;
+const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000eu;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_MAGIC = 0x4335544du;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS = 32u;
 const uint SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS = 64u;
@@ -32,6 +33,7 @@ const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED = 1u << 7u;
 const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_COMPOSITE_VALID_ONLY = 1u << 8u;
 const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_FOLIAGE_MOTION_VALID = 1u << 9u;
 const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_LIGHTING_EPOCH_CHANGED = 1u << 10u;
+const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_LOCAL_ADAPTIVE_SCHEDULING = 1u << 11u;
 const uint SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_SHIFT = 12u;
 const uint SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_MASK = 0xfu <<
     SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_SHIFT;
@@ -141,6 +143,93 @@ struct SimpleDdgiNearFieldResidualTileRecord
     uint reserved23;
 };
 
+const uint SIMPLE_DDGI_NEAR_FIELD_TILE_INACTIVE = 0u;
+const uint SIMPLE_DDGI_NEAR_FIELD_TILE_TRACE_HIGH = 1u;
+const uint SIMPLE_DDGI_NEAR_FIELD_TILE_TRACE_NORMAL = 2u;
+const uint SIMPLE_DDGI_NEAR_FIELD_TILE_TRACE_INTERLEAVED = 3u;
+const uint SIMPLE_DDGI_NEAR_FIELD_TILE_HISTORY_ONLY = 4u;
+const uint SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_CLASS_MASK = 0x7u;
+const uint SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_PHASE_SHIFT = 3u;
+const uint SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_RAYS_SHIFT = 4u;
+const uint SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_VALID_BIT = 1u << 7u;
+const uint SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_AGE_SHIFT = 8u;
+const uint SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_CONFIDENCE_SHIFT = 16u;
+const uint SIMPLE_DDGI_NEAR_FIELD_TRACE_HIGH_COUNT_WORD = 32u;
+const uint SIMPLE_DDGI_NEAR_FIELD_TRACE_NORMAL_COUNT_WORD = 33u;
+const uint SIMPLE_DDGI_NEAR_FIELD_INTERLEAVED_COUNT_WORD = 34u;
+const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_ONLY_COUNT_WORD = 35u;
+const uint SIMPLE_DDGI_NEAR_FIELD_INACTIVE_COUNT_WORD = 36u;
+const uint SIMPLE_DDGI_NEAR_FIELD_FORCED_REFRESH_COUNT_WORD = 37u;
+const uint SIMPLE_DDGI_NEAR_FIELD_REQUESTED_PIXEL_COUNT_WORD = 38u;
+const uint SIMPLE_DDGI_NEAR_FIELD_REQUESTED_RAY_COUNT_WORD = 39u;
+const uint SIMPLE_DDGI_NEAR_FIELD_SAVED_PIXEL_COUNT_WORD = 40u;
+const uint SIMPLE_DDGI_NEAR_FIELD_SAVED_RAY_COUNT_WORD = 41u;
+const uint SIMPLE_DDGI_NEAR_FIELD_MAXIMUM_AGE_WORD = 42u;
+
+struct SimpleDdgiNearFieldResidualSchedulerRecord
+{
+    uint packedState;
+    float signedResidualEnergy;
+    float variance;
+    uint packedEpochAndReceiver;
+};
+
+uint SimpleDdgiNearFieldSchedulerClass(uint packedState)
+{
+    return packedState & SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_CLASS_MASK;
+}
+
+uint SimpleDdgiNearFieldSchedulerPhase(uint packedState)
+{
+    return (packedState >> SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_PHASE_SHIFT) & 1u;
+}
+
+uint SimpleDdgiNearFieldSchedulerRays(uint packedState)
+{
+    return (packedState >> SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_RAYS_SHIFT) & 7u;
+}
+
+uint SimpleDdgiNearFieldSchedulerAge(uint packedState)
+{
+    return (packedState >> SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_AGE_SHIFT) & 0xffu;
+}
+
+float SimpleDdgiNearFieldSchedulerConfidence(uint packedState)
+{
+    return float((packedState >>
+        SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_CONFIDENCE_SHIFT) & 0xffu) /
+        255.0;
+}
+
+uint SimpleDdgiNearFieldPackSchedulerState(
+    uint tileClass,
+    uint phase,
+    uint rays,
+    bool valid,
+    uint age,
+    float confidence)
+{
+    uint confidenceByte = uint(round(clamp(confidence, 0.0, 1.0) * 255.0));
+    return (tileClass & 7u) | ((phase & 1u) <<
+        SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_PHASE_SHIFT) |
+        ((min(rays, 4u) & 7u) <<
+            SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_RAYS_SHIFT) |
+        (valid ? SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_VALID_BIT : 0u) |
+        (min(age, 255u) << SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_AGE_SHIFT) |
+        (confidenceByte <<
+            SIMPLE_DDGI_NEAR_FIELD_SCHEDULER_CONFIDENCE_SHIFT);
+}
+
+uint SimpleDdgiNearFieldTraceListFirstWord()
+{
+    return SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS;
+}
+
+uint SimpleDdgiNearFieldResolveListFirstWord(uint tileCapacity)
+{
+    return SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + tileCapacity;
+}
+
 uint SimpleDdgiNearFieldPackTraceCounts(
     uint covered, uint valid, uint invalid, uint raysLaunched)
 {
@@ -219,6 +308,34 @@ struct SimpleDdgiNearFieldResidualPreparePushConstants
     float farPlane;
     uint activeTileHeaderWords;
     uint indirectStageCount;
+};
+
+struct SimpleDdgiNearFieldResidualClassifyPushConstants
+{
+    uint abiVersion;
+    uint traceWidth;
+    uint traceHeight;
+    uint tileCapacity;
+    uint flags;
+    uint historyEpoch;
+    uint frameSerialLow;
+    uint frameSerialHigh;
+    uint schedulerEpoch;
+    uint maximumRaysPerPixel;
+    uint normalRaysPerPixel;
+    uint maximumHistoryOnlyAge;
+    uint forcedRefreshPeriod;
+    float highMotion;
+    float highVariance;
+    float activeEnergy;
+    float perceptualEnergyFloor;
+    float lowConfidence;
+    float historyOnlyConfidenceDecay;
+    float interleavedConfidenceDecay;
+    uint receiverCacheMetadataAvailable;
+    uint fullWidth;
+    uint fullHeight;
+    uint reserved23;
 };
 
 struct SimpleDdgiNearFieldResidualTemporalPushConstants

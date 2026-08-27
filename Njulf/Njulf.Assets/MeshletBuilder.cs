@@ -385,6 +385,9 @@ namespace Njulf.Assets
         {
             const float normalLengthEpsilon = 1e-20f;
             const float axisLengthEpsilon = 1e-12f;
+            // The cone must remain a conservative bound after the managed
+            // build and shader calculations round independently.
+            const float cutoffSafetyMargin = 1e-5f;
 
             for (int meshletIndex = 0; meshletIndex < meshlets.Count; meshletIndex++)
             {
@@ -409,7 +412,10 @@ namespace Njulf.Assets
                     if (!float.IsFinite(lengthSquared) || lengthSquared <= normalLengthEpsilon)
                         continue;
 
-                    axisSum += geometricNormal / MathF.Sqrt(lengthSquared);
+                    // The cross product magnitude is twice triangle area, so
+                    // summing it directly produces the required area-weighted
+                    // geometric-normal axis.
+                    axisSum += geometricNormal;
                     validTriangleCount++;
                 }
 
@@ -419,7 +425,7 @@ namespace Njulf.Assets
                     axisLengthSquared <= axisLengthEpsilon)
                 {
                     meshlet.NormalConeAxis = Vector3.Zero;
-                    meshlet.NormalConeCutoff = 1.0f;
+                    meshlet.NormalConeCutoff = -1.0f;
                     meshlets[meshletIndex] = meshlet;
                     continue;
                 }
@@ -447,17 +453,16 @@ namespace Njulf.Assets
                 // Cones spanning 90 degrees or more cannot conservatively
                 // reject a view hemisphere. Mark them disabled instead of
                 // introducing false negatives on folded or non-manifold data.
-                if (!float.IsFinite(minimumDot) || minimumDot <= 0.0f)
+                float safeCutoff = minimumDot - cutoffSafetyMargin;
+                if (!float.IsFinite(safeCutoff) || safeCutoff <= 0.0f)
                 {
                     meshlet.NormalConeAxis = Vector3.Zero;
-                    meshlet.NormalConeCutoff = 1.0f;
+                    meshlet.NormalConeCutoff = -1.0f;
                 }
                 else
                 {
-                    minimumDot = Math.Clamp(minimumDot, 0.0f, 1.0f);
                     meshlet.NormalConeAxis = axis;
-                    meshlet.NormalConeCutoff = MathF.Sqrt(
-                        MathF.Max(0.0f, 1.0f - minimumDot * minimumDot));
+                    meshlet.NormalConeCutoff = Math.Clamp(safeCutoff, 0.0f, 1.0f);
                 }
 
                 meshlets[meshletIndex] = meshlet;

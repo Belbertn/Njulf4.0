@@ -50,6 +50,11 @@ layout(std430, set = 0, binding = 20) readonly buffer TemporalSurfaceTableBuffer
 {
     SimpleDdgiNearFieldSurfaceEntry values[];
 } temporalSurfaceTable;
+layout(set = 0, binding = 21) uniform sampler2D currentPreparedDepthFootprint;
+layout(std430, set = 0, binding = 22) buffer TemporalSchedulerHistoryBuffer
+{
+    SimpleDdgiNearFieldResidualSchedulerRecord values[];
+} temporalSchedulerHistory;
 
 layout(push_constant) uniform NearFieldTemporalPushBlock
 {
@@ -97,6 +102,7 @@ shared float c5HistorySignedEnergy[64];
 shared float c5HistoryAbsoluteEnergy[64];
 shared float c5HistorySquaredEnergy[64];
 shared uint c5HistoryEnergyFinite[64];
+shared float c5HistoryConfidence[64];
 
 void WriteInvalid(ivec2 pixel, uint outputIndex)
 {
@@ -243,6 +249,56 @@ bool C5TemporalReadSurface(
         surface.stableMaterialId != 0u &&
         (surface.coverageMotionFlags & (1u << 4u)) != 0u &&
         (surface.coverageMotionFlags & (1u << 5u)) != 0u;
+}
+
+bool C5BuildCurrentReceiverMetadata(
+    ivec2 pixel,
+    vec2 outputUv,
+    out SimpleDdgiNearFieldResidualHitMetadata metadata,
+    out vec4 packedNormals)
+{
+    metadata = SimpleDdgiNearFieldZeroMetadata();
+    packedNormals = vec4(0.0);
+    ivec2 receiverExtent = textureSize(currentReceiverPayload, 0);
+    ivec2 depthExtent = textureSize(currentPreparedDepthFootprint, 0);
+    if (receiverExtent.x <= 0 || receiverExtent.y <= 0 ||
+        any(notEqual(receiverExtent, depthExtent)))
+        return false;
+    ivec2 receiverPixel = clamp(ivec2(outputUv * vec2(receiverExtent)),
+        ivec2(0), max(receiverExtent - ivec2(1), ivec2(0)));
+    uint surfaceToken;
+    vec3 diffuseBase;
+    vec3 dielectricF0;
+    SimpleDdgiNearFieldDecodeReceiverPayload(
+        texelFetch(currentReceiverPayload, receiverPixel, 0),
+        packedNormals,
+        surfaceToken,
+        diffuseBase,
+        dielectricF0);
+    vec2 depthFootprint = texelFetch(
+        currentPreparedDepthFootprint, receiverPixel, 0).rg;
+    SimpleDdgiNearFieldSurfaceEntry surface;
+    vec3 geometric = SimpleDdgiNearFieldDecodeOctNormal(packedNormals.xy);
+    vec3 shading = SimpleDdgiNearFieldDecodeOctNormal(packedNormals.zw);
+    if (!SimpleDdgiNearFieldFinite(depthFootprint.x) ||
+        !SimpleDdgiNearFieldFinite(depthFootprint.y) ||
+        depthFootprint.x <= 0.0 || depthFootprint.y <= 0.0 ||
+        dot(geometric, geometric) <= 0.0 || dot(shading, shading) <= 0.0 ||
+        !C5TemporalReadSurface(surfaceToken, surface))
+        return false;
+    metadata.receiverLinearDepth = depthFootprint.x;
+    metadata.hitLinearDepth = depthFootprint.x;
+    SimpleDdgiNearFieldSetReceiverFootprint(metadata, depthFootprint.y);
+    SimpleDdgiNearFieldSetMetadataFlags(metadata,
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE |
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_ATTACHMENT_VERIFIED |
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED);
+    metadata.receiverIdentity = uvec2(
+        surface.stableObjectId, surface.stableMaterialId);
+    metadata.packedReceiverRevisions =
+        surface.packedObjectMaterialRevisions;
+    metadata.packedHitUv = packHalf2x16(outputUv);
+    return true;
 }
 
 bool C5ValidatePreviousHitInCurrentFrame(
@@ -525,47 +581,47 @@ bool EvaluateTemporalPixel(
         return false;
     }
 
+    vec2 outputUv = (vec2(pixel) + vec2(0.5)) /
+        max(vec2(outputExtent), vec2(1.0));
     vec4 candidate = texelFetch(rawCandidateInput, pixel, 0);
     SimpleDdgiNearFieldResidualHitMetadata current =
         currentMetadata.values[outputIndex];
-    if (!SimpleDdgiNearFieldIsValidCandidate(candidate) ||
-        !SimpleDdgiNearFieldHasFlag(
+    bool hasCurrentSample = SimpleDdgiNearFieldIsValidCandidate(candidate) &&
+        SimpleDdgiNearFieldHasFlag(
             SimpleDdgiNearFieldMetadataFlags(current),
-            SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) ||
-        !SimpleDdgiNearFieldFinite(candidate.a) || candidate.a <= 0.0)
-    {
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) &&
+        SimpleDdgiNearFieldFinite(candidate.a) && candidate.a > 0.0;
+    bool adaptive = SimpleDdgiNearFieldHasFlag(pc.flags,
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_LOCAL_ADAPTIVE_SCHEDULING);
+    SimpleDdgiNearFieldResidualHitMetadata reconstructedCurrent;
+    if (!C5BuildCurrentReceiverMetadata(pixel, outputUv,
+            reconstructedCurrent, outputPackedNormals))
         return false;
+    if (!hasCurrentSample)
+    {
+        if (!adaptive)
+            return false;
+        current = reconstructedCurrent;
     }
 
     historyCandidate = true;
     historyReasonFlags = 0u;
-    outputResidual = candidate;
-    float candidateLuminance = dot(candidate.rgb,
-        vec3(0.2126, 0.7152, 0.0722));
-    if (!SimpleDdgiNearFieldFinite(candidateLuminance))
+    float candidateLuminance = 0.0;
+    uint outputHistoryLength = hasCurrentSample ? 1u : 0u;
+    if (hasCurrentSample)
     {
-        historyReasonFlags = C5_HISTORY_REASON_INVALID_CURRENT |
-            C5_HISTORY_REASON_NONFINITE;
-        return false;
+        outputResidual = candidate;
+        candidateLuminance = dot(candidate.rgb,
+            vec3(0.2126, 0.7152, 0.0722));
+        if (!SimpleDdgiNearFieldFinite(candidateLuminance))
+        {
+            historyReasonFlags = C5_HISTORY_REASON_INVALID_CURRENT |
+                C5_HISTORY_REASON_NONFINITE;
+            return false;
+        }
+        outputMoments = vec2(candidateLuminance,
+            candidateLuminance * candidateLuminance);
     }
-    outputMoments = vec2(candidateLuminance,
-        candidateLuminance * candidateLuminance);
-    uint outputHistoryLength = 1u;
-
-    vec2 outputUv = (vec2(pixel) + vec2(0.5)) /
-        max(vec2(outputExtent), vec2(1.0));
-    ivec2 receiverExtent = textureSize(currentReceiverPayload, 0);
-    ivec2 receiverPixel = clamp(ivec2(outputUv * vec2(receiverExtent)),
-        ivec2(0), max(receiverExtent - ivec2(1), ivec2(0)));
-    uint ignoredSurfaceToken;
-    vec3 ignoredDiffuseBase;
-    vec3 ignoredF0;
-    SimpleDdgiNearFieldDecodeReceiverPayload(
-        texelFetch(currentReceiverPayload, receiverPixel, 0),
-        outputPackedNormals,
-        ignoredSurfaceToken,
-        ignoredDiffuseBase,
-        ignoredF0);
 
     vec2 motion = textureLod(motionVectors, outputUv, 0.0).xy;
     bool finiteMotion = SimpleDdgiNearFieldFinite(motion.x) &&
@@ -606,6 +662,9 @@ bool EvaluateTemporalPixel(
         float accumulatedHistoryLength = 0.0;
         float acceptedBilinearWeight = 0.0;
         float reactiveBilinearWeight = 0.0;
+        float representativeHistoryWeight = -1.0;
+        SimpleDdgiNearFieldResidualHitMetadata representativeHistory =
+            SimpleDdgiNearFieldZeroMetadata();
         for (int tapY = 0; tapY < 2; ++tapY)
         {
             for (int tapX = 0; tapX < 2; ++tapX)
@@ -694,6 +753,11 @@ bool EvaluateTemporalPixel(
                 accumulatedMoments += previousMoments * reactiveWeight;
                 accumulatedHistoryLength +=
                     float(previousHistoryLength) * reactiveWeight;
+                if (reactiveWeight > representativeHistoryWeight)
+                {
+                    representativeHistoryWeight = reactiveWeight;
+                    representativeHistory = previous;
+                }
             }
         }
 
@@ -714,25 +778,23 @@ bool EvaluateTemporalPixel(
             vec3 neighbourhoodMaximum;
             float neighbourhoodMean;
             float neighbourhoodVariance;
-            if (!TryGetCurrentNeighbourhoodBounds(
-                    pixel,
-                    outputExtent,
-                    current,
-                    neighbourhoodMinimum,
-                    neighbourhoodMaximum,
-                    neighbourhoodMean,
-                    neighbourhoodVariance))
+            bool hasNeighbourhood = TryGetCurrentNeighbourhoodBounds(
+                pixel,
+                outputExtent,
+                current,
+                neighbourhoodMinimum,
+                neighbourhoodMaximum,
+                neighbourhoodMean,
+                neighbourhoodVariance);
+            float previousVariance = max(previousMoments.y -
+                previousMoments.x * previousMoments.x, 0.0);
+            vec3 clippedHistory = previousResidual.rgb;
+            if (hasNeighbourhood)
             {
-                historyReasonFlags |= C5_HISTORY_REASON_VARIANCE_CLIPPED;
-            }
-            else
-            {
-                float previousVariance = max(previousMoments.y -
-                    previousMoments.x * previousMoments.x, 0.0);
                 float sigma = sqrt(max(previousVariance,
                     neighbourhoodVariance));
                 vec3 clipExpansion = vec3(1.5 * sigma);
-                vec3 clippedHistory = clamp(previousResidual.rgb,
+                clippedHistory = clamp(previousResidual.rgb,
                     neighbourhoodMinimum - clipExpansion,
                     neighbourhoodMaximum + clipExpansion);
                 if (any(greaterThan(abs(clippedHistory -
@@ -740,28 +802,78 @@ bool EvaluateTemporalPixel(
                 {
                     historyReasonFlags |= C5_HISTORY_REASON_VARIANCE_CLIPPED;
                 }
-                outputHistoryLength = min(previousHistoryLength + 1u,
-                    min(pc.maximumHistoryLength,
-                        SIMPLE_DDGI_NEAR_FIELD_MAX_HISTORY_LENGTH));
-                float runningHistoryAuthority = float(
-                    outputHistoryLength - 1u) / float(outputHistoryLength);
-                float blend = min(clamp(pc.temporalBlend, 0.0, 1.0),
-                    runningHistoryAuthority) * sourceReactiveAuthority;
-                outputResidual.rgb = mix(
-                    candidate.rgb, clippedHistory, blend);
-                outputResidual.a = mix(
-                    candidate.a, previousResidual.a, blend);
-                float sampleWeight = 1.0 / float(outputHistoryLength);
-                outputMoments = mix(previousMoments,
-                    vec2(candidateLuminance,
-                        candidateLuminance * candidateLuminance),
-                    sampleWeight);
-                outputVariance = max(outputMoments.y -
-                    outputMoments.x * outputMoments.x, 0.0);
-                acceptedHistory = true;
             }
+            else if (hasCurrentSample)
+            {
+                historyReasonFlags |= C5_HISTORY_REASON_VARIANCE_CLIPPED;
+            }
+
+            outputHistoryLength = min(previousHistoryLength + 1u,
+                min(pc.maximumHistoryLength,
+                    SIMPLE_DDGI_NEAR_FIELD_MAX_HISTORY_LENGTH));
+            if (hasCurrentSample)
+            {
+                if (hasNeighbourhood)
+                {
+                    float runningHistoryAuthority = float(
+                        outputHistoryLength - 1u) /
+                        float(outputHistoryLength);
+                    float blend = min(clamp(pc.temporalBlend, 0.0, 1.0),
+                        runningHistoryAuthority) * sourceReactiveAuthority;
+                    outputResidual.rgb = mix(
+                        candidate.rgb, clippedHistory, blend);
+                    outputResidual.a = mix(
+                        candidate.a, previousResidual.a, blend);
+                    float sampleWeight = 1.0 /
+                        float(outputHistoryLength);
+                    outputMoments = mix(previousMoments,
+                        vec2(candidateLuminance,
+                            candidateLuminance * candidateLuminance),
+                        sampleWeight);
+                    acceptedHistory = true;
+                }
+            }
+            else
+            {
+                uint tileCountX = (pc.traceWidth + 7u) / 8u;
+                uint tileIndex = uint(pixel.y / 8) * tileCountX +
+                    uint(pixel.x / 8);
+                uint tileClass = tileIndex <
+                        uint(temporalSchedulerHistory.values.length())
+                    ? SimpleDdgiNearFieldSchedulerClass(
+                        temporalSchedulerHistory.values[tileIndex].packedState)
+                    : SIMPLE_DDGI_NEAR_FIELD_TILE_INACTIVE;
+                float confidenceDecay = tileClass ==
+                        SIMPLE_DDGI_NEAR_FIELD_TILE_HISTORY_ONLY
+                    ? 0.96
+                    : 0.985;
+                float energyDecay = tileClass ==
+                        SIMPLE_DDGI_NEAR_FIELD_TILE_HISTORY_ONLY
+                    ? 0.985
+                    : 0.995;
+                outputResidual = vec4(
+                    clippedHistory * energyDecay,
+                    previousResidual.a * confidenceDecay);
+                outputMoments = previousMoments;
+                // Carry the exact prior hit identity while replacing receiver
+                // fields with the current-frame reconstructed receiver.
+                current.hitLinearDepth = representativeHistory.hitLinearDepth;
+                current.packedHitNormal = representativeHistory.packedHitNormal;
+                current.hitIdentity = representativeHistory.hitIdentity;
+                current.packedHitRevisions =
+                    representativeHistory.packedHitRevisions;
+                current.packedHitUv = representativeHistory.packedHitUv;
+                current.packedHitSourceRadiance =
+                    representativeHistory.packedHitSourceRadiance;
+                acceptedHistory = representativeHistoryWeight >= 0.0;
+            }
+            outputVariance = max(outputMoments.y -
+                outputMoments.x * outputMoments.x, 0.0);
         }
     }
+
+    if (!hasCurrentSample && !acceptedHistory)
+        return false;
 
     if (!SimpleDdgiNearFieldFinite(outputResidual.rgb) ||
         !SimpleDdgiNearFieldFinite(outputResidual.a) || outputResidual.a <= 0.0 ||
@@ -823,6 +935,8 @@ void RecordTemporalTileSummary(uint tileIndex)
     float absoluteEnergy = 0.0;
     float squaredEnergy = 0.0;
     float maximumAbsoluteEnergy = 0.0;
+    float confidenceSum = 0.0;
+    uint validOutputCount = 0u;
     for (uint lane = 0u; lane < 64u; ++lane)
     {
         if (c5HistoryCovered[lane] == 0u)
@@ -856,6 +970,8 @@ void RecordTemporalTileSummary(uint tileIndex)
         maximumVariance = max(maximumVariance, c5HistoryVariance[lane]);
         if (c5HistoryEnergyFinite[lane] != 0u)
         {
+            validOutputCount++;
+            confidenceSum += c5HistoryConfidence[lane];
             float energy = c5HistorySignedEnergy[lane];
             float absolute = c5HistoryAbsoluteEnergy[lane];
             signedEnergy += energy;
@@ -925,6 +1041,40 @@ void RecordTemporalTileSummary(uint tileIndex)
             sourceRevisionRejects,
             epochRejects,
             invalidCurrentCount));
+
+    if (SimpleDdgiNearFieldHasFlag(pc.flags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_LOCAL_ADAPTIVE_SCHEDULING) &&
+        tileIndex < uint(temporalSchedulerHistory.values.length()))
+    {
+        SimpleDdgiNearFieldResidualSchedulerRecord scheduler =
+            temporalSchedulerHistory.values[tileIndex];
+        uint tileClass = SimpleDdgiNearFieldSchedulerClass(
+            scheduler.packedState);
+        uint phase = SimpleDdgiNearFieldSchedulerPhase(scheduler.packedState);
+        uint rays = SimpleDdgiNearFieldSchedulerRays(scheduler.packedState);
+        uint age = tileClass == SIMPLE_DDGI_NEAR_FIELD_TILE_HISTORY_ONLY ||
+                tileClass == SIMPLE_DDGI_NEAR_FIELD_TILE_TRACE_INTERLEAVED
+            ? SimpleDdgiNearFieldSchedulerAge(scheduler.packedState)
+            : 0u;
+        bool validSchedulerOutput = validOutputCount > 0u;
+        float reciprocalValid = validSchedulerOutput
+            ? 1.0 / float(validOutputCount)
+            : 0.0;
+        scheduler.packedState = SimpleDdgiNearFieldPackSchedulerState(
+            tileClass,
+            phase,
+            rays,
+            validSchedulerOutput,
+            age,
+            confidenceSum * reciprocalValid);
+        scheduler.signedResidualEnergy = validSchedulerOutput
+            ? signedEnergy * reciprocalValid
+            : 0.0;
+        scheduler.variance = validSchedulerOutput
+            ? varianceSum * reciprocalValid
+            : 0.0;
+        temporalSchedulerHistory.values[tileIndex] = scheduler;
+    }
 }
 
 void main()
@@ -933,15 +1083,17 @@ void main()
     uint activeCount = uint(temporalActiveTiles.words.length()) > 1u
         ? temporalActiveTiles.words[1]
         : 0u;
+    uint tileCountX = (pc.traceWidth + 7u) / 8u;
+    uint tileCountY = (pc.traceHeight + 7u) / 8u;
+    uint resolveFirstWord = SimpleDdgiNearFieldResolveListFirstWord(
+        tileCountX * tileCountY);
     bool activeTile = uint(temporalActiveTiles.words.length()) > 4u &&
         temporalActiveTiles.words[4u] == 0u && activeIndex < activeCount &&
-        SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex <
+        resolveFirstWord + activeIndex <
             uint(temporalActiveTiles.words.length());
     uint tileIndex = activeTile
-        ? temporalActiveTiles.words[
-            SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex]
+        ? temporalActiveTiles.words[resolveFirstWord + activeIndex]
         : 0u;
-    uint tileCountX = (pc.traceWidth + 7u) / 8u;
     uvec2 tile = tileCountX > 0u
         ? uvec2(tileIndex % tileCountX, tileIndex / tileCountX)
         : uvec2(0u);
@@ -1002,6 +1154,9 @@ void main()
     c5HistoryAbsoluteEnergy[lane] = finiteEnergy ? absoluteEnergy : 0.0;
     c5HistorySquaredEnergy[lane] = finiteEnergy ? squaredEnergy : 0.0;
     c5HistoryEnergyFinite[lane] = finiteEnergy ? 1u : 0u;
+    c5HistoryConfidence[lane] = validOutput
+        ? clamp(outputResidual.a, 0.0, 1.0)
+        : 0.0;
     barrier();
     if (lane == 0u)
     {

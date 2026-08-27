@@ -55,7 +55,9 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.AreaRayShadowMaskBufferBase, Is.EqualTo(BindlessIndex.VolumetricFogBounceRadianceBuffer + 1));
             Assert.That(BindlessIndex.AreaRayShadowMaskBufferFrame1, Is.EqualTo(BindlessIndex.AreaRayShadowMaskBufferBase + 1));
             Assert.That(BindlessIndex.ForwardMaterialDataBuffer, Is.EqualTo(BindlessIndex.AreaRayShadowMaskBufferFrame1 + 1));
-            Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(BindlessIndex.ForwardMaterialDataBuffer + 1));
+            Assert.That(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase, Is.EqualTo(BindlessIndex.ForwardMaterialDataBuffer + 1));
+            Assert.That(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase + 1));
+            Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1 + 1));
             Assert.That(BindlessIndex.AreaLightLtcMatrixTexture, Is.EqualTo(BindlessIndex.PrefilteredEnvironmentNextTexture + 1));
             Assert.That(BindlessIndex.AreaLightLtcAmplitudeTexture, Is.EqualTo(BindlessIndex.AreaLightLtcMatrixTexture + 1));
             Assert.That(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase, Is.EqualTo(BindlessIndex.AreaLightLtcAmplitudeTexture + 1));
@@ -73,9 +75,15 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DirectionalRayShadowMaskBufferBase), Is.EqualTo(nameof(BindlessIndex.DirectionalRayShadowMaskBufferBase)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.AreaRayShadowMaskBufferBase), Is.EqualTo(nameof(BindlessIndex.AreaRayShadowMaskBufferBase)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.ForwardMaterialDataBuffer), Is.EqualTo(nameof(BindlessIndex.ForwardMaterialDataBuffer)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1)));
             Assert.That(
                 BindlessIndex.FirstDynamicTextureIndex,
+                Is.EqualTo(BindlessIndex.GtaoDebugTexture + 1));
+            Assert.That(BindlessIndex.GtaoFilteredTexture,
                 Is.EqualTo(BindlessIndex.OpaqueSceneColorSnapshotTexture + 1));
+            Assert.That(BindlessIndex.GtaoDebugTexture,
+                Is.EqualTo(BindlessIndex.GtaoFilteredTexture + 1));
             Assert.That(BindlessIndex.OpaqueSceneColorSnapshotTexture,
                 Is.EqualTo(
                     BindlessIndex.SimpleDdgiSampledVisibilityTextureBase +
@@ -138,9 +146,13 @@ public sealed class BindlessIndexTests
             ["DIRECTIONAL_RAY_SHADOW_MASK_BUFFER_FRAME1_INDEX"] = BindlessIndex.DirectionalRayShadowMaskBufferFrame1,
             ["AREA_RAY_SHADOW_MASK_BUFFER_BASE_INDEX"] = BindlessIndex.AreaRayShadowMaskBufferBase,
             ["FORWARD_MATERIAL_DATA_BUFFER_INDEX"] = BindlessIndex.ForwardMaterialDataBuffer,
+            ["SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_BASE_INDEX"] = BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase,
+            ["SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_FRAME1_INDEX"] = BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1,
             ["AREA_LIGHT_LTC_MATRIX_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcMatrixTexture,
             ["AREA_LIGHT_LTC_AMPLITUDE_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcAmplitudeTexture,
             ["OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX"] = BindlessIndex.OpaqueSceneColorSnapshotTexture,
+            ["GTAO_FILTERED_TEXTURE_INDEX"] = BindlessIndex.GtaoFilteredTexture,
+            ["GTAO_DEBUG_TEXTURE_INDEX"] = BindlessIndex.GtaoDebugTexture,
             ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount
         };
 

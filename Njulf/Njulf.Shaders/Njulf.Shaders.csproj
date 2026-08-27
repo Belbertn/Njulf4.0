@@ -605,9 +605,67 @@
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_THIN_GLASS_ONLY=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
       </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_ordinary.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_TRANSPARENT_ROLE_ORDINARY=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_ordinary.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_WEIGHTED_OIT=1 -DFORWARD_TRANSPARENT_ROLE_ORDINARY=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_thick.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_TRANSPARENT_ROLE_THICK=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_thick.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_WEIGHTED_OIT=1 -DFORWARD_TRANSPARENT_ROLE_THICK=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_decal.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_WEIGHTED_OIT=1 -DFORWARD_TRANSPARENT_ROLE_DECAL=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_decal_cache_required.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_TRANSPARENT_ROLE_DECAL=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_decal_cache_required.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_WEIGHTED_OIT=1 -DFORWARD_TRANSPARENT_ROLE_DECAL=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
       <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_ray.frag">
         <Source>forward.frag</Source>
         <Defines>-DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
+        <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_ordinary_ray.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_TRANSPARENT_ROLE_ORDINARY=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
+        <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_ordinary_ray.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_WEIGHTED_OIT=1 -DFORWARD_TRANSPARENT_ROLE_ORDINARY=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
+        <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_thick_ray.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_TRANSPARENT_ROLE_THICK=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
+        <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_thick_ray.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_WEIGHTED_OIT=1 -DFORWARD_TRANSPARENT_ROLE_THICK=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
+        <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_decal_ray.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_TRANSPARENT_ROLE_DECAL=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
+        <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_decal_ray.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_WEIGHTED_OIT=1 -DFORWARD_TRANSPARENT_ROLE_DECAL=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
         <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
       </ReceiverFeedbackGraphicsShaderVariant>
       <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_ray.frag">
@@ -835,6 +893,19 @@
         <NjulfShaderArtifact Include="forward_opaque_ddgi_cache_required.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_opaque_simple_ddgi_cache_required.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_opaque_simple_full_input_ddgi_cache_required.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="forward_opaque_ddgi_cache_required_diagnostics.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="forward_opaque_simple_ddgi_cache_required_diagnostics.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="forward_opaque_ddgi_cache_debug.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="forward_opaque_simple_ddgi_cache_debug.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="forward_opaque_simple_full_input_ddgi_cache_debug.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="ddgi_simple_receiver_cache_resolve_diagnostics.comp"><Source>$(MSBuildProjectDirectory)\ddgi_simple_receiver_cache_resolve.comp</Source><Defines>-DNJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="ddgi_simple_receiver_cache_adaptive.comp"><Source>$(MSBuildProjectDirectory)\ddgi_simple_receiver_cache.comp</Source><Defines>-DNJULF_DDGI_RECEIVER_CACHE_ADAPTIVE=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="ddgi_simple_receiver_cache_resolve_adaptive.comp"><Source>$(MSBuildProjectDirectory)\ddgi_simple_receiver_cache_resolve.comp</Source><Defines>-DNJULF_DDGI_RECEIVER_CACHE_ADAPTIVE=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="ddgi_simple_receiver_cache_legacy.comp"><Source>$(MSBuildProjectDirectory)\ddgi_simple_receiver_cache.comp</Source><Defines>-DNJULF_DDGI_RECEIVER_CACHE_LEGACY=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="forward_opaque_ddgi_cache_legacy.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DFORWARD_DDGI_RECEIVER_CACHE_LEGACY=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="forward_opaque_simple_ddgi_cache_legacy.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DFORWARD_DDGI_RECEIVER_CACHE_LEGACY=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="forward_opaque_simple_full_input_ddgi_cache_legacy.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DFORWARD_DDGI_RECEIVER_CACHE_LEGACY=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_opaque_gi_disabled.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_OPAQUE=1 -DFORWARD_GLOBAL_ILLUMINATION_DISABLED=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_opaque_simple_gi_disabled.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_GLOBAL_ILLUMINATION_DISABLED=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_opaque_simple_full_input_gi_disabled.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_GLOBAL_ILLUMINATION_DISABLED=1</Defines></NjulfShaderArtifact>

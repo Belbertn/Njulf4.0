@@ -184,6 +184,7 @@ public readonly record struct SimpleDdgiNearFieldResidualLayout(
     ulong FilterScratchBytes,
     ulong SurfaceTableBytes,
     ulong ActiveTileAndIndirectBytes,
+    ulong SchedulerHistoryBytes,
     ulong TileBuffersBytes,
     ulong TelemetryReadbackBytes,
     ulong TotalBytes,
@@ -215,6 +216,7 @@ public readonly record struct SimpleDdgiNearFieldResidualLayout(
         FilterScratchBytes: 0UL,
         SurfaceTableBytes: 0UL,
         ActiveTileAndIndirectBytes: 0UL,
+        SchedulerHistoryBytes: 0UL,
         TileBuffersBytes: 0UL,
         TelemetryReadbackBytes: 0UL,
         TotalBytes: 0UL,
@@ -223,7 +225,8 @@ public readonly record struct SimpleDdgiNearFieldResidualLayout(
 
     public ulong PersistentBytes => checked(
         HistoryRadianceBytes + MomentBytes + HistoryValidityBytes +
-        HistoryMetadataBytes + HistoryNormalBytes + SurfaceTableBytes);
+        HistoryMetadataBytes + HistoryNormalBytes + SurfaceTableBytes +
+        SchedulerHistoryBytes);
 
     public ulong TransientBytes => checked(
         TraceSourceBytes + ReceiverPayloadBytes + TraceFrameConstantsBytes +
@@ -355,12 +358,17 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
                     profile.ImageRowAlignment, profile.ImageAllocationGranularity));
             int tileCountX = checked((traceWidth + TileWidth - 1) / TileWidth);
             int tileCountY = checked((traceHeight + TileHeight - 1) / TileHeight);
-            ulong activeTileAndIndirect = AlignUp(checked(
-                64UL * sizeof(uint) +
-                (ulong)tileCountX * (ulong)tileCountY * sizeof(uint) +
-                SimpleDdgiNearFieldResidualGpuAbi.IndirectStageCount *
-                SimpleDdgiNearFieldResidualGpuAbi.IndirectDispatchArgumentByteCount),
+            uint tileCapacity = checked((uint)(tileCountX * tileCountY));
+            ulong activeTileAndIndirect = AlignUp(
+                SimpleDdgiNearFieldResidualAdaptiveAbi.ArenaByteCount(
+                    tileCapacity),
                 profile.ImageAllocationGranularity);
+            ulong schedulerBank = AlignUp(checked(
+                (ulong)tileCapacity *
+                SimpleDdgiNearFieldResidualAdaptiveAbi
+                    .SchedulerRecordByteCount),
+                profile.ImageAllocationGranularity);
+            ulong schedulerHistory = checked(2UL * schedulerBank);
             ulong tileBuffers = AlignUp(checked(
                 (ulong)tileCountX * (ulong)tileCountY * TileRecordBytes +
                 SimpleDdgiNearFieldResidualGpuAbi.TelemetryHeaderByteCount),
@@ -379,7 +387,8 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
                 preparedDepthFootprint + preparedReceiverPayload + preparedMotion +
                 sourceLuminance + rawCandidate + hitMetadata + historyRadiance + moments +
                 historyValidity + historyMetadata + historyNormals + filterScratch +
-                surfaceTable + activeTileAndIndirect + tileBuffers + telemetryReadback);
+                surfaceTable + activeTileAndIndirect + schedulerHistory +
+                tileBuffers + telemetryReadback);
             if (total > budgetBytes)
             {
                 return SimpleDdgiNearFieldResidualLayout.Empty(
@@ -411,6 +420,7 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
                 filterScratch,
                 surfaceTable,
                 activeTileAndIndirect,
+                schedulerHistory,
                 tileBuffers,
                 telemetryReadback,
                 total,

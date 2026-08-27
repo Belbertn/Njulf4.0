@@ -107,6 +107,17 @@ namespace Njulf.Rendering.Data
         public int TransparentSortCandidateCount { get; set; }
         public long TransparentSortMicroseconds { get; set; }
         public int TransparentOverflowCount { get; set; }
+        public bool TransparentPipelinePartitioningEnabled { get; set; }
+        public bool TransparentPipelinePartitioningEffective { get; set; }
+        public int TransparentPipelineRunCount { get; set; }
+        public int TransparentPipelineAverageRunLength { get; set; }
+        public int TransparentPipelineMaximumRunLength { get; set; }
+        public int TransparentPipelineBindCount { get; set; }
+        public int TransparentPipelineUniversalFallbackCount { get; set; }
+        public int TransparentPipelineRayMeshletsAvoided { get; set; }
+        public int TransparentPipelineDecalCacheMeshlets { get; set; }
+        public string TransparentPipelineFallbackReason { get; set; } =
+            string.Empty;
         public int MaterialCount { get; set; }
         public int LightCount { get; set; }
         public int DirectionalLightCount { get; set; }
@@ -481,6 +492,11 @@ namespace Njulf.Rendering.Data
         public int MeshletLod2SubmittedCpu { get; set; }
         public int NormalConeEligibleOpaqueMeshletCount { get; set; }
         public int DoubleSidedOpaqueMeshletCount { get; set; }
+        public bool MeshletNormalConeCullingEnabled { get; set; }
+        public int MeshletNormalConeCandidateCount { get; set; }
+        public int MeshletNormalConeTestedCount { get; set; }
+        public int MeshletNormalConeRejectedCount { get; set; }
+        public int MeshletNormalConeInvalidCount { get; set; }
         public ulong StableSceneInputUploadBytes { get; set; }
         public ulong CpuCandidateListUploadBytes { get; set; }
         public int CameraDrivenCpuDrawListRebuilt { get; set; }
@@ -860,8 +876,16 @@ namespace Njulf.Rendering.Data
         public long GpuHybridReflectionSpatialMicroseconds { get; set; }
         public long GpuHybridReflectionCompositeMicroseconds { get; set; }
         public bool AmbientOcclusionEnabled { get; set; }
+        public AmbientOcclusionMode RequestedAmbientOcclusionMode { get; set; } =
+            AmbientOcclusionMode.Disabled;
         public AmbientOcclusionMode AmbientOcclusionMode { get; set; } = AmbientOcclusionMode.Disabled;
+        public bool GtaoRuntimeSupported { get; set; }
         public AmbientOcclusionDebugView AmbientOcclusionDebugView { get; set; } = AmbientOcclusionDebugView.None;
+        public AmbientOcclusionBentNormalMode AmbientOcclusionBentNormalMode { get; set; } =
+            AmbientOcclusionBentNormalMode.Off;
+        public GtaoQualityPreset GtaoQualityPreset { get; set; } =
+            GtaoQualityPreset.Balanced;
+        public int GtaoHistoryValid { get; set; }
         public AmbientOcclusionForwardSamplingMode AmbientOcclusionForwardSamplingMode { get; set; } =
             AmbientOcclusionForwardSamplingMode.Disabled;
         public int AmbientOcclusionForwardDepthAwareSamples { get; set; }
@@ -1186,6 +1210,11 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiFullRayProbeUpdateCount { get; set; }
         public int SimpleDdgiMaintenanceRayProbeUpdateCount { get; set; }
         public ulong SimpleDdgiAdaptiveRaySavedRaysPerFrame { get; set; }
+        public SimpleDdgiAdaptiveRayEvidence SimpleDdgiAdaptiveRayEvidence
+        {
+            get;
+            set;
+        }
         public int SimpleDdgiNearFullRayProbeUpdateCount { get; set; }
         public int SimpleDdgiMidFullRayProbeUpdateCount { get; set; }
         public int SimpleDdgiFarFullRayProbeUpdateCount { get; set; }
@@ -1672,6 +1701,8 @@ namespace Njulf.Rendering.Data
         public List<GPUPackedMeshletDrawCommand> PackedSolidDepthMeshletDrawCommands { get; } = new();
         public List<GPUPackedMeshletDrawCommand> PackedMaskedDepthMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> TransparentMeshletDrawCommands { get; } = new();
+        public List<TransparentMaterialRun> TransparentMaterialRuns { get; } =
+            new();
         public List<GPUObjectData> ObjectData { get; } = new();
         public List<GPUMaterialData> MaterialData { get; } = new();
         public List<GPUMaterialExtensionData> MaterialExtensionData { get; } = new();
@@ -1696,6 +1727,7 @@ namespace Njulf.Rendering.Data
             PackedSolidDepthMeshletDrawCommands.Clear();
             PackedMaskedDepthMeshletDrawCommands.Clear();
             TransparentMeshletDrawCommands.Clear();
+            TransparentMaterialRuns.Clear();
             ObjectData.Clear();
             MaterialData.Clear();
             MaterialExtensionData.Clear();
@@ -1748,6 +1780,16 @@ namespace Njulf.Rendering.Data
             TransparentSortCandidateCount = 0;
             TransparentSortMicroseconds = 0;
             TransparentOverflowCount = 0;
+            TransparentPipelinePartitioningEnabled = false;
+            TransparentPipelinePartitioningEffective = false;
+            TransparentPipelineRunCount = 0;
+            TransparentPipelineAverageRunLength = 0;
+            TransparentPipelineMaximumRunLength = 0;
+            TransparentPipelineBindCount = 0;
+            TransparentPipelineUniversalFallbackCount = 0;
+            TransparentPipelineRayMeshletsAvoided = 0;
+            TransparentPipelineDecalCacheMeshlets = 0;
+            TransparentPipelineFallbackReason = string.Empty;
             MaterialCount = 0;
             LightCount = 0;
             DirectionalLightCount = 0;
@@ -2021,6 +2063,11 @@ namespace Njulf.Rendering.Data
             MeshletLod2SubmittedCpu = 0;
             NormalConeEligibleOpaqueMeshletCount = 0;
             DoubleSidedOpaqueMeshletCount = 0;
+            MeshletNormalConeCullingEnabled = false;
+            MeshletNormalConeCandidateCount = 0;
+            MeshletNormalConeTestedCount = 0;
+            MeshletNormalConeRejectedCount = 0;
+            MeshletNormalConeInvalidCount = 0;
             StableSceneInputUploadBytes = 0;
             CpuCandidateListUploadBytes = 0;
             CameraDrivenCpuDrawListRebuilt = 0;
@@ -2459,8 +2506,13 @@ namespace Njulf.Rendering.Data
             GpuHybridReflectionSpatialMicroseconds = 0;
             GpuHybridReflectionCompositeMicroseconds = 0;
             AmbientOcclusionEnabled = false;
+            RequestedAmbientOcclusionMode = AmbientOcclusionMode.Disabled;
             AmbientOcclusionMode = AmbientOcclusionMode.Disabled;
+            GtaoRuntimeSupported = false;
             AmbientOcclusionDebugView = AmbientOcclusionDebugView.None;
+            AmbientOcclusionBentNormalMode = AmbientOcclusionBentNormalMode.Off;
+            GtaoQualityPreset = GtaoQualityPreset.Balanced;
+            GtaoHistoryValid = 0;
             AmbientOcclusionForwardSamplingMode = AmbientOcclusionForwardSamplingMode.Disabled;
             AmbientOcclusionForwardDepthAwareSamples = 0;
             AmbientOcclusionWidth = 0;
@@ -2751,6 +2803,7 @@ namespace Njulf.Rendering.Data
             SimpleDdgiFullRayProbeUpdateCount = 0;
             SimpleDdgiMaintenanceRayProbeUpdateCount = 0;
             SimpleDdgiAdaptiveRaySavedRaysPerFrame = 0;
+            SimpleDdgiAdaptiveRayEvidence = default;
             SimpleDdgiNearFullRayProbeUpdateCount = 0;
             SimpleDdgiMidFullRayProbeUpdateCount = 0;
             SimpleDdgiFarFullRayProbeUpdateCount = 0;

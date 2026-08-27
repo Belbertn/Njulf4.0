@@ -868,6 +868,39 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
     }
 
     [Test]
+    public void AdaptiveRayEvidence_ReusesBoundedFeedbackTailByRingAndContentKind()
+    {
+        string shared = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_schedule_shared.glsl");
+        string feedback = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_schedule_feedback.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiSchedulerAbi.FeedbackAdaptiveSavedRayRingOffsetWords,
+                Is.EqualTo(999));
+            Assert.That(
+                SimpleDdgiSchedulerAbi
+                    .FeedbackAdaptiveMaximumErrorContentOffsetWords +
+                SimpleDdgiSchedulerAbi.AdaptiveRayContentBucketCount,
+                Is.LessThanOrEqualTo(
+                    SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes /
+                    sizeof(uint)));
+            Assert.That(shared, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_SAVED_RING_OFFSET = 999u"));
+            Assert.That(feedback, Does.Contain(
+                "SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 40u"));
+            Assert.That(feedback, Does.Contain(
+                "lastCommittedSourceRefreshFrame =="));
+            Assert.That(feedback, Does.Contain(
+                "SchedulerReadQuadratureWitness("));
+            Assert.That(feedback, Does.Contain(
+                "SchedulerVolumeKind(sourceVolumeIndex)"));
+        });
+    }
+
+    [Test]
     public void EmptySourceCohort_DoesNotReportUnusedBudgetAsCapacityShortfall()
     {
         string feedback = ReadRepoText(

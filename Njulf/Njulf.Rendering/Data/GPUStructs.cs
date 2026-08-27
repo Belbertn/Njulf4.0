@@ -690,7 +690,7 @@ namespace Njulf.Rendering.Data
         public uint MeshletIndex;
         public uint InstanceId;
         public uint MaterialIndex;
-        public uint Padding;
+        public uint Flags;
     }
 
     [Flags]
@@ -926,6 +926,10 @@ namespace Njulf.Rendering.Data
         public uint DirectionalShadowLodFallbackCount;
         /// <summary>LOD0 candidate commands intentionally removed by lower-LOD decimation.</summary>
         public uint OpaqueLodDecimatedCount;
+        public uint NormalConeCandidateCount;
+        public uint NormalConeTestedCount;
+        public uint NormalConeRejectedCount;
+        public uint NormalConeInvalidCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1118,6 +1122,12 @@ namespace Njulf.Rendering.Data
         public const int MaximumReflectionCaptureLayer = 0x1FFF;
         public const int MaximumPackedLightCount = 1024;
         public const int MaximumDirectionalLightCount = 2;
+        public const int TransparentDrawBufferIndexBits = 14;
+        public const int TransparentFirstDrawBits = 18;
+        public const uint MaximumTransparentDrawBufferIndex =
+            (1u << TransparentDrawBufferIndexBits) - 1u;
+        public const int MaximumTransparentFirstDraw =
+            (1 << TransparentFirstDrawBits) - 1;
 
         private const int TotalLightCountBits = 11;
         private const int DirectionalLightIndexBits = 10;
@@ -1130,8 +1140,10 @@ namespace Njulf.Rendering.Data
             (1u << DirectionalLightIndexBits) - 1u;
 
         private const uint DebugViewModeMask = 0xFFu;
+        private const uint AmbientOcclusionDebugViewMask = 0x3Fu;
         private const int AmbientOcclusionEnabledShift = 8;
         private const int AmbientOcclusionDebugViewShift = 16;
+        private const int AmbientOcclusionBentNormalModeShift = 22;
         private const int TransparentReceiveShadowsShift = 24;
         private const int TransparencyDebugViewShift = 25;
         private const int ScreenSpaceGlobalIlluminationEnabledShift = 28;
@@ -1186,6 +1198,31 @@ namespace Njulf.Rendering.Data
         public float OcclusionBias;
         public uint DebugAndAoFlags;
         public uint DiagnosticFlags;
+
+        public static bool TryPackTransparentDrawRange(
+            uint drawBufferBaseIndex,
+            uint firstDraw,
+            out uint packedDrawBufferBaseIndex)
+        {
+            if (drawBufferBaseIndex > MaximumTransparentDrawBufferIndex ||
+                firstDraw > MaximumTransparentFirstDraw)
+            {
+                packedDrawBufferBaseIndex = 0;
+                return false;
+            }
+
+            packedDrawBufferBaseIndex = drawBufferBaseIndex |
+                (firstDraw << TransparentDrawBufferIndexBits);
+            return true;
+        }
+
+        public static uint UnpackTransparentDrawBufferBaseIndex(
+            uint packedDrawBufferBaseIndex) =>
+            packedDrawBufferBaseIndex & MaximumTransparentDrawBufferIndex;
+
+        public static uint UnpackTransparentFirstDraw(
+            uint packedDrawBufferBaseIndex) =>
+            packedDrawBufferBaseIndex >> TransparentDrawBufferIndexBits;
 
         public static uint PackLightDispatch(
             int totalLightCount,
@@ -1324,11 +1361,14 @@ namespace Njulf.Rendering.Data
             uint transparencyDebugView = 0u,
             uint ambientOcclusionForwardSamplingMode = 0u,
             bool globalIlluminationEnabled = false,
-            bool screenSpaceGlobalIlluminationEnabled = false)
+            bool screenSpaceGlobalIlluminationEnabled = false,
+            uint ambientOcclusionBentNormalMode = 0u)
         {
             return (debugViewMode & DebugViewModeMask) |
                    (ambientOcclusionEnabled ? 1u << AmbientOcclusionEnabledShift : 0u) |
-                   ((ambientOcclusionDebugView & DebugViewModeMask) << AmbientOcclusionDebugViewShift) |
+                   ((ambientOcclusionDebugView & AmbientOcclusionDebugViewMask) << AmbientOcclusionDebugViewShift) |
+                   ((ambientOcclusionBentNormalMode & 0x03u) <<
+                    AmbientOcclusionBentNormalModeShift) |
                    (transparentReceiveShadows ? 1u << TransparentReceiveShadowsShift : 0u) |
                    ((transparencyDebugView & 0x07u) << TransparencyDebugViewShift) |
                    (screenSpaceGlobalIlluminationEnabled ? 1u << ScreenSpaceGlobalIlluminationEnabledShift : 0u) |
@@ -2151,11 +2191,13 @@ namespace Njulf.Rendering.Data
         public uint Reserved0;
     }
 
-    // 128-byte ABI for the frame-local opaque receiver cache. The final four
+    // 132-byte ABI for the frame-local opaque receiver cache. The four
     // words are zero in the ordinary accelerator and carry the frame-scoped
     // exact B1 source transaction only in its dedicated shader variant.
     // invocation evaluates a complete Simple-DDGI gather for one 12x12 screen
-    // block, then writes a packed 16-byte gather-lattice sample.
+    // block, then writes the canonical 16-byte sample followed by a compact,
+    // frame-stamped signed L2 coefficient tail. The published 2x2 cache record
+    // remains 16 bytes.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiReceiverCachePushConstants
     {
@@ -2173,13 +2215,56 @@ namespace Njulf.Rendering.Data
         public uint FeedbackSamplePeriod;
         public uint FeedbackSamplePhase;
         public uint FeedbackMaximumOwnersPerTile;
+        public uint SurfaceBufferIndex;
     }
 
-    // 28-byte ABI for publishing the reduced gather lattice to a frame-local
-    // aligned FP16 cache buffer. The resolve reads current depth once per cache
-    // entry so its reconstruction cannot blend unrelated receiver surfaces.
+    // 124-byte ABI for publishing the reduced gather lattice to parallel
+    // frame-local radiance and surface buffers. The resolve reconstructs a
+    // deterministic 2x2 representative and admits only compatible gather
+    // sidecars.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiReceiverCacheResolvePushConstants
+    {
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Vector4 CameraPositionAndPadding;
+        public uint ScreenWidth;
+        public uint ScreenHeight;
+        public uint GatherWidth;
+        public uint GatherHeight;
+        public uint CacheWidth;
+        public uint CacheHeight;
+        public uint GatherBufferIndex;
+        public uint GatherSurfaceBufferIndex;
+        public uint PackedScaleAndEdgeExtents;
+        public uint DepthTextureIndex;
+        public uint CurrentFrameIndex;
+    }
+
+    // 128-byte ABI shared by adaptive classification, gather-list
+    // compaction, indirect finalization, and canonical-history seeding.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiReceiverCacheAdaptivePushConstants
+    {
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Vector4 CameraPositionAndPadding;
+        public uint ScreenWidth;
+        public uint ScreenHeight;
+        public uint CacheWidth;
+        public uint CacheHeight;
+        public uint GatherWidth;
+        public uint GatherHeight;
+        public uint MotionTextureIndex;
+        public uint HistoryAndPresetFlags;
+        public uint FrameStamp;
+        public uint SamplingPhase;
+        public uint MaximumHistoryAge;
+        public uint ClassifyPhase;
+    }
+
+    // Frozen 28-byte ABI used only by the controlled depth-only benchmark.
+    // Production surface-aware resolve never consumes this layout.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiReceiverCacheLegacyResolvePushConstants
     {
         public uint GatherWidth;
         public uint GatherHeight;
@@ -2819,6 +2904,9 @@ namespace Njulf.Rendering.Data
         public uint CompletionMask;
         public uint FailureReason;
         public uint UpdateFlags;
+        // Low 16 bits carry the bounded expected/source ray count. The high
+        // 16 bits carry an optional quantized nested-prefix quadrature witness
+        // so adaptive cardinality does not grow the shipping scheduler arena.
         public uint ExpectedRayInvocationCount;
         public uint TraceInvocationCount;
         public uint TransportInvocationCount;
@@ -3038,7 +3126,7 @@ namespace Njulf.Rendering.Data
         public uint AutoExposureEnabled;
         public uint AutoExposureStateBufferIndex;
         public uint DisplayReferredDebug;
-        public uint Padding1;
+        public uint AmbientOcclusionDebugView;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -3245,6 +3333,53 @@ namespace Njulf.Rendering.Data
         public float DepthSigma;
         public float NormalSigma;
         public uint UseSceneNormals;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUGtaoPushConstants
+    {
+        public Matrix4x4 InverseProjectionMatrix;
+        public Matrix4x4 ProjectionMatrix;
+        public Vector2 SourceDimensions;
+        public Vector2 DestinationDimensions;
+        public float Radius;
+        public float Thickness;
+        public float Falloff;
+        public float PlaneBias;
+        public float Intensity;
+        public float Power;
+        public uint DirectionCount;
+        public uint StepCount;
+        public uint FrameIndex;
+        public uint HiZMipCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUGtaoTemporalPushConstants
+    {
+        public Matrix4x4 InverseProjectionMatrix;
+        public Vector2 Dimensions;
+        public Vector2 SceneDimensions;
+        public uint HistoryValid;
+        public uint MaximumHistoryAge;
+        public uint FrameIndex;
+        public uint Padding0;
+        public float DepthThresholdScale;
+        public float NormalThreshold;
+        public float StableHistoryWeight;
+        public float MotionRejectionScale;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUGtaoSpatialPushConstants
+    {
+        public Matrix4x4 InverseProjectionMatrix;
+        public Vector2 SourceDimensions;
+        public Vector2 OutputDimensions;
+        public float DepthSigma;
+        public float NormalSigma;
+        public uint Radius;
+        public uint DebugView;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

@@ -33,6 +33,8 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
     // staging, one Jacobi sweep must still satisfy the normal final-sweep
     // producer contract even when the configured accelerated count is larger.
     private const uint SolveSingleSweepFlag = 1u << 9;
+    private const uint SolveCompactReadFlag = 1u << 21;
+    private const uint SolveCompactWriteFlag = 1u << 22;
     private const uint SolveVolumeFilterFlag = 1u << 23;
     private const uint SolveColorFilterFlag = 1u << 24;
     private const uint SolveFirstColorFlag = 1u << 25;
@@ -302,6 +304,81 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
         }
     }
 
+    /// <summary>
+    /// Executes two to four cache-only Jacobi sweeps for the pre-forward
+    /// radiometric lane. Intermediate irradiance uses scheduler candidate
+    /// storage that is dead after emit; visibility remains in the normal
+    /// private target and the final sweep always lands in that canonical
+    /// commit source. No intermediate publication or ray query is recorded.
+    /// </summary>
+    public bool TryExecuteUrgentPrivateSolve(
+        CommandBuffer cmd,
+        SceneRenderingData sceneData,
+        int requestedSweepCount,
+        uint compactScratchBaseWord,
+        uint compactScratchProbeCapacity)
+    {
+        int sweepCount = Math.Clamp(
+            requestedSweepCount,
+            2,
+            SimpleDdgiUrgentRelightPolicy.MaximumSweepCount);
+        if (compactScratchProbeCapacity == 0u ||
+            _volumeManager.SchedulerMode != SimpleDdgiSchedulerMode.GpuResident ||
+            !_volumeManager.GpuScheduler.IsReady ||
+            !_volumeManager.TransportV2Active ||
+            !_volumeManager.TransportAccelerationEnabled ||
+            !EnsureTransportPipeline() ||
+            _pipelines[1].Handle == 0)
+        {
+            return false;
+        }
+
+        GPUSimpleDdgiPushConstants pushConstants = CreatePushConstants(sceneData);
+        uint baseFlags = pushConstants.Flags & 0x001fffffu;
+        bool previousOutputCompact = false;
+        for (int sweep = 0; sweep < sweepCount; sweep++)
+        {
+            int remainingSweeps = sweepCount - sweep;
+            bool readCompact = sweep > 0 && previousOutputCompact;
+            bool writeCompact = (remainingSweeps & 1) == 0;
+
+            pushConstants.Flags = baseFlags |
+                (readCompact ? SolveCompactReadFlag : 0u) |
+                (writeCompact ? SolveCompactWriteFlag : 0u) |
+                (checked((uint)sweep) << (int)SweepIndexShift);
+            pushConstants.TransportReadIrradianceAtlasBufferIndex =
+                readCompact
+                    ? checked((uint)BindlessIndex.SimpleDdgiSchedulerArenaBuffer)
+                    : sweep == 0
+                        ? checked((uint)BindlessIndex.SimpleDdgiIrradianceAtlasBuffer)
+                        : checked((uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer);
+            // Visibility always targets the ordinary private transport buffer.
+            // The blend shader redirects only irradiance when compact-write is
+            // set, preserving the existing coherent visibility publication.
+            pushConstants.TransportWriteIrradianceAtlasBufferIndex =
+                checked((uint)BindlessIndex.SimpleDdgiTransportIrradianceAtlasBuffer);
+            pushConstants.DispatchQueueOffset = compactScratchBaseWord;
+            pushConstants.DispatchProbeCount = compactScratchProbeCapacity;
+            pushConstants.DispatchRaysPerProbe = 0u;
+
+            DispatchTransport(cmd, pushConstants);
+            InsertStorageBarrier(cmd);
+            DispatchBlend(cmd, pushConstants);
+            InsertStorageBarrier(cmd);
+            previousOutputCompact = writeCompact;
+        }
+
+        // The parity choice above is a construction invariant, not a recovery
+        // path: CommitLocal must never consume the compact scratch bank.
+        if (previousOutputCompact)
+            throw new InvalidOperationException(
+                "Urgent DDGI multi-sweep did not finish in private transport storage.");
+
+        sceneData.SimpleDdgiTransportCachedSweepCount = checked(
+            sceneData.SimpleDdgiTransportCachedSweepCount + sweepCount);
+        return true;
+    }
+
     public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
     {
         yield break;
@@ -336,11 +413,19 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
         BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
         if (_volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident)
         {
+            bool compactSolve = (pushConstants.Flags &
+                (SolveCompactReadFlag | SolveCompactWriteFlag)) != 0u;
+            uint compactScratchBaseWord = pushConstants.DispatchQueueOffset;
+            uint compactScratchProbeCapacity = pushConstants.DispatchProbeCount;
             for (int bucket = 0; bucket < SimpleDdgiGpuSchedulerLayout.MaxRayBucketCount; bucket++)
             {
                 pushConstants.SchedulerRayBucketIndex = checked((uint)bucket);
-                pushConstants.DispatchQueueOffset = 0u;
-                pushConstants.DispatchProbeCount = 0u;
+                pushConstants.DispatchQueueOffset = compactSolve
+                    ? compactScratchBaseWord
+                    : 0u;
+                pushConstants.DispatchProbeCount = compactSolve
+                    ? compactScratchProbeCapacity
+                    : 0u;
                 pushConstants.DispatchRaysPerProbe = 0u;
                 PushConstants(cmd, pushConstants);
                 InsertIndirectCommandReadBarrier(cmd);

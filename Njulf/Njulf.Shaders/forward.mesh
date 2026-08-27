@@ -49,13 +49,21 @@ void main()
     // GPU compaction already produced an exact indirect group count and a dense
     // command array. A mesh-only pipeline maps one mesh workgroup directly to
     // one command and avoids a single-lane passthrough task workgroup per draw.
-    uint drawCommandIndex = gl_WorkGroupID.x;
-    if (drawCommandIndex >= pc.Push.MeshletDrawCount)
+    uint localDrawIndex = gl_WorkGroupID.x;
+    if (localDrawIndex >= pc.Push.MeshletDrawCount)
     {
         if (gl_LocalInvocationIndex == 0u)
             SetMeshOutputsEXT(0u, 0u);
         return;
     }
+    uint drawBufferBaseIndex = ForwardDrawBufferBaseIndex(
+        pc.Push.MeshletDrawBufferBaseIndex);
+    uint drawCommandIndex = localDrawIndex +
+        (drawBufferBaseIndex ==
+             uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX)
+            ? ForwardTransparentFirstDraw(
+                pc.Push.MeshletDrawBufferBaseIndex)
+            : 0u);
 #else
     if (forwardPayload.Visible == 0u)
     {
@@ -64,10 +72,12 @@ void main()
         return;
     }
     uint drawCommandIndex = forwardPayload.DrawCommandIndex;
+    uint drawBufferBaseIndex = ForwardDrawBufferBaseIndex(
+        pc.Push.MeshletDrawBufferBaseIndex);
 #endif
 
     GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
-        pc.Push.MeshletDrawBufferBaseIndex,
+        drawBufferBaseIndex,
         pc.Push.CurrentFrameIndex,
         drawCommandIndex);
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);

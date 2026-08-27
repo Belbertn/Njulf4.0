@@ -7,6 +7,7 @@
 #define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
 #define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
 #define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
+#define SIMPLE_DDGI_PRIVATE_SOLVER_GATHER 1
 // Recursive transport reads the canonical field published by the preceding
 // completed update. The sampled atlas is a receiver-only accelerator and is
 // intentionally not synchronized between the inner red/black solve colors.
@@ -14,6 +15,8 @@
 #include "ddgi_simple_transport_operator.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+const uint SIMPLE_DDGI_TRANSPORT_SOLVE_COMPACT_READ = 1u << 21u;
 
 layout(push_constant) uniform SimpleDdgiPushBlock
 {
@@ -118,6 +121,20 @@ void main()
             ? pc.DispatchRaysPerProbe
             : params.raysPerProbe;
     }
+    uint privateSolverProbeCount = gpuScheduler
+        ? min(
+            SimpleDdgiSchedulerAcceptedCount(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerCountersOffsetWords),
+            pc.DispatchProbeCount)
+        : 0u;
+    ConfigureSimpleDdgiPrivateSolverGather(
+        gpuScheduler &&
+            (pc.Flags & SIMPLE_DDGI_TRANSPORT_SOLVE_COMPACT_READ) != 0u,
+        pc.SchedulerArenaBufferIndex,
+        pc.ProbeUpdateQueueBufferIndex,
+        pc.DispatchQueueOffset,
+        privateSolverProbeCount);
     uint dispatchRayCount = dispatchProbeCount * dispatchRaysPerProbe;
     if (dispatchRay >= dispatchRayCount || params.probeCount == 0u ||
         (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u)

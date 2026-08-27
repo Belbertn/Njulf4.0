@@ -32,15 +32,17 @@ void main()
     uint activeCount = uint(filterActiveTiles.words.length()) > 1u
         ? filterActiveTiles.words[1]
         : 0u;
+    uint tileCountX = (pc.traceWidth + 7u) / 8u;
+    uint tileCountY = (pc.traceHeight + 7u) / 8u;
+    uint resolveFirstWord = SimpleDdgiNearFieldResolveListFirstWord(
+        tileCountX * tileCountY);
     bool activeTile = uint(filterActiveTiles.words.length()) > 4u &&
         filterActiveTiles.words[4u] == 0u && activeIndex < activeCount &&
-        SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex <
+        resolveFirstWord + activeIndex <
             uint(filterActiveTiles.words.length());
     uint tileIndex = activeTile
-        ? filterActiveTiles.words[
-            SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex]
+        ? filterActiveTiles.words[resolveFirstWord + activeIndex]
         : 0u;
-    uint tileCountX = (pc.traceWidth + 7u) / 8u;
     uvec2 tile = tileCountX > 0u
         ? uvec2(tileIndex % tileCountX, tileIndex / tileCountX)
         : uvec2(0u);

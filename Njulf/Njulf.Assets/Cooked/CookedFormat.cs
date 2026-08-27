@@ -54,10 +54,11 @@ public static class CookedFormatVersions
     // models because their import convention cannot be proven; direct
     // .njmodel requests remain authoritative and retain legacy compatibility.
     public static CookedFormatVersion Model { get; } = new(1, 4);
-    // 1.3 appends conservative geometric-normal cones to meshlets. Legacy
-    // 1.0-1.2 meshlets load with cone culling disabled and can be recooked
-    // incrementally.
-    public static CookedFormatVersion Mesh { get; } = new(1, 3);
+    // 1.3 appended a 64-byte meshlet tail using a sine cutoff and cutoff=1
+    // disabled sentinel. 1.4 corrects the tail to cos(maximum deviation) and
+    // the unique axis=0/cutoff=-1 sentinel. Readers convert 1.3 conservatively;
+    // 1.0-1.2 keep their 48-byte records and load disabled.
+    public static CookedFormatVersion Mesh { get; } = new(1, 4);
     public static CookedFormatVersion Material { get; } = new(1, 2);
     public static CookedFormatVersion Texture { get; } = new(1, 3);
     public static CookedFormatVersion Animation { get; } = new(1, 1);

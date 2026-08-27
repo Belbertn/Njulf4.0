@@ -11,6 +11,9 @@ public sealed class ShaderBuildTests
     private static readonly string[] RequiredShaders =
     [
         "ambient_occlusion.comp",
+        "gtao.comp",
+        "gtao_temporal.comp",
+        "gtao_spatial.comp",
         "hybrid_reflection_ssr.comp",
         "hybrid_reflection_ray_query.comp",
         "hybrid_reflection_ddgi_base.comp",
@@ -36,6 +39,9 @@ public sealed class ShaderBuildTests
         "ddgi_simple_relocate_classify.comp",
         "ddgi_simple_receiver_cache.comp",
         "ddgi_simple_receiver_cache_b1.comp",
+        "ddgi_simple_receiver_cache_classify.comp",
+        "ddgi_simple_receiver_cache_adaptive.comp",
+        "ddgi_simple_receiver_cache_resolve_adaptive.comp",
         "ddgi_simple_schedule_admit_tail.comp",
         "ddgi_simple_schedule_feedback_partial.comp",
         "ddgi_simple_schedule_materialize.comp",
@@ -75,7 +81,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(319));
+            Assert.That(shaderResourceNames, Has.Length.EqualTo(351));
 
         foreach (string shaderName in RequiredShaders)
         {
@@ -95,7 +101,8 @@ public sealed class ShaderBuildTests
         string[] receiverCacheVariants =
         [
             "ddgi_simple_receiver_cache.comp",
-            "ddgi_simple_receiver_cache_b1.comp"
+            "ddgi_simple_receiver_cache_b1.comp",
+            "ddgi_simple_receiver_cache_adaptive.comp"
         ];
 
         foreach (string shaderName in receiverCacheVariants)

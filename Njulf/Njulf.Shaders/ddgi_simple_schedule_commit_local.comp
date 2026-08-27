@@ -421,8 +421,17 @@ void main()
     bool deferredRadiometricPublication = !urgentRelight &&
         SchedulerGpuResident() &&
         SchedulerDefersRadiometricPublication();
+    uint countAndQuadratureWitness = SchedulerArenaRead(outcomeBase + 11u);
     uint sourceRayCount = sourceRefresh
-        ? (SchedulerArenaRead(outcomeBase + 11u) & 0xffffu)
+        ? (countAndQuadratureWitness & 0xffffu)
+        : 0u;
+    uint quadratureCode = countAndQuadratureWitness >> 16u;
+    float quadratureError = quadratureCode != 0u
+        ? float(quadratureCode - 1u) / 65534.0
+        : 1.0;
+    uint quadratureWitness = quadratureCode != 0u
+        ? floatBitsToUint(quadratureError) |
+            SIMPLE_DDGI_SCHEDULER_QUADRATURE_WITNESS_VALID
         : 0u;
     bool invalidatingUpdate =
         (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_INVALIDATE) != 0u;
@@ -640,7 +649,19 @@ void main()
             SchedulerArenaWrite(stateBase + 2u, sourceGeneration);
             SchedulerArenaWrite(stateBase + 3u, sourceEpoch);
             SchedulerArenaWrite(stateBase + 7u, min(sourceRayCount, 0x1ffu));
-            SchedulerArenaWrite(stateBase + 9u, 0u);
+            uint sourceMode = (updateFlags &
+                SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_MASK) >>
+                SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_SHIFT;
+            bool radiometricRelight = sourceMode ==
+                    SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_ENVIRONMENT_RELIGHT ||
+                sourceMode ==
+                    SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_CACHED_HIT_RELIGHT;
+            // A cached radiometric relight owns only its committed prefix. It
+            // deliberately invalidates the witness so ordinary post-forward
+            // scheduling promotes the sequence before it can demote again.
+            SchedulerArenaWrite(
+                stateBase + 9u,
+                radiometricRelight ? 0u : quadratureWitness);
         }
         else if (SchedulerTransportV2())
         {

@@ -56,6 +56,8 @@ namespace Njulf.Rendering.Resources
         public const Format SceneColorFormat = Format.R16G16B16A16Sfloat;
         public const Format FoggedSceneColorFormat = SceneColorFormat;
         public const Format AmbientOcclusionFormat = Format.R8Unorm;
+        public const Format GtaoRadianceFormat = Format.R16G16B16A16Sfloat;
+        public const Format GtaoGeometryHistoryFormat = Format.R32G32Uint;
         public const Format MaterialTransportProvenanceFormat = Format.R8Unorm;
         public const Format LdrSceneColorFormat = Format.R16G16B16A16Sfloat;
         public const Format SmaaEdgesFormat = Format.R8G8Unorm;
@@ -187,7 +189,9 @@ namespace Njulf.Rendering.Resources
             SimpleDdgiNearFieldResidualLayout nearFieldResidualLayout = default,
             bool giCausticEnabled = false,
             GiCausticScreenResolveLayout giCausticScreenLayout = default,
-            bool hybridReflectionsEnabled = false)
+            bool hybridReflectionsEnabled = false,
+            AmbientOcclusionMode ambientOcclusionMode =
+                AmbientOcclusionMode.Ssao)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _renderGraph = renderGraph;
@@ -226,6 +230,56 @@ namespace Njulf.Rendering.Resources
                 "Ambient Occlusion Scratch",
                 AmbientOcclusionFormat,
                 ambientOcclusionExtent,
+                StorageSampledDescriptor);
+            bool gtaoEnabled = ambientOcclusionEnabled &&
+                ambientOcclusionMode == AmbientOcclusionMode.Gtao;
+            Extent2D gtaoWorkingExtent = gtaoEnabled
+                ? ambientOcclusionExtent
+                : PlaceholderExtent;
+            Extent2D gtaoResolvedExtent = gtaoEnabled
+                ? extent
+                : PlaceholderExtent;
+            GtaoRaw = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.GtaoRaw,
+                "GTAO Raw Bent Normal and Visibility",
+                GtaoRadianceFormat,
+                gtaoWorkingExtent,
+                StorageSampledDescriptor);
+            GtaoSpatialScratch = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.GtaoSpatialScratch,
+                "GTAO Spatial Debug Scratch",
+                GtaoRadianceFormat,
+                gtaoResolvedExtent,
+                StorageSampledDescriptor);
+            GtaoHistory0 = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.GtaoHistory,
+                "GTAO History A",
+                GtaoRadianceFormat,
+                gtaoWorkingExtent,
+                StorageSampledDescriptor);
+            GtaoHistory1 = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.GtaoHistory,
+                "GTAO History B",
+                GtaoRadianceFormat,
+                gtaoWorkingExtent,
+                StorageSampledDescriptor);
+            GtaoGeometryHistory0 = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.GtaoGeometryHistory,
+                "GTAO Geometry History A",
+                GtaoGeometryHistoryFormat,
+                gtaoWorkingExtent,
+                StorageSampledDescriptor);
+            GtaoGeometryHistory1 = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.GtaoGeometryHistory,
+                "GTAO Geometry History B",
+                GtaoGeometryHistoryFormat,
+                gtaoWorkingExtent,
+                StorageSampledDescriptor);
+            GtaoFiltered = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.GtaoFiltered,
+                "GTAO Filtered Bent Normal and Visibility",
+                GtaoRadianceFormat,
+                gtaoResolvedExtent,
                 StorageSampledDescriptor);
             MaterialTransportProvenance = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.MaterialTransportProvenance,
@@ -422,6 +476,13 @@ namespace Njulf.Rendering.Resources
         public RenderTarget AmbientOcclusionRaw { get; }
         public RenderTarget AmbientOcclusionBlurred { get; }
         public RenderTarget AmbientOcclusionScratch { get; }
+        public RenderTarget GtaoRaw { get; }
+        public RenderTarget GtaoSpatialScratch { get; }
+        public RenderTarget GtaoHistory0 { get; }
+        public RenderTarget GtaoHistory1 { get; }
+        public RenderTarget GtaoGeometryHistory0 { get; }
+        public RenderTarget GtaoGeometryHistory1 { get; }
+        public RenderTarget GtaoFiltered { get; }
         public RenderTarget MaterialTransportProvenance { get; }
         public RenderTarget? NearFieldDirectSource { get; private set; }
         public RenderTarget? NearFieldReceiverPayload { get; private set; }
@@ -469,7 +530,7 @@ namespace Njulf.Rendering.Resources
         public int BloomMipCount => _bloomMipChain.Count;
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
         public int ResizeCount { get; private set; }
-        public int RenderTargetCount => 15 + _bloomMipChain.Count +
+        public int RenderTargetCount => 22 + _bloomMipChain.Count +
             (NearFieldDirectSource is null ? 0 :
                 14 + (NearFieldSourceLuminance is null ? 0 : 1) +
                 (NearFieldResidualFilterScratch0 is null ? 0 : 2)) +
@@ -487,7 +548,17 @@ namespace Njulf.Rendering.Resources
             AntiAliasingRenderTargetBytes +
             WeightedOitRenderTargetBytes +
             BloomRenderTargetBytes;
-        public ulong AmbientOcclusionRenderTargetBytes => SumEnabledBytes(AmbientOcclusionRaw, AmbientOcclusionBlurred, AmbientOcclusionScratch);
+        public ulong AmbientOcclusionRenderTargetBytes => SumEnabledBytes(
+            AmbientOcclusionRaw,
+            AmbientOcclusionBlurred,
+            AmbientOcclusionScratch,
+            GtaoRaw,
+            GtaoSpatialScratch,
+            GtaoHistory0,
+            GtaoHistory1,
+            GtaoGeometryHistory0,
+            GtaoGeometryHistory1,
+            GtaoFiltered);
         public ulong MaterialTransportProvenanceRenderTargetBytes =>
             SumEnabledBytes(MaterialTransportProvenance);
         public ulong NearFieldResidualSourceRenderTargetBytes => SumEnabledBytes(
@@ -955,13 +1026,19 @@ namespace Njulf.Rendering.Resources
             bool fogEnabled = true,
             bool weightedOitEnabled = false,
             bool materialTransportProvenanceEnabled = false,
-            bool hybridReflectionsEnabled = false)
+            bool hybridReflectionsEnabled = false,
+            AmbientOcclusionMode ambientOcclusionMode =
+                AmbientOcclusionMode.Ssao)
         {
             ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
             RecreateIfDifferent(SceneDepth, extent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.FogOutput, FoggedSceneColor, CalculateFoggedSceneColorExtent(extent, fogEnabled));
-            RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale, ambientOcclusionEnabled);
+            RecreateAmbientOcclusionTargets(
+                extent,
+                ambientOcclusionResolutionScale,
+                ambientOcclusionEnabled,
+                ambientOcclusionMode);
             RecreateGraphOwnedTarget(
                 RenderGraphResourceId.MaterialTransportProvenance,
                 MaterialTransportProvenance,
@@ -1014,7 +1091,11 @@ namespace Njulf.Rendering.Resources
             RecreateGraphOwnedTarget(RenderGraphResourceId.WeightedOitRevealage, WeightedOitRevealage, targetExtent);
         }
 
-        public void RecreateAmbientOcclusionTargets(Extent2D sceneExtent, float resolutionScale, bool enabled)
+        public void RecreateAmbientOcclusionTargets(
+            Extent2D sceneExtent,
+            float resolutionScale,
+            bool enabled,
+            AmbientOcclusionMode mode = AmbientOcclusionMode.Ssao)
         {
             Extent2D workingExtent = enabled
                 ? CalculateAmbientOcclusionExtent(sceneExtent, resolutionScale)
@@ -1023,6 +1104,27 @@ namespace Njulf.Rendering.Resources
             RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionRaw, AmbientOcclusionRaw, workingExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionBlurred, AmbientOcclusionBlurred, resolvedExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionScratch, AmbientOcclusionScratch, workingExtent);
+            bool gtaoEnabled = enabled && mode == AmbientOcclusionMode.Gtao;
+            Extent2D gtaoWorkingExtent = gtaoEnabled
+                ? workingExtent
+                : PlaceholderExtent;
+            Extent2D gtaoResolvedExtent = gtaoEnabled
+                ? sceneExtent
+                : PlaceholderExtent;
+            RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoRaw,
+                GtaoRaw, gtaoWorkingExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoSpatialScratch,
+                GtaoSpatialScratch, gtaoResolvedExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoHistory,
+                GtaoHistory0, gtaoWorkingExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoHistory,
+                GtaoHistory1, gtaoWorkingExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoGeometryHistory,
+                GtaoGeometryHistory0, gtaoWorkingExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoGeometryHistory,
+                GtaoGeometryHistory1, gtaoWorkingExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoFiltered,
+                GtaoFiltered, gtaoResolvedExtent);
         }
 
         private void CreateHybridReflectionTargets(Extent2D extent)
@@ -1484,6 +1586,19 @@ namespace Njulf.Rendering.Resources
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionRaw, AmbientOcclusionRaw);
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionBlurred, AmbientOcclusionBlurred);
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionScratch, AmbientOcclusionScratch);
+            DisposeIfManagerOwned(RenderGraphResourceId.GtaoRaw, GtaoRaw);
+            DisposeIfManagerOwned(RenderGraphResourceId.GtaoSpatialScratch,
+                GtaoSpatialScratch);
+            DisposeIfManagerOwned(RenderGraphResourceId.GtaoHistory,
+                GtaoHistory0);
+            DisposeIfManagerOwned(RenderGraphResourceId.GtaoHistory,
+                GtaoHistory1);
+            DisposeIfManagerOwned(RenderGraphResourceId.GtaoGeometryHistory,
+                GtaoGeometryHistory0);
+            DisposeIfManagerOwned(RenderGraphResourceId.GtaoGeometryHistory,
+                GtaoGeometryHistory1);
+            DisposeIfManagerOwned(RenderGraphResourceId.GtaoFiltered,
+                GtaoFiltered);
             DisposeIfManagerOwned(
                 RenderGraphResourceId.MaterialTransportProvenance,
                 MaterialTransportProvenance);

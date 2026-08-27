@@ -384,6 +384,15 @@ namespace Njulf.Rendering.Diagnostics
         /// <summary>Hard-cap and latency evidence for the active Simple-DDGI scheduler.</summary>
         public SimpleDdgiSchedulingTelemetry SimpleDdgiScheduling { get; init; } =
             SimpleDdgiSchedulingTelemetry.Unavailable("Simple DDGI scheduling was not captured.");
+        /// <summary>
+        /// Fence-complete maximum directional error and actual saved source-ray
+        /// work, split by ring and stable DDGI volume kind.
+        /// </summary>
+        public SimpleDdgiAdaptiveRayEvidence SimpleDdgiAdaptiveRayEvidence
+        {
+            get;
+            init;
+        }
         /// <summary>Authored GI intent, retained even when a live fallback suppresses rendering.</summary>
         public bool Requested { get; init; }
         public GlobalIlluminationMode RequestedMode { get; init; } = GlobalIlluminationMode.Disabled;
@@ -456,6 +465,18 @@ namespace Njulf.Rendering.Diagnostics
         public bool SimpleDdgiReceiverFullClear { get; init; }
         public uint SimpleDdgiReceiverResourceGeneration { get; init; }
         public int SimpleDdgiReceiverRecordsPublished { get; init; }
+        /// <summary>
+        /// Surface-aware receiver-cache mode, ABI, memory, fallback, and
+        /// optional fence-complete rejection evidence.
+        /// </summary>
+        public SimpleDdgiReceiverCacheDiagnostics SimpleDdgiReceiverCache
+        {
+            get;
+            init;
+        } = SimpleDdgiReceiverCacheDiagnostics.Exact(
+            SimpleDdgiReceiverCacheMode.Exact,
+            SimpleDdgiReceiverCacheFallbackReason.ExactRequested,
+            "receiver-cache diagnostics unavailable");
         /// <summary>Exact canonical, cache, scratch, and optional mirror allocation contract.</summary>
         public SimpleDdgiStorageDiagnostics SimpleDdgiStorage { get; init; } =
             SimpleDdgiStorageDiagnostics.Unavailable;
@@ -1194,6 +1215,10 @@ namespace Njulf.Rendering.Diagnostics
                 flags.Add("ray-query");
             if (diagnostics.SimpleDdgiStructuredGatherEnabled != 0)
                 flags.Add("structured-gather");
+            flags.Add(
+                $"receiver-cache-requested-{diagnostics.SimpleDdgiReceiverCache.RequestedMode}");
+            flags.Add(
+                $"receiver-cache-effective-{diagnostics.SimpleDdgiReceiverCache.EffectiveMode}");
             if (diagnostics.SimpleDdgiReducedBlendEnabled != 0)
                 flags.Add("reduced-blend");
             if (IsFeatureActive(diagnostics, "sampled-simple-ddgi-atlas"))
@@ -1632,7 +1657,10 @@ namespace Njulf.Rendering.Diagnostics
                 ForwardGiIncrementalMicroseconds = diagnostics.GpuForwardGiIncrementalMicroseconds,
                 ForwardGiIncrementalAttribution = diagnostics.GpuForwardGiIncrementalAttribution,
                 ForwardGiIncrementalReason = diagnostics.GpuForwardGiIncrementalTimingReason,
+                SimpleDdgiReceiverCache = diagnostics.SimpleDdgiReceiverCache,
                 SimpleDdgiScheduling = diagnostics.SimpleDdgiScheduling,
+                SimpleDdgiAdaptiveRayEvidence =
+                    diagnostics.SimpleDdgiAdaptiveRayEvidence,
                 GiPipelineCacheLoaded = diagnostics.GiPipelineCacheLoaded != 0,
                 GiPipelineCacheRejected = diagnostics.GiPipelineCacheRejected != 0,
                 GiPipelineCacheSaved = diagnostics.GiPipelineCacheSaved != 0,

@@ -34,6 +34,11 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
         SimpleDdgiNearFieldResidualQualityPreset.Balanced;
     public int RaysPerPixel { get; init; } = 2;
     public float ResidualIntensity { get; init; } = 1.0f;
+    /// <summary>
+    /// Qualification-only local tile scheduling. False preserves the V13
+    /// full-trace behavior while still using V14's split trace/resolve arena.
+    /// </summary>
+    public bool LocalAdaptiveSchedulingEnabled { get; init; }
 
     public static SimpleDdgiNearFieldResidualGpuConfiguration CreateReference(
         SimpleDdgiNearFieldResidualLayout layout,
@@ -311,7 +316,9 @@ public enum SimpleDdgiNearFieldResidualGpuResourceKind : byte
     PreparedMotion = 23,
     SourceLuminance = 24,
     SurfaceTable = 25,
-    ActiveTileAndIndirect = 26
+    ActiveTileAndIndirect = 26,
+    SchedulerHistory0 = 27,
+    SchedulerHistory1 = 28
 }
 
 /// <summary>
@@ -382,6 +389,14 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         { get; init; } = new(0UL, 0UL,
             SimpleDdgiNearFieldResidualGpuResourceKind.ActiveTileAndIndirect);
 
+    public SimpleDdgiNearFieldResidualGpuResource SchedulerHistory0
+        { get; init; } = new(0UL, 0UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.SchedulerHistory0);
+
+    public SimpleDdgiNearFieldResidualGpuResource SchedulerHistory1
+        { get; init; } = new(0UL, 0UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.SchedulerHistory1);
+
     public void Validate(in SimpleDdgiNearFieldResidualLayout layout)
     {
         if (AllocationId == 0UL)
@@ -398,6 +413,7 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
             layout.HistoryNormalBytes == 0UL ||
             layout.SurfaceTableBytes == 0UL ||
             layout.ActiveTileAndIndirectBytes == 0UL ||
+            layout.SchedulerHistoryBytes == 0UL ||
             layout.TelemetryReadbackBytes == 0UL ||
             (layout.TraceFrameConstantsBytes & 1UL) != 0UL ||
             (layout.HistoryRadianceBytes & 1UL) != 0UL ||
@@ -405,6 +421,7 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
             (layout.HistoryValidityBytes & 1UL) != 0UL ||
             (layout.HistoryMetadataBytes & 1UL) != 0UL ||
             (layout.HistoryNormalBytes & 1UL) != 0UL ||
+            (layout.SchedulerHistoryBytes & 1UL) != 0UL ||
             (layout.TelemetryReadbackBytes & 1UL) != 0UL ||
             (layout.FilterScratchBytes & 1UL) != 0UL)
         {
@@ -483,6 +500,12 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         ValidateResource(ActiveTileAndIndirect, layout.ActiveTileAndIndirectBytes,
             SimpleDdgiNearFieldResidualGpuResourceKind.ActiveTileAndIndirect,
             nameof(ActiveTileAndIndirect));
+        ValidateResource(SchedulerHistory0, layout.SchedulerHistoryBytes / 2UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.SchedulerHistory0,
+            nameof(SchedulerHistory0));
+        ValidateResource(SchedulerHistory1, layout.SchedulerHistoryBytes / 2UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.SchedulerHistory1,
+            nameof(SchedulerHistory1));
         ValidateResource(TileBuffers, layout.TileBuffersBytes,
             SimpleDdgiNearFieldResidualGpuResourceKind.TileBuffers,
             nameof(TileBuffers));
@@ -524,7 +547,8 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
             HistoryMetadata0.Bytes + HistoryMetadata1.Bytes +
             HistoryNormal0.Bytes + HistoryNormal1.Bytes +
             FilterScratch0.Bytes + FilterScratch1.Bytes + SurfaceTable.Bytes +
-            ActiveTileAndIndirect.Bytes + TileBuffers.Bytes +
+            ActiveTileAndIndirect.Bytes + SchedulerHistory0.Bytes +
+            SchedulerHistory1.Bytes + TileBuffers.Bytes +
             TelemetryReadback0.Bytes + TelemetryReadback1.Bytes);
         if (actualBytes != layout.TotalBytes)
         {
@@ -566,6 +590,8 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         yield return FilterScratch1;
         yield return SurfaceTable;
         yield return ActiveTileAndIndirect;
+        yield return SchedulerHistory0;
+        yield return SchedulerHistory1;
         yield return TileBuffers;
         yield return TelemetryReadback0;
         yield return TelemetryReadback1;

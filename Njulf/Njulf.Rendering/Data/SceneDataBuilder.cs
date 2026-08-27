@@ -96,6 +96,8 @@ namespace Njulf.Rendering.Data
         private readonly List<GPUPackedMeshletDrawCommand> _packedMaskedDepthMeshletDrawCommands = new List<GPUPackedMeshletDrawCommand>();
         private readonly List<GPUMeshletTaskFrameData> _meshletTaskFrameData = new List<GPUMeshletTaskFrameData>(1);
         private readonly List<GPUMeshletDrawCommand> _transparentMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
+        private readonly List<TransparentMaterialRun> _transparentMaterialRuns =
+            new List<TransparentMaterialRun>();
         private readonly List<GPUMeshletDrawCommand> _directionalShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _localShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _directionalStaticShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
@@ -206,6 +208,7 @@ namespace Njulf.Rendering.Data
         private int _submittedSmallMeshletsUnder32Triangles;
         private int _normalConeEligibleOpaqueMeshletCount;
         private int _doubleSidedOpaqueMeshletCount;
+        private bool _meshletNormalConeCullingEnabled;
         private bool _disposed;
 
         public bool CaptureCpuSnapshots { get; set; }
@@ -412,8 +415,7 @@ namespace Njulf.Rendering.Data
                 : new MaterialManager(context, bufferManager, stagingRing, sync, textureManager);
         }
 
-        public SceneRenderingData Build(
-            Scene scene,
+        public SceneRenderingData Build(Scene scene,
             ICamera camera,
             uint screenWidth,
             uint screenHeight,
@@ -429,6 +431,7 @@ namespace Njulf.Rendering.Data
             bool geometryDecalsEnabled = true,
             bool useCameraDependentCpuPayload = false,
             bool useCpuMeshletFrustumCulling = false,
+            bool meshletNormalConeCullingEnabled = false,
             bool captureSceneSubmissionValidationLists = false,
             float gpuLod1DistanceRatio = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio,
             float gpuLod2DistanceRatio = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio)
@@ -451,6 +454,8 @@ namespace Njulf.Rendering.Data
 
             lock (_lock)
             {
+                _meshletNormalConeCullingEnabled =
+                    meshletNormalConeCullingEnabled;
                 long buildStart = Stopwatch.GetTimestamp();
                 int frameIndex = _stagingRing.CurrentFrameIndex;
                 _lastUploadedBytes = 0;
@@ -511,6 +516,7 @@ namespace Njulf.Rendering.Data
                     CaptureCpuSnapshots,
                     cameraDependentCpuPayload,
                     useCpuMeshletFrustumCulling,
+                    meshletNormalConeCullingEnabled,
                     gpuLod1DistanceRatio,
                     gpuLod2DistanceRatio);
                 _lastPayloadSignatureMicroseconds = ElapsedMicroseconds(signatureStart);
@@ -540,6 +546,7 @@ namespace Njulf.Rendering.Data
                     _packedSolidDepthMeshletDrawCommands.Clear();
                     _packedMaskedDepthMeshletDrawCommands.Clear();
                     _transparentMeshletDrawCommands.Clear();
+                    _transparentMaterialRuns.Clear();
                     _directionalShadowMeshletDrawCommands.Clear();
                     _localShadowMeshletDrawCommands.Clear();
                     _directionalStaticShadowMeshletDrawCommands.Clear();
@@ -598,7 +605,15 @@ namespace Njulf.Rendering.Data
                         rebuildObjectData: staticPayloadChanged,
                         geometryDecalsEnabled: geometryDecalsEnabled,
                         isolatedDecalMaterialIndex: isolatedDecalMaterialIndex,
-                        maxTransparentMeshlets: transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue,
+                        maxTransparentMeshlets:
+                            transparencySettings?.MaxTransparentMeshlets ??
+                            int.MaxValue,
+                        transparencyMode:
+                            transparencySettings?.Mode ??
+                            TransparencyMode.SortedAlphaBlend,
+                        transparentPipelinePartitioningEnabled:
+                            transparencySettings?.PipelinePartitioningEnabled ??
+                            false,
                         useCameraDependentCpuPayload: cameraDependentCpuPayload,
                         useCpuMeshletFrustumCulling: useCpuMeshletFrustumCulling,
                         gpuLod1DistanceRatio: gpuLod1DistanceRatio,
@@ -808,6 +823,8 @@ namespace Njulf.Rendering.Data
                         _normalConeEligibleOpaqueMeshletCount,
                     DoubleSidedOpaqueMeshletCount =
                         _doubleSidedOpaqueMeshletCount,
+                    MeshletNormalConeCullingEnabled =
+                        meshletNormalConeCullingEnabled,
                     StableSceneInputUploadBytes = _lastObjectUploadBytes +
                         _lastInstanceUploadBytes + materialUploadBytes +
                         forwardMaterialUploadBytes + materialExtensionUploadBytes,
@@ -883,6 +900,9 @@ namespace Njulf.Rendering.Data
                     TiledLightHeaderBuffer = _tiledLightHeaderBuffer.Handle,
                     TiledLightIndexBuffer = _tiledLightIndexBuffer.Handle
                 };
+
+                sceneData.TransparentMaterialRuns.AddRange(
+                    _transparentMaterialRuns);
 
                 if (CaptureCpuSnapshots || captureSceneSubmissionValidationLists)
                 {
@@ -979,8 +999,7 @@ namespace Njulf.Rendering.Data
             return changed;
         }
 
-        private void BuildCpuScenePayload(
-            Scene scene,
+        private void BuildCpuScenePayload(Scene scene,
             Vector3 cameraPosition,
             Frustum frustum,
             GPUShadowData? directionalShadowData,
@@ -991,6 +1010,7 @@ namespace Njulf.Rendering.Data
             bool geometryDecalsEnabled,
             int isolatedDecalMaterialIndex,
             int maxTransparentMeshlets,
+            TransparencyMode transparencyMode, bool transparentPipelinePartitioningEnabled,
             bool useCameraDependentCpuPayload,
             bool useCpuMeshletFrustumCulling,
             float gpuLod1DistanceRatio,
@@ -1188,7 +1208,9 @@ namespace Njulf.Rendering.Data
                 uint meshletCommandFlags = CreateMeshletCommandFlags(
                     metadata,
                     cullingMatrix,
-                    isSkinnedObject);
+                    isSkinnedObject,
+                    renderMode,
+                    isGeometryDecal);
                 if (castsDirectionalShadow && useCameraDependentCpuPayload)
                 {
                     for (int cascade = 0; cascade < directionalShadowCascadeCount; cascade++)
@@ -1227,7 +1249,7 @@ namespace Njulf.Rendering.Data
                         MeshletIndex = meshletIndex,
                         InstanceId = instanceId,
                         MaterialIndex = (uint)materialIndex,
-                        Padding = meshletCommandFlags
+                        Flags = meshletCommandFlags
                     };
 
                     if (meshletVisibleToCamera)
@@ -1248,6 +1270,8 @@ namespace Njulf.Rendering.Data
                                     transparentDistanceSquared,
                                     metadata.DecalLayer,
                                     forwardClass,
+                                    metadata.IsGeometryDecal,
+                                    metadata.TransmissionPolicy,
                                     ReceivesSceneReflections(metadata),
                                     maxTransparentMeshlets);
                         }
@@ -1457,7 +1481,9 @@ namespace Njulf.Rendering.Data
                     uint meshletCommandFlags = CreateMeshletCommandFlags(
                         metadata,
                         worldMatrix,
-                        isSkinned: false);
+                        isSkinned: false,
+                        renderMode,
+                        isGeometryDecal);
                     var staticInstanceKey = new StaticInstanceKey(batch, instance);
                     int previousLodLevel = _previousStaticInstanceLods.TryGetValue(staticInstanceKey, out int storedLodLevel)
                         ? storedLodLevel
@@ -1511,7 +1537,7 @@ namespace Njulf.Rendering.Data
                             MeshletIndex = meshletIndex,
                             InstanceId = instanceId,
                             MaterialIndex = (uint)materialIndex,
-                            Padding = meshletCommandFlags
+                            Flags = meshletCommandFlags
                         };
 
                         if (meshletVisibleToCamera)
@@ -1532,6 +1558,8 @@ namespace Njulf.Rendering.Data
                                         transparentDistanceSquared,
                                         metadata.DecalLayer,
                                         forwardClass,
+                                        metadata.IsGeometryDecal,
+                                        metadata.TransmissionPolicy,
                                         ReceivesSceneReflections(metadata),
                                         maxTransparentMeshlets);
                             }
@@ -1587,8 +1615,9 @@ namespace Njulf.Rendering.Data
             long sortStart = Stopwatch.GetTimestamp();
             _transparentSortScratch.Sort(CompareTransparentMeshlets);
             _transparentSortMicroseconds = ElapsedMicroseconds(sortStart);
-            foreach (TransparentMeshletDraw draw in _transparentSortScratch)
-                _transparentMeshletDrawCommands.Add(draw.Command);
+            AppendTransparentDrawOrder(
+                transparencyMode,
+                transparentPipelinePartitioningEnabled);
 
             foreach (MaterialRenderMetadata metadata in _materialManager.GetMaterialMetadataSnapshot())
             {
@@ -1606,6 +1635,8 @@ namespace Njulf.Rendering.Data
             float distanceSquared,
             int layer,
             MaterialForwardClass forwardClass,
+            bool isGeometryDecal,
+            GiTransmissionPolicy transmissionPolicy,
             bool receivesSceneReflections,
             int maxTransparentMeshlets)
         {
@@ -1619,7 +1650,73 @@ namespace Njulf.Rendering.Data
                 _thinGlassMeshletCount++;
             if (receivesSceneReflections)
                 _transparentReflectionReceiverMeshletCount++;
-            _transparentSortScratch.Add(new TransparentMeshletDraw(command, distanceSquared, layer));
+            _transparentSortScratch.Add(new TransparentMeshletDraw(
+                command,
+                distanceSquared,
+                layer,
+                new TransparentDrawClassification(
+                    TransparentMaterialClassifier.Classify(
+                        forwardClass,
+                        isGeometryDecal,
+                        transmissionPolicy),
+                    receivesSceneReflections)));
+        }
+
+        private void AppendTransparentDrawOrder(
+            TransparencyMode transparencyMode,
+            bool pipelinePartitioningEnabled)
+        {
+            if (!pipelinePartitioningEnabled)
+            {
+                foreach (TransparentMeshletDraw draw in
+                         _transparentSortScratch)
+                {
+                    _transparentMeshletDrawCommands.Add(draw.Command);
+                }
+
+                return;
+            }
+
+            if (transparencyMode == TransparencyMode.WeightedBlendedOit)
+            {
+                // Retain the canonical list as the rollback source for exact
+                // feedback and lazy-pipeline failure. Weighted OIT remains
+                // deterministic and partitions its adjacent keys without
+                // duplicating the GPU command buffer or upload bandwidth.
+                foreach (TransparentMeshletDraw draw in
+                         _transparentSortScratch)
+                    AppendTransparentDraw(draw);
+
+                return;
+            }
+
+            foreach (TransparentMeshletDraw draw in _transparentSortScratch)
+                AppendTransparentDraw(draw);
+        }
+
+        private void AppendTransparentDraw(TransparentMeshletDraw draw)
+        {
+            int drawIndex = _transparentMeshletDrawCommands.Count;
+            _transparentMeshletDrawCommands.Add(draw.Command);
+            if (_transparentMaterialRuns.Count > 0)
+            {
+                int lastIndex = _transparentMaterialRuns.Count - 1;
+                TransparentMaterialRun last =
+                    _transparentMaterialRuns[lastIndex];
+                if (last.Classification == draw.Classification)
+                {
+                    _transparentMaterialRuns[lastIndex] = last with
+                    {
+                        DrawCount = checked(last.DrawCount + 1)
+                    };
+                    return;
+                }
+            }
+
+            _transparentMaterialRuns.Add(new TransparentMaterialRun(
+                drawIndex,
+                1,
+                draw.Classification));
         }
 
         internal static bool ReceivesSceneReflections(
@@ -1641,7 +1738,7 @@ namespace Njulf.Rendering.Data
             MeshInfo meshInfo)
         {
             GPUMeshletCommandFlags commandFlags =
-                (GPUMeshletCommandFlags)command.Padding;
+                (GPUMeshletCommandFlags)command.Flags;
             if ((commandFlags &
                  GPUMeshletCommandFlags.NormalConeCullEligible) != 0)
             {
@@ -1738,7 +1835,7 @@ namespace Njulf.Rendering.Data
             if (renderMode != MaterialRenderMode.Blend)
                 flags |= GPUMeshletDrawFlags.CanHiZTest;
             GPUMeshletCommandFlags commandFlags =
-                (GPUMeshletCommandFlags)command.Padding;
+                (GPUMeshletCommandFlags)command.Flags;
             if ((commandFlags & GPUMeshletCommandFlags.MaterialDoubleSided) != 0)
                 flags |= GPUMeshletDrawFlags.MaterialDoubleSided;
             if ((commandFlags & GPUMeshletCommandFlags.NormalConeCullEligible) != 0)
@@ -1754,10 +1851,11 @@ namespace Njulf.Rendering.Data
             };
         }
 
-        private static uint CreateMeshletCommandFlags(
-            MaterialRenderMetadata metadata,
+        private uint CreateMeshletCommandFlags(MaterialRenderMetadata metadata,
             Matrix4x4 worldMatrix,
-            bool isSkinned)
+            bool isSkinned,
+            MaterialRenderMode renderMode,
+            bool isGeometryDecal)
         {
             GPUMeshletCommandFlags flags = GPUMeshletCommandFlags.None;
             if (metadata.DoubleSided)
@@ -1767,7 +1865,10 @@ namespace Njulf.Rendering.Data
             // normal cone. Restrict whole-meshlet rejection to rigid or
             // uniformly-scaled one-sided instances, where inverse-transpose
             // preserves every cone angle exactly.
-            if (!metadata.DoubleSided &&
+            if (_meshletNormalConeCullingEnabled &&
+                renderMode == MaterialRenderMode.Opaque &&
+                !isGeometryDecal &&
+                !metadata.DoubleSided &&
                 !isSkinned &&
                 IsNormalConePreservingTransform(worldMatrix))
             {
@@ -2998,6 +3099,7 @@ namespace Njulf.Rendering.Data
                 _packedMaskedDepthMeshletDrawCommands.Clear();
                 _meshletTaskFrameData.Clear();
                 _transparentMeshletDrawCommands.Clear();
+                _transparentMaterialRuns.Clear();
                 _transparentSortScratch.Clear();
                 _previousRenderObjectLods.Clear();
                 _previousStaticInstanceLods.Clear();
@@ -3082,16 +3184,22 @@ namespace Njulf.Rendering.Data
 
         private readonly struct TransparentMeshletDraw
         {
-            public TransparentMeshletDraw(GPUMeshletDrawCommand command, float distanceSquared, int layer)
+            public TransparentMeshletDraw(
+                GPUMeshletDrawCommand command,
+                float distanceSquared,
+                int layer,
+                TransparentDrawClassification classification)
             {
                 Command = command;
                 DistanceSquared = distanceSquared;
                 Layer = layer;
+                Classification = classification;
             }
 
             public GPUMeshletDrawCommand Command { get; }
             public float DistanceSquared { get; }
             public int Layer { get; }
+            public TransparentDrawClassification Classification { get; }
         }
 
         private readonly struct StaticInstanceKey : IEquatable<StaticInstanceKey>
@@ -3233,8 +3341,7 @@ namespace Njulf.Rendering.Data
                 _hash = hash;
             }
 
-            public static SceneCullingSignature Create(
-                Scene scene,
+            public static SceneCullingSignature Create(Scene scene,
                 Matrix4x4 viewProjection,
                 GPUShadowData? directionalShadowData,
                 int directionalShadowCascadeCount,
@@ -3247,6 +3354,7 @@ namespace Njulf.Rendering.Data
                 bool captureCpuSnapshots,
                 bool cameraDependentCpuPayload,
                 bool useCpuMeshletFrustumCulling,
+                bool meshletNormalConeCullingEnabled,
                 float gpuLod1DistanceRatio,
                 float gpuLod2DistanceRatio)
             {
@@ -3269,6 +3377,7 @@ namespace Njulf.Rendering.Data
                 hash.Add(captureCpuSnapshots);
                 hash.Add(cameraDependentCpuPayload);
                 hash.Add(useCpuMeshletFrustumCulling);
+                hash.Add(meshletNormalConeCullingEnabled);
                 if (cameraDependentCpuPayload)
                 {
                     hash.Add(gpuLod1DistanceRatio);
@@ -3276,6 +3385,10 @@ namespace Njulf.Rendering.Data
                 }
                 hash.Add(transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue);
                 hash.Add(transparencySettings?.SortPerMeshlet ?? true);
+                hash.Add(transparencySettings?.Mode ??
+                    TransparencyMode.SortedAlphaBlend);
+                hash.Add(transparencySettings?.PipelinePartitioningEnabled ??
+                    false);
                 hash.Add(geometryDecalsEnabled);
                 hash.Add(isolatedDecalMaterialIndex);
                 if (cameraDependentCpuPayload && directionalShadowData.HasValue)

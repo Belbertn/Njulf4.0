@@ -315,10 +315,22 @@ void main()
         atomicAdd(prepareTelemetry.words[19u], 1u);
         return;
     }
-    uint activeIndex = atomicAdd(activeTiles.words[1], 1u);
+    // The optional classifier owns both lists when local adaptivity is active.
+    // Prepare still publishes exact current occupancy/source data, but does
+    // not expose partially classified work to any indirect consumer.
+    if (SimpleDdgiNearFieldHasFlag(pc.flags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_LOCAL_ADAPTIVE_SCHEDULING))
+        return;
+
+    uint resolveIndex = atomicAdd(activeTiles.words[1], 1u);
+    uint traceIndex = atomicAdd(activeTiles.words[2], 1u);
     atomicAdd(prepareTelemetry.words[17u], 1u);
-    if (activeIndex >= pc.tileCapacity ||
-        pc.activeTileHeaderWords + activeIndex >=
+    uint traceWord = SimpleDdgiNearFieldTraceListFirstWord() + traceIndex;
+    uint resolveWord = SimpleDdgiNearFieldResolveListFirstWord(
+        pc.tileCapacity) + resolveIndex;
+    if (resolveIndex >= pc.tileCapacity || traceIndex >= pc.tileCapacity ||
+        traceWord >= uint(activeTiles.words.length()) ||
+        resolveWord >=
             uint(activeTiles.words.length()))
     {
         atomicAdd(activeTiles.words[4], 1u);
@@ -331,11 +343,22 @@ void main()
     // Tile identities must remain dense in the active extent because every
     // indirect consumer decodes them with the active trace width.
     uint activeTileRowStride = (pc.traceWidth + 7u) / 8u;
-    activeTiles.words[pc.activeTileHeaderWords + activeIndex] =
-        gl_WorkGroupID.y * activeTileRowStride + gl_WorkGroupID.x;
-    atomicAdd(activeTiles.words[2], 1u); // compacted tiles
+    uint tileIndex = gl_WorkGroupID.y * activeTileRowStride +
+        gl_WorkGroupID.x;
+    activeTiles.words[traceWord] = tileIndex;
+    activeTiles.words[resolveWord] = tileIndex;
     atomicAdd(prepareTelemetry.words[18u], 1u);
-    // Each indirect stage uses one workgroup per active tile.
+    atomicAdd(activeTiles.words[
+        SIMPLE_DDGI_NEAR_FIELD_TRACE_NORMAL_COUNT_WORD], 1u);
+    uint tileWidth = min(8u, pc.traceWidth - gl_WorkGroupID.x * 8u);
+    uint tileHeight = min(8u, pc.traceHeight - gl_WorkGroupID.y * 8u);
+    uint tilePixels = tileWidth * tileHeight;
+    atomicAdd(activeTiles.words[
+        SIMPLE_DDGI_NEAR_FIELD_REQUESTED_PIXEL_COUNT_WORD], tilePixels);
+    atomicAdd(activeTiles.words[
+        SIMPLE_DDGI_NEAR_FIELD_REQUESTED_RAY_COUNT_WORD],
+        tilePixels * pc.raysPerPixel);
+    // Trace consumes its own list; every later stage consumes resolve.
     for (uint stage = 0u; stage < pc.indirectStageCount; ++stage)
     {
         uint argumentBase = 8u + stage * 3u;
@@ -350,8 +373,9 @@ void main()
                 ((maximumFullTileWidth + 7u) / 8u) *
                 ((maximumFullTileHeight + 7u) / 8u));
         }
+        uint listCount = stage == 0u ? traceIndex + 1u : resolveIndex + 1u;
         atomicMax(activeTiles.words[argumentBase],
-            (activeIndex + 1u) * groupMultiplier);
+            listCount * groupMultiplier);
         activeTiles.words[argumentBase + 1u] = 1u;
         activeTiles.words[argumentBase + 2u] = 1u;
     }

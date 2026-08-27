@@ -19,6 +19,8 @@ internal readonly record struct SimpleDdgiNearFieldResidualVulkanBuffers(
     BufferHandle HistoryMetadata1,
     BufferHandle SurfaceTable,
     BufferHandle ActiveTileAndIndirect,
+    BufferHandle SchedulerHistory0,
+    BufferHandle SchedulerHistory1,
     BufferHandle TileRecords,
     BufferHandle TraceFrameConstants0,
     BufferHandle TraceFrameConstants1,
@@ -27,6 +29,7 @@ internal readonly record struct SimpleDdgiNearFieldResidualVulkanBuffers(
 {
     public bool IsComplete => HistoryMetadata0.IsValid && HistoryMetadata1.IsValid &&
         SurfaceTable.IsValid && ActiveTileAndIndirect.IsValid &&
+        SchedulerHistory0.IsValid && SchedulerHistory1.IsValid &&
         TileRecords.IsValid && TraceFrameConstants0.IsValid &&
         TraceFrameConstants1.IsValid && TelemetryReadback0.IsValid &&
         TelemetryReadback1.IsValid;
@@ -45,6 +48,13 @@ internal readonly record struct SimpleDdgiNearFieldResidualVulkanBuffers(
         _ => throw new ArgumentOutOfRangeException(nameof(index))
     };
 
+    public BufferHandle SchedulerHistory(int index) => index switch
+    {
+        0 => SchedulerHistory0,
+        1 => SchedulerHistory1,
+        _ => throw new ArgumentOutOfRangeException(nameof(index))
+    };
+
     public BufferHandle TelemetryReadback(int index) => index switch
     {
         0 => TelemetryReadback0,
@@ -58,13 +68,14 @@ internal enum SimpleDdgiNearFieldResidualRecordedStage : byte
     Idle = 0,
     Reset = 1,
     Prepare = 2,
-    Trace = 3,
-    Temporal = 4,
-    Finalize = 5,
-    Filtering = 6,
-    FrequencySeparation = 7,
-    Composite = 8,
-    Invalid = 9
+    Classify = 3,
+    Trace = 4,
+    Temporal = 5,
+    Finalize = 6,
+    Filtering = 7,
+    FrequencySeparation = 8,
+    Composite = 9,
+    Invalid = 10
 }
 
 /// <summary>
@@ -160,6 +171,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
     private ulong _lastCameraCutSerial;
     private bool _hasCameraCutSerial;
     private bool _historyInputValid;
+    private SimpleDdgiNearFieldResidualGpuHistoryRevision
+        _recordedHistoryRevision;
     private uint _publishedSourceLightingEpoch;
     private bool _hasPublishedSourceLightingEpoch;
     private Matrix4x4 _previousViewProjection = Matrix4x4.Identity;
@@ -252,6 +265,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         BufferHandle historyMetadata1 = BufferHandle.Invalid;
         BufferHandle surfaceTable = BufferHandle.Invalid;
         BufferHandle activeTileAndIndirect = BufferHandle.Invalid;
+        BufferHandle schedulerHistory0 = BufferHandle.Invalid;
+        BufferHandle schedulerHistory1 = BufferHandle.Invalid;
         BufferHandle tileRecords = BufferHandle.Invalid;
         BufferHandle traceFrameConstants0 = BufferHandle.Invalid;
         BufferHandle traceFrameConstants1 = BufferHandle.Invalid;
@@ -286,6 +301,18 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 requireDeviceAddress: false,
                 MemoryBudgetCategory.GlobalIllumination,
                 "C5 Active Tiles And Indirect Arguments");
+            schedulerHistory0 = _bufferManager.CreateDeviceBuffer(
+                _layout.SchedulerHistoryBytes / 2UL,
+                usage,
+                requireDeviceAddress: false,
+                MemoryBudgetCategory.GlobalIllumination,
+                "C5 Scheduler History 0");
+            schedulerHistory1 = _bufferManager.CreateDeviceBuffer(
+                _layout.SchedulerHistoryBytes / 2UL,
+                usage,
+                requireDeviceAddress: false,
+                MemoryBudgetCategory.GlobalIllumination,
+                "C5 Scheduler History 1");
             tileRecords = _bufferManager.CreateDeviceBuffer(
                 _layout.TileBuffersBytes,
                 usage,
@@ -335,6 +362,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 historyMetadata1,
                 surfaceTable,
                 activeTileAndIndirect,
+                schedulerHistory0,
+                schedulerHistory1,
                 tileRecords,
                 traceFrameConstants0,
                 traceFrameConstants1,
@@ -397,6 +426,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             DestroyBuffer(traceFrameConstants1);
             DestroyBuffer(traceFrameConstants0);
             DestroyBuffer(tileRecords);
+            DestroyBuffer(schedulerHistory1);
+            DestroyBuffer(schedulerHistory0);
             DestroyBuffer(activeTileAndIndirect);
             DestroyBuffer(surfaceTable);
             DestroyBuffer(historyMetadata1);
@@ -408,6 +439,9 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
 
     public SimpleDdgiNearFieldResidualGpuRuntimeSnapshot Snapshot =>
         _manager.Snapshot;
+
+    internal bool LocalAdaptiveSchedulingEnabled =>
+        _configuration.LocalAdaptiveSchedulingEnabled;
 
     public ulong ActualAllocationBytes
     {
@@ -609,6 +643,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             }
             _recordedExecutionExtent = _executionExtent;
             var revision = CreateHistoryRevision(sceneData);
+            _recordedHistoryRevision = revision;
             SimpleDdgiNearFieldResidualGpuBeginFrameResult begin =
                 _manager.BeginFrame(revision, frameIndex & 1);
             if (!begin.Started)
@@ -641,7 +676,9 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         lock (_sync)
         {
             ValidateStage(commandBuffer, frameIndex, sceneData,
-                SimpleDdgiNearFieldResidualRecordedStage.Prepare);
+                _configuration.LocalAdaptiveSchedulingEnabled
+                    ? SimpleDdgiNearFieldResidualRecordedStage.Classify
+                    : SimpleDdgiNearFieldResidualRecordedStage.Prepare);
             _recorder.RecordTrace(
                 commandBuffer,
                 frameIndex,
@@ -696,6 +733,36 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         }
     }
 
+    internal void RecordClassify(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        SceneRenderingData sceneData)
+    {
+        lock (_sync)
+        {
+            ValidateStage(commandBuffer, frameIndex, sceneData,
+                SimpleDdgiNearFieldResidualRecordedStage.Prepare);
+            if (!_configuration.LocalAdaptiveSchedulingEnabled)
+                throw new InvalidOperationException(
+                    "C5 local classifier is disabled for this generation.");
+            bool lightingChanged = !_hasPublishedSourceLightingEpoch ||
+                _publishedSourceLightingEpoch !=
+                    sceneData.SimpleDdgiSourceLightingGeneration;
+            _recorder.RecordClassify(
+                commandBuffer,
+                _frameToken,
+                _recordedExecutionExtent,
+                _recordedHistoryRevision,
+                _historyInputValid,
+                lightingChanged,
+                sceneData.DdgiFrameSerial == ulong.MaxValue
+                    ? ulong.MaxValue
+                    : sceneData.DdgiFrameSerial + 1UL);
+            _recordedStage =
+                SimpleDdgiNearFieldResidualRecordedStage.Classify;
+        }
+    }
+
     internal void RecordTemporal(
         CommandBuffer commandBuffer,
         int frameIndex,
@@ -708,7 +775,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             _recorder.RecordTemporal(
                 commandBuffer,
                 _frameToken,
-                CreateHistoryRevision(sceneData),
+                _recordedHistoryRevision,
                 _historyInputValid,
                 !_hasPublishedSourceLightingEpoch ||
                     _publishedSourceLightingEpoch !=
@@ -941,6 +1008,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                         _configuration.FilterIterationCount,
                         _calibratedSourceCostUpperBoundMicroseconds,
                         _sourceCostAuthoritative,
+                        _configuration.LocalAdaptiveSchedulingEnabled,
                         out SimpleDdgiNearFieldResidualStageTimings timings,
                         out string unavailableTimingPass);
                 if (timingsAvailable)
@@ -1034,6 +1102,23 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         bool sourceCostAuthoritative,
         out SimpleDdgiNearFieldResidualStageTimings timings,
         out string unavailablePass)
+        => TryResolveStageTimings(
+            snapshot,
+            filterIterationCount,
+            calibratedSourceMicroseconds,
+            sourceCostAuthoritative,
+            localAdaptiveSchedulingEnabled: false,
+            out timings,
+            out unavailablePass);
+
+    private static bool TryResolveStageTimings(
+        FrameTimingSnapshot snapshot,
+        int filterIterationCount,
+        ulong calibratedSourceMicroseconds,
+        bool sourceCostAuthoritative,
+        bool localAdaptiveSchedulingEnabled,
+        out SimpleDdgiNearFieldResidualStageTimings timings,
+        out string unavailablePass)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         timings = SimpleDdgiNearFieldResidualStageTimings.Empty;
@@ -1084,6 +1169,16 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         }
 
         ulong filter = 0UL;
+        ulong classify = 0UL;
+        if (localAdaptiveSchedulingEnabled &&
+            !TryReadRequiredGpuMicroseconds(
+                snapshot,
+                SimpleDdgiNearFieldResidualGpuPassNames.Classify,
+                out classify,
+                out unavailablePass))
+        {
+            return false;
+        }
         for (int iteration = 0; iteration < filterIterationCount; iteration++)
         {
             if (!TryReadRequiredGpuMicroseconds(
@@ -1104,7 +1199,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             FilterMicroseconds: filter,
             CompositeMicroseconds: composite)
         {
-            PrepareCompactionMicroseconds = SaturatingAdd(reset, prepare),
+            PrepareCompactionMicroseconds = SaturatingAdd(
+                SaturatingAdd(reset, prepare), classify),
             FinalizationMicroseconds = finalization,
             FrequencySeparationMicroseconds = frequencySeparation,
             SourceCostAuthoritative = sourceCostAuthoritative &&
@@ -1610,6 +1706,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         DestroyBuffer(_buffers.TraceFrameConstants1);
         DestroyBuffer(_buffers.TraceFrameConstants0);
         DestroyBuffer(_buffers.TileRecords);
+        DestroyBuffer(_buffers.SchedulerHistory1);
+        DestroyBuffer(_buffers.SchedulerHistory0);
         DestroyBuffer(_buffers.ActiveTileAndIndirect);
         DestroyBuffer(_buffers.SurfaceTable);
         DestroyBuffer(_buffers.HistoryMetadata1);
@@ -1650,6 +1748,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             _bufferManager.GetBufferAllocationSize(_buffers.HistoryMetadata1) +
             _bufferManager.GetBufferAllocationSize(_buffers.SurfaceTable) +
             _bufferManager.GetBufferAllocationSize(_buffers.ActiveTileAndIndirect) +
+            _bufferManager.GetBufferAllocationSize(_buffers.SchedulerHistory0) +
+            _bufferManager.GetBufferAllocationSize(_buffers.SchedulerHistory1) +
             _bufferManager.GetBufferAllocationSize(_buffers.TileRecords) +
             _bufferManager.GetBufferAllocationSize(_buffers.TraceFrameConstants0) +
             _bufferManager.GetBufferAllocationSize(_buffers.TraceFrameConstants1) +
@@ -1891,7 +1991,11 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 SurfaceTable = Resource(layout.SurfaceTableBytes,
                     SimpleDdgiNearFieldResidualGpuResourceKind.SurfaceTable),
                 ActiveTileAndIndirect = Resource(layout.ActiveTileAndIndirectBytes,
-                    SimpleDdgiNearFieldResidualGpuResourceKind.ActiveTileAndIndirect)
+                    SimpleDdgiNearFieldResidualGpuResourceKind.ActiveTileAndIndirect),
+                SchedulerHistory0 = Resource(layout.SchedulerHistoryBytes / 2UL,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.SchedulerHistory0),
+                SchedulerHistory1 = Resource(layout.SchedulerHistoryBytes / 2UL,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.SchedulerHistory1)
             };
         }
 

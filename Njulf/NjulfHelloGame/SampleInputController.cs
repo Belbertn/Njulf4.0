@@ -828,6 +828,13 @@ internal sealed class SampleInputController
                 AmbientOcclusionDebugView.BlurredAo => AmbientOcclusionDebugView.FinalAo,
                 AmbientOcclusionDebugView.FinalAo => AmbientOcclusionDebugView.ReconstructedNormal,
                 AmbientOcclusionDebugView.ReconstructedNormal => AmbientOcclusionDebugView.LinearDepth,
+                AmbientOcclusionDebugView.LinearDepth => AmbientOcclusionDebugView.RawGtaoVisibility,
+                AmbientOcclusionDebugView.RawGtaoVisibility => AmbientOcclusionDebugView.GtaoHorizonContribution,
+                AmbientOcclusionDebugView.GtaoHorizonContribution => AmbientOcclusionDebugView.RawGtaoBentNormal,
+                AmbientOcclusionDebugView.RawGtaoBentNormal => AmbientOcclusionDebugView.FilteredGtaoBentNormal,
+                AmbientOcclusionDebugView.FilteredGtaoBentNormal => AmbientOcclusionDebugView.GtaoTemporalConfidence,
+                AmbientOcclusionDebugView.GtaoTemporalConfidence => AmbientOcclusionDebugView.GtaoHistoryRejection,
+                AmbientOcclusionDebugView.GtaoHistoryRejection => AmbientOcclusionDebugView.FinalGtao,
                 _ => AmbientOcclusionDebugView.None
             };
             PrintAmbientOcclusionSettings("AO debug");
@@ -3066,7 +3073,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiProbeResidency => GlobalIlluminationDebugView.DdgiResidencyFallback,
             GlobalIlluminationDebugView.DdgiResidencyFallback => GlobalIlluminationDebugView.DdgiPageAge,
             GlobalIlluminationDebugView.DdgiPageAge => GlobalIlluminationDebugView.DdgiPhysicalPage,
-            GlobalIlluminationDebugView.DdgiPhysicalPage => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiPhysicalPage => GlobalIlluminationDebugView.DdgiReceiverCacheRejection,
+            GlobalIlluminationDebugView.DdgiReceiverCacheRejection => GlobalIlluminationDebugView.DdgiSampledIrradiance,
             GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
             GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
@@ -3231,6 +3239,7 @@ internal sealed class SampleInputController
             or GlobalIlluminationDebugView.DdgiResidencyFallback
             or GlobalIlluminationDebugView.DdgiPageAge
             or GlobalIlluminationDebugView.DdgiPhysicalPage
+            or GlobalIlluminationDebugView.DdgiReceiverCacheRejection
             or GlobalIlluminationDebugView.DdgiVisibilityConfidence
             or GlobalIlluminationDebugView.DdgiConfidenceChain
             or GlobalIlluminationDebugView.DdgiProbeLogicalPosition
@@ -3285,6 +3294,8 @@ internal sealed class SampleInputController
                 "cyan border; resident pages progress cyan to red at retention expiry; magenta = suppressed and grey = nonresident.",
             GlobalIlluminationDebugView.DdgiPhysicalPage =>
                 "yellow border; stable hash of physical page and mapping generation; grey = no physical owner.",
+            GlobalIlluminationDebugView.DdgiReceiverCacheRejection =>
+                "green = admitted cache; magenta = invalid, red = depth/position, orange = plane, blue = normal, yellow = insufficient support; all non-green pixels map to exact fallback.",
             _ => "DDGI debug view; border/badge encodes view category and id."
         };
     }

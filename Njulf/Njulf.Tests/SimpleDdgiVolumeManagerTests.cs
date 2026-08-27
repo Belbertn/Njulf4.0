@@ -14,6 +14,108 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiVolumeManagerTests
 {
     [Test]
+    public void FrozenTailInvalidations_CoalescePoseAndReleaseFailClosed()
+    {
+        var buffer = new SimpleDdgiFrozenTailInvalidationBuffer();
+        var first = new DdgiDirtyRegion(
+            new BoundingBox(new Vector3(-1f), new Vector3(2f)),
+            DdgiDirtyReason.TransformChanged)
+        {
+            OldWorldBounds = new BoundingBox(
+                new Vector3(0f),
+                new Vector3(1f)),
+            NewWorldBounds = new BoundingBox(
+                new Vector3(1f),
+                new Vector3(2f)),
+            InfluenceBounds = new BoundingBox(
+                new Vector3(-1f),
+                new Vector3(2f)),
+            SourceIdentifier = 17UL,
+            SourceRevision = 3UL,
+            Priority = 4u
+        };
+        DdgiDirtyRegion second = first with
+        {
+            Bounds = new BoundingBox(
+                new Vector3(0f),
+                new Vector3(4f)),
+            OldWorldBounds = first.NewWorldBounds,
+            NewWorldBounds = new BoundingBox(
+                new Vector3(3f),
+                new Vector3(4f)),
+            InfluenceBounds = new BoundingBox(
+                new Vector3(0f),
+                new Vector3(4f)),
+            SourceRevision = 4UL,
+            Priority = 6u
+        };
+
+        IReadOnlyList<DdgiDirtyRegion>? firstResult = buffer.Resolve(
+            auditFrozen: true,
+            new[] { first });
+        IReadOnlyList<DdgiDirtyRegion>? secondResult = buffer.Resolve(
+            auditFrozen: true,
+            new[] { second });
+        IReadOnlyList<DdgiDirtyRegion>? released = buffer.Resolve(
+            auditFrozen: false,
+            dirtyRegions: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstResult, Is.Null);
+            Assert.That(secondResult, Is.Null);
+            Assert.That(released, Has.Count.EqualTo(1));
+            Assert.That(released![0].OldWorldBounds,
+                Is.EqualTo(first.OldWorldBounds));
+            Assert.That(released[0].NewWorldBounds,
+                Is.EqualTo(second.NewWorldBounds));
+            Assert.That(released[0].InfluenceBounds.Min,
+                Is.EqualTo(first.InfluenceBounds.Min));
+            Assert.That(released[0].InfluenceBounds.Max,
+                Is.EqualTo(second.InfluenceBounds.Max));
+            Assert.That(released[0].SourceRevision, Is.EqualTo(4UL));
+            Assert.That(released[0].Priority, Is.EqualTo(6u));
+            Assert.That(buffer.DeferredCount, Is.Zero);
+            Assert.That(buffer.ReleasedDeferredThisFrame, Is.True);
+        });
+    }
+
+    [Test]
+    public void FrozenTailInvalidations_UnsupportedEventReleasesRetainedPose()
+    {
+        var buffer = new SimpleDdgiFrozenTailInvalidationBuffer();
+        var bounds = new BoundingBox(new Vector3(0f), new Vector3(1f));
+        var pose = new DdgiDirtyRegion(
+            bounds,
+            DdgiDirtyReason.TransformChanged)
+        {
+            SourceIdentifier = 23UL
+        };
+        var topology = new DdgiDirtyRegion(
+            bounds,
+            DdgiDirtyReason.GeometryAdded)
+        {
+            SourceIdentifier = 23UL
+        };
+
+        Assert.That(buffer.Resolve(true, new[] { pose }), Is.Null);
+        IReadOnlyList<DdgiDirtyRegion>? released = buffer.Resolve(
+            auditFrozen: true,
+            new[] { topology });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(released, Has.Count.EqualTo(2));
+            Assert.That(released![0].Reason,
+                Is.EqualTo(DdgiDirtyReason.TransformChanged));
+            Assert.That(released[1].Reason,
+                Is.EqualTo(DdgiDirtyReason.GeometryAdded));
+            Assert.That(buffer.DeferredCount, Is.Zero);
+            Assert.That(buffer.ReleasedDeferredThisFrame, Is.True);
+        });
+    }
+
+    [Test]
     public void VolumeAdmissionOrder_HigherPriorityRefinementWinsBeforeSlotOrdinal()
     {
         var cameraBrick = new SimpleDdgiVolumeAdmissionOrderKey(

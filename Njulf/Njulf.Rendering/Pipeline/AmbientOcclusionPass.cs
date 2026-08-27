@@ -19,6 +19,7 @@ namespace Njulf.Rendering.Pipeline
 
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
+        private readonly bool _gtaoRuntimeSupported;
         private readonly nint _entryPointName;
         private DescriptorSetLayout _descriptorSetLayout;
         private DescriptorPool _descriptorPool;
@@ -32,11 +33,13 @@ namespace Njulf.Rendering.Pipeline
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             RenderTargetManager renderTargets,
-            RenderSettings settings)
+            RenderSettings settings,
+            bool gtaoRuntimeSupported = true)
             : base("AmbientOcclusionPass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _gtaoRuntimeSupported = gtaoRuntimeSupported;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -54,23 +57,49 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             AmbientOcclusionSettings ao = _settings.AmbientOcclusion;
-            bool enabled = ao.Enabled && sceneData.DepthPrePassEnabled;
+            AmbientOcclusionMode effectiveMode = ResolveEffectiveMode(
+                ao.Mode,
+                _gtaoRuntimeSupported);
+            bool enabled = ao.Enabled &&
+                effectiveMode != AmbientOcclusionMode.Disabled &&
+                sceneData.DepthPrePassEnabled;
             sceneData.AmbientOcclusionEnabled = enabled;
-            sceneData.AmbientOcclusionMode = enabled ? ao.Mode : AmbientOcclusionMode.Disabled;
+            sceneData.RequestedAmbientOcclusionMode = ao.Mode;
+            sceneData.GtaoRuntimeSupported = _gtaoRuntimeSupported;
+            sceneData.AmbientOcclusionMode = enabled
+                ? effectiveMode
+                : AmbientOcclusionMode.Disabled;
             sceneData.AmbientOcclusionDebugView = ao.DebugView;
+            sceneData.AmbientOcclusionBentNormalMode =
+                enabled && effectiveMode == AmbientOcclusionMode.Gtao
+                    ? ao.BentNormalMode
+                    : AmbientOcclusionBentNormalMode.Off;
+            sceneData.GtaoQualityPreset = ao.GtaoQualityPreset;
             sceneData.AmbientOcclusionForwardSamplingMode = ResolveForwardSamplingMode(enabled);
             sceneData.AmbientOcclusionForwardDepthAwareSamples = 0;
             sceneData.AmbientOcclusionWidth = enabled ? _renderTargets.AmbientOcclusionRaw.Extent.Width : 1u;
             sceneData.AmbientOcclusionHeight = enabled ? _renderTargets.AmbientOcclusionRaw.Extent.Height : 1u;
-            sceneData.AmbientOcclusionFormat = RenderTargetManager.AmbientOcclusionFormat.ToString();
+            sceneData.AmbientOcclusionFormat = enabled &&
+                effectiveMode == AmbientOcclusionMode.Gtao
+                    ? $"scalar={RenderTargetManager.AmbientOcclusionFormat};" +
+                      $"gtao={RenderTargetManager.GtaoRadianceFormat};" +
+                      $"geometry={RenderTargetManager.GtaoGeometryHistoryFormat}"
+                    : RenderTargetManager.AmbientOcclusionFormat.ToString();
             sceneData.AmbientOcclusionResolutionScale = enabled ? ao.ResolutionScale : 0.0f;
             sceneData.AmbientOcclusionRadius = enabled ? ao.Radius : 0.0f;
             sceneData.AmbientOcclusionIntensity = enabled ? ao.Intensity : 0.0f;
             sceneData.AmbientOcclusionBias = enabled ? ao.Bias : 0.0f;
             sceneData.AmbientOcclusionSampleCount = enabled ? ao.SampleCount : 0;
             sceneData.AmbientOcclusionBlurRadius = enabled ? ao.BlurRadius : 0;
-            return enabled;
+            return enabled && effectiveMode == AmbientOcclusionMode.Ssao;
         }
+
+        internal static AmbientOcclusionMode ResolveEffectiveMode(
+            AmbientOcclusionMode requestedMode,
+            bool gtaoRuntimeSupported) =>
+            requestedMode == AmbientOcclusionMode.Gtao && !gtaoRuntimeSupported
+                ? AmbientOcclusionMode.Ssao
+                : requestedMode;
 
         private static AmbientOcclusionForwardSamplingMode ResolveForwardSamplingMode(
             bool enabled)
@@ -115,7 +144,7 @@ namespace Njulf.Rendering.Pipeline
                 SampleCount = (uint)ao.SampleCount,
                 FrameIndex = (uint)frameIndex,
                 UseSceneNormals = 0,
-                Mode = (uint)ao.Mode
+                Mode = (uint)sceneData.AmbientOcclusionMode
             };
 
             _context.Api.CmdPushConstants(

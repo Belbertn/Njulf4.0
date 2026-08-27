@@ -155,15 +155,18 @@ void main()
         uint activeCount = uint(compositeActiveTiles.words.length()) > 1u
             ? compositeActiveTiles.words[1]
             : 0u;
+        uint traceTileCountX = (pc.traceWidth + 7u) / 8u;
+        uint traceTileCountY = (pc.traceHeight + 7u) / 8u;
+        uint resolveFirstWord = SimpleDdgiNearFieldResolveListFirstWord(
+            traceTileCountX * traceTileCountY);
         if (uint(compositeActiveTiles.words.length()) <= 4u ||
             compositeActiveTiles.words[4u] != 0u ||
             activeIndex >= activeCount ||
-            SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex >=
+            resolveFirstWord + activeIndex >=
                 uint(compositeActiveTiles.words.length()))
             return;
         uint tileIndex = compositeActiveTiles.words[
-            SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex];
-        uint traceTileCountX = (pc.traceWidth + 7u) / 8u;
+            resolveFirstWord + activeIndex];
         uvec2 traceTile = uvec2(
             tileIndex % max(traceTileCountX, 1u),
             tileIndex / max(traceTileCountX, 1u));

@@ -206,11 +206,19 @@ uint SceneCompactedEmittedCounterWord(uint drawBufferBaseIndex)
 
 void main()
 {
-    uint drawIndex = gl_WorkGroupID.x;
+    uint localDrawIndex = gl_WorkGroupID.x;
+    uint drawBufferBaseIndex = ForwardDrawBufferBaseIndex(
+        pc.Push.MeshletDrawBufferBaseIndex);
+    uint firstDraw = drawBufferBaseIndex ==
+            uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX)
+        ? ForwardTransparentFirstDraw(
+            pc.Push.MeshletDrawBufferBaseIndex)
+        : 0u;
+    uint drawIndex = firstDraw + localDrawIndex;
     forwardPayload.DrawCommandIndex = drawIndex;
     forwardPayload.Visible = 0u;
 
-    if (drawIndex >= pc.Push.MeshletDrawCount)
+    if (localDrawIndex >= pc.Push.MeshletDrawCount)
     {
         EmitMeshTasksEXT(0, 0, 0);
         return;
@@ -218,7 +226,8 @@ void main()
 
     IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_CANDIDATES);
 
-    if (pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX))
+    if (drawBufferBaseIndex ==
+        uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX))
     {
         IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_EMITTED);
         forwardPayload.Visible = 1u;
@@ -226,11 +235,11 @@ void main()
         return;
     }
 
-    if (IsSceneCompactedDrawBufferBaseIndex(pc.Push.MeshletDrawBufferBaseIndex))
+    if (IsSceneCompactedDrawBufferBaseIndex(drawBufferBaseIndex))
     {
         uint emittedCount = BindlessStorageBuffers[
             nonuniformEXT(uint(SCENE_SUBMISSION_COUNTER_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex)].Words[
-                SceneCompactedEmittedCounterWord(pc.Push.MeshletDrawBufferBaseIndex)];
+                SceneCompactedEmittedCounterWord(drawBufferBaseIndex)];
         if (drawIndex >= emittedCount)
         {
             EmitMeshTasksEXT(0, 0, 0);
@@ -244,7 +253,7 @@ void main()
     }
 
     GPUPackedMeshletDrawCommand command = ReadPackedMeshletDrawCommandFromBase(
-        ForwardPackedDrawBufferBaseIndex(pc.Push.MeshletDrawBufferBaseIndex),
+        ForwardPackedDrawBufferBaseIndex(drawBufferBaseIndex),
         pc.Push.CurrentFrameIndex,
         drawIndex);
     vec4 worldCenterRadius = command.WorldCenterRadius;

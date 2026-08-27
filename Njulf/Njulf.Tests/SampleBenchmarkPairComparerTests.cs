@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
 
@@ -693,6 +694,39 @@ public sealed class SampleBenchmarkPairComparerTests
         Assert.That(
             settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark,
             Is.True);
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ForwardGiSurfaceDiagnostics);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+                Is.EqualTo(SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial));
+            Assert.That(
+                settings.Diagnostics.DdgiForwardEstimateCountersEnabled,
+                Is.True);
+            Assert.That(
+                settings.GlobalIllumination.GiCausticMode,
+                Is.EqualTo(GiCausticMode.Off));
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiDirectionalRadianceMode,
+                Is.EqualTo(SimpleDdgiDirectionalRadianceMode.Off));
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiGlossyTransportMode,
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.Off));
+            Assert.That(settings.Reflections.Enabled, Is.False);
+        });
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.Baseline);
+        Assert.That(
+            settings.Diagnostics.DdgiForwardEstimateCountersEnabled,
+            Is.False);
 
         settings = new RenderSettings();
         SampleBenchmarkCaptureVariant.Apply(

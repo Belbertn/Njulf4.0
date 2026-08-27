@@ -96,7 +96,9 @@ public enum SurfaceHistoryConsumer : uint
     DirectionalCsmTemporal = 1u << 1,
     DirectionalRaySoft = 1u << 2,
     NearFieldResidual = 1u << 3,
-    Reflection = 1u << 4
+    Reflection = 1u << 4,
+    SimpleDdgiReceiverCache = 1u << 5,
+    AmbientOcclusionGtao = 1u << 6
 }
 
 public static class SurfaceHistoryPolicy
@@ -106,7 +108,9 @@ public static class SurfaceHistoryPolicy
         bool nearFieldResidualActive,
         bool directionalCsmTemporalActive = false,
         bool directionalRaySoftActive = false,
-        bool reflectionActive = false)
+        bool reflectionActive = false,
+        bool simpleDdgiReceiverCacheActive = false,
+        bool ambientOcclusionGtaoActive = false)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -126,6 +130,10 @@ public static class SurfaceHistoryPolicy
         }
         if (reflectionActive)
             consumers |= SurfaceHistoryConsumer.Reflection;
+        if (simpleDdgiReceiverCacheActive)
+            consumers |= SurfaceHistoryConsumer.SimpleDdgiReceiverCache;
+        if (ambientOcclusionGtaoActive)
+            consumers |= SurfaceHistoryConsumer.AmbientOcclusionGtao;
 
         return consumers;
     }

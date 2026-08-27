@@ -63,6 +63,21 @@ const int MESHLET_DRAW_BUFFER_BASE_INDEX = 10;
 const int MESHLET_DRAW_BUFFER_FRAME1_INDEX = 11;
 const int TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX = 12;
 const int TRANSPARENT_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 13;
+const uint FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_BITS = 14u;
+const uint FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_MASK =
+    (1u << FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_BITS) - 1u;
+
+uint ForwardDrawBufferBaseIndex(uint packedDrawBufferBaseIndex)
+{
+    return packedDrawBufferBaseIndex &
+        FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_MASK;
+}
+
+uint ForwardTransparentFirstDraw(uint packedDrawBufferBaseIndex)
+{
+    return packedDrawBufferBaseIndex >>
+        FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_BITS;
+}
 const int LIGHT_BUFFER_INDEX = 14;
 const int TILED_LIGHT_HEADER_BUFFER_INDEX = 15;
 const int TILED_LIGHT_INDICES_BUFFER_INDEX = 16;
@@ -275,7 +290,9 @@ const int DIRECTIONAL_SHADOW_COUNTER_BUFFER_FRAME1_INDEX = 221;
 const int VOLUMETRIC_FOG_BOUNCE_RADIANCE_BUFFER_INDEX = 222;
 const int AREA_RAY_SHADOW_MASK_BUFFER_BASE_INDEX = 223;
 const int FORWARD_MATERIAL_DATA_BUFFER_INDEX = 225;
-const int STATIC_BUFFER_COUNT = 226;
+const int SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_BASE_INDEX = 226;
+const int SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_FRAME1_INDEX = 227;
+const int STATIC_BUFFER_COUNT = 228;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -357,7 +374,9 @@ const int SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT = 128;
 const int SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX = 42;
 const int SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX = 170;
 const int OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX = 298;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 299;
+const int GTAO_FILTERED_TEXTURE_INDEX = 299;
+const int GTAO_DEBUG_TEXTURE_INDEX = 300;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 301;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -799,7 +818,7 @@ struct GPUMeshletDrawCommand
     uint MeshletIndex;
     uint InstanceId;
     uint MaterialIndex;
-    uint Padding;
+    uint Flags;
 };
 
 struct GPUPackedMeshletDrawCommand
@@ -1576,7 +1595,7 @@ const int SIZEOF_GPU_FOLIAGE_COUNTERS = 40;
 const int SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS = 16;
 const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_PATCH = 80;
 const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_GENERATION_PUSH_CONSTANTS = 32;
-const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 280;
+const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 296;
 const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 184;
 const int SIZEOF_GPU_FORWARD_VISIBILITY_COMPACTION_PUSH_CONSTANTS = 92;
 const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 52;
@@ -1792,6 +1811,13 @@ const int OFFSET_GPU_MESHLET_LOCAL_VERTEX_OFFSET = 32;
 const int OFFSET_GPU_MESHLET_LOCAL_VERTEX_COUNT = 36;
 const int OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_OFFSET = 40;
 const int OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_COUNT = 44;
+const int OFFSET_GPU_MESHLET_NORMAL_CONE_AXIS = 48;
+const int OFFSET_GPU_MESHLET_NORMAL_CONE_CUTOFF = 60;
+
+const int OFFSET_GPU_MESHLET_DRAW_COMMAND_MESHLET_INDEX = 0;
+const int OFFSET_GPU_MESHLET_DRAW_COMMAND_INSTANCE_ID = 4;
+const int OFFSET_GPU_MESHLET_DRAW_COMMAND_MATERIAL_INDEX = 8;
+const int OFFSET_GPU_MESHLET_DRAW_COMMAND_FLAGS = 12;
 
 const int OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_MESHLET_INDEX = 0;
 const int OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_INSTANCE_ID = 4;
@@ -2369,6 +2395,46 @@ const uint TRANSPARENT_REFLECTION_RAY_ADMITTED_COUNTER =
     TRANSPARENT_REFLECTION_COUNTER_BASE + 14u;
 const uint TRANSPARENT_REFLECTION_RAY_EXACT_BUDGET_REJECT_COUNTER =
     TRANSPARENT_REFLECTION_COUNTER_BASE + 15u;
+// Qualification-only surface-aware receiver-cache evidence. Production timing
+// artifacts compile every write out; dedicated diagnostic artifacts set the
+// active marker and populate this appended, fence-complete family.
+const uint SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 16u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_DIAGNOSTIC_ACTIVE_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 0u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_CANDIDATE_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 1u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_VALID_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 2u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_INVALID_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 3u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_DEPTH_POSITION_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 4u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_PLANE_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 5u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_NORMAL_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 6u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_SUPPORT_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 7u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_FORWARD_CANDIDATE_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 8u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_FORWARD_ACCEPTED_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 9u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_FORWARD_INVALID_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 10u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_FORWARD_DEPTH_POSITION_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 11u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_FORWARD_PLANE_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 12u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_FORWARD_NORMAL_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 13u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_FORWARD_SUPPORT_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 14u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 15u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_LEGACY_FRAGMENT_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 16u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_COUNT = 17u;
 const float SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_SUM_SCALE = 256.0;
 const float SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_MAX_SCALE = 65535.0;
 const float DDGI_MANY_LIGHT_PDF_SCALE = 1048576.0;
@@ -2402,6 +2468,10 @@ const uint MESHLET_TASK_GROUP_SIZE = 1u;
 
 #ifndef NJULF_DDGI_DETAILED_COUNTERS
 #define NJULF_DDGI_DETAILED_COUNTERS 0
+#endif
+
+#ifndef NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+#define NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS 0
 #endif
 
 // Directional-shadow traversal/filter counters are investigation-only.  Keep
@@ -3182,6 +3252,30 @@ void WriteParticleInstance(uint bufferBaseIndex, uint frameIndex, uint instanceI
     WriteStorageVec4(bufferIndex, baseWord + 28u, particle.VolumetricRadiusAnisotropyAndFlags);
 }
 
+void AddSimpleDdgiReceiverCacheDiagnostic(
+    uint frameIndex,
+    uint counterIndex,
+    uint value)
+{
+#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+    uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
+        frameIndex;
+    atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            counterIndex],
+        value);
+#endif
+}
+
+void IncrementSimpleDdgiReceiverCacheDiagnostic(
+    uint frameIndex,
+    uint counterIndex)
+{
+#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+    AddSimpleDdgiReceiverCacheDiagnostic(frameIndex, counterIndex, 1u);
+#endif
+}
+
 void WriteParticleInstance(uint frameIndex, uint instanceIndex, GPUParticleInstance particle)
 {
     WriteParticleInstance(uint(GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_BASE_INDEX), frameIndex, instanceIndex, particle);
@@ -3268,6 +3362,19 @@ GPUMeshlet ReadMeshlet(uint meshletIndex)
     return meshlet;
 }
 
+bool MeshletNormalConeValid(GPUMeshlet meshlet)
+{
+    float coneCutoff = meshlet.NormalConeCutoff;
+    float objectAxisLengthSquared = dot(
+        meshlet.NormalConeAxis,
+        meshlet.NormalConeAxis);
+    return coneCutoff > 0.0 && coneCutoff <= 1.0 &&
+        !isnan(coneCutoff) && !isinf(coneCutoff) &&
+        !any(isnan(meshlet.NormalConeAxis)) &&
+        !any(isinf(meshlet.NormalConeAxis)) &&
+        objectAxisLengthSquared > 1e-12;
+}
+
 bool MeshletBackfaceConeCulled(
     GPUMeshlet meshlet,
     uint instanceBufferIndex,
@@ -3277,64 +3384,44 @@ bool MeshletBackfaceConeCulled(
     vec3 viewPosition)
 {
     float coneCutoff = meshlet.NormalConeCutoff;
-    float objectAxisLengthSquared = dot(
-        meshlet.NormalConeAxis,
-        meshlet.NormalConeAxis);
-    if (coneCutoff >= 0.999999 ||
-        coneCutoff < 0.0 ||
-        objectAxisLengthSquared <= 1e-12)
-    {
+    if (!MeshletNormalConeValid(meshlet))
         return false;
-    }
 
     vec3 worldAxis = TransformRowMajorVector(
         meshlet.NormalConeAxis,
         instanceBufferIndex,
         objectWordOffset + 16u);
     float worldAxisLengthSquared = dot(worldAxis, worldAxis);
-    if (worldAxisLengthSquared <= 1e-12)
+    if (worldAxisLengthSquared <= 1e-12 ||
+        isnan(worldAxisLengthSquared) ||
+        isinf(worldAxisLengthSquared))
         return false;
     worldAxis *= inversesqrt(worldAxisLengthSquared);
 
-    vec3 cameraToCenter = worldCenter - viewPosition;
-    float distanceSquared = dot(cameraToCenter, cameraToCenter);
+    vec3 centerToCamera = viewPosition - worldCenter;
+    float distanceSquared = dot(centerToCamera, centerToCamera);
     float safeRadius = max(worldRadius, 0.0);
-    if (distanceSquared <= safeRadius * safeRadius + 1e-8)
+    if (distanceSquared <= safeRadius * safeRadius + 1e-8 ||
+        isnan(distanceSquared) || isinf(distanceSquared) ||
+        isnan(safeRadius) || isinf(safeRadius))
         return false;
 
     float inverseDistance = inversesqrt(distanceSquared);
     float sphereSine = clamp(safeRadius * inverseDistance, 0.0, 1.0);
     float sphereCosine = sqrt(max(1.0 - sphereSine * sphereSine, 0.0));
-    float coneCosine = sqrt(max(1.0 - coneCutoff * coneCutoff, 0.0));
-    float conservativeCutoff = min(
-        coneCutoff * sphereCosine + coneCosine * sphereSine,
+    float coneSine = sqrt(max(1.0 - coneCutoff * coneCutoff, 0.0));
+    float combinedCosine =
+        coneCutoff * sphereCosine - coneSine * sphereSine;
+    if (combinedCosine <= 0.0)
+        return false;
+
+    float combinedSine = min(
+        coneSine * sphereCosine + coneCutoff * sphereSine,
         1.0);
-    return dot(cameraToCenter * inverseDistance, worldAxis) >=
-        conservativeCutoff;
-}
-
-bool MeshletBackfaceConeCulledDirectional(
-    GPUMeshlet meshlet,
-    uint instanceBufferIndex,
-    uint objectWordOffset,
-    vec3 viewDirection)
-{
-    float coneCutoff = meshlet.NormalConeCutoff;
-    if (coneCutoff >= 0.999999 || coneCutoff < 0.0)
-        return false;
-
-    vec3 worldAxis = TransformRowMajorVector(
-        meshlet.NormalConeAxis,
-        instanceBufferIndex,
-        objectWordOffset + 16u);
-    float worldAxisLengthSquared = dot(worldAxis, worldAxis);
-    float viewLengthSquared = dot(viewDirection, viewDirection);
-    if (worldAxisLengthSquared <= 1e-12 || viewLengthSquared <= 1e-12)
-        return false;
-
-    return dot(
-        worldAxis * inversesqrt(worldAxisLengthSquared),
-        viewDirection * inversesqrt(viewLengthSquared)) >= coneCutoff;
+    vec3 surfaceToCamera = centerToCamera * inverseDistance;
+    const float rejectionSafetyEpsilon = 1e-6;
+    return dot(worldAxis, surfaceToCamera) <
+        -combinedSine - rejectionSafetyEpsilon;
 }
 
 GPUMeshletDrawCommand ReadMeshletDrawCommandFromBase(uint bufferBaseIndex, uint frameIndex, uint drawIndex)
@@ -3345,7 +3432,7 @@ GPUMeshletDrawCommand ReadMeshletDrawCommandFromBase(uint bufferBaseIndex, uint 
     command.MeshletIndex = ReadStorageWord(bufferIndex, baseWord + 0u);
     command.InstanceId = ReadStorageWord(bufferIndex, baseWord + 1u);
     command.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 2u);
-    command.Padding = ReadStorageWord(bufferIndex, baseWord + 3u);
+    command.Flags = ReadStorageWord(bufferIndex, baseWord + 3u);
     return command;
 }
 

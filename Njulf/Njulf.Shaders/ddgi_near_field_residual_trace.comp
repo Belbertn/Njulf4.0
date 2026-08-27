@@ -42,6 +42,10 @@ layout(std430, set = 0, binding = 9) readonly buffer TraceActiveTileBuffer
 } traceActiveTiles;
 layout(set = 0, binding = 10) uniform usampler2D fullReceiverPayload;
 layout(set = 0, binding = 11) uniform sampler2D sourceLuminance;
+layout(std430, set = 0, binding = 12) readonly buffer TraceSchedulerHistoryBuffer
+{
+    SimpleDdgiNearFieldResidualSchedulerRecord values[];
+} traceSchedulerHistory;
 
 layout(push_constant) uniform NearFieldTracePushBlock
 {
@@ -860,6 +864,7 @@ bool EvaluateSingleCandidate(
     ivec2 pixel,
     uint metadataIndex,
     uint rayOrdinal,
+    uint raysPerPixel,
     out vec3 nearEstimate,
     out float confidence,
     out SimpleDdgiNearFieldResidualHitMetadata metadata,
@@ -947,7 +952,7 @@ bool EvaluateSingleCandidate(
     vec3 receiverWorldPosition;
     vec3 generationDirection;
     float generationPdf;
-    bool guidedRequested = pc.raysPerPixel >= 2u && rayOrdinal > 0u &&
+    bool guidedRequested = raysPerPixel >= 2u && rayOrdinal > 0u &&
         (rayOrdinal & 1u) != 0u;
     bool guidedProposal = false;
     ivec2 guidedTargetPixel = ivec2(-1);
@@ -1182,7 +1187,7 @@ bool EvaluateSingleCandidate(
         hitGeometric,
         generationDirection);
     float guidedWeight = guideAvailable
-        ? float(pc.raysPerPixel / 2u) / float(pc.raysPerPixel)
+        ? float(raysPerPixel / 2u) / float(raysPerPixel)
         : 0.0;
     float mixturePdf = (1.0 - guidedWeight) * cosinePdf +
         guidedWeight * guidedPdf;
@@ -1224,6 +1229,7 @@ bool EvaluateSingleCandidate(
 bool EvaluateCandidate(
     ivec2 pixel,
     uint metadataIndex,
+    uint raysPerPixel,
     out vec3 nearEstimate,
     out float confidence,
     out SimpleDdgiNearFieldResidualHitMetadata metadata,
@@ -1259,7 +1265,7 @@ bool EvaluateCandidate(
     guidedZeroCount = 0u;
     cosineProposalCount = 0u;
     validSampleCount = 0u;
-    if (pc.raysPerPixel == 0u || pc.raysPerPixel > 4u)
+    if (raysPerPixel == 0u || raysPerPixel > 4u)
     {
         failureFlags = C5_TRACE_REASON_INVALID_RAY;
         return false;
@@ -1270,7 +1276,7 @@ bool EvaluateCandidate(
     bool hasRepresentative = false;
     for (uint rayOrdinal = 0u; rayOrdinal < 4u; ++rayOrdinal)
     {
-        if (rayOrdinal >= pc.raysPerPixel)
+        if (rayOrdinal >= raysPerPixel)
             break;
         vec3 singleNear;
         float singleConfidence;
@@ -1285,6 +1291,7 @@ bool EvaluateCandidate(
             pixel,
             metadataIndex,
             rayOrdinal,
+            raysPerPixel,
             singleNear,
             singleConfidence,
             singleMetadata,
@@ -1356,8 +1363,8 @@ bool EvaluateCandidate(
 void main()
 {
     uint activeIndex = gl_WorkGroupID.x;
-    uint activeCount = uint(traceActiveTiles.words.length()) > 1u
-        ? traceActiveTiles.words[1]
+    uint activeCount = uint(traceActiveTiles.words.length()) > 2u
+        ? traceActiveTiles.words[2]
         : 0u;
     bool activeTile = uint(traceActiveTiles.words.length()) > 4u &&
         traceActiveTiles.words[4u] == 0u && activeIndex < activeCount &&
@@ -1368,24 +1375,52 @@ void main()
             SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex]
         : 0u;
     uint tileCountX = (pc.traceWidth + 7u) / 8u;
+    uint tileCountY = (pc.traceHeight + 7u) / 8u;
+    uint tileCapacity = tileCountX * tileCountY;
     uvec2 tile = tileCountX > 0u
         ? uvec2(tileIndex % tileCountX, tileIndex / tileCountX)
         : uvec2(0u);
     ivec2 pixel = ivec2(tile * 8u + gl_LocalInvocationID.xy);
     ivec2 outputExtent = imageSize(rawResidualOutput);
-    bool covered = activeTile &&
+    bool receiverCovered = activeTile &&
         pixel.x < outputExtent.x && pixel.y < outputExtent.y &&
         pixel.x < int(pc.traceWidth) && pixel.y < int(pc.traceHeight);
-    uint metadataIndex = covered
+    uint metadataIndex = receiverCovered
         ? uint(pixel.y) * pc.traceWidth + uint(pixel.x)
         : 0u;
     uint localIndex = gl_LocalInvocationIndex;
+    uint tileClass = SIMPLE_DDGI_NEAR_FIELD_TILE_TRACE_NORMAL;
+    uint checkerboardPhase = 0u;
+    uint localRaysPerPixel = pc.raysPerPixel;
+    if (activeTile && SimpleDdgiNearFieldHasFlag(pc.flags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_LOCAL_ADAPTIVE_SCHEDULING))
+    {
+        if (tileIndex >= uint(traceSchedulerHistory.values.length()))
+        {
+            receiverCovered = false;
+            localRaysPerPixel = 0u;
+        }
+        else
+        {
+            uint packedSchedule =
+                traceSchedulerHistory.values[tileIndex].packedState;
+            tileClass = SimpleDdgiNearFieldSchedulerClass(packedSchedule);
+            checkerboardPhase =
+                SimpleDdgiNearFieldSchedulerPhase(packedSchedule);
+            localRaysPerPixel = min(pc.raysPerPixel,
+                SimpleDdgiNearFieldSchedulerRays(packedSchedule));
+        }
+    }
+    bool selectedForTrace = receiverCovered &&
+        (tileClass != SIMPLE_DDGI_NEAR_FIELD_TILE_TRACE_INTERLEAVED ||
+         ((uint(pixel.x + pixel.y) & 1u) == checkerboardPhase)) &&
+        localRaysPerPixel > 0u;
 
     // Build the optional source-luminance hierarchy once for this compacted
     // tile. One-ray tiers keep the tree at zero and never enter the guided
     // proposal path. Partial edge tiles contribute exact-zero leaves.
     float guideWeight = 0.0;
-    if (activeTile && pc.raysPerPixel >= 2u)
+    if (activeTile && localRaysPerPixel >= 2u)
         guideWeight = C5ReadGuideLuminance(pixel);
     c5SourceLuminanceHierarchy[64u + localIndex] = guideWeight;
     if (localIndex == 0u)
@@ -1407,7 +1442,9 @@ void main()
     float confidence = 0.0;
     SimpleDdgiNearFieldResidualHitMetadata metadata =
         SimpleDdgiNearFieldZeroMetadata();
-    uint failureFlags = covered ? C5_TRACE_REASON_INVALID_RECEIVER : 0u;
+    uint failureFlags = selectedForTrace
+        ? C5_TRACE_REASON_INVALID_RECEIVER
+        : 0u;
     uint rayLaunched = 0u;
     uint rayHitCount = 0u;
     uint traceSteps = 0u;
@@ -1421,14 +1458,15 @@ void main()
     uint guidedZeroCount = 0u;
     uint cosineProposalCount = 0u;
     uint validSampleCount = 0u;
-    bool valid = covered && EvaluateCandidate(
-        pixel, metadataIndex, nearEstimate, confidence, metadata,
+    bool valid = selectedForTrace && EvaluateCandidate(
+        pixel, metadataIndex, localRaysPerPixel,
+        nearEstimate, confidence, metadata,
         failureFlags, rayLaunched, rayHitCount, traceSteps, mipVisits,
         maximumTraceSteps, maximumMipVisits, refinementVisits,
         proposalCount, guidedProposalCount, guidedValidCount,
         guidedZeroCount, cosineProposalCount, validSampleCount);
 
-    c5TileCovered[localIndex] = covered ? 1u : 0u;
+    c5TileCovered[localIndex] = selectedForTrace ? 1u : 0u;
     c5TileValid[localIndex] = valid ? 1u : 0u;
     c5TileHit[localIndex] = valid ? rayHitCount : 0u;
     c5TileConfidence[localIndex] = valid ? confidence : 0.0;
@@ -1455,8 +1493,13 @@ void main()
     }
     barrier();
 
-    if (!covered)
+    if (!receiverCovered)
         return;
+    if (!selectedForTrace)
+    {
+        WriteInvalid(pixel, metadataIndex);
+        return;
+    }
     if (!valid)
     {
         WriteInvalid(pixel, metadataIndex);

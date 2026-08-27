@@ -63,7 +63,8 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             AmbientOcclusionSettings ao = _settings.AmbientOcclusion;
-            if (!sceneData.AmbientOcclusionEnabled)
+            if (!sceneData.AmbientOcclusionEnabled ||
+                sceneData.AmbientOcclusionMode != AmbientOcclusionMode.Ssao)
                 return false;
 
             bool requiresFullResolutionResolve =

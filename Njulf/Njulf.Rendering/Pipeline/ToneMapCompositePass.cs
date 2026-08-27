@@ -106,11 +106,15 @@ namespace Njulf.Rendering.Pipeline
                 OutputToSrgb = antiAliasingEnabled ? 0u : IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u,
                 EnvironmentDebugView = (uint)_settings.Environment.DebugView,
                 EnvironmentDebugMipLevel = (uint)_settings.Environment.DebugMipLevel,
-                AmbientOcclusionDebugTextureIndex = (uint)GetAmbientOcclusionDebugTextureIndex(),
+                AmbientOcclusionDebugTextureIndex =
+                    (uint)GetAmbientOcclusionDebugTextureIndex(
+                        sceneData.AmbientOcclusionMode),
                 AutoExposureEnabled = _settings.AutoExposure.Enabled &&
                     !displayReferredFogDebug ? 1u : 0u,
                 AutoExposureStateBufferIndex = (uint)(BindlessIndex.AutoExposureStateBufferBase + frameIndex),
-                DisplayReferredDebug = displayReferredFogDebug ? 1u : 0u
+                DisplayReferredDebug = displayReferredFogDebug ? 1u : 0u,
+                AmbientOcclusionDebugView =
+                    (uint)_settings.AmbientOcclusion.DebugView
             };
 
             uint size = (uint)Marshal.SizeOf<GPUCompositePushConstants>();
@@ -186,12 +190,25 @@ namespace Njulf.Rendering.Pipeline
             return BindlessIndex.BloomMipTextureBase + mip;
         }
 
-        private int GetAmbientOcclusionDebugTextureIndex()
+        private int GetAmbientOcclusionDebugTextureIndex(
+            AmbientOcclusionMode effectiveMode)
         {
             return _settings.AmbientOcclusion.DebugView switch
             {
-                AmbientOcclusionDebugView.RawAo => BindlessIndex.AmbientOcclusionRawTexture,
+                AmbientOcclusionDebugView.RawAo =>
+                    effectiveMode == AmbientOcclusionMode.Gtao
+                        ? BindlessIndex.GtaoDebugTexture
+                        : BindlessIndex.AmbientOcclusionRawTexture,
                 AmbientOcclusionDebugView.BlurredAo => BindlessIndex.AmbientOcclusionBlurredTexture,
+                AmbientOcclusionDebugView.RawGtaoVisibility or
+                AmbientOcclusionDebugView.GtaoHorizonContribution or
+                AmbientOcclusionDebugView.RawGtaoBentNormal or
+                AmbientOcclusionDebugView.FilteredGtaoBentNormal or
+                AmbientOcclusionDebugView.GtaoTemporalConfidence or
+                AmbientOcclusionDebugView.GtaoHistoryRejection =>
+                    BindlessIndex.GtaoDebugTexture,
+                AmbientOcclusionDebugView.FinalGtao =>
+                    BindlessIndex.AmbientOcclusionBlurredTexture,
                 _ => 0
             };
         }

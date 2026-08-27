@@ -204,9 +204,13 @@ namespace Njulf.Rendering.Resources
         public const int TransparentReflectionRayBudgetRejectedCounter =
             TransparentReflectionCounterBase + 15;
         public const int TransparentReflectionCounterCount = 16;
-        public const int CounterCount =
+        public const int SimpleDdgiReceiverCacheCounterBase =
             TransparentReflectionCounterBase +
             TransparentReflectionCounterCount;
+        public const int SimpleDdgiReceiverCacheCounterCount = 17;
+        public const int CounterCount =
+            SimpleDdgiReceiverCacheCounterBase +
+            SimpleDdgiReceiverCacheCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -255,6 +259,9 @@ namespace Njulf.Rendering.Resources
         private readonly TransparentReflectionGpuCounters[]
             _lastCompletedTransparentReflectionCounters =
                 new TransparentReflectionGpuCounters[FramesInFlight];
+        private readonly SimpleDdgiReceiverCacheGpuCounters[]
+            _lastCompletedSimpleDdgiReceiverCacheCounters =
+                new SimpleDdgiReceiverCacheGpuCounters[FramesInFlight];
         private readonly DebugDdgiOverlayGpuCounters[]
             _lastCompletedDebugDdgiOverlayCounters =
                 new DebugDdgiOverlayGpuCounters[FramesInFlight];
@@ -451,6 +458,9 @@ namespace Njulf.Rendering.Resources
                     ExactRayBudgetRejected =
                         counters[TransparentReflectionCounterBase + 15]
                 };
+            _lastCompletedSimpleDdgiReceiverCacheCounters[frameIndex] =
+                DecodeSimpleDdgiReceiverCacheCounters(
+                    new ReadOnlySpan<uint>(counters, CounterCount));
 
             _lastCompletedCounters[frameIndex] = new GpuMeshletCounters(
                 checked((int)counters[0]),
@@ -1111,6 +1121,46 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _lastCompletedTransparentReflectionCounters[frameIndex];
+        }
+
+        public SimpleDdgiReceiverCacheGpuCounters
+            GetLastCompletedSimpleDdgiReceiverCacheCounters(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedSimpleDdgiReceiverCacheCounters[frameIndex];
+        }
+
+        internal static SimpleDdgiReceiverCacheGpuCounters
+            DecodeSimpleDdgiReceiverCacheCounters(
+                ReadOnlySpan<uint> counters)
+        {
+            if (counters.Length < CounterCount)
+                throw new ArgumentException(
+                    "Renderer diagnostic counter span is incomplete.",
+                    nameof(counters));
+
+            int counterBase = SimpleDdgiReceiverCacheCounterBase;
+            if (counters[counterBase] == 0u)
+                return SimpleDdgiReceiverCacheGpuCounters.Unavailable;
+
+            return new SimpleDdgiReceiverCacheGpuCounters(
+                ReadbackValid: 1,
+                ResolveCandidateCount: counters[counterBase + 1],
+                ResolveValidCount: counters[counterBase + 2],
+                ResolveInvalidOrNonFiniteRejectCount: counters[counterBase + 3],
+                ResolveDepthOrPositionRejectCount: counters[counterBase + 4],
+                ResolvePlaneRejectCount: counters[counterBase + 5],
+                ResolveNormalRejectCount: counters[counterBase + 6],
+                ResolveInsufficientSupportRejectCount: counters[counterBase + 7],
+                ForwardCandidateCount: counters[counterBase + 8],
+                ForwardAcceptedCount: counters[counterBase + 9],
+                ForwardInvalidOrNonFiniteRejectCount: counters[counterBase + 10],
+                ForwardDepthOrPositionRejectCount: counters[counterBase + 11],
+                ForwardPlaneRejectCount: counters[counterBase + 12],
+                ForwardNormalRejectCount: counters[counterBase + 13],
+                ForwardInsufficientSupportRejectCount: counters[counterBase + 14],
+                ExactFallbackFragmentCount: counters[counterBase + 15],
+                LegacyFragmentCount: counters[counterBase + 16]);
         }
 
         public DebugDdgiOverlayGpuCounters

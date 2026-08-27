@@ -1,0 +1,223 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D TemporalInput;
+layout(set = 0, binding = 1) uniform usampler2D GeometryInput;
+layout(set = 0, binding = 2) uniform sampler2D RawInput;
+layout(set = 0, binding = 3) uniform sampler2D DepthTexture;
+layout(rgba16f, set = 0, binding = 4) uniform writeonly image2D GtaoFilteredOutput;
+layout(r8, set = 0, binding = 5) uniform writeonly image2D ScalarAoOutput;
+layout(rgba16f, set = 0, binding = 6) uniform writeonly image2D GtaoDebugOutput;
+
+layout(push_constant) uniform GtaoSpatialPushBlock
+{
+    mat4 InverseProjectionMatrix;
+    vec2 SourceDimensions;
+    vec2 OutputDimensions;
+    float DepthSigma;
+    float NormalSigma;
+    uint Radius;
+    uint DebugView;
+} pc;
+
+const int GTAO_GROUP_SIZE = 8;
+const int GTAO_MAX_RADIUS = 2;
+const int GTAO_SHARED_STRIDE = GTAO_GROUP_SIZE + GTAO_MAX_RADIUS * 2;
+const int GTAO_SHARED_COUNT = GTAO_SHARED_STRIDE * GTAO_SHARED_STRIDE;
+
+shared vec4 SharedPayload[GTAO_SHARED_COUNT];
+shared vec4 SharedGeometry[GTAO_SHARED_COUNT];
+shared uint SharedRejection[GTAO_SHARED_COUNT];
+
+vec3 DecodeOctahedral(vec2 encoded)
+{
+    vec3 normal = vec3(encoded,
+        1.0 - abs(encoded.x) - abs(encoded.y));
+    if (normal.z < 0.0)
+        normal.xy = (vec2(1.0) - abs(normal.yx)) * sign(normal.xy);
+    float lengthSquared = dot(normal, normal);
+    return lengthSquared > 1.0e-8
+        ? normal * inversesqrt(lengthSquared)
+        : vec3(0.0, 0.0, 1.0);
+}
+
+vec2 EncodeOctahedral(vec3 normal)
+{
+    normal /= max(abs(normal.x) + abs(normal.y) + abs(normal.z), 1.0e-6);
+    vec2 encoded = normal.xy;
+    if (normal.z < 0.0)
+        encoded = (vec2(1.0) - abs(encoded.yx)) * sign(encoded);
+    return clamp(encoded, vec2(-1.0), vec2(1.0));
+}
+
+bool UnpackGeometry(uvec2 packed, out vec3 normal, out float viewDepth)
+{
+    if ((packed.y & 0x80000000u) == 0u)
+    {
+        normal = vec3(0.0, 0.0, 1.0);
+        viewDepth = 0.0;
+        return false;
+    }
+    normal = DecodeOctahedral(unpackSnorm2x16(packed.x));
+    float logarithmicDepth = unpackHalf2x16(packed.y & 0xffffu).x;
+    viewDepth = max(exp2(logarithmicDepth) - 1.0, 0.0);
+    return !isnan(viewDepth) && !isinf(viewDepth);
+}
+
+void LoadSharedSample(int sharedIndex, ivec2 outputPixel)
+{
+    ivec2 outputExtent = ivec2(pc.OutputDimensions);
+    ivec2 clampedOutput = clamp(outputPixel, ivec2(0),
+        outputExtent - ivec2(1));
+    vec2 uv = (vec2(clampedOutput) + vec2(0.5)) /
+        pc.OutputDimensions;
+    ivec2 sourceExtent = textureSize(TemporalInput, 0);
+    ivec2 sourcePixel = clamp(ivec2(floor(uv * vec2(sourceExtent))),
+        ivec2(0), sourceExtent - ivec2(1));
+    vec4 payload = texelFetch(TemporalInput, sourcePixel, 0);
+    uvec2 packedGeometry = texelFetch(GeometryInput,
+        sourcePixel, 0).xy;
+    vec3 normal;
+    float viewDepth;
+    bool valid = UnpackGeometry(packedGeometry, normal, viewDepth);
+    SharedPayload[sharedIndex] = valid
+        ? payload
+        : vec4(0.0, 0.0, 1.0, 0.0);
+    SharedGeometry[sharedIndex] = vec4(normal,
+        valid ? viewDepth : -1.0);
+    SharedRejection[sharedIndex] =
+        (packedGeometry.y >> 24u) & 0x7fu;
+}
+
+float Gaussian(float value, float sigma)
+{
+    float safeSigma = max(sigma, 1.0e-4);
+    return exp(-0.5 * value * value / (safeSigma * safeSigma));
+}
+
+vec3 RejectionColor(uint reason)
+{
+    if (reason == 0u) return vec3(0.05, 0.65, 0.10);
+    if (reason == 1u) return vec3(0.15, 0.35, 1.00);
+    if (reason == 2u) return vec3(1.00, 0.75, 0.10);
+    if (reason == 3u) return vec3(0.40, 0.00, 0.70);
+    if (reason == 4u) return vec3(1.00, 0.15, 0.10);
+    if (reason == 5u) return vec3(1.00, 0.00, 0.75);
+    if (reason == 6u) return vec3(1.00, 1.00, 1.00);
+    return vec3(0.00, 0.85, 0.85);
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 localPixel = ivec2(gl_LocalInvocationID.xy);
+    ivec2 groupBase = pixel - localPixel;
+    uint linearLocal = gl_LocalInvocationIndex;
+    for (uint sharedIndex = linearLocal;
+         sharedIndex < uint(GTAO_SHARED_COUNT);
+         sharedIndex += 64u)
+    {
+        ivec2 sharedPixel = ivec2(
+            int(sharedIndex) % GTAO_SHARED_STRIDE,
+            int(sharedIndex) / GTAO_SHARED_STRIDE);
+        LoadSharedSample(int(sharedIndex), groupBase + sharedPixel -
+            ivec2(GTAO_MAX_RADIUS));
+    }
+    barrier();
+
+    ivec2 outputExtent = imageSize(GtaoFilteredOutput);
+    if (any(greaterThanEqual(pixel, outputExtent)))
+        return;
+    int centerIndex = (localPixel.y + GTAO_MAX_RADIUS) *
+        GTAO_SHARED_STRIDE + localPixel.x + GTAO_MAX_RADIUS;
+    vec4 centerPayload = SharedPayload[centerIndex];
+    vec4 centerGeometry = SharedGeometry[centerIndex];
+    if (centerGeometry.w < 0.0)
+    {
+        vec4 emptyPayload = vec4(0.0, 0.0, 1.0, 0.0);
+        imageStore(GtaoFilteredOutput, pixel, emptyPayload);
+        imageStore(ScalarAoOutput, pixel, vec4(1.0));
+        imageStore(GtaoDebugOutput, pixel, vec4(1.0));
+        return;
+    }
+
+    int radius = int(clamp(pc.Radius, 0u, uint(GTAO_MAX_RADIUS)));
+    float visibilitySum = 0.0;
+    vec3 bentNormalSum = vec3(0.0);
+    float confidenceSum = 0.0;
+    float weightSum = 0.0;
+    for (int y = -radius; y <= radius; ++y)
+    {
+        for (int x = -radius; x <= radius; ++x)
+        {
+            int sharedIndex = (localPixel.y + GTAO_MAX_RADIUS + y) *
+                GTAO_SHARED_STRIDE +
+                localPixel.x + GTAO_MAX_RADIUS + x;
+            vec4 samplePayload = SharedPayload[sharedIndex];
+            vec4 sampleGeometry = SharedGeometry[sharedIndex];
+            if (sampleGeometry.w < 0.0)
+                continue;
+            float depthDifference = abs(
+                sampleGeometry.w - centerGeometry.w);
+            float depthSigma = min(max(pc.DepthSigma, 0.02),
+                max(0.03, centerGeometry.w * 0.04));
+            if (depthDifference > depthSigma * 4.0)
+                continue;
+            float normalAgreement = clamp(dot(
+                sampleGeometry.xyz, centerGeometry.xyz), 0.0, 1.0);
+            if (normalAgreement < 0.50)
+                continue;
+            float spatialWeight = Gaussian(length(vec2(x, y)),
+                max(float(radius), 1.0));
+            float depthWeight = Gaussian(depthDifference, depthSigma);
+            float normalWeight = pow(normalAgreement,
+                max(pc.NormalSigma * 0.125, 1.0));
+            float weight = spatialWeight * depthWeight * normalWeight;
+            vec3 bentNormal = DecodeOctahedral(samplePayload.xy);
+            if (dot(bentNormal, centerGeometry.xyz) <= 0.0)
+                continue;
+            visibilitySum += samplePayload.z * weight;
+            bentNormalSum += bentNormal * weight;
+            confidenceSum += samplePayload.w * weight;
+            weightSum += weight;
+        }
+    }
+    float visibility = weightSum > 1.0e-6
+        ? visibilitySum / weightSum
+        : centerPayload.z;
+    float confidence = weightSum > 1.0e-6
+        ? confidenceSum / weightSum
+        : centerPayload.w;
+    vec3 bentNormal = dot(bentNormalSum, bentNormalSum) > 1.0e-8
+        ? normalize(bentNormalSum)
+        : DecodeOctahedral(centerPayload.xy);
+    if (dot(bentNormal, centerGeometry.xyz) <= 0.0)
+        bentNormal = centerGeometry.xyz;
+    vec4 filtered = vec4(EncodeOctahedral(bentNormal),
+        clamp(visibility, 0.0, 1.0),
+        clamp(confidence, 0.0, 1.0));
+    imageStore(GtaoFilteredOutput, pixel, filtered);
+    imageStore(ScalarAoOutput, pixel, vec4(filtered.z, 0.0, 0.0, 1.0));
+
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / pc.OutputDimensions;
+    vec4 raw = textureLod(RawInput, uv, 0.0);
+    vec3 debugColor = vec3(filtered.z);
+    if (pc.DebugView == 1u || pc.DebugView == 6u)
+        debugColor = vec3(raw.z);
+    else if (pc.DebugView == 7u)
+        debugColor = vec3(1.0 - raw.z);
+    else if (pc.DebugView == 8u)
+        debugColor = DecodeOctahedral(raw.xy) * 0.5 + vec3(0.5);
+    else if (pc.DebugView == 9u)
+        debugColor = bentNormal * 0.5 + vec3(0.5);
+    else if (pc.DebugView == 10u)
+        debugColor = vec3(centerPayload.w);
+    else if (pc.DebugView == 11u)
+        debugColor = RejectionColor(SharedRejection[centerIndex]);
+    imageStore(GtaoDebugOutput, pixel,
+        vec4(clamp(debugColor, vec3(0.0), vec3(1.0)), 1.0));
+}

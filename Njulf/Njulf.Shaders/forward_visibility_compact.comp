@@ -137,7 +137,7 @@ GPUMeshletDrawCommand ReadBucketCommand(uint bucket, uint localIndex)
     command.MeshletIndex = ReadStorageWord(bufferIndex, baseWord + 0u);
     command.InstanceId = ReadStorageWord(bufferIndex, baseWord + 1u);
     command.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 2u);
-    command.Padding = ReadStorageWord(bufferIndex, baseWord + 3u);
+    command.Flags = ReadStorageWord(bufferIndex, baseWord + 3u);
     return command;
 }
 
@@ -148,7 +148,7 @@ void WriteBucketCommand(uint bucket, uint outputIndex, GPUMeshletDrawCommand com
     WriteStorageWord(bufferIndex, baseWord + 0u, command.MeshletIndex);
     WriteStorageWord(bufferIndex, baseWord + 1u, command.InstanceId);
     WriteStorageWord(bufferIndex, baseWord + 2u, command.MaterialIndex);
-    WriteStorageWord(bufferIndex, baseWord + 3u, command.Padding);
+    WriteStorageWord(bufferIndex, baseWord + 3u, command.Flags);
 }
 
 float ReadInstanceMaxScale(uint instanceBufferIndex, uint objectWordOffset)
@@ -260,7 +260,7 @@ void ProcessBucketCandidate(uint bucket, uint localIndex)
     uint objectWordOffset = command.InstanceId *
         uint(SIZEOF_GPU_OBJECT_DATA / 4);
     vec4 worldCenterRadius = ResolveMeshletWorldCenterRadius(command, meshlet);
-    if ((command.Padding &
+    if ((command.Flags &
             MESHLET_COMMAND_FLAG_NORMAL_CONE_CULL_ELIGIBLE) != 0u)
     {
         mat4 inverseView = ReadMeshletTaskInverseViewMatrix(

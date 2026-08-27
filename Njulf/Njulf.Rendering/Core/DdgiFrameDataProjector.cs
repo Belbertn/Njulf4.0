@@ -635,8 +635,17 @@ internal static class DdgiFrameDataProjector
             manager.FullRayProbeUpdateCount;
         sceneData.SimpleDdgiMaintenanceRayProbeUpdateCount =
             manager.MaintenanceRayProbeUpdateCount;
+        SimpleDdgiAdaptiveRayEvidence adaptiveRayEvidence =
+            manager.SchedulerMode.IsGpuMode() && schedulerFeedbackValid
+                ? manager.GpuScheduler.LastAdaptiveRayEvidence
+                : default;
+        sceneData.SimpleDdgiAdaptiveRayEvidence = adaptiveRayEvidence;
         sceneData.SimpleDdgiAdaptiveRaySavedRaysPerFrame =
-            manager.AdaptiveRaySavedPrimaryRayCount;
+            manager.SchedulerMode.IsGpuMode()
+                ? schedulerFeedbackValid
+                    ? adaptiveRayEvidence.TotalSavedRayCount
+                    : 0UL
+                : manager.AdaptiveRaySavedPrimaryRayCount;
         sceneData.SimpleDdgiNearFullRayProbeUpdateCount =
             manager.NearFullRayProbeUpdateCount;
         sceneData.SimpleDdgiMidFullRayProbeUpdateCount =
@@ -804,7 +813,8 @@ internal static class DdgiFrameDataProjector
         sceneData.DdgiBufferBytes = checked(
             manager.BufferBytes +
             input.ReceiverCacheBufferBytes +
-            input.ReceiverGatherBufferBytes);
+            input.ReceiverGatherBufferBytes +
+            input.ReceiverSurfaceSidecarBytes);
         sceneData.DdgiProbeRelocationCount = manager.ProbeRelocationCount;
         sceneData.DdgiProbeClassificationCount = probesToUpdate;
         sceneData.DdgiClassifiedInactiveProbeCountEstimate =
@@ -958,6 +968,7 @@ internal readonly record struct DdgiFrameProjectionInput(
     SimpleDdgiNearVisibilityGpuCounters NearVisibilityEvidence,
     ulong ReceiverCacheBufferBytes,
     ulong ReceiverGatherBufferBytes,
+    ulong ReceiverSurfaceSidecarBytes,
     SimpleDdgiFrameEvidenceCoordinator FrameEvidence);
 
 internal readonly record struct AdvancedGiFrameProjectionInput(

@@ -16,6 +16,27 @@ animated emissives, VFX emitters, HDR environments, multi-bounce transport,
 opacity micromaps, directional guiding, hero caustics, and C5 near-field GI
 already have implementations. This document tracks the remaining work instead.
 
+The 2026-08-27 Forward+ adaptive-quality closure also completed the bounded C5
+local scheduler, temporal surface-aware DDGI receiver cache, GTAO/bent-normal
+indirect lighting, transparent pipeline partitioning, and conservative meshlet
+normal-cone culling. Their preset activation is:
+
+| Preset | AO | Bent-normal diffuse | DDGI receiver | C5 local scheduler |
+| --- | --- | --- | --- | --- |
+| Low | Disabled | Off | Exact | Off |
+| Medium | GTAO Low | Off | Temporal adaptive | Off |
+| High | GTAO Balanced | Environment | Exact | On |
+| DdgiHigh | GTAO High | Off | Temporal adaptive | On |
+| Ultra | GTAO High | Environment + exact DDGI | Exact | On |
+
+Meshlet cones and transparent partitioning are enabled in every preset and
+fail closed to visible/universal behavior when their inputs are unavailable.
+GTAO similarly falls back to SSAO when its required formats are unsupported.
+Hardware golden-image, soak, cross-vendor, and statistically paired performance
+campaigns below remain pending validation evidence; they do not disable these
+runtime defaults. P2 content-dependent features remain optional and were not
+part of this closure.
+
 ## Recommended implementation order
 
 1. Recover performance headroom in C5 and the DDGI receiver cache.
@@ -176,8 +197,8 @@ without claiming that the entire global field can always converge in one frame.
 
 ### Near-field detail and leakage
 
-- [ ] Improve C5 disocclusion detection, temporal confidence, and history repair.
-- [ ] Add checkerboard/interleaved reconstruction and higher ray counts only in
+- [x] Improve C5 disocclusion detection, temporal confidence, and history repair.
+- [x] Add checkerboard/interleaved reconstruction and higher ray counts only in
       high-variance tiles.
 - [ ] Allocate refinement bricks automatically from receiver density, geometric
       complexity, lighting variance, and observed error.
@@ -215,13 +236,13 @@ first optimization target.
 - [ ] Produce C5 normal, direct-diffuse, and emissive inputs at trace resolution or
       only for active tiles rather than through unconditional full-resolution
       outputs.
-- [ ] Skip C5 where residual energy, estimated visibility error, or perceptual
+- [x] Skip C5 where residual energy, estimated visibility error, or perceptual
       contribution is below threshold.
-- [ ] Trace alternating/checkerboard tiles and reconstruct temporally.
-- [ ] Use additional rays only for high-variance or low-confidence tiles.
+- [x] Trace alternating/checkerboard tiles and reconstruct temporally.
+- [x] Use additional rays only for high-variance or low-confidence tiles.
 - [ ] Pack C5 history formats and alias non-overlapping resources through the
       render graph.
-- [ ] Add per-stage timing and memory counters that separate C5 input generation,
+- [x] Add per-stage timing and memory counters that separate C5 input generation,
       tracing, filtering, and composition.
 
 ### P0: Optimize the DDGI receiver cache
@@ -230,10 +251,10 @@ The receiver cache should be retained: local comparisons show that exact
 per-fragment DDGI is substantially more expensive. The goal is to reduce cache
 construction and reconstruction cost.
 
-- [ ] Add temporal reprojection with conservative disocclusion rejection.
-- [ ] Rebuild only dirty or high-gradient tiles.
-- [ ] Select tile rate from depth, normal, material, motion, and GI gradients.
-- [ ] Dynamically choose full, half, or quarter-rate evaluation per tile.
+- [x] Add temporal reprojection with conservative disocclusion rejection.
+- [x] Rebuild only dirty or high-gradient tiles.
+- [x] Select tile rate from depth, normal, material, motion, and GI gradients.
+- [x] Dynamically choose full, half, or quarter-rate evaluation per tile.
 - [ ] Investigate fusing sampling and reconstruction or sharing workgroup data.
 - [ ] Reuse receiver-cache payloads as C5 inputs where ownership remains clear.
 

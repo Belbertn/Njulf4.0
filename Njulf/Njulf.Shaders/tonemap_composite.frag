@@ -24,7 +24,7 @@ layout(push_constant) uniform CompositePushBlock
     uint AutoExposureEnabled;
     uint AutoExposureStateBufferIndex;
     uint DisplayReferredDebug;
-    uint Padding1;
+    uint AmbientOcclusionDebugView;
 } pc;
 
 const uint TONE_MAPPER_NONE = 0u;
@@ -84,6 +84,17 @@ void main()
     {
         float ao = texture(BindlessTextures[nonuniformEXT(int(pc.AmbientOcclusionDebugTextureIndex))], inUv).r;
         vec3 debugColor = vec3(clamp(ao, 0.0, 1.0));
+        if (pc.OutputToSrgb != 0u)
+            debugColor = LinearToSrgb(debugColor);
+        outColor = vec4(debugColor, 1.0);
+        return;
+    }
+
+    if (pc.AmbientOcclusionDebugTextureIndex == uint(GTAO_DEBUG_TEXTURE_INDEX))
+    {
+        vec3 debugColor = clamp(texture(
+            BindlessTextures[nonuniformEXT(GTAO_DEBUG_TEXTURE_INDEX)],
+            inUv).rgb, vec3(0.0), vec3(1.0));
         if (pc.OutputToSrgb != 0u)
             debugColor = LinearToSrgb(debugColor);
         outColor = vec4(debugColor, 1.0);

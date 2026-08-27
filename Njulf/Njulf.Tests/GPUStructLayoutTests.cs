@@ -441,17 +441,40 @@ namespace Njulf.Tests
                     Is.EqualTo(1u << 15));
                 Assert.That(
                     Marshal.SizeOf<GPUSimpleDdgiReceiverCachePushConstants>(),
-                    Is.EqualTo(128));
+                    Is.EqualTo(132));
                 Assert.That(
                     Marshal.OffsetOf<GPUSimpleDdgiReceiverCachePushConstants>(
                         nameof(GPUSimpleDdgiReceiverCachePushConstants.FeedbackControlOffsetWords)).ToInt32(),
                     Is.EqualTo(112));
                 Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiReceiverCachePushConstants>(
+                        nameof(GPUSimpleDdgiReceiverCachePushConstants.SurfaceBufferIndex)).ToInt32(),
+                    Is.EqualTo(128));
+                Assert.That(
                     Marshal.SizeOf<GPUSimpleDdgiReceiverCacheResolvePushConstants>(),
-                    Is.EqualTo(28));
+                    Is.EqualTo(124));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiReceiverCacheResolvePushConstants>(
+                        nameof(GPUSimpleDdgiReceiverCacheResolvePushConstants.GatherBufferIndex)).ToInt32(),
+                    Is.EqualTo(104));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiReceiverCacheResolvePushConstants>(
+                        nameof(GPUSimpleDdgiReceiverCacheResolvePushConstants.GatherSurfaceBufferIndex)).ToInt32(),
+                    Is.EqualTo(108));
                 Assert.That(
                     Marshal.OffsetOf<GPUSimpleDdgiReceiverCacheResolvePushConstants>(
                         nameof(GPUSimpleDdgiReceiverCacheResolvePushConstants.DepthTextureIndex)).ToInt32(),
+                    Is.EqualTo(116));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiReceiverCacheResolvePushConstants>(
+                        nameof(GPUSimpleDdgiReceiverCacheResolvePushConstants.CurrentFrameIndex)).ToInt32(),
+                    Is.EqualTo(120));
+                Assert.That(
+                    Marshal.SizeOf<GPUSimpleDdgiReceiverCacheLegacyResolvePushConstants>(),
+                    Is.EqualTo(28));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiReceiverCacheLegacyResolvePushConstants>(
+                        nameof(GPUSimpleDdgiReceiverCacheLegacyResolvePushConstants.DepthTextureIndex)).ToInt32(),
                     Is.EqualTo(24));
             });
         }
@@ -608,6 +631,8 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.LocalVertexCount), "OFFSET_GPU_MESHLET_LOCAL_VERTEX_COUNT");
                 AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.LocalTriangleOffset), "OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_OFFSET");
                 AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.LocalTriangleCount), "OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_COUNT");
+                AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.NormalConeAxis), "OFFSET_GPU_MESHLET_NORMAL_CONE_AXIS");
+                AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.NormalConeCutoff), "OFFSET_GPU_MESHLET_NORMAL_CONE_CUTOFF");
             });
         }
 
@@ -616,6 +641,10 @@ namespace Njulf.Tests
         {
             Assert.Multiple(() =>
             {
+                AssertFieldOffset<GPUMeshletDrawCommand>(nameof(GPUMeshletDrawCommand.MeshletIndex), "OFFSET_GPU_MESHLET_DRAW_COMMAND_MESHLET_INDEX");
+                AssertFieldOffset<GPUMeshletDrawCommand>(nameof(GPUMeshletDrawCommand.InstanceId), "OFFSET_GPU_MESHLET_DRAW_COMMAND_INSTANCE_ID");
+                AssertFieldOffset<GPUMeshletDrawCommand>(nameof(GPUMeshletDrawCommand.MaterialIndex), "OFFSET_GPU_MESHLET_DRAW_COMMAND_MATERIAL_INDEX");
+                AssertFieldOffset<GPUMeshletDrawCommand>(nameof(GPUMeshletDrawCommand.Flags), "OFFSET_GPU_MESHLET_DRAW_COMMAND_FLAGS");
                 AssertFieldOffset<GPUPackedMeshletDrawCommand>(nameof(GPUPackedMeshletDrawCommand.MeshletIndex), "OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_MESHLET_INDEX");
                 AssertFieldOffset<GPUPackedMeshletDrawCommand>(nameof(GPUPackedMeshletDrawCommand.InstanceId), "OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_INSTANCE_ID");
                 AssertFieldOffset<GPUPackedMeshletDrawCommand>(nameof(GPUPackedMeshletDrawCommand.MaterialIndex), "OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_MATERIAL_INDEX");

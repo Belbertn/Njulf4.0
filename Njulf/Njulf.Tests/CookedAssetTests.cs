@@ -473,7 +473,7 @@ public sealed class CookedAssetTests
             Assert.That(meshlet.BoundingSphereRadius, Is.EqualTo(4f));
             Assert.That(meshlet.LocalTriangleCount, Is.EqualTo(12));
             Assert.That(meshlet.NormalConeAxis, Is.EqualTo(Vector3.Zero));
-            Assert.That(meshlet.NormalConeCutoff, Is.EqualTo(1f));
+            Assert.That(meshlet.NormalConeCutoff, Is.EqualTo(-1f));
         });
     }
 

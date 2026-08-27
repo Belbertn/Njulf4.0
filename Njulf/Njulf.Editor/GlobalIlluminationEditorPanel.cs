@@ -265,6 +265,8 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
             "This samples the nearest published probe. Black means that selected probe was not relocated; most receivers can be black even when other probes in the ring were relocated.",
         GlobalIlluminationDebugView.DdgiProbeRelocationDirection =>
             "This samples the nearest published probe. Neutral gray means no relocation; colored deviations encode relocation direction.",
+        GlobalIlluminationDebugView.DdgiReceiverCacheRejection =>
+            "Green fragments use the surface-aware cache. Every non-green fragment uses the exact DDGI fallback; magenta=invalid, red=depth/position, orange=plane, blue=normal, yellow=support.",
         GlobalIlluminationDebugView.DdgiProbeResidency =>
             "This is a categorical residency state. Broad flat regions are expected when receivers share the same dense or sparse-page state.",
         GlobalIlluminationDebugView.DdgiResidencyFallback =>

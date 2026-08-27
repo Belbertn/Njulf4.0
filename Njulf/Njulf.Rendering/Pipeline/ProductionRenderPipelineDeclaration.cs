@@ -28,6 +28,9 @@ internal sealed class ProductionRenderPipelineDeclaration
         "ForwardVisibilityCompactionPass",
         "AmbientOcclusionPass",
         "AmbientOcclusionBlurPass",
+        "GtaoPass",
+        "GtaoTemporalPass",
+        "GtaoSpatialPass",
         "TiledLightCullingPass",
         "SimpleDdgiLightTreePass",
         "EnvironmentPrefilterPass",
@@ -125,6 +128,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         {
             latePasses.Add("SimpleDdgiNearFieldResidualResetPass");
             latePasses.Add("SimpleDdgiNearFieldResidualPreparePass");
+            latePasses.Add("SimpleDdgiNearFieldResidualClassifyPass");
             latePasses.Add("SimpleDdgiNearFieldResidualTracePass");
             latePasses.Add("SimpleDdgiNearFieldResidualTemporalPass");
             latePasses.Add("SimpleDdgiNearFieldResidualFinalizePass");
@@ -327,6 +331,38 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeStorage(RenderGraphResourceId.AmbientOcclusionScratch,
                     ImageLayout.ShaderReadOnlyOptimal),
                 WriteComputeStorage(RenderGraphResourceId.AmbientOcclusionBlurred, ImageLayout.ShaderReadOnlyOptimal)),
+            Pass("GtaoPass",
+                ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+                ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
+                WriteComputeStorage(RenderGraphResourceId.GtaoRaw,
+                    ImageLayout.ShaderReadOnlyOptimal)),
+            Pass("GtaoTemporalPass",
+                ReadComputeSampled(RenderGraphResourceId.GtaoRaw),
+                ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+                ReadComputeSampled(RenderGraphResourceId.MotionVectors),
+                ReadComputeSampled(RenderGraphResourceId.GtaoHistory,
+                    RenderGraphHistoryBindingSelection.Previous),
+                ReadComputeSampled(RenderGraphResourceId.GtaoGeometryHistory,
+                    RenderGraphHistoryBindingSelection.Previous),
+                WriteComputeStorage(RenderGraphResourceId.GtaoHistory,
+                    ImageLayout.ShaderReadOnlyOptimal,
+                    RenderGraphHistoryBindingSelection.Current),
+                WriteComputeStorage(RenderGraphResourceId.GtaoGeometryHistory,
+                    ImageLayout.ShaderReadOnlyOptimal,
+                    RenderGraphHistoryBindingSelection.Current)),
+            Pass("GtaoSpatialPass",
+                ReadComputeSampled(RenderGraphResourceId.GtaoHistory,
+                    RenderGraphHistoryBindingSelection.Current),
+                ReadComputeSampled(RenderGraphResourceId.GtaoGeometryHistory,
+                    RenderGraphHistoryBindingSelection.Current),
+                ReadComputeSampled(RenderGraphResourceId.GtaoRaw),
+                ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+                WriteComputeStorage(RenderGraphResourceId.GtaoFiltered,
+                    ImageLayout.ShaderReadOnlyOptimal),
+                WriteComputeStorage(RenderGraphResourceId.GtaoSpatialScratch,
+                    ImageLayout.ShaderReadOnlyOptimal),
+                WriteComputeStorage(RenderGraphResourceId.AmbientOcclusionBlurred,
+                    ImageLayout.ShaderReadOnlyOptimal)),
             Pass("TiledLightCullingPass",
                 ReadComputeDepth(RenderGraphResourceId.SceneDepth),
                 Write(RenderGraphResourceId.LightTiles)),
@@ -371,6 +407,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 Read(RenderGraphResourceId.FoliageBuffers),
                 Read(RenderGraphResourceId.LightTiles),
                 ReadFragmentSampled(RenderGraphResourceId.AmbientOcclusionBlurred),
+                ReadFragmentSampled(RenderGraphResourceId.GtaoFiltered),
                 Read(RenderGraphResourceId.DirectionalShadowMap),
                 Read(RenderGraphResourceId.SpotShadowAtlas),
                 Read(RenderGraphResourceId.PointShadowCubemapArray),
@@ -1012,6 +1049,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                     RenderGraphResourceId.NearFieldResidualFilterScratch,
                     RenderGraphHistoryBindingSelection.All));
             }
+            nearFieldResetUsages.Add(WriteTransferAndComputeBuffer(
+                RenderGraphResourceId.NearFieldResidualSchedulerHistory,
+                RenderGraphHistoryBindingSelection.Current));
 
             declarations.AddRange([
                 Pass("SimpleDdgiNearFieldResidualResetPass",
@@ -1034,6 +1074,22 @@ internal sealed class ProductionRenderPipelineDeclaration
                         RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments),
                     WriteComputeBuffer(RenderGraphResourceId.NearFieldSurfaceTable),
                     WriteComputeBuffer(RenderGraphResourceId.NearFieldResidualTileBuffers)),
+                Pass("SimpleDdgiNearFieldResidualClassifyPass",
+                    ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldPreparedDepthFootprint),
+                    ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldPreparedReceiverPayload),
+                    ReadComputeSampled(RenderGraphResourceId.NearFieldPreparedMotion),
+                    ReadComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualSchedulerHistory,
+                        RenderGraphHistoryBindingSelection.Previous),
+                    WriteComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualSchedulerHistory,
+                        RenderGraphHistoryBindingSelection.Current),
+                    ReadWriteComputeIndirectBuffer(
+                        RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments),
+                    ReadWriteComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualTileBuffers)),
                 Pass("SimpleDdgiNearFieldResidualTracePass",
                     ReadComputeSampled(RenderGraphResourceId.NearFieldDirectSource),
                     ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
@@ -1048,6 +1104,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                         RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments),
                     ReadComputeBuffer(
                         RenderGraphResourceId.NearFieldResidualTraceFrameConstants),
+                    ReadComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualSchedulerHistory,
+                        RenderGraphHistoryBindingSelection.Current),
                     WriteComputeStorage(RenderGraphResourceId.NearFieldResidualRaw),
                     WriteComputeBuffer(
                         RenderGraphResourceId.NearFieldResidualHistoryMetadata,
@@ -1061,6 +1120,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                     ReadComputeSampled(RenderGraphResourceId.NearFieldPreparedMotion),
                     ReadComputeSampled(
                         RenderGraphResourceId.NearFieldPreparedReceiverPayload),
+                    ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldPreparedDepthFootprint),
                     ReadComputeSampled(RenderGraphResourceId.NearFieldDirectSource),
                     ReadComputeDepth(RenderGraphResourceId.SceneDepth),
                     ReadComputeSampled(RenderGraphResourceId.NearFieldReceiverPayload),
@@ -1099,6 +1160,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                     WriteComputeStorage(
                         RenderGraphResourceId.NearFieldResidualHistoryNormals,
                         historyBinding: RenderGraphHistoryBindingSelection.Current),
+                    ReadWriteComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualSchedulerHistory,
+                        RenderGraphHistoryBindingSelection.Current),
                     WriteComputeBuffer(
                         RenderGraphResourceId.NearFieldResidualTileBuffers)),
                 Pass("SimpleDdgiNearFieldResidualFinalizePass",
@@ -1213,6 +1277,26 @@ internal sealed class ProductionRenderPipelineDeclaration
                 RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.SceneResolution),
             OwnedImageResource(RenderGraphResourceId.AmbientOcclusionScratch, "Ambient occlusion scratch",
                 RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.HalfResolution),
+            OwnedImageResource(RenderGraphResourceId.GtaoRaw,
+                "GTAO raw bent normal and visibility",
+                RenderTargetManager.GtaoRadianceFormat,
+                RenderGraphResourceSizePolicy.HalfResolution),
+            OwnedImageResource(RenderGraphResourceId.GtaoSpatialScratch,
+                "GTAO spatial debug scratch",
+                RenderTargetManager.GtaoRadianceFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
+            OwnedImageChainResource(RenderGraphResourceId.GtaoHistory,
+                "GTAO history",
+                RenderTargetManager.GtaoRadianceFormat,
+                RenderGraphResourceSizePolicy.HalfResolution),
+            OwnedImageChainResource(RenderGraphResourceId.GtaoGeometryHistory,
+                "GTAO geometry history",
+                RenderTargetManager.GtaoGeometryHistoryFormat,
+                RenderGraphResourceSizePolicy.HalfResolution),
+            OwnedImageResource(RenderGraphResourceId.GtaoFiltered,
+                "GTAO filtered bent normal and visibility",
+                RenderTargetManager.GtaoRadianceFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
             BufferSetResource(RenderGraphResourceId.DdgiProbeResources, "DDGI probe resources"),
             BufferSetResource(RenderGraphResourceId.TlasStorage, "TLAS storage"),
             BufferSetResource(RenderGraphResourceId.RayQueryInstanceMetadata, "Ray-query instance metadata"),
@@ -1497,6 +1581,9 @@ internal sealed class ProductionRenderPipelineDeclaration
             descriptors.Add(BufferSetResource(
                 RenderGraphResourceId.NearFieldResidualTraceFrameConstants,
                 "Near-field residual per-frame reconstruction constants"));
+            descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.NearFieldResidualSchedulerHistory,
+                "Near-field residual double-buffered tile scheduler history"));
             descriptors.Add(TransientImageResource(
                 RenderGraphResourceId.NearFieldReceiverPayload,
                 "Near-field C5 compact receiver payload",
@@ -2215,7 +2302,10 @@ internal sealed class ProductionRenderPipelineDeclaration
             HistoryBinding: historyBinding);
     }
 
-    private static RenderGraphResourceUsage ReadWriteComputeBuffer(RenderGraphResourceId resource)
+    private static RenderGraphResourceUsage ReadWriteComputeBuffer(
+        RenderGraphResourceId resource,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
     {
         return new RenderGraphResourceUsage(
             resource,
@@ -2224,7 +2314,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit | AccessFlags2.TransferReadBit |
             AccessFlags2.TransferWriteBit,
             ImageLayout.Undefined,
-            RenderGraphQueueIntent.Compute);
+            RenderGraphQueueIntent.Compute,
+            HistoryBinding: historyBinding);
     }
 
     private static RenderGraphResourceUsage ReadWrite(RenderGraphResourceId resource)

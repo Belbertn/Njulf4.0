@@ -1083,6 +1083,19 @@ internal sealed class HelloGame : Game
             settings.GlobalIllumination.SimpleDdgiStoragePackingMode =
                 _smokeOptions.SimpleDdgiStoragePackingModeOverride.Value;
         }
+        if (_smokeOptions.Benchmark.Enabled ||
+            _smokeOptions.BenchmarkQualitySequence.Enabled)
+        {
+            // Pipeline families are immutable for a renderer lifetime. Apply
+            // capture-only pipeline requirements before construction, then
+            // ApplySmokeRenderSettings repeats the same deterministic delta
+            // after scene profiles have established ordinary runtime state.
+            SampleBenchmarkCaptureVariant.Apply(
+                settings,
+                _smokeOptions.Benchmark.Enabled
+                    ? _smokeOptions.Benchmark.CaptureVariant
+                    : _smokeOptions.BenchmarkQualitySequence.CaptureVariant);
+        }
         ApplyAdvancedGiSettings(settings.GlobalIllumination);
         ApplyScenePostOverrides(settings);
     }

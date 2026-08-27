@@ -3,26 +3,83 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "ddgi_receiver_surface.glsl"
+
+#ifndef NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+#define NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE 0
+#endif
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+layout(std430, set = 2, binding = 0) buffer ReceiverCacheOutputBlock
+#else
 layout(std430, set = 2, binding = 0) writeonly buffer ReceiverCacheOutputBlock
+#endif
 {
     uvec4 Entries[];
 } ReceiverCacheOutput;
 
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+layout(std430, set = 2, binding = 1) buffer ReceiverSurfaceOutputBlock
+#else
+layout(std430, set = 2, binding = 1) writeonly buffer ReceiverSurfaceOutputBlock
+#endif
+{
+    uvec2 Entries[];
+} ReceiverSurfaceOutput;
+
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+layout(std430, set = 2, binding = 4) buffer ReceiverMetadataOutputBlock
+{
+    uvec4 Entries[];
+} ReceiverMetadataOutput;
+
+layout(std430, set = 2, binding = 6) readonly buffer ReceiverTileScheduleBlock
+{
+    uvec4 Entries[];
+} ReceiverTileSchedule;
+
+layout(std430, set = 2, binding = 8) readonly buffer ReceiverResolveTileBlock
+{
+    uvec2 Entries[];
+} ReceiverResolveTiles;
+
+layout(std430, set = 2, binding = 9) readonly buffer ReceiverAdaptiveControlBlock
+{
+    uint Words[];
+} ReceiverAdaptiveControl;
+
+layout(std430, set = 2, binding = 10) readonly buffer ReceiverGatherStampBlock
+{
+    uint Entries[];
+} ReceiverGatherStamps;
+#endif
+
 layout(push_constant) uniform SimpleDdgiReceiverCacheResolvePushBlock
 {
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndPadding;
+    uint ScreenWidth;
+    uint ScreenHeight;
     uint GatherWidth;
     uint GatherHeight;
     uint CacheWidth;
     uint CacheHeight;
     uint GatherBufferIndex;
+    uint GatherSurfaceBufferIndex;
     uint PackedScaleAndEdgeExtents;
     uint DepthTextureIndex;
+    uint CurrentFrameIndex;
 } pc;
 
 const float RECEIVER_CACHE_INV_PI = 0.31830988618;
+const float RECEIVER_NORMAL_RELATIVE_EPSILON = 0.000001;
+const float RECEIVER_CACHE_MINIMUM_COMPATIBLE_WEIGHT = 0.125;
+const uint RECEIVER_CACHE_MINIMUM_COMPATIBLE_COUNT = 1u;
+// The first four words retain the canonical gather record. The tail carries
+// the compact directional coefficient lattice consumed directly by forward.
+const uint RECEIVER_GATHER_ENTRY_WORDS = 20u;
 
 struct ReceiverCacheGatherSample
 {
@@ -34,12 +91,33 @@ struct ReceiverCacheGatherSample
     uint DepthCode;
 };
 
+struct ReceiverCacheGatherCandidate
+{
+    ReceiverCacheGatherSample Sample;
+    uvec2 Surface;
+    SimpleDdgiReceiverSurface DecodedSurface;
+    uvec2 Pixel;
+    vec3 WorldPosition;
+    float PixelFootprint;
+    ivec2 Coordinate;
+    bool Valid;
+};
+
+struct ReceiverCacheResolvedSurface
+{
+    uvec2 Packed;
+    SimpleDdgiReceiverSurface Decoded;
+    uvec2 Pixel;
+    vec3 WorldPosition;
+    float PixelFootprint;
+    bool Valid;
+};
+
 ReceiverCacheGatherSample EmptyReceiverCacheGatherSample()
 {
     ReceiverCacheGatherSample result;
     result.DdgiIrradiance = vec3(0.0);
     result.EnvironmentIrradiance = vec3(0.0);
-    // Empty reconstruction support must never black out reflections.
     result.IndirectSpecularVisibility = 1.0;
     result.RoughSpecularMinimumRoughness = 0.55;
     result.RoughSpecularFullWeightRoughness = 0.70;
@@ -47,11 +125,40 @@ ReceiverCacheGatherSample EmptyReceiverCacheGatherSample()
     return result;
 }
 
-uint EncodeReceiverCacheDepth(float depth)
+ReceiverCacheGatherCandidate EmptyReceiverCacheGatherCandidate()
 {
-    // This mirrors the gather encoder exactly. Code zero remains the invalid
-    // sentinel, while a code delta measures relative rather than absolute
-    // receiver separation across the complete reverse-Z range.
+    ReceiverCacheGatherCandidate result;
+    result.Sample = EmptyReceiverCacheGatherSample();
+    result.Surface = SimpleDdgiReceiverSurfaceInvalid();
+    result.DecodedSurface.GeometricNormal = vec3(0.0);
+    result.DecodedSurface.ReverseZ = 0.0;
+    result.DecodedSurface.RepresentativeOffset = uvec2(0u);
+    result.Pixel = uvec2(0u);
+    result.WorldPosition = vec3(0.0);
+    result.PixelFootprint =
+        SIMPLE_DDGI_RECEIVER_SURFACE_MINIMUM_WORLD_TOLERANCE;
+    result.Coordinate = ivec2(0);
+    result.Valid = false;
+    return result;
+}
+
+ReceiverCacheResolvedSurface EmptyReceiverCacheResolvedSurface()
+{
+    ReceiverCacheResolvedSurface result;
+    result.Packed = SimpleDdgiReceiverSurfaceInvalid();
+    result.Decoded.GeometricNormal = vec3(0.0);
+    result.Decoded.ReverseZ = 0.0;
+    result.Decoded.RepresentativeOffset = uvec2(0u);
+    result.Pixel = uvec2(0u);
+    result.WorldPosition = vec3(0.0);
+    result.PixelFootprint =
+        SIMPLE_DDGI_RECEIVER_SURFACE_MINIMUM_WORLD_TOLERANCE;
+    result.Valid = false;
+    return result;
+}
+
+uint EncodeLegacyReceiverCacheDepth(float depth)
+{
     float normalized = clamp(
         (log2(max(depth, 1.0 / 65536.0)) + 16.0) / 16.0,
         0.0,
@@ -78,14 +185,171 @@ uvec2 LastCacheBlockExtent()
         uvec2(1u));
 }
 
-ReceiverCacheGatherSample LoadGatherSample(
-    uvec2 coord,
-    out uint depthCode)
+bool ReconstructReceiverPosition(
+    ivec2 pixel,
+    out vec3 worldPosition,
+    out float depth)
 {
-    uint entryIndex = coord.y * pc.GatherWidth + coord.x;
+    uvec2 screenExtent = uvec2(pc.ScreenWidth, pc.ScreenHeight);
+    if (any(lessThan(pixel, ivec2(0))) ||
+        any(greaterThanEqual(pixel, ivec2(screenExtent))))
+    {
+        worldPosition = vec3(0.0);
+        depth = 0.0;
+        return false;
+    }
+
+    depth = texelFetch(
+        BindlessTextures[nonuniformEXT(pc.DepthTextureIndex)],
+        pixel,
+        0).r;
+    if (!SimpleDdgiReceiverSurfaceFinite(depth) || depth <= 0.000001)
+    {
+        worldPosition = vec3(0.0);
+        return false;
+    }
+    return SimpleDdgiReceiverSurfaceReconstructPosition(
+        uvec2(pixel),
+        depth,
+        pc.InverseViewProjectionMatrix,
+        screenExtent,
+        worldPosition);
+}
+
+bool ReconstructReceiverPosition(ivec2 pixel, out vec3 worldPosition)
+{
+    float ignoredDepth;
+    return ReconstructReceiverPosition(pixel, worldPosition, ignoredDepth);
+}
+
+bool SelectScreenDerivative(
+    vec3 center,
+    bool negativeValid,
+    vec3 negativePosition,
+    bool positiveValid,
+    vec3 positivePosition,
+    out vec3 derivative)
+{
+    vec3 negativeDerivative = center - negativePosition;
+    vec3 positiveDerivative = positivePosition - center;
+    if (negativeValid && positiveValid)
+    {
+        derivative = dot(negativeDerivative, negativeDerivative) <=
+                dot(positiveDerivative, positiveDerivative)
+            ? negativeDerivative
+            : positiveDerivative;
+        return true;
+    }
+    if (negativeValid)
+    {
+        derivative = negativeDerivative;
+        return true;
+    }
+    if (positiveValid)
+    {
+        derivative = positiveDerivative;
+        return true;
+    }
+    derivative = vec3(0.0);
+    return false;
+}
+
+vec3 ReconstructReceiverNormal(
+    ivec2 pixel,
+    vec3 worldPosition,
+    vec3 viewDirection,
+    out float pixelFootprint)
+{
+    vec3 leftPosition;
+    vec3 rightPosition;
+    vec3 upPosition;
+    vec3 downPosition;
+    bool leftValid = ReconstructReceiverPosition(
+        pixel + ivec2(-1, 0),
+        leftPosition);
+    bool rightValid = ReconstructReceiverPosition(
+        pixel + ivec2(1, 0),
+        rightPosition);
+    bool upValid = ReconstructReceiverPosition(
+        pixel + ivec2(0, -1),
+        upPosition);
+    bool downValid = ReconstructReceiverPosition(
+        pixel + ivec2(0, 1),
+        downPosition);
+
+    pixelFootprint =
+        SIMPLE_DDGI_RECEIVER_SURFACE_MINIMUM_WORLD_TOLERANCE;
+    ivec2 screenExtent = ivec2(pc.ScreenWidth, pc.ScreenHeight);
+    if (pixel.x + 1 < screenExtent.x)
+    {
+        if (rightValid)
+            pixelFootprint = max(
+                pixelFootprint,
+                distance(worldPosition, rightPosition));
+    }
+    else if (leftValid)
+    {
+        pixelFootprint = max(
+            pixelFootprint,
+            distance(worldPosition, leftPosition));
+    }
+    if (pixel.y + 1 < screenExtent.y)
+    {
+        if (downValid)
+            pixelFootprint = max(
+                pixelFootprint,
+                distance(worldPosition, downPosition));
+    }
+    else if (upValid)
+    {
+        pixelFootprint = max(
+            pixelFootprint,
+            distance(worldPosition, upPosition));
+    }
+
+    vec3 dx;
+    vec3 dy;
+    bool dxValid = SelectScreenDerivative(
+        worldPosition,
+        leftValid,
+        leftPosition,
+        rightValid,
+        rightPosition,
+        dx);
+    bool dyValid = SelectScreenDerivative(
+        worldPosition,
+        upValid,
+        upPosition,
+        downValid,
+        downPosition,
+        dy);
+
+    vec3 normal = viewDirection;
+    if (dxValid && dyValid)
+    {
+        vec3 candidate = cross(dx, dy);
+        float lengthSquared = dot(candidate, candidate);
+        float derivativeAreaSquared = max(
+            dot(dx, dx) * dot(dy, dy),
+            1.0e-30);
+        if (lengthSquared >
+                derivativeAreaSquared * RECEIVER_NORMAL_RELATIVE_EPSILON &&
+            SimpleDdgiReceiverSurfaceFinite(lengthSquared) &&
+            SimpleDdgiReceiverSurfaceFinite(derivativeAreaSquared))
+        {
+            normal = candidate * inversesqrt(lengthSquared);
+        }
+    }
+    if (dot(normal, viewDirection) < 0.0)
+        normal = -normal;
+    return normalize(normal);
+}
+
+ReceiverCacheGatherSample LoadGatherSample(uint entryIndex)
+{
     uvec4 packed = ReadStorageAlignedUVec4Uniform(
         pc.GatherBufferIndex,
-        entryIndex * 4u);
+        entryIndex * RECEIVER_GATHER_ENTRY_WORDS);
     vec2 ddgiXy = unpackHalf2x16(packed.x);
     vec2 ddgiZEnvironmentX = unpackHalf2x16(packed.y);
     vec2 environmentYz = unpackHalf2x16(packed.z);
@@ -94,10 +358,7 @@ ReceiverCacheGatherSample LoadGatherSample(
     result.EnvironmentIrradiance = vec3(
         ddgiZEnvironmentX.y,
         environmentYz);
-    // Gather metadata layout:
-    // [ depth:10 | visibility:10 | minimum roughness:6 | full roughness:6 ].
-    depthCode = packed.w & 0x3ffu;
-    result.DepthCode = depthCode;
+    result.DepthCode = packed.w & 0x3ffu;
     result.IndirectSpecularVisibility =
         float((packed.w >> 10u) & 0x3ffu) / 1023.0;
     result.RoughSpecularMinimumRoughness =
@@ -107,7 +368,364 @@ ReceiverCacheGatherSample LoadGatherSample(
     return result;
 }
 
-uint EncodeResolvedReceiverCacheMetadata(ReceiverCacheGatherSample value)
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+uint ReceiverAdaptiveTileWidth()
+{
+    return (pc.CacheWidth + 7u) / 8u;
+}
+
+bool TryLoadReprojectedGatherCandidate(
+    ivec2 gatherCoordinate,
+    out ReceiverCacheGatherCandidate candidate)
+{
+    candidate = EmptyReceiverCacheGatherCandidate();
+    uvec2 screenCenter = uvec2(gatherCoordinate) * GatherScale() +
+        uvec2(GatherScale() / 2u);
+    uvec2 cacheCoordinate = min(
+        screenCenter / CacheScale(),
+        uvec2(pc.CacheWidth - 1u, pc.CacheHeight - 1u));
+    uvec2 tileCoordinate = cacheCoordinate / 8u;
+    uint tileIndex = tileCoordinate.y * ReceiverAdaptiveTileWidth() +
+        tileCoordinate.x;
+    // Dirty tiles are concurrently overwritten by this dispatch. Restrict
+    // fallback reads to Reuse tiles, which classification published and this
+    // resolve dispatch never writes.
+    if (ReceiverTileSchedule.Entries[tileIndex].x != 3u)
+        return false;
+
+    uint cacheIndex = cacheCoordinate.y * pc.CacheWidth + cacheCoordinate.x;
+    uvec4 packed = ReceiverCacheOutput.Entries[cacheIndex];
+    candidate.Surface = ReceiverSurfaceOutput.Entries[cacheIndex];
+    vec2 ddgiXy = unpackHalf2x16(packed.x);
+    vec2 ddgiZEnvironmentX = unpackHalf2x16(packed.y);
+    vec2 environmentYz = unpackHalf2x16(packed.z);
+    candidate.Sample.DdgiIrradiance =
+        vec3(ddgiXy, ddgiZEnvironmentX.x) * 3.14159265359;
+    candidate.Sample.EnvironmentIrradiance =
+        vec3(ddgiZEnvironmentX.y, environmentYz) * 3.14159265359;
+    candidate.Sample.DepthCode = packed.w & 0x3ffu;
+    candidate.Sample.IndirectSpecularVisibility =
+        float((packed.w >> 10u) & 0x3ffu) / 1023.0;
+    candidate.Sample.RoughSpecularMinimumRoughness =
+        float((packed.w >> 20u) & 0x3fu) / 63.0;
+    candidate.Sample.RoughSpecularFullWeightRoughness =
+        float((packed.w >> 26u) & 0x3fu) / 63.0;
+    candidate.Coordinate = gatherCoordinate;
+    candidate.Valid = candidate.Sample.DepthCode != 0u &&
+        SimpleDdgiReceiverSurfaceDecode(
+            candidate.Surface,
+            candidate.DecodedSurface) &&
+        SimpleDdgiReceiverSurfaceResolvePixel(
+            cacheCoordinate,
+            CacheScale(),
+            candidate.DecodedSurface,
+            uvec2(pc.ScreenWidth, pc.ScreenHeight),
+            candidate.Pixel) &&
+        SimpleDdgiReceiverSurfaceReconstructPosition(
+            candidate.Pixel,
+            candidate.DecodedSurface.ReverseZ,
+            pc.InverseViewProjectionMatrix,
+            uvec2(pc.ScreenWidth, pc.ScreenHeight),
+            candidate.WorldPosition);
+    if (candidate.Valid)
+    {
+        candidate.PixelFootprint =
+            SimpleDdgiReceiverSurfacePixelFootprint(
+                candidate.Pixel,
+                candidate.DecodedSurface.ReverseZ,
+                candidate.WorldPosition,
+                pc.InverseViewProjectionMatrix,
+                uvec2(pc.ScreenWidth, pc.ScreenHeight));
+    }
+    return candidate.Valid;
+}
+#endif
+
+uvec2 LoadGatherSurface(uint entryIndex)
+{
+    uint word = entryIndex * 2u;
+    return uvec2(
+        ReadStorageWordUniform(pc.GatherSurfaceBufferIndex, word + 0u),
+        ReadStorageWordUniform(pc.GatherSurfaceBufferIndex, word + 1u));
+}
+
+bool TryLoadGatherCandidate(
+    ivec2 coordinate,
+    out ReceiverCacheGatherCandidate candidate)
+{
+    candidate = EmptyReceiverCacheGatherCandidate();
+    if (any(lessThan(coordinate, ivec2(0))) ||
+        any(greaterThanEqual(
+            coordinate,
+            ivec2(pc.GatherWidth, pc.GatherHeight))))
+    {
+        return false;
+    }
+
+    uint entryIndex = uint(coordinate.y) * pc.GatherWidth +
+        uint(coordinate.x);
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+    if (ReceiverGatherStamps.Entries[entryIndex] != pc.CurrentFrameIndex)
+        return TryLoadReprojectedGatherCandidate(coordinate, candidate);
+#endif
+    candidate.Sample = LoadGatherSample(entryIndex);
+    candidate.Surface = LoadGatherSurface(entryIndex);
+    candidate.Coordinate = coordinate;
+    candidate.Valid = candidate.Sample.DepthCode != 0u &&
+        SimpleDdgiReceiverSurfaceDecode(
+            candidate.Surface,
+            candidate.DecodedSurface) &&
+        SimpleDdgiReceiverSurfaceResolvePixel(
+            uvec2(coordinate),
+            GatherScale(),
+            candidate.DecodedSurface,
+            uvec2(pc.ScreenWidth, pc.ScreenHeight),
+            candidate.Pixel) &&
+        SimpleDdgiReceiverSurfaceReconstructPosition(
+            candidate.Pixel,
+            candidate.DecodedSurface.ReverseZ,
+            pc.InverseViewProjectionMatrix,
+            uvec2(pc.ScreenWidth, pc.ScreenHeight),
+            candidate.WorldPosition);
+    if (candidate.Valid)
+    {
+        candidate.PixelFootprint =
+            SimpleDdgiReceiverSurfacePixelFootprint(
+                candidate.Pixel,
+                candidate.DecodedSurface.ReverseZ,
+                candidate.WorldPosition,
+                pc.InverseViewProjectionMatrix,
+                uvec2(pc.ScreenWidth, pc.ScreenHeight));
+    }
+    return candidate.Valid;
+}
+
+bool CandidateMatchesRepresentative(
+    ReceiverCacheGatherCandidate candidate,
+    ReceiverCacheResolvedSurface representative)
+{
+    return candidate.Valid &&
+        representative.Valid &&
+        SimpleDdgiReceiverSurfaceEvaluateDecoded(
+            candidate.DecodedSurface.ReverseZ,
+            candidate.WorldPosition,
+            candidate.DecodedSurface.GeometricNormal,
+            representative.Decoded.ReverseZ,
+            representative.WorldPosition,
+            representative.Decoded.GeometricNormal,
+            max(
+                candidate.PixelFootprint,
+                representative.PixelFootprint),
+            max(GatherScale(), CacheScale()),
+            pc.CameraPositionAndPadding.xyz) ==
+        SIMPLE_DDGI_RECEIVER_SURFACE_ACCEPTED;
+}
+
+ReceiverCacheGatherCandidate ResolveCompatibleGatherCandidate(
+    ivec2 requestedCoordinate,
+    ReceiverCacheResolvedSurface representative)
+{
+    ivec2 extent = ivec2(pc.GatherWidth, pc.GatherHeight);
+    ivec2 coordinate = clamp(
+        requestedCoordinate,
+        ivec2(0),
+        extent - ivec2(1));
+    ReceiverCacheGatherCandidate result;
+    if (TryLoadGatherCandidate(coordinate, result) &&
+        CandidateMatchesRepresentative(result, representative))
+    {
+        return result;
+    }
+
+    bool found = false;
+    uint bestDistance = 3u;
+    float bestReverseZ = 0.0;
+    int bestOrder = 10;
+    ReceiverCacheGatherCandidate best =
+        EmptyReceiverCacheGatherCandidate();
+    int order = 0;
+    for (int y = -1; y <= 1; y++)
+    for (int x = -1; x <= 1; x++, order++)
+    {
+        if (x == 0 && y == 0)
+            continue;
+        ReceiverCacheGatherCandidate candidate;
+        if (!TryLoadGatherCandidate(
+                coordinate + ivec2(x, y),
+                candidate) ||
+            !CandidateMatchesRepresentative(
+                candidate,
+                representative))
+        {
+            continue;
+        }
+
+        uint distance = uint(abs(x) + abs(y));
+        if (!found || distance < bestDistance ||
+            (distance == bestDistance &&
+             (candidate.DecodedSurface.ReverseZ > bestReverseZ ||
+              (candidate.DecodedSurface.ReverseZ == bestReverseZ &&
+               order < bestOrder))))
+        {
+            found = true;
+            bestDistance = distance;
+            bestReverseZ = candidate.DecodedSurface.ReverseZ;
+            bestOrder = order;
+            best = candidate;
+        }
+    }
+    return found ? best : EmptyReceiverCacheGatherCandidate();
+}
+
+bool SelectResolvedRepresentativeSurface(
+    uvec2 resolvedCoordinate,
+    uvec2 blockExtent,
+    out ReceiverCacheResolvedSurface representativeSurface)
+{
+    representativeSurface = EmptyReceiverCacheResolvedSurface();
+    uint cacheScale = CacheScale();
+    uvec2 blockBase = resolvedCoordinate * cacheScale;
+    uvec2 surfaces[4];
+    SimpleDdgiReceiverSurface decodedSurfaces[4];
+    uvec2 pixels[4];
+    vec3 worldPositions[4];
+    float pixelFootprints[4];
+    float reverseDepths[4];
+    bool valid[4];
+    for (int index = 0; index < 4; index++)
+    {
+        surfaces[index] = SimpleDdgiReceiverSurfaceInvalid();
+        decodedSurfaces[index].GeometricNormal = vec3(0.0);
+        decodedSurfaces[index].ReverseZ = 0.0;
+        decodedSurfaces[index].RepresentativeOffset = uvec2(0u);
+        pixels[index] = uvec2(0u);
+        worldPositions[index] = vec3(0.0);
+        pixelFootprints[index] =
+            SIMPLE_DDGI_RECEIVER_SURFACE_MINIMUM_WORLD_TOLERANCE;
+        reverseDepths[index] = 0.0;
+        valid[index] = false;
+    }
+
+    int validCount = 0;
+    for (uint y = 0u; y < blockExtent.y; y++)
+    for (uint x = 0u; x < blockExtent.x; x++)
+    {
+        int index = int(y * cacheScale + x);
+        ivec2 pixel = ivec2(blockBase + uvec2(x, y));
+        vec3 worldPosition;
+        float reverseZ;
+        if (!ReconstructReceiverPosition(
+                pixel,
+                worldPosition,
+                reverseZ))
+        {
+            continue;
+        }
+        vec3 viewVector =
+            pc.CameraPositionAndPadding.xyz - worldPosition;
+        float viewDistance = length(viewVector);
+        if (!(viewDistance > 0.00001) ||
+            !SimpleDdgiReceiverSurfaceFinite(viewDistance))
+        {
+            continue;
+        }
+        float ignoredOriginalPixelFootprint;
+        vec3 normal = ReconstructReceiverNormal(
+            pixel,
+            worldPosition,
+            viewVector / viewDistance,
+            ignoredOriginalPixelFootprint);
+        surfaces[index] = SimpleDdgiReceiverSurfacePack(
+            normal,
+            reverseZ,
+            uvec2(x, y));
+        valid[index] = SimpleDdgiReceiverSurfaceDecode(
+                surfaces[index],
+                decodedSurfaces[index]) &&
+            SimpleDdgiReceiverSurfaceResolvePixel(
+                resolvedCoordinate,
+                cacheScale,
+                decodedSurfaces[index],
+                uvec2(pc.ScreenWidth, pc.ScreenHeight),
+                pixels[index]) &&
+            SimpleDdgiReceiverSurfaceReconstructPosition(
+                pixels[index],
+                decodedSurfaces[index].ReverseZ,
+                pc.InverseViewProjectionMatrix,
+                uvec2(pc.ScreenWidth, pc.ScreenHeight),
+                worldPositions[index]);
+        if (valid[index])
+        {
+            pixelFootprints[index] =
+                SimpleDdgiReceiverSurfacePixelFootprint(
+                    pixels[index],
+                    decodedSurfaces[index].ReverseZ,
+                    worldPositions[index],
+                    pc.InverseViewProjectionMatrix,
+                    uvec2(pc.ScreenWidth, pc.ScreenHeight));
+        }
+        reverseDepths[index] = decodedSurfaces[index].ReverseZ;
+        if (valid[index])
+            validCount++;
+    }
+    if (validCount == 0)
+        return false;
+
+    int bestIndex = -1;
+    int bestSupport = -1;
+    float bestDepth = -1.0;
+    for (int candidateIndex = 0; candidateIndex < 4; candidateIndex++)
+    {
+        if (!valid[candidateIndex])
+            continue;
+        int support = 0;
+        for (int otherIndex = 0; otherIndex < 4; otherIndex++)
+        {
+            if (!valid[otherIndex])
+                continue;
+            if (SimpleDdgiReceiverSurfaceEvaluateDecoded(
+                    decodedSurfaces[candidateIndex].ReverseZ,
+                    worldPositions[candidateIndex],
+                    decodedSurfaces[candidateIndex].GeometricNormal,
+                    decodedSurfaces[otherIndex].ReverseZ,
+                    worldPositions[otherIndex],
+                    decodedSurfaces[otherIndex].GeometricNormal,
+                    max(
+                        pixelFootprints[candidateIndex],
+                        pixelFootprints[otherIndex]),
+                    cacheScale,
+                    pc.CameraPositionAndPadding.xyz) ==
+                SIMPLE_DDGI_RECEIVER_SURFACE_ACCEPTED)
+            {
+                support++;
+            }
+        }
+
+        if (support > bestSupport ||
+            (support == bestSupport &&
+             (reverseDepths[candidateIndex] > bestDepth ||
+              (reverseDepths[candidateIndex] == bestDepth &&
+               candidateIndex < bestIndex))))
+        {
+            bestIndex = candidateIndex;
+            bestSupport = support;
+            bestDepth = reverseDepths[candidateIndex];
+        }
+    }
+    if (bestIndex < 0)
+        return false;
+    representativeSurface.Packed = surfaces[bestIndex];
+    representativeSurface.Decoded = decodedSurfaces[bestIndex];
+    representativeSurface.Pixel = pixels[bestIndex];
+    representativeSurface.WorldPosition = worldPositions[bestIndex];
+    representativeSurface.PixelFootprint = pixelFootprints[bestIndex];
+    representativeSurface.Valid = true;
+    return true;
+}
+
+uint EncodeResolvedReceiverCacheMetadata(
+    ReceiverCacheGatherSample value,
+    float representativeReverseZ)
 {
     uint visibilityCode = uint(round(clamp(
         value.IndirectSpecularVisibility,
@@ -121,262 +739,289 @@ uint EncodeResolvedReceiverCacheMetadata(ReceiverCacheGatherSample value)
         value.RoughSpecularFullWeightRoughness,
         0.0,
         1.0) * 63.0));
-    // Forward shading ignores the low bits, but retaining the selected receiver
-    // depth keeps the resolved entry self-describing for captures and future
-    // cache consumers.
-    return (value.DepthCode & 0x3ffu) |
+    return EncodeLegacyReceiverCacheDepth(representativeReverseZ) |
         (visibilityCode << 10u) |
         (minimumCode << 20u) |
         (fullCode << 26u);
 }
 
-bool TryLoadGatherSample(
-    ivec2 coord,
-    out ReceiverCacheGatherSample value,
-    out uint depthCode)
+ReceiverCacheGatherSample BlendCompatibleGatherSamples(
+    ReceiverCacheGatherCandidate candidates[4],
+    vec4 weights,
+    out float compatibleWeight,
+    out uint compatibleCount)
 {
-    if (any(lessThan(coord, ivec2(0))) ||
-        any(greaterThanEqual(coord, ivec2(pc.GatherWidth, pc.GatherHeight))))
+    compatibleWeight = 0.0;
+    compatibleCount = 0u;
+    for (int index = 0; index < 4; index++)
     {
-        value = EmptyReceiverCacheGatherSample();
-        depthCode = 0u;
-        return false;
-    }
-
-    value = LoadGatherSample(uvec2(coord), depthCode);
-    return depthCode != 0u;
-}
-
-ReceiverCacheGatherSample ResolveGatherSample(ivec2 requestedCoord)
-{
-    ivec2 extent = ivec2(pc.GatherWidth, pc.GatherHeight);
-    ivec2 coord = clamp(requestedCoord, ivec2(0), extent - ivec2(1));
-    uint centerDepthCode;
-    ReceiverCacheGatherSample resolved;
-    if (TryLoadGatherSample(coord, resolved, centerDepthCode))
-        return resolved;
-
-    // Empty lattice cells adjacent to an occupied receiver must not pull the
-    // reconstructed field toward black. Deterministically prefer the nearest
-    // valid sample, then the closest reverse-Z surface for equal distance.
-    bool found = false;
-    uint bestDistance = 3u;
-    uint bestDepthCode = 0u;
-    for (int y = -1; y <= 1; y++)
-    for (int x = -1; x <= 1; x++)
-    {
-        if (x == 0 && y == 0)
-            continue;
-
-        ReceiverCacheGatherSample candidate;
-        uint candidateDepthCode;
-        if (!TryLoadGatherSample(
-                coord + ivec2(x, y),
-                candidate,
-                candidateDepthCode))
+        if (!candidates[index].Valid)
         {
+            weights[index] = 0.0;
             continue;
         }
-
-        uint distance = uint(abs(x) + abs(y));
-        if (!found || distance < bestDistance ||
-            (distance == bestDistance &&
-             candidateDepthCode > bestDepthCode))
-        {
-            found = true;
-            bestDistance = distance;
-            bestDepthCode = candidateDepthCode;
-            resolved = candidate;
-        }
+        compatibleWeight += weights[index];
+        compatibleCount++;
     }
 
-    if (found)
-        return resolved;
-    return EmptyReceiverCacheGatherSample();
-}
-
-uint SelectResolvedReceiverDepthCode(
-    uvec2 resolvedCoord,
-    uvec2 blockExtent)
-{
-    uvec2 blockBase = resolvedCoord * CacheScale();
-    uvec2 centerOffset = min(blockExtent / 2u, blockExtent - uvec2(1u));
-    ivec2 centerPixel = ivec2(blockBase + centerOffset);
-    float depth = texelFetch(
-        BindlessTextures[nonuniformEXT(pc.DepthTextureIndex)],
-        centerPixel,
-        0).r;
-    if (depth > 0.000001 && !isnan(depth) && !isinf(depth))
-        return EncodeReceiverCacheDepth(depth);
-
-    // A half-resolution cache block can straddle a silhouette. If its center
-    // is clear, select the closest occupied reverse-Z receiver so thin opaque
-    // geometry still receives a depth-compatible reconstruction.
-    float closestDepth = 0.0;
-    for (uint y = 0u; y < blockExtent.y; y++)
-    for (uint x = 0u; x < blockExtent.x; x++)
+    if (compatibleCount < RECEIVER_CACHE_MINIMUM_COMPATIBLE_COUNT ||
+        compatibleWeight < RECEIVER_CACHE_MINIMUM_COMPATIBLE_WEIGHT)
     {
-        float candidate = texelFetch(
-            BindlessTextures[nonuniformEXT(pc.DepthTextureIndex)],
-            ivec2(blockBase + uvec2(x, y)),
-            0).r;
-        if (candidate > closestDepth && !isnan(candidate) && !isinf(candidate))
-            closestDepth = candidate;
+        return EmptyReceiverCacheGatherSample();
     }
-    return closestDepth > 0.000001
-        ? EncodeReceiverCacheDepth(closestDepth)
-        : 0u;
+
+    weights /= compatibleWeight;
+    ReceiverCacheGatherSample result;
+    result.DdgiIrradiance = vec3(0.0);
+    result.EnvironmentIrradiance = vec3(0.0);
+    result.IndirectSpecularVisibility = 0.0;
+    result.RoughSpecularMinimumRoughness = 0.0;
+    result.RoughSpecularFullWeightRoughness = 0.0;
+    result.DepthCode = 1u;
+    for (int index = 0; index < 4; index++)
+    {
+        result.DdgiIrradiance +=
+            candidates[index].Sample.DdgiIrradiance * weights[index];
+        result.EnvironmentIrradiance +=
+            candidates[index].Sample.EnvironmentIrradiance * weights[index];
+        result.IndirectSpecularVisibility +=
+            candidates[index].Sample.IndirectSpecularVisibility * weights[index];
+        result.RoughSpecularMinimumRoughness +=
+            candidates[index].Sample.RoughSpecularMinimumRoughness * weights[index];
+        result.RoughSpecularFullWeightRoughness +=
+            candidates[index].Sample.RoughSpecularFullWeightRoughness * weights[index];
+    }
+    return result;
 }
 
-float ReceiverCacheDepthCompatibility(
-    ReceiverCacheGatherSample sampleValue,
-    uint receiverDepthCode)
+void StoreInvalidResolvedEntry(uint entryIndex)
 {
-    if (sampleValue.DepthCode == 0u || receiverDepthCode == 0u)
-        return 0.0;
-
-    // Eight logarithmic codes are about a nine-percent depth change and keep
-    // ordinary sloped surfaces fully supported. Fade to zero by 32 codes
-    // (roughly 41 percent) so foreground and background receivers do not
-    // exchange irradiance merely because they share a screen-space tile.
-    float codeDelta = float(abs(
-        int(sampleValue.DepthCode) - int(receiverDepthCode)));
-    return 1.0 - smoothstep(8.0, 32.0, codeDelta);
+    ReceiverCacheOutput.Entries[entryIndex] = uvec4(0u);
+    ReceiverSurfaceOutput.Entries[entryIndex] =
+        SimpleDdgiReceiverSurfaceInvalid();
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+    ReceiverMetadataOutput.Entries[entryIndex] = uvec4(0u);
+#endif
 }
 
-ReceiverCacheGatherSample BlendDepthCompatibleGatherSamples(
-    ReceiverCacheGatherSample topLeft,
-    ReceiverCacheGatherSample topRight,
-    ReceiverCacheGatherSample bottomLeft,
-    ReceiverCacheGatherSample bottomRight,
-    vec2 blend,
-    uint receiverDepthCode)
+#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+void RecordResolveRejection(uint reason)
 {
+    uint counter = SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_SUPPORT_COUNTER;
+    if (reason == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_INVALID ||
+        reason == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_NON_FINITE)
+    {
+        counter = SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_INVALID_COUNTER;
+    }
+    else if (reason == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_DEPTH ||
+             reason == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_POSITION)
+    {
+        counter =
+            SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_DEPTH_POSITION_COUNTER;
+    }
+    else if (reason == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_PLANE)
+    {
+        counter = SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_PLANE_COUNTER;
+    }
+    else if (reason == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_NORMAL)
+    {
+        counter = SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_NORMAL_COUNTER;
+    }
+    IncrementSimpleDdgiReceiverCacheDiagnostic(
+        pc.CurrentFrameIndex,
+        counter);
+}
+
+uint DiagnoseRequestedGatherCompatibility(
+    ivec2 coordinate,
+    ReceiverCacheResolvedSurface representativeSurface)
+{
+    ReceiverCacheGatherCandidate candidate;
+    if (!TryLoadGatherCandidate(coordinate, candidate))
+        return SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_INVALID;
+    return SimpleDdgiReceiverSurfaceEvaluateDecoded(
+        candidate.DecodedSurface.ReverseZ,
+        candidate.WorldPosition,
+        candidate.DecodedSurface.GeometricNormal,
+        representativeSurface.Decoded.ReverseZ,
+        representativeSurface.WorldPosition,
+        representativeSurface.Decoded.GeometricNormal,
+        max(
+            candidate.PixelFootprint,
+            representativeSurface.PixelFootprint),
+        max(GatherScale(), CacheScale()),
+        pc.CameraPositionAndPadding.xyz);
+}
+
+uint DiagnoseResolveRejection(
+    ivec2 baseCoordinate,
+    ReceiverCacheResolvedSurface representativeSurface)
+{
+    uint reasons[4];
+    reasons[0] = DiagnoseRequestedGatherCompatibility(
+        baseCoordinate,
+        representativeSurface);
+    reasons[1] = DiagnoseRequestedGatherCompatibility(
+        baseCoordinate + ivec2(1, 0),
+        representativeSurface);
+    reasons[2] = DiagnoseRequestedGatherCompatibility(
+        baseCoordinate + ivec2(0, 1),
+        representativeSurface);
+    reasons[3] = DiagnoseRequestedGatherCompatibility(
+        baseCoordinate + ivec2(1, 1),
+        representativeSurface);
+    // One resolved entry owns one stable reason. Prefer the most specific
+    // geometric discontinuity over missing support/metadata.
+    for (int index = 0; index < 4; index++)
+        if (reasons[index] == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_NORMAL)
+            return reasons[index];
+    for (int index = 0; index < 4; index++)
+        if (reasons[index] == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_PLANE)
+            return reasons[index];
+    for (int index = 0; index < 4; index++)
+        if (reasons[index] == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_DEPTH ||
+            reasons[index] == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_POSITION)
+        {
+            return reasons[index];
+        }
+    for (int index = 0; index < 4; index++)
+        if (reasons[index] == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_NON_FINITE)
+            return reasons[index];
+    for (int index = 0; index < 4; index++)
+        if (reasons[index] == SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_INVALID)
+            return reasons[index];
+    return SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_INSUFFICIENT_SUPPORT;
+}
+#endif
+
+void main()
+{
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+    uint resolveWorkIndex = gl_WorkGroupID.x;
+    if (resolveWorkIndex >= ReceiverAdaptiveControl.Words[1])
+        return;
+    uvec2 resolvedCoordinate =
+        ReceiverResolveTiles.Entries[resolveWorkIndex] * 8u +
+        gl_LocalInvocationID.xy;
+#else
+    uvec2 resolvedCoordinate = gl_GlobalInvocationID.xy;
+#endif
+    uvec2 outputExtent = uvec2(pc.CacheWidth, pc.CacheHeight);
+    if (any(greaterThanEqual(resolvedCoordinate, outputExtent)))
+        return;
+
+#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+    if (all(equal(resolvedCoordinate, uvec2(0u))))
+    {
+        IncrementSimpleDdgiReceiverCacheDiagnostic(
+            pc.CurrentFrameIndex,
+            SIMPLE_DDGI_RECEIVER_CACHE_DIAGNOSTIC_ACTIVE_COUNTER);
+    }
+    IncrementSimpleDdgiReceiverCacheDiagnostic(
+        pc.CurrentFrameIndex,
+        SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_CANDIDATE_COUNTER);
+#endif
+
+    uint cacheScale = CacheScale();
+    uvec2 blockExtent = uvec2(cacheScale);
+    uvec2 lastBlockExtent = LastCacheBlockExtent();
+    if (resolvedCoordinate.x + 1u == outputExtent.x)
+        blockExtent.x = lastBlockExtent.x;
+    if (resolvedCoordinate.y + 1u == outputExtent.y)
+        blockExtent.y = lastBlockExtent.y;
+
+    uint entryIndex = resolvedCoordinate.y * pc.CacheWidth +
+        resolvedCoordinate.x;
+    ReceiverCacheResolvedSurface representativeSurface;
+    if (!SelectResolvedRepresentativeSurface(
+            resolvedCoordinate,
+            blockExtent,
+            representativeSurface))
+    {
+        StoreInvalidResolvedEntry(entryIndex);
+#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+        RecordResolveRejection(
+            SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_INVALID);
+#endif
+        return;
+    }
+
+    vec2 screenCoordinate =
+        vec2(resolvedCoordinate * cacheScale) +
+        vec2(blockExtent) * 0.5;
+    vec2 latticePosition =
+        (screenCoordinate - vec2(0.5)) /
+            float(GatherScale()) - vec2(0.5);
+    ivec2 baseCoordinate = ivec2(floor(latticePosition));
+    vec2 blend = fract(latticePosition);
+    ReceiverCacheGatherCandidate candidates[4];
+    candidates[0] = ResolveCompatibleGatherCandidate(
+        baseCoordinate,
+        representativeSurface);
+    candidates[1] = ResolveCompatibleGatherCandidate(
+        baseCoordinate + ivec2(1, 0),
+        representativeSurface);
+    candidates[2] = ResolveCompatibleGatherCandidate(
+        baseCoordinate + ivec2(0, 1),
+        representativeSurface);
+    candidates[3] = ResolveCompatibleGatherCandidate(
+        baseCoordinate + ivec2(1, 1),
+        representativeSurface);
     vec4 weights = vec4(
         (1.0 - blend.x) * (1.0 - blend.y),
         blend.x * (1.0 - blend.y),
         (1.0 - blend.x) * blend.y,
         blend.x * blend.y);
-    weights *= vec4(
-        ReceiverCacheDepthCompatibility(topLeft, receiverDepthCode),
-        ReceiverCacheDepthCompatibility(topRight, receiverDepthCode),
-        ReceiverCacheDepthCompatibility(bottomLeft, receiverDepthCode),
-        ReceiverCacheDepthCompatibility(bottomRight, receiverDepthCode));
-    float weightSum = dot(weights, vec4(1.0));
-
-    if (weightSum <= 0.000001)
+    float compatibleWeight;
+    uint compatibleCount;
+    ReceiverCacheGatherSample resolved = BlendCompatibleGatherSamples(
+        candidates,
+        weights,
+        compatibleWeight,
+        compatibleCount);
+    if (compatibleCount < RECEIVER_CACHE_MINIMUM_COMPATIBLE_COUNT ||
+        compatibleWeight < RECEIVER_CACHE_MINIMUM_COMPATIBLE_WEIGHT)
     {
-        // An isolated receiver may have no compatible lattice corner. Fall
-        // back deterministically to the closest valid depth rather than black.
-        int bestDelta = 2147483647;
-        int bestIndex = -1;
-        uint depthCodes[4] = uint[4](
-            topLeft.DepthCode,
-            topRight.DepthCode,
-            bottomLeft.DepthCode,
-            bottomRight.DepthCode);
-        for (int index = 0; index < 4; index++)
-        {
-            if (depthCodes[index] == 0u)
-                continue;
-            int delta = abs(int(depthCodes[index]) - int(receiverDepthCode));
-            if (delta < bestDelta)
-            {
-                bestDelta = delta;
-                bestIndex = index;
-            }
-        }
-        if (bestIndex < 0)
-            return EmptyReceiverCacheGatherSample();
-        weights = vec4(0.0);
-        weights[bestIndex] = 1.0;
-        weightSum = 1.0;
-    }
-
-    weights /= weightSum;
-    ReceiverCacheGatherSample result;
-    result.DdgiIrradiance =
-        topLeft.DdgiIrradiance * weights.x +
-        topRight.DdgiIrradiance * weights.y +
-        bottomLeft.DdgiIrradiance * weights.z +
-        bottomRight.DdgiIrradiance * weights.w;
-    result.EnvironmentIrradiance =
-        topLeft.EnvironmentIrradiance * weights.x +
-        topRight.EnvironmentIrradiance * weights.y +
-        bottomLeft.EnvironmentIrradiance * weights.z +
-        bottomRight.EnvironmentIrradiance * weights.w;
-    result.IndirectSpecularVisibility =
-        topLeft.IndirectSpecularVisibility * weights.x +
-        topRight.IndirectSpecularVisibility * weights.y +
-        bottomLeft.IndirectSpecularVisibility * weights.z +
-        bottomRight.IndirectSpecularVisibility * weights.w;
-    result.RoughSpecularMinimumRoughness =
-        topLeft.RoughSpecularMinimumRoughness * weights.x +
-        topRight.RoughSpecularMinimumRoughness * weights.y +
-        bottomLeft.RoughSpecularMinimumRoughness * weights.z +
-        bottomRight.RoughSpecularMinimumRoughness * weights.w;
-    result.RoughSpecularFullWeightRoughness =
-        topLeft.RoughSpecularFullWeightRoughness * weights.x +
-        topRight.RoughSpecularFullWeightRoughness * weights.y +
-        bottomLeft.RoughSpecularFullWeightRoughness * weights.z +
-        bottomRight.RoughSpecularFullWeightRoughness * weights.w;
-    result.DepthCode = receiverDepthCode;
-    return result;
-}
-
-void main()
-{
-    uvec2 resolvedCoord = gl_GlobalInvocationID.xy;
-    uvec2 outputExtent = uvec2(pc.CacheWidth, pc.CacheHeight);
-    if (any(greaterThanEqual(resolvedCoord, outputExtent)))
-    {
+        StoreInvalidResolvedEntry(entryIndex);
+#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+        RecordResolveRejection(DiagnoseResolveRejection(
+            baseCoordinate,
+            representativeSurface));
+#endif
         return;
     }
 
-    uint cacheScale = CacheScale();
-    uvec2 blockExtent = uvec2(cacheScale);
-    uvec2 lastBlockExtent = LastCacheBlockExtent();
-    if (resolvedCoord.x + 1u == outputExtent.x)
-        blockExtent.x = lastBlockExtent.x;
-    if (resolvedCoord.y + 1u == outputExtent.y)
-        blockExtent.y = lastBlockExtent.y;
-
-    uint receiverDepthCode = SelectResolvedReceiverDepthCode(
-        resolvedCoord,
-        blockExtent);
-    ReceiverCacheGatherSample resolved = EmptyReceiverCacheGatherSample();
-    if (receiverDepthCode != 0u)
+    if (!representativeSurface.Valid)
     {
-        // Evaluate the same centered, clamp-to-edge bilinear reconstruction
-        // used by the former fragment texture sample at the mean pixel center
-        // of this (possibly partial) cache block.
-        vec2 screenCoordinate =
-            vec2(resolvedCoord * cacheScale) + vec2(blockExtent) * 0.5;
-        vec2 latticePosition =
-            (screenCoordinate - vec2(0.5)) / float(GatherScale()) - vec2(0.5);
-        ivec2 baseCoord = ivec2(floor(latticePosition));
-        vec2 blend = fract(latticePosition);
-        resolved = BlendDepthCompatibleGatherSamples(
-            ResolveGatherSample(baseCoord),
-            ResolveGatherSample(baseCoord + ivec2(1, 0)),
-            ResolveGatherSample(baseCoord + ivec2(0, 1)),
-            ResolveGatherSample(baseCoord + ivec2(1, 1)),
-            blend,
-            receiverDepthCode);
+        StoreInvalidResolvedEntry(entryIndex);
+#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+        RecordResolveRejection(
+            SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_INVALID);
+#endif
+        return;
     }
 
-    // Store both irradiance fields divided by pi so the constant
-    // diffuse-Lambert factor is paid once per cache sample instead of once per
-    // full-resolution fragment. Keeping them separate preserves the distinct
-    // DDGI material-AO and environment screen-space-AO policies.
     resolved.DdgiIrradiance *= RECEIVER_CACHE_INV_PI;
     resolved.EnvironmentIrradiance *= RECEIVER_CACHE_INV_PI;
-    uint entryIndex = resolvedCoord.y * pc.CacheWidth + resolvedCoord.x;
     ReceiverCacheOutput.Entries[entryIndex] = uvec4(
         packHalf2x16(resolved.DdgiIrradiance.xy),
         packHalf2x16(vec2(
             resolved.DdgiIrradiance.z,
             resolved.EnvironmentIrradiance.x)),
         packHalf2x16(resolved.EnvironmentIrradiance.yz),
-        EncodeResolvedReceiverCacheMetadata(resolved));
+        EncodeResolvedReceiverCacheMetadata(
+            resolved,
+            representativeSurface.Decoded.ReverseZ));
+    ReceiverSurfaceOutput.Entries[entryIndex] = representativeSurface.Packed;
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+    ReceiverMetadataOutput.Entries[entryIndex] = uvec4(
+        representativeSurface.Packed,
+        1u | (255u << 16u),
+        0u);
+#endif
+#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+    IncrementSimpleDdgiReceiverCacheDiagnostic(
+        pc.CurrentFrameIndex,
+        SIMPLE_DDGI_RECEIVER_CACHE_RESOLVE_VALID_COUNTER);
+#endif
 }

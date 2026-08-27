@@ -1078,7 +1078,12 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
                 ResidualIntensity = _initialization.Settings
                     .AdvancedOverridesEnabled
                     ? _initialization.Settings.ResidualIntensity
-                    : 1.0f
+                    : 1.0f,
+                LocalAdaptiveSchedulingEnabled = _initialization.Settings
+                    .LocalAdaptiveSchedulingEnabled &&
+                    (_initialization.RequestedMode ==
+                         SimpleDdgiNearFieldResidualMode.HiZAdaptive ||
+                     _usesCandidateAuthorization)
             };
 
     private void ClearGpuState()
@@ -1302,7 +1307,8 @@ internal readonly record struct NearFieldResidualSettings(
     float MaximumTraceDistanceMeters,
     int RaysPerPixel,
     int FilterIterationCount,
-    float ResidualIntensity);
+    float ResidualIntensity,
+    bool LocalAdaptiveSchedulingEnabled = false);
 
 internal readonly record struct NearFieldResidualInitializationRequest(
     SimpleDdgiNearFieldResidualMode RequestedMode,

@@ -390,8 +390,15 @@ internal sealed class RendererDiagnosticsAssembler
             FogFormat: sceneData.FogFormat,
             GpuFogMicroseconds: sceneData.GpuFogMicroseconds,
             AmbientOcclusionEnabled: sceneData.AmbientOcclusionEnabled ? 1 : 0,
+            RequestedAmbientOcclusionMode:
+                sceneData.RequestedAmbientOcclusionMode,
             AmbientOcclusionMode: sceneData.AmbientOcclusionMode,
+            GtaoRuntimeSupported: sceneData.GtaoRuntimeSupported ? 1 : 0,
             AmbientOcclusionDebugView: sceneData.AmbientOcclusionDebugView,
+            AmbientOcclusionBentNormalMode:
+                sceneData.AmbientOcclusionBentNormalMode,
+            GtaoQualityPreset: sceneData.GtaoQualityPreset,
+            GtaoHistoryValid: sceneData.GtaoHistoryValid,
             AmbientOcclusionForwardSamplingMode: sceneData.AmbientOcclusionForwardSamplingMode,
             AmbientOcclusionForwardDepthAwareSamples: sceneData.AmbientOcclusionForwardDepthAwareSamples,
             AmbientOcclusionWidth: sceneData.AmbientOcclusionWidth,
@@ -619,6 +626,26 @@ internal sealed class RendererDiagnosticsAssembler
             TransparentSortCandidateCount = sceneData.TransparentSortCandidateCount,
             TransparentSortMicroseconds = sceneData.TransparentSortMicroseconds,
             TransparentOverflowCount = sceneData.TransparentOverflowCount,
+            TransparentPipelinePartitioningEnabled =
+                sceneData.TransparentPipelinePartitioningEnabled ? 1 : 0,
+            TransparentPipelinePartitioningEffective =
+                sceneData.TransparentPipelinePartitioningEffective ? 1 : 0,
+            TransparentPipelineRunCount =
+                sceneData.TransparentPipelineRunCount,
+            TransparentPipelineAverageRunLength =
+                sceneData.TransparentPipelineAverageRunLength,
+            TransparentPipelineMaximumRunLength =
+                sceneData.TransparentPipelineMaximumRunLength,
+            TransparentPipelineBindCount =
+                sceneData.TransparentPipelineBindCount,
+            TransparentPipelineUniversalFallbackCount =
+                sceneData.TransparentPipelineUniversalFallbackCount,
+            TransparentPipelineRayMeshletsAvoided =
+                sceneData.TransparentPipelineRayMeshletsAvoided,
+            TransparentPipelineDecalCacheMeshlets =
+                sceneData.TransparentPipelineDecalCacheMeshlets,
+            TransparentPipelineFallbackReason =
+                sceneData.TransparentPipelineFallbackReason,
             StaticInstanceBatchCount = sceneData.StaticInstanceBatchCount,
             StaticInstanceCount = sceneData.StaticInstanceCount,
             VisibleStaticInstanceCount = sceneData.VisibleStaticInstanceCount,
@@ -768,6 +795,9 @@ internal sealed class RendererDiagnosticsAssembler
             SimpleDdgiFullRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiFullRayProbeUpdateCount : 0,
             SimpleDdgiMaintenanceRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiMaintenanceRayProbeUpdateCount : 0,
             SimpleDdgiAdaptiveRaySavedRaysPerFrame = giUsesSimpleDdgi ? sceneData.SimpleDdgiAdaptiveRaySavedRaysPerFrame : 0UL,
+            SimpleDdgiAdaptiveRayEvidence = giUsesSimpleDdgi
+                ? sceneData.SimpleDdgiAdaptiveRayEvidence
+                : default,
             SimpleDdgiNearFullRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiNearFullRayProbeUpdateCount : 0,
             SimpleDdgiMidFullRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiMidFullRayProbeUpdateCount : 0,
             SimpleDdgiFarFullRayProbeUpdateCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiFarFullRayProbeUpdateCount : 0,
@@ -1001,6 +1031,12 @@ internal sealed class RendererDiagnosticsAssembler
             GpuSimpleDdgiReceiverCacheMicroseconds = giUsesSimpleDdgi
                 ? sceneData.GpuSimpleDdgiReceiverCacheMicroseconds
                 : 0,
+            SimpleDdgiReceiverCache = _forwardPlusPass?
+                .SimpleDdgiReceiverCacheDiagnostics ??
+                SimpleDdgiReceiverCacheDiagnostics.Exact(
+                    Settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+                    SimpleDdgiReceiverCacheFallbackReason.ResourceUnavailable,
+                    "forward pass unavailable"),
             GpuForwardGiGatherTimingCoverage = giEnabled ? sceneData.GpuForwardGiGatherTimingCoverage : 0,
             GpuForwardGiGatherTimingAttribution = giEnabled && sceneData.GpuForwardGiGatherTimingCoverage != 0
                 ? GiTimingAttribution.Inclusive
@@ -2525,6 +2561,16 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.NormalConeEligibleOpaqueMeshletCount,
             DoubleSidedOpaqueMeshletCount =
                 sceneData.DoubleSidedOpaqueMeshletCount,
+            MeshletNormalConeCullingEnabled =
+                sceneData.MeshletNormalConeCullingEnabled,
+            MeshletNormalConeCandidateCount =
+                sceneData.MeshletNormalConeCandidateCount,
+            MeshletNormalConeTestedCount =
+                sceneData.MeshletNormalConeTestedCount,
+            MeshletNormalConeRejectedCount =
+                sceneData.MeshletNormalConeRejectedCount,
+            MeshletNormalConeInvalidCount =
+                sceneData.MeshletNormalConeInvalidCount,
             ForwardMeshOnlyIndirectDrawCount =
                 sceneData.ForwardMeshOnlyIndirectDrawCount,
             DepthMeshOnlyIndirectDrawCount =

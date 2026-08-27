@@ -56,6 +56,10 @@ const uint SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_OVERFLOW = 67u;
 // retention used instead of dropping a caster.
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_LOD_FALLBACK = 68u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_LOD_DECIMATED = 69u;
+const uint SCENE_SUBMISSION_COUNTER_NORMAL_CONE_CANDIDATE = 70u;
+const uint SCENE_SUBMISSION_COUNTER_NORMAL_CONE_TESTED = 71u;
+const uint SCENE_SUBMISSION_COUNTER_NORMAL_CONE_REJECTED = 72u;
+const uint SCENE_SUBMISSION_COUNTER_NORMAL_CONE_INVALID = 73u;
 const uint SCENE_INDIRECT_DISPATCH_WORD_STRIDE = 4u;
 const uint SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT = 0u;
 const uint SCENE_INDIRECT_DISPATCH_SIMPLE_OPAQUE_SLOT = 1u;
@@ -178,7 +182,7 @@ void WriteMeshletDrawCommandToBase(uint outputBufferIndex, uint outputIndex, GPU
     WriteStorageWord(outputBufferIndex, baseWord + 0u, command.MeshletIndex);
     WriteStorageWord(outputBufferIndex, baseWord + 1u, command.InstanceId);
     WriteStorageWord(outputBufferIndex, baseWord + 2u, command.MaterialIndex);
-    WriteStorageWord(outputBufferIndex, baseWord + 3u, command.Padding);
+    WriteStorageWord(outputBufferIndex, baseWord + 3u, command.Flags);
 }
 
 void WriteMeshletDrawCommand(uint outputIndex, GPUMeshletDrawCommand command)
@@ -269,7 +273,7 @@ vec4 ResolveMeshletWorldCenterRadius(GPUMeshletDrawCommand command)
 
 bool IsNormalConeCullEligible(GPUMeshletDrawCommand command)
 {
-    return (command.Padding &
+    return (command.Flags &
         MESHLET_COMMAND_FLAG_NORMAL_CONE_CULL_ELIGIBLE) != 0u;
 }
 
@@ -624,16 +628,32 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
         return;
     }
 
-    if (IsNormalConeCullEligible(command) &&
-        MeshletBackfaceConeCulled(
-            meshlet,
-            instanceBufferIndex,
-            objectWordOffset,
-            worldCenterRadius.xyz,
-            worldCenterRadius.w,
-            pc.Push.CameraPosition.xyz))
+    if (IsNormalConeCullEligible(command))
     {
-        return;
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+            SCENE_SUBMISSION_COUNTER_NORMAL_CONE_CANDIDATE], 1u);
+        if (!MeshletNormalConeValid(meshlet))
+        {
+            atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                SCENE_SUBMISSION_COUNTER_NORMAL_CONE_INVALID], 1u);
+        }
+        else
+        {
+            atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                SCENE_SUBMISSION_COUNTER_NORMAL_CONE_TESTED], 1u);
+            if (MeshletBackfaceConeCulled(
+                    meshlet,
+                    instanceBufferIndex,
+                    objectWordOffset,
+                    worldCenterRadius.xyz,
+                    worldCenterRadius.w,
+                    pc.Push.CameraPosition.xyz))
+            {
+                atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                    SCENE_SUBMISSION_COUNTER_NORMAL_CONE_REJECTED], 1u);
+                return;
+            }
+        }
     }
 
     bool canHiZTest = CanHiZTestMeshletDrawCommand(command);
@@ -763,20 +783,6 @@ void ProcessDirectionalShadowCandidate(
 
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
     vec4 worldSphere = ResolveMeshletWorldCenterRadius(command, meshlet);
-    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
-        pc.Push.CurrentFrameIndex;
-    uint objectWordOffset = command.InstanceId *
-        uint(SIZEOF_GPU_OBJECT_DATA / 4);
-    if (IsNormalConeCullEligible(command) &&
-        MeshletBackfaceConeCulledDirectional(
-            meshlet,
-            instanceBufferIndex,
-            objectWordOffset,
-            pc.Push.DirectionalShadowLightDirection.xyz))
-    {
-        return;
-    }
-
     uint cascadeCount = min(pc.Push.DirectionalShadowCascadeCount, SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT);
     for (uint cascade = 0u; cascade < cascadeCount; cascade++)
     {

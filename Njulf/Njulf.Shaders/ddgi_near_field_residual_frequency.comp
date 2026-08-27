@@ -121,16 +121,19 @@ void main()
     uint activeCount = activeTiles.words.length() > 1
         ? activeTiles.words[1]
         : 0u;
+    uint tileCountX = (pc.traceWidth + 7u) / 8u;
+    uint tileCountY = (pc.traceHeight + 7u) / 8u;
+    uint resolveFirstWord = SimpleDdgiNearFieldResolveListFirstWord(
+        tileCountX * tileCountY);
     bool tileIsActive = pc.abiVersion ==
             SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION &&
         activeTiles.words.length() > 4 && activeTiles.words[4] == 0 &&
         activeIndex < activeCount && pc.activeTileHeaderWords >= 64u &&
-        pc.activeTileHeaderWords + activeIndex <
+        resolveFirstWord + activeIndex <
             uint(activeTiles.words.length());
     uint tileIndex = tileIsActive
-        ? activeTiles.words[pc.activeTileHeaderWords + activeIndex]
+        ? activeTiles.words[resolveFirstWord + activeIndex]
         : 0u;
-    uint tileCountX = (pc.traceWidth + 7u) / 8u;
     uvec2 tile = tileCountX > 0u
         ? uvec2(tileIndex % tileCountX, tileIndex / tileCountX)
         : uvec2(0u);
