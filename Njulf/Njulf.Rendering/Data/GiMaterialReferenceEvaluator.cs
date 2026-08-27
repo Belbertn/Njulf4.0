@@ -228,6 +228,24 @@ public static class GiMaterialReferenceEvaluator
             sheenEnergy);
     }
 
+    public static Vector3 EvaluateGiSubsurfaceDiffuseBudget(
+        Vector3 ordinaryDiffuseBudget,
+        Vector3 subsurfaceTint)
+    {
+        return Clamp01(ordinaryDiffuseBudget) * Clamp01(subsurfaceTint);
+    }
+
+    public static Vector3 ApplyGiSubsurfaceDiffuseSplit(
+        Vector3 frontDiffuse,
+        Vector3 backDiffuse,
+        float strength)
+    {
+        strength = Saturate(strength);
+        Vector3 front = MaxZero(frontDiffuse);
+        Vector3 back = MaxZero(backDiffuse);
+        return front * (1f - strength) + back * strength;
+    }
+
     public static Vector3 EvaluateMaterialDielectricF0(
         float ior,
         float specularFactor = 1f,

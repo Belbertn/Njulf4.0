@@ -114,9 +114,11 @@ $algorithmicAtomicCounts = @{
     'forward_transparent_thin_glass.frag.spv' = 16
     # Normal ray-query transparent variants contain both bounded optical-task
     # admission and the DDGI gather used to shade a committed reflection hit.
-    # All of those sites are reachable only after the frame-local ray budget.
-    'forward_transparent_ray.frag.spv' = 47
-    'forward_weighted_oit_ray.frag.spv' = 47
+    # Their production compile deliberately preserves function boundaries to
+    # avoid glslang's exhaustive-inlining ID overflow, so shared atomic sites
+    # appear once in the module rather than once per inlined call path.
+    'forward_transparent_ray.frag.spv' = 10
+    'forward_weighted_oit_ray.frag.spv' = 10
     'fog.comp.spv' = 14
     'particle.vert.spv' = 14
     'foliage_grass.mesh.spv' = 14

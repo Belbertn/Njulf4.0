@@ -59,8 +59,8 @@ namespace Njulf.Rendering.Pipeline
                 TransparentForwardPass.RequiresSceneReflectionRayVariant(
                     sceneData);
             bool rayVariant = rayVariantRequired &&
-                _meshPipeline.RayTransparentPipelinesAvailable &&
-                _raySceneDescriptors?.IsAvailable == true;
+                _raySceneDescriptors?.IsAvailable == true &&
+                _meshPipeline.TryEnsureRayWeightedOitTransparentPipeline();
             if (sceneData.TransparentReceiveGlobalIllumination ||
                 rayVariant ||
                 sceneData.DecalReceiveGlobalIllumination)
@@ -242,10 +242,11 @@ namespace Njulf.Rendering.Pipeline
                 return false;
             }
 
+            bool exactPipelineAvailable = rayVariant
+                ? _meshPipeline.TryEnsureRayWeightedOitReceiverFeedbackPipeline()
+                : _meshPipeline.TryEnsureWeightedOitReceiverFeedbackPipeline();
             if (sceneData.CurrentFrameIndex != checked((uint)frameIndex) ||
-                (rayVariant
-                    ? _meshPipeline.RayWeightedOitReceiverFeedbackPipeline.Handle
-                    : _meshPipeline.WeightedOitReceiverFeedbackPipeline.Handle) == 0)
+                !exactPipelineAvailable)
             {
                 _receiverFeedbackRuntime.AbortCapture(
                     "receiver-feedback-weighted-oit-pipeline-or-frame-slot-unavailable");

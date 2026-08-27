@@ -487,7 +487,7 @@ namespace Njulf.Rendering.Pipeline
                 // The helper supplies the stable reason.
             }
             else if (hasOpaqueDraws &&
-                     !_meshPipeline.AlphaMaskReceiverFeedbackPipelinesAvailable)
+                     !_meshPipeline.TryEnsureAlphaMaskReceiverFeedbackPipelines())
             {
                 unavailableReason =
                     "receiver-feedback-reflection-capture-opaque-pipelines-unavailable";
@@ -919,7 +919,7 @@ namespace Njulf.Rendering.Pipeline
                         sceneData.FoliageClusterCount > 0;
                     string? unavailableReason = null;
                     if (maskedFeedbackRequired &&
-                        !_meshPipeline.AlphaMaskReceiverFeedbackPipelinesAvailable)
+                        !_meshPipeline.TryEnsureAlphaMaskReceiverFeedbackPipelines())
                     {
                         unavailableReason =
                             "receiver-feedback-alpha-mask-pipelines-unavailable";

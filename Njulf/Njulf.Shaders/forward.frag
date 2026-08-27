@@ -3816,6 +3816,8 @@ void AccumulateLight(
     vec3 albedo,
     float metallic,
     vec3 directionalDiffuseBase,
+    vec3 subsurfaceDirectionalDiffuseBase,
+    bool subsurfaceBacklightingActive,
     float roughness,
     vec3 dielectricF0,
     vec3 normal,
@@ -3825,34 +3827,58 @@ void AccumulateLight(
     bool geometryDecal,
     out float shadowFactor,
     out uint shadowCascade,
+    out vec3 shadowEvaluationNormal,
     inout vec3 directLighting,
-    inout vec3 directDiffuseSource)
+    inout vec3 directDiffuseSource,
+    inout vec3 directBackDiffuseSource)
 {
     GPULight light = ReadLight(lightIndex);
     shadowFactor = 1.0;
     shadowCascade = 0u;
+    shadowEvaluationNormal = shadowNormal;
 
     vec3 lightDirection;
     float attenuation = 1.0;
+    float signedNdotL = 0.0;
+    bool backSide = false;
 
     if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL)
     {
         lightDirection = normalize(-light.Direction);
-        // A light below the geometric horizon cannot contribute diffuse or
-        // specular BRDF energy.  Skip its shadow lookup before entering the
-        // expensive directional PCF path; this is particularly important for
-        // the large number of back-facing fragments in dense meshlet scenes.
-        if (dot(normal, lightDirection) <= 0.0)
+        signedNdotL = dot(normal, lightDirection);
+        if (signedNdotL > 0.0)
+        {
+            shadowFactor = EvaluateDirectionalShadowForEffectiveMode(
+                lightIndex,
+                worldPosition,
+                shadowEvaluationNormal,
+                geometryDecal,
+                shadowCascade);
+        }
+        else if (signedNdotL < 0.0 && subsurfaceBacklightingActive)
+        {
+            backSide = true;
+            shadowEvaluationNormal = -shadowNormal;
+            // The screen-space temporal/ray masks are produced for the visible
+            // front hemisphere. Use one normal-aware CSM lookup for the bounded
+            // backside lobe rather than treating a skipped mask sample as lit.
+            shadowFactor = EvaluateDirectionalShadow(
+                lightIndex,
+                worldPosition,
+                shadowEvaluationNormal,
+                geometryDecal,
+                shadowCascade);
+        }
+        else
+        {
             return;
-        shadowFactor = EvaluateDirectionalShadowForEffectiveMode(
-            lightIndex,
-            worldPosition,
-            shadowNormal,
-            geometryDecal,
-            shadowCascade);
+        }
     }
     else if (NjulfIsAreaLight(light))
     {
+        // Area-light visibility is currently a front-hemisphere mask. Its
+        // ordinary diffuse participates in the global split below, but the
+        // bounded approximation deliberately does not invent a back lobe.
         float nDotV = max(dot(normal, viewDirection), 0.0);
         vec3 diffuseReflectance = EvaluateGiDiffuseBrdf(
             directionalDiffuseBase,
@@ -3887,8 +3913,21 @@ void AccumulateLight(
             return;
 
         lightDirection = toLight / max(distanceToLight, 0.0001);
-        if (dot(normal, lightDirection) <= 0.0)
+        signedNdotL = dot(normal, lightDirection);
+        if (signedNdotL > 0.0)
+        {
+            shadowEvaluationNormal = shadowNormal;
+        }
+        else if (signedNdotL < 0.0 && subsurfaceBacklightingActive)
+        {
+            backSide = true;
+            shadowEvaluationNormal = -shadowNormal;
+        }
+        else
+        {
             return;
+        }
+
         attenuation = EvaluateNjulfLightDistanceAttenuation(
             light,
             distanceToLight);
@@ -3900,18 +3939,22 @@ void AccumulateLight(
             attenuation *= EvaluateNjulfSpotAttenuation(
                 light,
                 lightDirection);
+            if (attenuation <= 0.0)
+                return;
             shadowFactor = EvaluateSpotShadow(
                 lightIndex,
                 worldPosition,
-                shadowNormal,
+                shadowEvaluationNormal,
                 geometryDecal);
         }
         else if (light.Type == GPU_LIGHT_TYPE_POINT)
         {
+            if (attenuation <= 0.0)
+                return;
             shadowFactor = EvaluatePointShadow(
                 lightIndex,
                 worldPosition,
-                shadowNormal,
+                shadowEvaluationNormal,
                 geometryDecal);
         }
     }
@@ -3921,6 +3964,20 @@ void AccumulateLight(
     }
 
     vec3 radiance = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
+    if (backSide)
+    {
+        float backNdotL = max(-signedNdotL, 0.0);
+        float nDotV = max(dot(normal, viewDirection), 0.0);
+        vec3 backDiffuse = EvaluateGiDiffuseBrdf(
+            subsurfaceDirectionalDiffuseBase,
+            dielectricF0,
+            backNdotL,
+            nDotV);
+        directBackDiffuseSource +=
+            backDiffuse * radiance * backNdotL * shadowFactor;
+        return;
+    }
+
     vec3 diffuseContribution;
     directLighting += EvaluatePbrLight(
         albedo,
@@ -4210,8 +4267,10 @@ vec3 ForwardEvaluateThickTerminalRadiance(
         terminalIor, 1.0, vec3(1.0));
     vec3 direct = vec3(0.0);
     vec3 ignoredDiffuse = vec3(0.0);
+    vec3 ignoredBackDiffuse = vec3(0.0);
     float ignoredShadow;
     uint ignoredCascade;
+    vec3 ignoredShadowNormal;
     for (uint lightIndex = 0u;
          lightIndex < ForwardTotalLightCount(pc.Push);
          ++lightIndex)
@@ -4221,6 +4280,8 @@ vec3 ForwardEvaluateThickTerminalRadiance(
             baseColor.rgb,
             metallic,
             diffuseBase,
+            vec3(0.0),
+            false,
             roughness,
             dielectricF0,
             normal,
@@ -4230,8 +4291,10 @@ vec3 ForwardEvaluateThickTerminalRadiance(
             false,
             ignoredShadow,
             ignoredCascade,
+            ignoredShadowNormal,
             direct,
-            ignoredDiffuse);
+            ignoredDiffuse,
+            ignoredBackDiffuse);
     }
 
     vec3 environmentDiffuse = EvaluateEnvironmentDiffuseIrradiance(
@@ -5340,6 +5403,25 @@ void main()
         canonicalDiffuseReflectance = vec3(0.0);
     }
 
+    subsurfaceColor = clamp(
+        subsurfaceColor,
+        vec3(0.0),
+        vec3(1.0));
+    subsurfaceStrength = clamp(subsurfaceStrength, 0.0, 1.0);
+    vec3 subsurfaceDirectionalDiffuseBase =
+        EvaluateGiSubsurfaceDiffuseBudget(
+            directionalDiffuseBase,
+            subsurfaceColor);
+    vec3 subsurfaceDiffuseReflectance =
+        EvaluateGiSubsurfaceDiffuseBudget(
+            canonicalDiffuseReflectance,
+            subsurfaceColor);
+    bool subsurfaceBacklightingActive =
+        subsurfaceStrength > 0.000001 &&
+        any(greaterThan(
+            subsurfaceDirectionalDiffuseBase,
+            vec3(0.000001)));
+
     if (IsMaterialDebugView(debugViewMode))
     {
         if (debugViewMode == MATERIAL_DEBUG_FEATURE_FLAGS)
@@ -5696,8 +5778,10 @@ void main()
     GPUEnvironmentData environment = ReadEnvironmentData();
     vec3 directLighting = vec3(0.0);
     vec3 directDiffuseSource = vec3(0.0);
+    vec3 directBackDiffuseSource = vec3(0.0);
     float lastShadowFactor = 1.0;
     uint lastShadowCascade = 0u;
+    vec3 lastShadowEvaluationNormal = shadowNormal;
 
     if (environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)
     {
@@ -5755,13 +5839,20 @@ void main()
     uint directionalLightCount = ForwardDirectionalLightCount(pc.Push);
     float directionalShadowFactor = 1.0;
     uint directionalShadowCascade = 0u;
+    vec3 directionalShadowEvaluationNormal = shadowNormal;
+    int configuredDirectionalShadowLightIndex =
+        int(round(ReadShadowIndices().w));
     if (directionalLightCount > 0u)
     {
+        uint directionalLightIndex =
+            ForwardDirectionalLightIndex(pc.Push, 0u);
         AccumulateLight(
-            ForwardDirectionalLightIndex(pc.Push, 0u),
+            directionalLightIndex,
             albedo,
             metallic,
             directionalDiffuseBase,
+            subsurfaceDirectionalDiffuseBase,
+            subsurfaceBacklightingActive,
             roughness,
             dielectricF0,
             normal,
@@ -5771,21 +5862,31 @@ void main()
             geometryDecal,
             lastShadowFactor,
             lastShadowCascade,
+            lastShadowEvaluationNormal,
             directLighting,
-            directDiffuseSource);
-        if (lastShadowFactor < 1.0 || lastShadowCascade != 0u)
+            directDiffuseSource,
+            directBackDiffuseSource);
+        if (int(directionalLightIndex) ==
+                configuredDirectionalShadowLightIndex ||
+            lastShadowFactor < 1.0 || lastShadowCascade != 0u)
         {
             directionalShadowFactor = lastShadowFactor;
             directionalShadowCascade = lastShadowCascade;
+            directionalShadowEvaluationNormal =
+                lastShadowEvaluationNormal;
         }
     }
     if (directionalLightCount > 1u)
     {
+        uint directionalLightIndex =
+            ForwardDirectionalLightIndex(pc.Push, 1u);
         AccumulateLight(
-            ForwardDirectionalLightIndex(pc.Push, 1u),
+            directionalLightIndex,
             albedo,
             metallic,
             directionalDiffuseBase,
+            subsurfaceDirectionalDiffuseBase,
+            subsurfaceBacklightingActive,
             roughness,
             dielectricF0,
             normal,
@@ -5795,23 +5896,28 @@ void main()
             geometryDecal,
             lastShadowFactor,
             lastShadowCascade,
+            lastShadowEvaluationNormal,
             directLighting,
-            directDiffuseSource);
-        // A non-shadow-casting moon/sun returns the exact sentinel 1/0. Do
-        // not let it overwrite the debug state produced by the other
-        // directional light. A fully lit cascade-zero caster has the same
-        // values as the initialized state, so no special case is needed.
-        if (lastShadowFactor < 1.0 || lastShadowCascade != 0u)
+            directDiffuseSource,
+            directBackDiffuseSource);
+        // Prefer the configured shadow owner even when its exact result is the
+        // fully-lit cascade-zero sentinel. Retain the non-default fallback for
+        // diagnostic configurations that do not publish an owner index.
+        if (int(directionalLightIndex) ==
+                configuredDirectionalShadowLightIndex ||
+            lastShadowFactor < 1.0 || lastShadowCascade != 0u)
         {
             directionalShadowFactor = lastShadowFactor;
             directionalShadowCascade = lastShadowCascade;
+            directionalShadowEvaluationNormal =
+                lastShadowEvaluationNormal;
         }
     }
     vec3 directionalShadowDebugColor;
     if (TryEvaluateDirectionalShadowDebug(
             debugViewMode,
             fragWorldPosition,
-            shadowNormal,
+            directionalShadowEvaluationNormal,
             geometryDecal,
             directionalShadowFactor,
             directionalShadowDebugColor))
@@ -5862,6 +5968,8 @@ void main()
                 albedo,
                 metallic,
                 directionalDiffuseBase,
+                subsurfaceDirectionalDiffuseBase,
+                subsurfaceBacklightingActive,
                 roughness,
                 dielectricF0,
                 normal,
@@ -5871,9 +5979,22 @@ void main()
                 geometryDecal,
                 lastShadowFactor,
                 lastShadowCascade,
+                lastShadowEvaluationNormal,
                 directLighting,
-                directDiffuseSource);
+                directDiffuseSource,
+                directBackDiffuseSource);
         }
+    }
+
+    if (subsurfaceStrength > 0.0)
+    {
+        vec3 originalDirectDiffuseSource = directDiffuseSource;
+        directDiffuseSource = ApplyGiSubsurfaceDiffuseSplit(
+            originalDirectDiffuseSource,
+            directBackDiffuseSource,
+            subsurfaceStrength);
+        directLighting +=
+            directDiffuseSource - originalDirectDiffuseSource;
     }
 
     if (debugViewMode == MATERIAL_CAPTURE_LINEAR_DIRECT_DIFFUSE)
@@ -5969,6 +6090,23 @@ void main()
     {
         WriteForwardColor(vec4(specularIbl, 1.0));
         return;
+    }
+
+    vec3 subsurfaceBackDiffuseIndirect = vec3(0.0);
+    if (subsurfaceStrength > 0.0 &&
+        environment.Enabled != 0u &&
+        any(greaterThan(
+            subsurfaceDiffuseReflectance,
+            vec3(0.000001))))
+    {
+        vec3 subsurfaceBackEnvironmentIrradiance =
+            EvaluateEnvironmentDiffuseIrradiance(
+                environment,
+                -normal);
+        subsurfaceBackDiffuseIndirect =
+            EvaluateGiDiffuseFromIrradiance(
+                subsurfaceBackEnvironmentIrradiance,
+                subsurfaceDiffuseReflectance) * indirectAo;
     }
 
     vec3 finalDiffuseIndirect = vec3(0.0);
@@ -6232,8 +6370,13 @@ void main()
 #endif
 
 #if NJULF_DDGI_DETAILED_COUNTERS
+        vec3 diagnosticFinalDiffuseIndirect =
+            ApplyGiSubsurfaceDiffuseSplit(
+                finalDiffuseIndirect,
+                subsurfaceBackDiffuseIndirect,
+                subsurfaceStrength);
         HybridDiffuseGiResult simpleHybridDiagnostics;
-        simpleHybridDiagnostics.diffuse = finalDiffuseIndirect;
+        simpleHybridDiagnostics.diffuse = diagnosticFinalDiffuseIndirect;
         simpleHybridDiagnostics.ddgiCoverage = simpleGather.spatialCoverage;
         simpleHybridDiagnostics.environmentFallbackWeight = simpleFallback;
         simpleHybridDiagnostics.nearContactSuppression = 1.0 - simpleLeakAttenuation;
@@ -6256,7 +6399,7 @@ void main()
             simpleDiagnosticVisibilityMean,
             finalDdgiDiffuse,
             diffuseIbl,
-            finalDiffuseIndirect);
+            diagnosticFinalDiffuseIndirect);
 #endif
     }
     else
@@ -6274,8 +6417,13 @@ void main()
         hybridSuppressionMask = vec3(0.0);
 #endif
 #if NJULF_DDGI_DETAILED_COUNTERS
+        vec3 diagnosticFinalDiffuseIndirect =
+            ApplyGiSubsurfaceDiffuseSplit(
+                finalDiffuseIndirect,
+                subsurfaceBackDiffuseIndirect,
+                subsurfaceStrength);
         HybridDiffuseGiResult simpleFallbackDiagnostics;
-        simpleFallbackDiagnostics.diffuse = finalDiffuseIndirect;
+        simpleFallbackDiagnostics.diffuse = diagnosticFinalDiffuseIndirect;
         simpleFallbackDiagnostics.ddgiCoverage = 0.0;
         simpleFallbackDiagnostics.environmentFallbackWeight = fallbackWeight;
         simpleFallbackDiagnostics.nearContactSuppression = 0.0;
@@ -6300,7 +6448,7 @@ void main()
                 0.0,
                 vec3(0.0),
                 diffuseIbl,
-                finalDiffuseIndirect);
+                diagnosticFinalDiffuseIndirect);
         }
 #endif
     }
@@ -6309,6 +6457,14 @@ void main()
     WriteMaterialTransportProvenance(materialTransportProvenance);
 #endif
 #endif // FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE
+
+    if (subsurfaceStrength > 0.0)
+    {
+        finalDiffuseIndirect = ApplyGiSubsurfaceDiffuseSplit(
+            finalDiffuseIndirect,
+            subsurfaceBackDiffuseIndirect,
+            subsurfaceStrength);
+    }
 
 #if !FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
@@ -6921,12 +7077,6 @@ void main()
             float sheenPower = mix(4.0, 1.25, sheenRoughness);
             float sheenRim = pow(clamp(1.0 - nDotV, 0.0, 1.0), sheenPower);
             color += sheenColor * sheenRim * (1.0 - metallic) * indirectAo;
-        }
-
-        if (subsurfaceStrength > 0.0 && metallic < 0.5)
-        {
-            float wrap = clamp(dot(normal, viewDirection) * 0.5 + 0.5, 0.0, 1.0);
-            color += albedo * subsurfaceColor * subsurfaceStrength * wrap * indirectAo * 0.35;
         }
 
         if (iridescenceFactor > 0.0 && metallic < 0.5)

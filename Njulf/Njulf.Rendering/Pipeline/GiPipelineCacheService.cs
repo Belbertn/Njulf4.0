@@ -38,8 +38,9 @@ internal sealed record GiPipelineCacheIdentity(
 
 /// <summary>
 /// Fixed, checksummed envelope around the opaque Vulkan cache blob. Vulkan's
-/// own cache header remains authoritative, while this header rejects changes
-/// in shaders and Njulf's GI ABI before data reaches the driver.
+/// own cache header remains authoritative. The shader hash records provenance
+/// so unchanged entries can survive shader-bundle revisions, while Njulf's GI
+/// ABI remains a hard application-level compatibility boundary.
 /// </summary>
 internal static class GiPipelineCacheFileCodec
 {
@@ -80,9 +81,11 @@ internal static class GiPipelineCacheFileCodec
         ReadOnlySpan<byte> encoded,
         GiPipelineCacheIdentity expected,
         out byte[] payload,
+        out bool shaderBundleChanged,
         out string reason)
     {
         payload = Array.Empty<byte>();
+        shaderBundleChanged = false;
         reason = string.Empty;
         try
         {
@@ -113,9 +116,6 @@ internal static class GiPipelineCacheFileCodec
                 encoded[32..48], expected.PipelineCacheUuid))
             return Reject("Vulkan pipelineCacheUUID changed.", out reason);
         if (!CryptographicOperations.FixedTimeEquals(
-                encoded[48..80], expected.ShaderBundleHash))
-            return Reject("GI shader bundle changed.", out reason);
-        if (!CryptographicOperations.FixedTimeEquals(
                 encoded[80..112], expected.EngineAbiHash))
             return Reject("GI engine ABI changed.", out reason);
 
@@ -135,7 +135,11 @@ internal static class GiPipelineCacheFileCodec
             return Reject("Cache payload checksum failed.", out reason);
 
         payload = sourcePayload.ToArray();
-        reason = "Compatible cache loaded.";
+        shaderBundleChanged = !CryptographicOperations.FixedTimeEquals(
+            encoded[48..80], expected.ShaderBundleHash);
+        reason = shaderBundleChanged
+            ? "Compatible cache loaded from a different shader bundle."
+            : "Compatible cache loaded.";
         return true;
     }
 
@@ -178,6 +182,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
     private bool _cacheLoaded;
     private bool _cacheRejected;
     private bool _cacheSaved;
+    private bool _loadedFromDifferentShaderBundle;
     private ulong _loadedPayloadBytes;
     private ulong _savedPayloadBytes;
     private ulong _pipelineCreationCount;
@@ -215,6 +220,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         {
             _cacheRejected = true;
             _cacheLoaded = false;
+            _loadedFromDifferentShaderBundle = false;
             _loadedPayloadBytes = 0;
             _loadStatus = $"Driver rejected cached data ({result}); using an empty cache.";
             result = CreateCache(Array.Empty<byte>(), out _cache);
@@ -347,7 +353,9 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 _savedPayloadBytes = checked((ulong)payload.Length);
                 _dirty = false;
                 _loadStatus = _cacheLoaded
-                    ? "Compatible cache loaded and refreshed."
+                    ? _loadedFromDifferentShaderBundle
+                        ? "Compatible cache from a different shader bundle loaded and refreshed."
+                        : "Compatible cache loaded and refreshed."
                     : "Pipeline cache saved.";
             }
             return true;
@@ -387,6 +395,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                     encoded,
                     _identity,
                     out byte[] payload,
+                    out bool shaderBundleChanged,
                     out string reason))
             {
                 _cacheRejected = true;
@@ -395,6 +404,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             }
 
             _cacheLoaded = true;
+            _loadedFromDifferentShaderBundle = shaderBundleChanged;
             _loadedPayloadBytes = checked((ulong)payload.Length);
             _loadStatus = reason;
             return payload;

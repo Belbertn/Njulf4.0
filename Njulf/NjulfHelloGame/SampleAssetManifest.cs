@@ -40,7 +40,16 @@ internal sealed record SampleAssetManifest(
             "Assets/Bistro_v5_2/BistroExterior.fbx",
             ModelImportBackend.Assimp,
             AssimpMaterialTextureConvention.AmazonBistro),
-        Array.Empty<SampleAssetReference>(),
+        // The exterior and interior FBXs share the same authored coordinate
+        // system, so the loader's common model world places the interior in
+        // the cafe without an additional offset, rotation, or scale.
+        new[]
+        {
+            new SampleAssetReference(
+                "Assets/Bistro_v5_2/BistroInterior.fbx",
+                ModelImportBackend.Assimp,
+                AssimpMaterialTextureConvention.AmazonBistro)
+        },
         Array.Empty<SampleAssetReference>(),
         1.0f,
         CoreVector3.Zero,

@@ -68,6 +68,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
     {
         private const string EntryPoint = "main";
 
+        private enum DeferredPipelineState
+        {
+            NotAdmitted,
+            Deferred,
+            Ready,
+            Failed
+        }
+
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
         private readonly RaySceneDescriptorBank? _raySceneDescriptors;
@@ -86,6 +94,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private string _forwardTaskShaderName = "forward.task.spv";
         private string? _transparentTaskShaderName = "forward.task.spv";
         private string _transparentMeshShaderName = "forward.mesh.spv";
+        private Format? _materialTransportProvenanceFormat;
+        private DeferredPipelineState _rayTransparentPipelineState;
+        private DeferredPipelineState _rayWeightedOitPipelineState;
+        private DeferredPipelineState _alphaMaskReceiverFeedbackPipelineState;
+        private DeferredPipelineState _transparentReceiverFeedbackPipelineState;
+        private DeferredPipelineState _thinGlassReceiverFeedbackPipelineState;
+        private DeferredPipelineState _weightedOitReceiverFeedbackPipelineState;
+        private DeferredPipelineState _rayTransparentReceiverFeedbackPipelineState;
+        private DeferredPipelineState _rayWeightedOitReceiverFeedbackPipelineState;
 
         private VkPipeline _depthPipeline;
         private VkPipeline _maskedDepthPipeline;
@@ -255,7 +272,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             get
             {
-                EnsureRayWeightedOitTransparentPipeline();
+                TryEnsureRayWeightedOitTransparentPipeline();
                 return _rayWeightedOitTransparentPipeline;
             }
         }
@@ -265,10 +282,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             get
             {
-                EnsureRayWeightedOitReceiverFeedbackPipeline();
+                TryEnsureRayWeightedOitReceiverFeedbackPipeline();
                 return _rayWeightedOitReceiverFeedbackPipeline;
             }
         }
+        internal bool RayTransparentPipelinesAdmitted =>
+            _rayTransparentPipelineState is
+                DeferredPipelineState.Deferred or DeferredPipelineState.Ready;
         public bool RayTransparentPipelinesAvailable =>
             _rayTransparentLayout.Handle != 0 &&
             _rayTransparentForwardPipeline.Handle != 0;
@@ -282,7 +302,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             get
             {
-                EnsureWeightedOitReceiverFeedbackPipeline();
+                TryEnsureWeightedOitReceiverFeedbackPipeline();
                 return _weightedOitReceiverFeedbackPipeline;
             }
         }
@@ -1417,6 +1437,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 materialTransportProvenanceEnabled
                     ? RenderTargetManager.MaterialTransportProvenanceFormat
                     : null;
+            _materialTransportProvenanceFormat =
+                materialTransportProvenanceFormat;
 
             _depthPipeline = CreateGraphicsPipeline(
                 depthTaskShaderName,
@@ -1737,11 +1759,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (!RendererBuildConfiguration.FastPipelineStartup)
                 EnsureWeightedOitTransparentPipeline();
 
-            CreateRayTransparentPipelines(
-                colorFormat,
-                depthFormat,
-                transparentTaskShaderName,
-                transparentMeshShaderName);
+            AdmitRayTransparentPipelines();
 
             CreateReceiverFeedbackPipelines(
                 colorFormat,
@@ -1785,36 +1803,61 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         }
 
-        private void CreateRayTransparentPipelines(
-            Format colorFormat,
-            Format depthFormat,
-            string? transparentTaskShaderName,
-            string transparentMeshShaderName)
+        private void AdmitRayTransparentPipelines()
         {
+            _rayTransparentPipelineState = DeferredPipelineState.NotAdmitted;
+            _rayWeightedOitPipelineState = DeferredPipelineState.NotAdmitted;
             if (_rayTransparentLayout.Handle == 0)
                 return;
+
+            _rayTransparentPipelineState = DeferredPipelineState.Deferred;
+            _rayWeightedOitPipelineState = DeferredPipelineState.Deferred;
+            RayTransparentPipelineFailureReason =
+                "ray-query transparent pipelines deferred until first use";
+            if (RendererBuildConfiguration.FastPipelineStartup)
+                return;
+
+            if (TryEnsureRayTransparentPipelines() &&
+                !TryEnsureRayWeightedOitTransparentPipeline())
+            {
+                DestroyOptionalPipeline(ref _rayTransparentForwardPipeline);
+                _rayTransparentPipelineState = DeferredPipelineState.Failed;
+                RayTransparentPipelineFailureReason =
+                    "ray-query-weighted-oit-pipeline-creation-failed";
+            }
+        }
+
+        internal bool TryEnsureRayTransparentPipelines()
+        {
+            if (_rayTransparentPipelineState == DeferredPipelineState.Ready)
+                return _rayTransparentForwardPipeline.Handle != 0;
+            if (_rayTransparentPipelineState != DeferredPipelineState.Deferred ||
+                _rayTransparentLayout.Handle == 0)
+            {
+                return false;
+            }
 
             try
             {
                 _rayTransparentForwardPipeline = CreateGraphicsPipeline(
-                    transparentTaskShaderName,
-                    transparentMeshShaderName,
+                    _transparentTaskShaderName,
+                    _transparentMeshShaderName,
                     "forward_transparent_ray.frag.spv",
-                    colorFormat,
-                    depthFormat,
+                    _colorFormat,
+                    _depthFormat,
                     hasColorAttachment: true,
                     depthWriteEnable: false,
                     blendEnable: true,
                     cullMode: CullModeFlags.None,
                     depthBiasEnable: false,
                     pipelineLayout: _rayTransparentLayout);
-                if (!RendererBuildConfiguration.FastPipelineStartup)
-                    EnsureRayWeightedOitTransparentPipeline();
                 _context.SetDebugName(
                     _rayTransparentForwardPipeline.Handle,
                     ObjectType.Pipeline,
                     "Ray Query Transparent Forward Plus Mesh Pipeline");
+                _rayTransparentPipelineState = DeferredPipelineState.Ready;
                 RayTransparentPipelineFailureReason = string.Empty;
+                return true;
             }
             catch (Exception exception) when (
                 exception is VulkanException or IOException or
@@ -1822,12 +1865,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 DestroyOptionalPipeline(ref _rayTransparentForwardPipeline);
                 DestroyOptionalPipeline(ref _rayWeightedOitTransparentPipeline);
+                _rayTransparentPipelineState = DeferredPipelineState.Failed;
+                _rayWeightedOitPipelineState = DeferredPipelineState.Failed;
                 RayTransparentPipelineFailureReason =
                     "ray-query-transparent-pipeline-creation-failed:" +
                     exception.GetType().Name + ":" + exception.Message;
                 System.Diagnostics.Debug.WriteLine(
                     "Ray-query transparent variants are unavailable; " +
                     RayTransparentPipelineFailureReason);
+                return false;
             }
         }
 
@@ -1839,10 +1885,44 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             string transparentMeshShaderName,
             Format? materialTransportProvenanceFormat)
         {
+            _alphaMaskReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _transparentReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _thinGlassReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _weightedOitReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _rayTransparentReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _rayWeightedOitReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
             ReceiverFeedbackPipelineFailureReason =
                 "receiver-feedback-pipelines-not-admitted-at-startup";
             if (!_receiverFeedbackPipelinesEnabled)
                 return;
+
+            _alphaMaskReceiverFeedbackPipelineState =
+                DeferredPipelineState.Deferred;
+            _transparentReceiverFeedbackPipelineState =
+                DeferredPipelineState.Deferred;
+            _thinGlassReceiverFeedbackPipelineState =
+                DeferredPipelineState.Deferred;
+            _weightedOitReceiverFeedbackPipelineState =
+                DeferredPipelineState.Deferred;
+            if (RayTransparentPipelinesAdmitted)
+            {
+                _rayTransparentReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Deferred;
+                _rayWeightedOitReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Deferred;
+            }
+            if (RendererBuildConfiguration.FastPipelineStartup)
+            {
+                ReceiverFeedbackPipelineFailureReason =
+                    "receiver-feedback-pipelines-deferred-until-first-use";
+                return;
+            }
 
             try
             {
@@ -1866,6 +1946,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     out _forwardCompactedSimpleFullInputAlphaMaskReceiverFeedbackPipeline,
                     materialTransportProvenanceFormat:
                         materialTransportProvenanceFormat);
+                _alphaMaskReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Ready;
 
                 _transparentReceiverFeedbackPipeline = CreateGraphicsPipeline(
                     transparentTaskShaderName,
@@ -1882,6 +1964,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _transparentReceiverFeedbackPipeline.Handle,
                     ObjectType.Pipeline,
                     "B1 Exact Transparent Forward Plus Mesh Pipeline");
+                _transparentReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Ready;
 
                 _thinGlassReceiverFeedbackPipeline = CreateGraphicsPipeline(
                     transparentTaskShaderName,
@@ -1898,15 +1982,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _thinGlassReceiverFeedbackPipeline.Handle,
                     ObjectType.Pipeline,
                     "B1 Exact DDGI Directional Thin Glass Mesh Pipeline");
+                _thinGlassReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Ready;
 
-                if (!RendererBuildConfiguration.FastPipelineStartup)
-                    EnsureWeightedOitReceiverFeedbackPipeline();
+                if (!TryEnsureWeightedOitReceiverFeedbackPipeline())
+                {
+                    throw new InvalidOperationException(
+                        ReceiverFeedbackPipelineFailureReason);
+                }
 
-                CreateRayTransparentReceiverFeedbackPipelines(
-                    colorFormat,
-                    depthFormat,
-                    transparentTaskShaderName,
-                    transparentMeshShaderName);
+                TryEnsureRayTransparentReceiverFeedbackPipeline();
 
                 ReceiverFeedbackPipelineFailureReason =
                     "receiver-feedback-pipelines-ready";
@@ -1920,6 +2005,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 // down with it, and a partial set must never be selectable.
                 DestroyAlphaMaskReceiverFeedbackPipelines();
                 DestroyTransparentReceiverFeedbackPipelines();
+                MarkReceiverFeedbackPipelineStatesFailed();
                 ReceiverFeedbackPipelineFailureReason =
                     "receiver-feedback-pipeline-creation-failed:" +
                     exception.GetType().Name + ":" + exception.Message;
@@ -1930,34 +2016,177 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             }
         }
 
-        private void CreateRayTransparentReceiverFeedbackPipelines(
-            Format colorFormat,
-            Format depthFormat,
-            string? transparentTaskShaderName,
-            string transparentMeshShaderName)
+        internal bool TryEnsureAlphaMaskReceiverFeedbackPipelines()
         {
-            if (!RayTransparentPipelinesAvailable ||
-                _rayTransparentLayout.Handle == 0)
+            if (_alphaMaskReceiverFeedbackPipelineState ==
+                DeferredPipelineState.Ready)
             {
-                return;
+                return AlphaMaskReceiverFeedbackPipelinesAvailable;
+            }
+            if (_alphaMaskReceiverFeedbackPipelineState !=
+                    DeferredPipelineState.Deferred ||
+                !_receiverFeedbackPipelinesEnabled)
+            {
+                return false;
+            }
+
+            try
+            {
+                string provenanceSuffix =
+                    _materialTransportProvenanceFormat.HasValue
+                        ? "_provenance"
+                        : string.Empty;
+                CreateOpaqueSpecializedPipelineSet(
+                    _colorFormat,
+                    _depthFormat,
+                    _forwardTaskShaderName,
+                    $"forward_opaque_ddgi_b1{provenanceSuffix}.frag.spv",
+                    $"forward_opaque_simple_ddgi_b1{provenanceSuffix}.frag.spv",
+                    $"forward_opaque_simple_full_input_ddgi_b1{provenanceSuffix}.frag.spv",
+                    "B1 Exact Alpha-Mask Receiver Feedback",
+                    out _forwardAlphaMaskReceiverFeedbackPipeline,
+                    out _forwardCompactedAlphaMaskReceiverFeedbackPipeline,
+                    out _forwardSimpleAlphaMaskReceiverFeedbackPipeline,
+                    out _forwardSimpleFullInputAlphaMaskReceiverFeedbackPipeline,
+                    out _forwardCompactedSimpleAlphaMaskReceiverFeedbackPipeline,
+                    out _forwardCompactedSimpleFullInputAlphaMaskReceiverFeedbackPipeline,
+                    materialTransportProvenanceFormat:
+                        _materialTransportProvenanceFormat);
+                _alphaMaskReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Ready;
+                ReceiverFeedbackPipelineFailureReason =
+                    "alpha-mask-receiver-feedback-pipelines-ready";
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                ArgumentException or InvalidOperationException)
+            {
+                DestroyAlphaMaskReceiverFeedbackPipelines();
+                _alphaMaskReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Failed;
+                ReceiverFeedbackPipelineFailureReason =
+                    "alpha-mask-receiver-feedback-pipeline-creation-failed:" +
+                    exception.GetType().Name + ":" + exception.Message;
+                System.Diagnostics.Debug.WriteLine(
+                    "B1 alpha-mask receiver-feedback pipelines unavailable; " +
+                    ReceiverFeedbackPipelineFailureReason);
+                return false;
+            }
+        }
+
+        internal bool TryEnsureTransparentReceiverFeedbackPipeline(
+            bool thinGlass)
+        {
+            return thinGlass
+                ? TryEnsureTransparentReceiverFeedbackPipeline(
+                    ref _thinGlassReceiverFeedbackPipeline,
+                    ref _thinGlassReceiverFeedbackPipelineState,
+                    "forward_transparent_thin_glass_ddgi_b1.frag.spv",
+                    "B1 Exact DDGI Directional Thin Glass Mesh Pipeline",
+                    "thin-glass")
+                : TryEnsureTransparentReceiverFeedbackPipeline(
+                    ref _transparentReceiverFeedbackPipeline,
+                    ref _transparentReceiverFeedbackPipelineState,
+                    "forward_transparent_ddgi_b1.frag.spv",
+                    "B1 Exact Transparent Forward Plus Mesh Pipeline",
+                    "transparent");
+        }
+
+        private bool TryEnsureTransparentReceiverFeedbackPipeline(
+            ref VkPipeline pipeline,
+            ref DeferredPipelineState state,
+            string fragmentShader,
+            string debugName,
+            string failureKind)
+        {
+            if (state == DeferredPipelineState.Ready)
+                return pipeline.Handle != 0;
+            if (state != DeferredPipelineState.Deferred ||
+                !_receiverFeedbackPipelinesEnabled)
+            {
+                return false;
+            }
+
+            try
+            {
+                pipeline = CreateGraphicsPipeline(
+                    _transparentTaskShaderName,
+                    _transparentMeshShaderName,
+                    fragmentShader,
+                    _colorFormat,
+                    _depthFormat,
+                    hasColorAttachment: true,
+                    depthWriteEnable: false,
+                    blendEnable: true,
+                    cullMode: CullModeFlags.None,
+                    depthBiasEnable: false);
+                _context.SetDebugName(
+                    pipeline.Handle,
+                    ObjectType.Pipeline,
+                    debugName);
+                state = DeferredPipelineState.Ready;
+                ReceiverFeedbackPipelineFailureReason =
+                    failureKind + "-receiver-feedback-pipeline-ready";
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                ArgumentException or InvalidOperationException)
+            {
+                DestroyOptionalPipeline(ref pipeline);
+                state = DeferredPipelineState.Failed;
+                ReceiverFeedbackPipelineFailureReason =
+                    failureKind +
+                    "-receiver-feedback-pipeline-creation-failed:" +
+                    exception.GetType().Name + ":" + exception.Message;
+                System.Diagnostics.Debug.WriteLine(
+                    "B1 transparent receiver-feedback pipeline unavailable; " +
+                    ReceiverFeedbackPipelineFailureReason);
+                return false;
+            }
+        }
+
+        internal bool TryEnsureRayTransparentReceiverFeedbackPipeline()
+        {
+            if (_rayTransparentReceiverFeedbackPipelineState ==
+                DeferredPipelineState.Ready)
+            {
+                return _rayTransparentReceiverFeedbackPipeline.Handle != 0;
+            }
+            if (_rayTransparentReceiverFeedbackPipelineState !=
+                    DeferredPipelineState.Deferred ||
+                !TryEnsureRayTransparentPipelines())
+            {
+                return false;
             }
 
             try
             {
                 _rayTransparentReceiverFeedbackPipeline = CreateGraphicsPipeline(
-                    transparentTaskShaderName,
-                    transparentMeshShaderName,
+                    _transparentTaskShaderName,
+                    _transparentMeshShaderName,
                     "forward_transparent_ray_ddgi_b1.frag.spv",
-                    colorFormat,
-                    depthFormat,
+                    _colorFormat,
+                    _depthFormat,
                     hasColorAttachment: true,
                     depthWriteEnable: false,
                     blendEnable: true,
                     cullMode: CullModeFlags.None,
                     depthBiasEnable: false,
                     pipelineLayout: _rayTransparentLayout);
-                if (!RendererBuildConfiguration.FastPipelineStartup)
-                    EnsureRayWeightedOitReceiverFeedbackPipeline();
+                _rayTransparentReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Ready;
+                if (!RendererBuildConfiguration.FastPipelineStartup &&
+                    !TryEnsureRayWeightedOitReceiverFeedbackPipeline())
+                {
+                    DestroyOptionalPipeline(
+                        ref _rayTransparentReceiverFeedbackPipeline);
+                    _rayTransparentReceiverFeedbackPipelineState =
+                        DeferredPipelineState.Failed;
+                    return false;
+                }
+                return true;
             }
             catch (Exception exception) when (
                 exception is VulkanException or IOException or
@@ -1967,9 +2196,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     ref _rayTransparentReceiverFeedbackPipeline);
                 DestroyOptionalPipeline(
                     ref _rayWeightedOitReceiverFeedbackPipeline);
+                _rayTransparentReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Failed;
+                _rayWeightedOitReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Failed;
+                ReceiverFeedbackPipelineFailureReason =
+                    "ray-query-receiver-feedback-pipeline-creation-failed:" +
+                    exception.GetType().Name + ":" + exception.Message;
                 System.Diagnostics.Debug.WriteLine(
                     "Combined ray-query/B1 transparent variants are unavailable: " +
                     exception.Message);
+                return false;
             }
         }
 
@@ -1992,73 +2229,141 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 "Weighted OIT Transparent Mesh Pipeline");
         }
 
-        private void EnsureRayWeightedOitTransparentPipeline()
+        internal bool TryEnsureRayWeightedOitTransparentPipeline()
         {
-            if (_rayWeightedOitTransparentPipeline.Handle != 0 ||
-                _rayTransparentLayout.Handle == 0)
+            if (_rayWeightedOitPipelineState == DeferredPipelineState.Ready)
+                return _rayWeightedOitTransparentPipeline.Handle != 0;
+            if (_rayWeightedOitPipelineState != DeferredPipelineState.Deferred ||
+                !TryEnsureRayTransparentPipelines())
             {
-                return;
+                return false;
             }
 
-            _rayWeightedOitTransparentPipeline =
-                CreateWeightedOitGraphicsPipeline(
+            try
+            {
+                _rayWeightedOitTransparentPipeline =
+                    CreateWeightedOitGraphicsPipeline(
                     _transparentTaskShaderName,
                     _transparentMeshShaderName,
                     "forward_weighted_oit_ray.frag.spv",
                     RenderTargetManager.WeightedOitAccumulationFormat,
                     RenderTargetManager.WeightedOitRevealageFormat,
-                    _depthFormat,
-                    _rayTransparentLayout);
-            _context.SetDebugName(
-                _rayWeightedOitTransparentPipeline.Handle,
-                ObjectType.Pipeline,
-                "Ray Query Weighted OIT Transparent Mesh Pipeline");
+                        _depthFormat,
+                        _rayTransparentLayout);
+                _context.SetDebugName(
+                    _rayWeightedOitTransparentPipeline.Handle,
+                    ObjectType.Pipeline,
+                    "Ray Query Weighted OIT Transparent Mesh Pipeline");
+                _rayWeightedOitPipelineState = DeferredPipelineState.Ready;
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                ArgumentException or InvalidOperationException)
+            {
+                DestroyOptionalPipeline(ref _rayWeightedOitTransparentPipeline);
+                _rayWeightedOitPipelineState = DeferredPipelineState.Failed;
+                System.Diagnostics.Debug.WriteLine(
+                    "Ray-query weighted OIT pipeline unavailable: " +
+                    exception.Message);
+                return false;
+            }
         }
 
-        private void EnsureWeightedOitReceiverFeedbackPipeline()
+        internal bool TryEnsureWeightedOitReceiverFeedbackPipeline()
         {
-            if (_weightedOitReceiverFeedbackPipeline.Handle != 0 ||
+            if (_weightedOitReceiverFeedbackPipelineState ==
+                DeferredPipelineState.Ready)
+            {
+                return _weightedOitReceiverFeedbackPipeline.Handle != 0;
+            }
+            if (_weightedOitReceiverFeedbackPipelineState !=
+                    DeferredPipelineState.Deferred ||
                 !_receiverFeedbackPipelinesEnabled)
             {
-                return;
+                return false;
             }
 
-            _weightedOitReceiverFeedbackPipeline =
-                CreateWeightedOitGraphicsPipeline(
+            try
+            {
+                _weightedOitReceiverFeedbackPipeline =
+                    CreateWeightedOitGraphicsPipeline(
                     _transparentTaskShaderName,
                     _transparentMeshShaderName,
                     "forward_weighted_oit_ddgi_b1.frag.spv",
                     RenderTargetManager.WeightedOitAccumulationFormat,
-                    RenderTargetManager.WeightedOitRevealageFormat,
-                    _depthFormat);
-            _context.SetDebugName(
-                _weightedOitReceiverFeedbackPipeline.Handle,
-                ObjectType.Pipeline,
-                "B1 Exact Weighted OIT Transparent Mesh Pipeline");
+                        RenderTargetManager.WeightedOitRevealageFormat,
+                        _depthFormat);
+                _context.SetDebugName(
+                    _weightedOitReceiverFeedbackPipeline.Handle,
+                    ObjectType.Pipeline,
+                    "B1 Exact Weighted OIT Transparent Mesh Pipeline");
+                _weightedOitReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Ready;
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                ArgumentException or InvalidOperationException)
+            {
+                DestroyOptionalPipeline(
+                    ref _weightedOitReceiverFeedbackPipeline);
+                _weightedOitReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Failed;
+                ReceiverFeedbackPipelineFailureReason =
+                    "weighted-oit-receiver-feedback-pipeline-creation-failed:" +
+                    exception.GetType().Name + ":" + exception.Message;
+                return false;
+            }
         }
 
-        private void EnsureRayWeightedOitReceiverFeedbackPipeline()
+        internal bool TryEnsureRayWeightedOitReceiverFeedbackPipeline()
         {
-            if (_rayWeightedOitReceiverFeedbackPipeline.Handle != 0 ||
-                !_receiverFeedbackPipelinesEnabled ||
-                _rayTransparentLayout.Handle == 0)
+            if (_rayWeightedOitReceiverFeedbackPipelineState ==
+                DeferredPipelineState.Ready)
             {
-                return;
+                return _rayWeightedOitReceiverFeedbackPipeline.Handle != 0;
+            }
+            if (_rayWeightedOitReceiverFeedbackPipelineState !=
+                    DeferredPipelineState.Deferred ||
+                !_receiverFeedbackPipelinesEnabled ||
+                !TryEnsureRayWeightedOitTransparentPipeline())
+            {
+                return false;
             }
 
-            _rayWeightedOitReceiverFeedbackPipeline =
-                CreateWeightedOitGraphicsPipeline(
+            try
+            {
+                _rayWeightedOitReceiverFeedbackPipeline =
+                    CreateWeightedOitGraphicsPipeline(
                     _transparentTaskShaderName,
                     _transparentMeshShaderName,
                     "forward_weighted_oit_ray_ddgi_b1.frag.spv",
                     RenderTargetManager.WeightedOitAccumulationFormat,
                     RenderTargetManager.WeightedOitRevealageFormat,
-                    _depthFormat,
-                    _rayTransparentLayout);
-            _context.SetDebugName(
-                _rayWeightedOitReceiverFeedbackPipeline.Handle,
-                ObjectType.Pipeline,
-                "Ray Query B1 Exact Weighted OIT Transparent Mesh Pipeline");
+                        _depthFormat,
+                        _rayTransparentLayout);
+                _context.SetDebugName(
+                    _rayWeightedOitReceiverFeedbackPipeline.Handle,
+                    ObjectType.Pipeline,
+                    "Ray Query B1 Exact Weighted OIT Transparent Mesh Pipeline");
+                _rayWeightedOitReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Ready;
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                ArgumentException or InvalidOperationException)
+            {
+                DestroyOptionalPipeline(
+                    ref _rayWeightedOitReceiverFeedbackPipeline);
+                _rayWeightedOitReceiverFeedbackPipelineState =
+                    DeferredPipelineState.Failed;
+                ReceiverFeedbackPipelineFailureReason =
+                    "ray-weighted-oit-receiver-feedback-pipeline-creation-failed:" +
+                    exception.GetType().Name + ":" + exception.Message;
+                return false;
+            }
         }
 
         private void CreateHybridReflectionPipelines(
@@ -3220,6 +3525,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private void DestroyPipelines()
         {
             InvalidateForwardOpaquePipelineCache();
+            ResetDeferredPipelineStates();
             NearFieldDirectSourceAttachmentEnabled = false;
             GiCausticReceiverAttachmentEnabled = false;
             CombinedAdvancedGiAttachmentEnabled = false;
@@ -3570,6 +3876,41 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 ref _rayTransparentReceiverFeedbackPipeline);
             DestroyOptionalPipeline(
                 ref _rayWeightedOitReceiverFeedbackPipeline);
+        }
+
+        private void MarkReceiverFeedbackPipelineStatesFailed()
+        {
+            _alphaMaskReceiverFeedbackPipelineState =
+                DeferredPipelineState.Failed;
+            _transparentReceiverFeedbackPipelineState =
+                DeferredPipelineState.Failed;
+            _thinGlassReceiverFeedbackPipelineState =
+                DeferredPipelineState.Failed;
+            _weightedOitReceiverFeedbackPipelineState =
+                DeferredPipelineState.Failed;
+            _rayTransparentReceiverFeedbackPipelineState =
+                DeferredPipelineState.Failed;
+            _rayWeightedOitReceiverFeedbackPipelineState =
+                DeferredPipelineState.Failed;
+        }
+
+        private void ResetDeferredPipelineStates()
+        {
+            _rayTransparentPipelineState = DeferredPipelineState.NotAdmitted;
+            _rayWeightedOitPipelineState = DeferredPipelineState.NotAdmitted;
+            _alphaMaskReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _transparentReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _thinGlassReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _weightedOitReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _rayTransparentReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _rayWeightedOitReceiverFeedbackPipelineState =
+                DeferredPipelineState.NotAdmitted;
+            _materialTransportProvenanceFormat = null;
         }
 
         private void DestroyOptionalPipeline(ref VkPipeline pipeline)

@@ -68,8 +68,8 @@ namespace Njulf.Rendering.Pipeline
                 RequiresSceneReflectionRayVariant(sceneData);
             bool rayVariant =
                 (existingRayVariantRequired || reflectionRayVariantRequired) &&
-                _meshPipeline.RayTransparentPipelinesAvailable &&
-                _raySceneDescriptors?.IsAvailable == true;
+                _raySceneDescriptors?.IsAvailable == true &&
+                _meshPipeline.TryEnsureRayTransparentPipelines();
             if (sceneData.TransparentReceiveGlobalIllumination ||
                 rayVariant ||
                 sceneData.DecalReceiveGlobalIllumination)
@@ -352,13 +352,18 @@ namespace Njulf.Rendering.Pipeline
                 sceneData,
                 exactFeedback: false,
                 rayVariant,
-                _meshPipeline.ThinGlassReceiverFeedbackPipeline.Handle != 0);
+                pipelineAvailable: true);
+            bool exactPipelineAvailable = rayVariant
+                ? _meshPipeline.TryEnsureRayTransparentReceiverFeedbackPipeline()
+                : _meshPipeline.TryEnsureTransparentReceiverFeedbackPipeline(
+                    thinGlassVariant);
             Silk.NET.Vulkan.Pipeline exactPipeline = rayVariant
                 ? _meshPipeline.RayTransparentReceiverFeedbackPipeline
                 : thinGlassVariant
                     ? _meshPipeline.ThinGlassReceiverFeedbackPipeline
                     : _meshPipeline.TransparentReceiverFeedbackPipeline;
             if (sceneData.CurrentFrameIndex != checked((uint)frameIndex) ||
+                !exactPipelineAvailable ||
                 exactPipeline.Handle == 0)
             {
                 _receiverFeedbackRuntime.AbortCapture(

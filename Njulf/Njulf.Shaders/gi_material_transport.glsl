@@ -145,6 +145,25 @@ vec3 EvaluateGiDirectionalDiffuseBase(
         vec3(1.0));
 }
 
+vec3 EvaluateGiSubsurfaceDiffuseBudget(
+    vec3 ordinaryDiffuseBudget,
+    vec3 subsurfaceTint)
+{
+    return clamp(ordinaryDiffuseBudget, vec3(0.0), vec3(1.0)) *
+        clamp(subsurfaceTint, vec3(0.0), vec3(1.0));
+}
+
+vec3 ApplyGiSubsurfaceDiffuseSplit(
+    vec3 frontDiffuse,
+    vec3 backDiffuse,
+    float strength)
+{
+    return mix(
+        max(frontDiffuse, vec3(0.0)),
+        max(backDiffuse, vec3(0.0)),
+        clamp(strength, 0.0, 1.0));
+}
+
 vec3 EvaluateGiHemisphericalDiffuseReflectance(
     vec3 linearBaseColor,
     float metallic,

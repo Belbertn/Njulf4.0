@@ -608,18 +608,22 @@
       <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_ray.frag">
         <Source>forward.frag</Source>
         <Defines>-DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
+        <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
       </ReceiverFeedbackGraphicsShaderVariant>
       <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_ray.frag">
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_WEIGHTED_OIT=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
+        <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
       </ReceiverFeedbackGraphicsShaderVariant>
       <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_ray_ddgi_b1.frag">
         <Source>forward.frag</Source>
         <Defines>-DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+        <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
       </ReceiverFeedbackGraphicsShaderVariant>
       <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_ray_ddgi_b1.frag">
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_WEIGHTED_OIT=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+        <AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>
       </ReceiverFeedbackGraphicsShaderVariant>
       <ReceiverFeedbackGraphicsShaderVariant Include="particle_b1.vert">
         <Source>particle.vert</Source>
@@ -709,6 +713,11 @@
            diagnostic variants available, but freeze B1 graphics to the
            production counter profile in every configuration. -->
       <NjulfReceiverFeedbackGraphicsCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) -DNJULF_DDGI_DETAILED_COUNTERS=0 -DNJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS=0</NjulfReceiverFeedbackGraphicsCompileOptions>
+      <!-- glslang's -Os pass exhaustively inlines the large forward ray-query
+           call graph and already approaches the SPIR-V ID ceiling before
+           subsurface transport is enabled. Keep function boundaries in these
+           four variants; -Od is appended after -Os by the build task. -->
+      <NjulfForwardRayQueryOptimizationOptions>-Od</NjulfForwardRayQueryOptimizationOptions>
       <NjulfShaderBuildMode Condition="'$(NjulfShaderBuildMode)' == ''">Compile</NjulfShaderBuildMode>
       <NjulfShaderMaxParallelism Condition="'$(NjulfShaderMaxParallelism)' == ''">0</NjulfShaderMaxParallelism>
       <NjulfShaderCacheMode Condition="'$(NjulfShaderCacheMode)' == ''">ReadWrite</NjulfShaderCacheMode>
@@ -847,6 +856,7 @@
           <Source>$(MSBuildProjectDirectory)\%(ReceiverFeedbackGraphicsShaderVariant.Source)</Source>
           <Defines>%(ReceiverFeedbackGraphicsShaderVariant.Defines)</Defines>
           <CompileOptions>$(NjulfReceiverFeedbackGraphicsCompileOptions)</CompileOptions>
+          <AdditionalCompileOptions>%(ReceiverFeedbackGraphicsShaderVariant.AdditionalCompileOptions)</AdditionalCompileOptions>
         </NjulfShaderArtifact>
       </ItemGroup>
 

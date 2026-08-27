@@ -449,6 +449,8 @@ internal sealed class PerformanceCaptureHostIdentityResolver
         return "ProfileSymbols";
 #elif NJULF_DETAILED_INVESTIGATION
         return "DetailedInvestigation";
+#elif NJULF_DEVELOPMENT
+        return "Development";
 #elif DEBUG
         return "Debug";
 #else

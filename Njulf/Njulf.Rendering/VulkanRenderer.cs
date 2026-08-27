@@ -4949,7 +4949,9 @@ namespace Njulf.Rendering
                 sceneData.TransparentMeshletCount > 0;
             bool transparentRayVariantsAvailable =
                 _raySceneDescriptorBank?.IsAvailable == true &&
-                _meshPipeline.RayTransparentPipelinesAvailable;
+                _meshPipeline.RayTransparentPipelinesAdmitted &&
+                (!transparentRayReceiverRequired ||
+                 _meshPipeline.TryEnsureRayTransparentPipelines());
             ShadowFrameCandidate candidate =
                 _shadowFramePlanner.ResolveCandidate(
                     new ShadowFrameCandidateInput(
@@ -7628,6 +7630,18 @@ namespace Njulf.Rendering
                                  sceneData.RaySceneReadiness.IsReady(
                                      RaySceneConsumer.ThickTransmission,
                                      requirement.RequiredCategories);
+            bool rayPipelineAvailable =
+                _meshPipeline?.RayTransparentPipelinesAdmitted == true;
+            bool rayPipelineRequiredNow =
+                Settings.Transparency.Enabled &&
+                Settings.Transparency.ThickTransmissionMode ==
+                    ThickTransmissionMode.RayQuery &&
+                sceneData.TransparentMeshletCount > 0;
+            if (rayPipelineAvailable && rayPipelineRequiredNow)
+            {
+                rayPipelineAvailable =
+                    _meshPipeline!.TryEnsureRayTransparentPipelines();
+            }
             ThickTransmissionModeResolution resolution =
                 ThickTransmissionModeResolver.Resolve(
                     Settings.Transparency,
@@ -7635,7 +7649,7 @@ namespace Njulf.Rendering
                         _context.RayQuerySupported,
                         _accelerationStructureManager?.Supported == true,
                         raySceneReady,
-                        _meshPipeline?.RayTransparentPipelinesAvailable == true));
+                        rayPipelineAvailable));
             sceneData.RequestedThickTransmissionMode = resolution.Requested;
             sceneData.EffectiveThickTransmissionMode = resolution.Effective;
             sceneData.ThickTransmissionFallbackReason = resolution.Reason;

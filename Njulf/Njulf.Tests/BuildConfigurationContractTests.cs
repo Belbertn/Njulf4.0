@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Pipeline;
 using NUnit.Framework;
 
@@ -16,6 +17,98 @@ public sealed class BuildConfigurationContractTests
 #else
         Assert.That(RendererBuildConfiguration.FastPipelineStartup, Is.False);
 #endif
+    }
+
+    [Test]
+    public void PerformanceCaptureReportsTheActualBuildTier()
+    {
+        PerformanceCaptureStartupIdentity identity =
+            new PerformanceCaptureHostIdentityResolver(
+                    typeof(BuildConfigurationContractTests).Assembly,
+                    typeof(RendererBuildConfiguration).Assembly)
+                .ResolveStartupIdentity();
+
+#if NJULF_SHIPPING_PERFORMANCE
+        const string expected = "ShippingPerformance";
+#elif NJULF_PROFILE_SYMBOLS
+        const string expected = "ProfileSymbols";
+#elif NJULF_DETAILED_INVESTIGATION
+        const string expected = "DetailedInvestigation";
+#elif NJULF_DEVELOPMENT
+        const string expected = "Development";
+#elif DEBUG
+        const string expected = "Debug";
+#else
+        const string expected = "Release";
+#endif
+
+        Assert.That(identity.CompileConfiguration, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void FastStartupDefersRayAndReceiverFeedbackFamiliesBehindFirstUseGates()
+    {
+        string root = FindRepositoryRoot();
+        string meshPipeline = File.ReadAllText(Path.Combine(
+            root,
+            "Njulf.Rendering",
+            "Pipeline",
+            "PipelineObjects",
+            "MeshPipeline.cs"));
+        string forwardPass = File.ReadAllText(Path.Combine(
+            root,
+            "Njulf.Rendering",
+            "Pipeline",
+            "ForwardPlusPass.cs"));
+        string transparentPass = File.ReadAllText(Path.Combine(
+            root,
+            "Njulf.Rendering",
+            "Pipeline",
+            "TransparentForwardPass.cs"));
+        string weightedPass = File.ReadAllText(Path.Combine(
+            root,
+            "Njulf.Rendering",
+            "Pipeline",
+            "WeightedTransparentPass.cs"));
+
+        string rayAdmission = SliceBetween(
+            meshPipeline,
+            "private void AdmitRayTransparentPipelines()",
+            "internal bool TryEnsureRayTransparentPipelines()");
+        string feedbackAdmission = SliceBetween(
+            meshPipeline,
+            "private void CreateReceiverFeedbackPipelines(",
+            "internal bool TryEnsureAlphaMaskReceiverFeedbackPipelines()");
+        int eagerTransparent = meshPipeline.IndexOf(
+            "_transparentForwardPipeline = CreateGraphicsPipeline(",
+            StringComparison.Ordinal);
+        int rayAdmissionCall = meshPipeline.IndexOf(
+            "AdmitRayTransparentPipelines();",
+            StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(eagerTransparent, Is.GreaterThanOrEqualTo(0));
+            Assert.That(rayAdmissionCall, Is.GreaterThan(eagerTransparent));
+            Assert.That(rayAdmission,
+                Does.Match(
+                    "if \\(RendererBuildConfiguration\\.FastPipelineStartup\\)\\s+return;\\s+\\r?\\n?\\s*if \\(TryEnsureRayTransparentPipelines\\(\\)"));
+            Assert.That(feedbackAdmission,
+                Does.Match(
+                    "if \\(RendererBuildConfiguration\\.FastPipelineStartup\\)\\s+\\{[\\s\\S]*?return;[\\s\\S]*?CreateOpaqueSpecializedPipelineSet\\("));
+            Assert.That(meshPipeline,
+                Does.Contain("DeferredPipelineState.Failed"));
+            Assert.That(forwardPass,
+                Does.Contain("TryEnsureAlphaMaskReceiverFeedbackPipelines()"));
+            Assert.That(transparentPass,
+                Does.Contain("TryEnsureRayTransparentPipelines()"));
+            Assert.That(transparentPass,
+                Does.Contain("TryEnsureTransparentReceiverFeedbackPipeline("));
+            Assert.That(weightedPass,
+                Does.Contain("TryEnsureRayWeightedOitTransparentPipeline()"));
+            Assert.That(weightedPass,
+                Does.Contain("TryEnsureWeightedOitReceiverFeedbackPipeline()"));
+        });
     }
 
     [Test]
@@ -137,5 +230,17 @@ public sealed class BuildConfigurationContractTests
 
         throw new DirectoryNotFoundException(
             "Could not locate the Njulf repository root from the test directory.");
+    }
+
+    private static string SliceBetween(
+        string source,
+        string startMarker,
+        string endMarker)
+    {
+        int start = source.IndexOf(startMarker, StringComparison.Ordinal);
+        int end = source.IndexOf(endMarker, start, StringComparison.Ordinal);
+        Assert.That(start, Is.GreaterThanOrEqualTo(0), startMarker);
+        Assert.That(end, Is.GreaterThan(start), endMarker);
+        return source[start..end];
     }
 }

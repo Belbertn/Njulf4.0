@@ -23,9 +23,11 @@ particular development run must enforce the cooked-only contract.
 
 Renderer startup in `Development` also favors the active production path:
 
-- mesh pipelines use the renderer's persistent, device-compatible Vulkan cache;
+- mesh pipelines reuse unchanged entries from the renderer's persistent,
+  device-compatible Vulkan cache even when the shader bundle revision changes;
 - the dense GPU-compacted path is created first;
-- advanced GI material variants and inactive transparency families such as
+- advanced GI material variants, ray-query transparency, exact B1
+  receiver-feedback variants, and inactive transparency families such as
   Weighted OIT are created on first use and then persisted.
 
 `Debug` and `DetailedInvestigation` retain eager compatibility/diagnostic

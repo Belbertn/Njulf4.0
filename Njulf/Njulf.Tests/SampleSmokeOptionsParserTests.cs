@@ -793,11 +793,12 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
-    public void BistroFollowsSponzaInTheSceneCycleAndUsesTheAssimpImporter()
+    public void BistroFollowsSponzaAndLoadsTheAlignedInteriorWithAssimp()
     {
         SampleSceneKind[] scenes = Enum.GetValues<SampleSceneKind>();
         int sponzaIndex = Array.IndexOf(scenes, SampleSceneKind.SponzaPlaza);
         SampleAssetManifest manifest = SampleAssetManifest.Bistro;
+        SampleAssetReference interior = manifest.AddendumModelAssets.Single();
 
         Assert.Multiple(() =>
         {
@@ -807,6 +808,17 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(
                 manifest.ModelAsset.AssimpMaterialTextureConvention,
                 Is.EqualTo(AssimpMaterialTextureConvention.AmazonBistro));
+            Assert.That(manifest.AddendumModelAssets, Has.Count.EqualTo(1));
+            Assert.That(
+                interior.Path,
+                Is.EqualTo("Assets/Bistro_v5_2/BistroInterior.fbx"));
+            Assert.That(interior.ExpectedBackend, Is.EqualTo(ModelImportBackend.Assimp));
+            Assert.That(
+                interior.AssimpMaterialTextureConvention,
+                Is.EqualTo(AssimpMaterialTextureConvention.AmazonBistro));
+            Assert.That(
+                manifest.CreateModelWorld(rotation: 0f),
+                Is.EqualTo(Njulf.Core.Math.Matrix4x4.Identity));
             Assert.That(manifest.EnableImportedModelLights, Is.False);
         });
     }
