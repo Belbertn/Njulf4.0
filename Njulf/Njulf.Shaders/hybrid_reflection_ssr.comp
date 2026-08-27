@@ -136,10 +136,11 @@ void main()
         return;
     }
 
-    float roughness = HybridReflectionPayloadRoughness(payload);
+    float schedulingRoughness =
+        HybridReflectionPayloadSchedulingRoughness(payload);
     vec3 f0 = HybridReflectionPayloadF0(payload);
     uint tier = HybridResolveAdaptiveReflectionTier(
-        roughness,
+        schedulingRoughness,
         f0,
         HybridReflectionPayloadSpecularOcclusion(payload),
         HybridReflectionPayloadLobeFlags(payload),
@@ -244,7 +245,7 @@ void main()
         float rayDepth = ndc.z;
         float depthError = sceneDepth - rayDepth;
         float thickness = 0.0015 + normalizedStep * 0.006 +
-            roughness * 0.003;
+            schedulingRoughness * 0.003;
         if (sceneDepth > 0.0 && depthError >= 0.0 &&
             depthError <= thickness)
         {

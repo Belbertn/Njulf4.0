@@ -68,19 +68,23 @@ public static class SampleSponzaGlobalIlluminationProfile
     }
 
     /// <summary>
-    /// Keeps the unqualified C5 residual out of normal presentation. Runtime
-    /// evidence reports its history as invalid and its resource completion as
-    /// mismatched, so allocating it adds no bounce while reserving 87 MB. The
-    /// explicit C5 fixture/CLI path is applied after this hook.
+    /// Reasserts the quality tier's C5 policy after global rollout changes.
+    /// The validation fixture may explicitly force the residual on, while
+    /// later CLI overrides remain authoritative.
     /// </summary>
     public static void ConfigurePostAdvancedGiRollout(
         RenderSettings settings,
         bool residualValidationEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        bool highClassPreset = settings.QualityPreset is
+            RenderQualityPreset.High or
+            RenderQualityPreset.DdgiHigh or
+            RenderQualityPreset.Ultra;
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            residualValidationEnabled
-                ? SimpleDdgiNearFieldResidualMode.HiZAdaptive
+            residualValidationEnabled || highClassPreset
+                ? GlobalIlluminationSettings
+                    .DefaultSimpleDdgiNearFieldResidualMode
                 : SimpleDdgiNearFieldResidualMode.Off;
     }
 

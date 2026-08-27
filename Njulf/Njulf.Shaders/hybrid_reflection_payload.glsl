@@ -1,7 +1,8 @@
 #ifndef NJULF_HYBRID_REFLECTION_PAYLOAD_GLSL
 #define NJULF_HYBRID_REFLECTION_PAYLOAD_GLSL
 
-const uint NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 3u;
+const uint NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 4u;
+const uint NJULF_HYBRID_REFLECTION_OCT12_MASK = 0x0fffu;
 const uint NJULF_HYBRID_REFLECTION_IDENTITY_MASK = 0x007fffffu;
 const uint NJULF_HYBRID_REFLECTION_SPECULAR_OCCLUSION_MASK = 0x3fu;
 const uint NJULF_HYBRID_REFLECTION_LOBE_TRANSMISSIVE = 1u << 0u;
@@ -51,6 +52,35 @@ vec3 NjulfHybridReflectionOctDecode(uint packed)
     return normalize(normal);
 }
 
+uint NjulfHybridReflectionPackGeometricNormalSchedulingRoughness(
+    vec3 geometricNormal,
+    float schedulingRoughness)
+{
+    vec2 encoded = NjulfHybridReflectionOctEncode(geometricNormal) * 0.5 +
+        vec2(0.5);
+    uvec2 oct12 = uvec2(round(clamp(encoded, vec2(0.0), vec2(1.0)) *
+        float(NJULF_HYBRID_REFLECTION_OCT12_MASK)));
+    uint roughness8 = uint(round(clamp(schedulingRoughness, 0.0, 1.0) *
+        255.0));
+    return oct12.x | (oct12.y << 12u) | (roughness8 << 24u);
+}
+
+vec3 NjulfHybridReflectionOct12Decode(uint packed)
+{
+    vec2 encoded = vec2(
+        float(packed & NJULF_HYBRID_REFLECTION_OCT12_MASK),
+        float((packed >> 12u) & NJULF_HYBRID_REFLECTION_OCT12_MASK)) /
+        float(NJULF_HYBRID_REFLECTION_OCT12_MASK) * 2.0 - vec2(1.0);
+    vec3 normal = vec3(encoded, 1.0 - abs(encoded.x) - abs(encoded.y));
+    if (normal.z < 0.0)
+    {
+        normal.xy = (vec2(1.0) - abs(normal.yx)) *
+            vec2(normal.x >= 0.0 ? 1.0 : -1.0,
+                 normal.y >= 0.0 ? 1.0 : -1.0);
+    }
+    return normalize(normal);
+}
+
 uint NjulfHybridReflectionPackF0Roughness(vec3 f0, float roughness)
 {
     uvec4 bytes = uvec4(round(clamp(
@@ -75,7 +105,8 @@ bool NjulfHybridReflectionCreatePayload(
     vec3 geometricNormal,
     vec3 shadingNormal,
     vec3 f0,
-    float roughness,
+    float physicalRoughness,
+    float schedulingRoughness,
     float specularOcclusion,
     uint lobeFlags,
     uvec3 receiverIdentity,
@@ -88,7 +119,8 @@ bool NjulfHybridReflectionCreatePayload(
         any(isnan(geometricNormal)) || any(isinf(geometricNormal)) ||
         any(isnan(shadingNormal)) || any(isinf(shadingNormal)) ||
         any(isnan(f0)) || any(isinf(f0)) ||
-        isnan(roughness) || isinf(roughness) ||
+        isnan(physicalRoughness) || isinf(physicalRoughness) ||
+        isnan(schedulingRoughness) || isinf(schedulingRoughness) ||
         isnan(specularOcclusion) || isinf(specularOcclusion))
     {
         return false;
@@ -102,9 +134,11 @@ bool NjulfHybridReflectionCreatePayload(
         float(NJULF_HYBRID_REFLECTION_SPECULAR_OCCLUSION_MASK)));
     uint packedLobeFlags = lobeFlags & NJULF_HYBRID_REFLECTION_LOBE_MASK;
     payload = uvec4(
-        packSnorm2x16(NjulfHybridReflectionOctEncode(geometricNormal)),
+        NjulfHybridReflectionPackGeometricNormalSchedulingRoughness(
+            geometricNormal,
+            schedulingRoughness),
         packSnorm2x16(NjulfHybridReflectionOctEncode(shadingNormal)),
-        NjulfHybridReflectionPackF0Roughness(f0, roughness),
+        NjulfHybridReflectionPackF0Roughness(f0, physicalRoughness),
         identity | (occlusion << 23u) | (packedLobeFlags << 29u) |
             NJULF_HYBRID_REFLECTION_VALID_BIT);
     return true;
@@ -141,7 +175,7 @@ bool HybridReflectionPayloadValid(uvec4 payload)
 
 vec3 HybridReflectionPayloadGeometricNormal(uvec4 payload)
 {
-    return NjulfHybridReflectionOctDecode(payload.x);
+    return NjulfHybridReflectionOct12Decode(payload.x);
 }
 
 vec3 HybridReflectionPayloadShadingNormal(uvec4 payload)
@@ -157,12 +191,17 @@ vec3 HybridReflectionPayloadF0(uvec4 payload)
     return f0;
 }
 
-float HybridReflectionPayloadRoughness(uvec4 payload)
+float HybridReflectionPayloadPhysicalRoughness(uvec4 payload)
 {
     vec3 f0;
     float roughness;
     NjulfHybridReflectionUnpackF0Roughness(payload.z, f0, roughness);
     return roughness;
+}
+
+float HybridReflectionPayloadSchedulingRoughness(uvec4 payload)
+{
+    return float(payload.x >> 24u) / 255.0;
 }
 
 float HybridReflectionPayloadSpecularOcclusion(uvec4 payload)

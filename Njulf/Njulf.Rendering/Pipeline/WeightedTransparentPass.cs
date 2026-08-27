@@ -51,11 +51,14 @@ namespace Njulf.Rendering.Pipeline
             if (!ShouldExecute(frameIndex, sceneData))
                 return;
 
-            bool rayVariant =
-                (sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
+            bool rayVariantRequired =
+                sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
                  DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
                  sceneData.EffectiveThickTransmissionMode ==
-                 ThickTransmissionMode.RayQuery) &&
+                 ThickTransmissionMode.RayQuery ||
+                TransparentForwardPass.RequiresSceneReflectionRayVariant(
+                    sceneData);
+            bool rayVariant = rayVariantRequired &&
                 _meshPipeline.RayTransparentPipelinesAvailable &&
                 _raySceneDescriptors?.IsAvailable == true;
             if (sceneData.TransparentReceiveGlobalIllumination ||
@@ -179,7 +182,13 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.EffectiveThickTransmissionMode ==
                     ThickTransmissionMode.RayQuery,
                     thickTransmissionDispersionEnabled:
-                    sceneData.ThickTransmissionDispersionEnabled)
+                    sceneData.ThickTransmissionDispersionEnabled,
+                    effectiveReflectionMode:
+                    sceneData.EffectiveReflectionMode,
+                    transparentSampleReflections:
+                    sceneData.TransparentSampleReflections,
+                    opaqueSceneColorSnapshotAvailable:
+                    sceneData.OpaqueSceneColorSnapshotAvailable)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();

@@ -329,6 +329,44 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
     }
 
     [Test]
+    public void AllThinGlassScene_UsesRayVariantForHybridSceneReflections()
+    {
+        var glassOnly = new SceneRenderingData
+        {
+            TransparentObjectCount = 23,
+            ThinGlassObjectCount = 23,
+            TransparentMeshletCount = 481,
+            ThinGlassMeshletCount = 481,
+            TransparentReflectionReceiverObjectCount = 23,
+            TransparentReflectionReceiverMeshletCount = 481,
+            TransparentSampleReflections = true,
+            OpaqueSceneColorSnapshotAvailable = true,
+            EffectiveReflectionMode = ReflectionMode.HybridRayQuery,
+            TransparentSceneReflectionRayTaskBudget = 65_536
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                TransparentForwardPass.RequiresSceneReflectionRayVariant(
+                    glassOnly),
+                Is.True);
+            Assert.That(
+                TransparentForwardPass.ShouldUseDirectionalOnlyThinGlass(
+                    glassOnly,
+                    exactFeedback: false,
+                    rayVariant: true,
+                    pipelineAvailable: true),
+                Is.False);
+        });
+
+        glassOnly.OpaqueSceneColorSnapshotAvailable = false;
+        Assert.That(
+            TransparentForwardPass.RequiresSceneReflectionRayVariant(glassOnly),
+            Is.False);
+    }
+
+    [Test]
     public void ExactCaptureProducerContract_RejectsUnavailableReservedOrOversizedSources()
     {
         SimpleDdgiReceiverFeedbackCaptureProducerContract unavailable =

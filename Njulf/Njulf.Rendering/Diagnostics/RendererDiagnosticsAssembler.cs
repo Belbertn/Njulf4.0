@@ -542,6 +542,33 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.HybridReflectionProbeFallbackCount,
             HybridReflectionEnvironmentFallbackCount =
                 sceneData.HybridReflectionEnvironmentFallbackCount,
+            TransparentReflectionReceiverObjectCount =
+                sceneData.TransparentReflectionReceiverObjectCount,
+            TransparentReflectionReceiverMeshletCount =
+                sceneData.TransparentReflectionReceiverMeshletCount,
+            TransparentSampleReflections =
+                sceneData.TransparentSampleReflections ? 1 : 0,
+            OpaqueSceneColorSnapshotAvailable =
+                sceneData.OpaqueSceneColorSnapshotAvailable ? 1 : 0,
+            TransparentSceneReflectionRayTaskBudget =
+                sceneData.TransparentSceneReflectionRayTaskBudget,
+            TransparentReflectionRayRequestCount =
+                sceneData.TransparentReflectionRayRequestCount,
+            TransparentReflectionEstimatedSsrHitCount =
+                sceneData.TransparentReflectionEstimatedSsrHitCount,
+            TransparentReflectionEstimatedRayHitCount =
+                sceneData.TransparentReflectionEstimatedRayHitCount,
+            TransparentReflectionEstimatedRayMissCount =
+                sceneData.TransparentReflectionEstimatedRayMissCount,
+            TransparentReflectionEstimatedBudgetRejectedCount =
+                sceneData.TransparentReflectionEstimatedBudgetRejectedCount,
+            TransparentReflectionEstimatedDdgiFallbackCount =
+                sceneData.TransparentReflectionEstimatedDdgiFallbackCount,
+            TransparentReflectionEstimatedProbeFallbackCount =
+                sceneData.TransparentReflectionEstimatedProbeFallbackCount,
+            TransparentReflectionEstimatedEnvironmentFallbackCount =
+                sceneData
+                    .TransparentReflectionEstimatedEnvironmentFallbackCount,
             GpuHybridReflectionSsrMicroseconds =
                 sceneData.GpuHybridReflectionSsrMicroseconds,
             GpuHybridReflectionRayQueryMicroseconds =

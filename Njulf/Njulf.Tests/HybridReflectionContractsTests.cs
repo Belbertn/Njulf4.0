@@ -279,6 +279,14 @@ public sealed class HybridReflectionContractsTests
         var high = new RenderSettings();
         var ddgiHigh = new RenderSettings();
         var ultra = new RenderSettings();
+        foreach (RenderSettings settings in new[]
+                 {
+                     low, medium, high, ddgiHigh, ultra
+                 })
+        {
+            settings.Reflections.Enabled = false;
+            settings.Reflections.Mode = ReflectionMode.Disabled;
+        }
         low.ApplyQualityPreset(RenderQualityPreset.Low);
         medium.ApplyQualityPreset(RenderQualityPreset.Medium);
         high.ApplyQualityPreset(RenderQualityPreset.High);
@@ -287,18 +295,35 @@ public sealed class HybridReflectionContractsTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(low.Reflections.Enabled, Is.True);
             Assert.That(low.Reflections.Mode,
                 Is.EqualTo(ReflectionMode.StaticProbes));
+            Assert.That(medium.Reflections.Enabled, Is.True);
             Assert.That(medium.Reflections.Mode,
                 Is.EqualTo(ReflectionMode.StaticProbesAndSsr));
             Assert.That(medium.Reflections.RayQueryPixelBudgetFraction,
                 Is.Zero);
+            Assert.That(medium.Transparency.SampleReflections, Is.False);
+            Assert.That(medium.Transparency.SceneReflectionRayTaskBudget,
+                Is.Zero);
+            Assert.That(high.Reflections.Enabled, Is.True);
             Assert.That(high.Reflections.Mode,
                 Is.EqualTo(ReflectionMode.HybridRayQuery));
+            Assert.That(high.Transparency.SampleReflections, Is.True);
+            Assert.That(high.Transparency.SceneReflectionRayTaskBudget,
+                Is.EqualTo(65_536));
+            Assert.That(ddgiHigh.Reflections.Enabled, Is.True);
             Assert.That(ddgiHigh.Reflections.Mode,
                 Is.EqualTo(ReflectionMode.HybridRayQuery));
+            Assert.That(ddgiHigh.Transparency.SampleReflections, Is.True);
+            Assert.That(ddgiHigh.Transparency.SceneReflectionRayTaskBudget,
+                Is.EqualTo(65_536));
+            Assert.That(ultra.Reflections.Enabled, Is.True);
             Assert.That(ultra.Reflections.Mode,
                 Is.EqualTo(ReflectionMode.HybridRayQuery));
+            Assert.That(ultra.Transparency.SampleReflections, Is.True);
+            Assert.That(ultra.Transparency.SceneReflectionRayTaskBudget,
+                Is.EqualTo(131_072));
             Assert.That(ultra.Reflections.RayQueryPixelBudgetFraction,
                 Is.GreaterThan(high.Reflections.RayQueryPixelBudgetFraction));
             Assert.That(HybridReflectionBudgetPlanner.ResolveRayQueryCapacity(
@@ -458,6 +483,7 @@ public sealed class HybridReflectionContractsTests
             "HybridReflectionTemporalPass",
             "HybridReflectionSpatialPass",
             "HybridReflectionCompositePass",
+            "OpaqueSceneColorSnapshotPass",
             "TransparentForwardPass"
         ];
         var order = ProductionRenderPipelineDeclaration.Instance.PassOrder
@@ -493,6 +519,13 @@ public sealed class HybridReflectionContractsTests
             declarations["HybridReflectionSpatialPass"].Usages.Single(
                 usage => usage.Resource ==
                     RenderGraphResourceId.HybridReflectionRawRadiance);
+        RenderGraphResourceUsage snapshotSceneColor =
+            declarations["OpaqueSceneColorSnapshotPass"].Usages.Single(
+                usage => usage.Resource == RenderGraphResourceId.SceneColor);
+        RenderGraphResourceUsage snapshotWrite =
+            declarations["OpaqueSceneColorSnapshotPass"].Usages.Single(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.HybridReflectionFilterScratch);
 
         Assert.Multiple(() =>
         {
@@ -527,6 +560,22 @@ public sealed class HybridReflectionContractsTests
                 usage => usage.Resource ==
                     RenderGraphResourceId.HybridReflectionReceiverPayload &&
                     usage.Access == RenderGraphResourceAccess.Read), Is.True);
+            Assert.That(snapshotSceneColor.Access,
+                Is.EqualTo(RenderGraphResourceAccess.Read));
+            Assert.That(snapshotWrite.Access,
+                Is.EqualTo(RenderGraphResourceAccess.Write));
+            Assert.That(declarations["TransparentForwardPass"].Usages.Any(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.HybridReflectionFilterScratch &&
+                    usage.Access == RenderGraphResourceAccess.Read &&
+                    (usage.StageMask & PipelineStageFlags2.FragmentShaderBit) != 0),
+                Is.True);
+            Assert.That(declarations["WeightedTransparentPass"].Usages.Any(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.HybridReflectionFilterScratch &&
+                    usage.Access == RenderGraphResourceAccess.Read &&
+                    (usage.StageMask & PipelineStageFlags2.FragmentShaderBit) != 0),
+                Is.True);
         });
     }
 
@@ -540,7 +589,8 @@ public sealed class HybridReflectionContractsTests
             "HybridReflectionResolvePass",
             "HybridReflectionTemporalPass",
             "HybridReflectionSpatialPass",
-            "HybridReflectionCompositePass"
+            "HybridReflectionCompositePass",
+            "OpaqueSceneColorSnapshotPass"
         ];
 
         Assert.That(passes.Select(AsyncComputePassCatalog.GetClassification),
@@ -558,7 +608,8 @@ public sealed class HybridReflectionContractsTests
             "HybridReflectionResolvePass",
             "HybridReflectionTemporalPass",
             "HybridReflectionSpatialPass",
-            "HybridReflectionCompositePass"
+            "HybridReflectionCompositePass",
+            "OpaqueSceneColorSnapshotPass"
         ];
 
         Assert.Multiple(() =>
@@ -680,11 +731,14 @@ public sealed class HybridReflectionContractsTests
             "hybrid_reflection_spatial.comp");
         string composite = ReadRepoText("Njulf.Shaders",
             "hybrid_reflection_composite.comp");
+        string opaqueSnapshot = ReadRepoText("Njulf.Shaders",
+            "opaque_scene_color_snapshot.comp");
         string compute = ReadRepoText("Njulf.Shaders",
             "hybrid_reflection_compute.glsl");
         string payload = ReadRepoText("Njulf.Shaders",
             "hybrid_reflection_payload.glsl");
         string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
         string runtime = ReadRepoText("Njulf.Rendering", "Pipeline",
             "HybridReflectionVulkanRuntime.cs");
         string normalizedForward = forward.Replace("\r\n", "\n",
@@ -859,6 +913,35 @@ public sealed class HybridReflectionContractsTests
                 "pc.ReflectionDebugView == 11u"));
             Assert.That(composite, Does.Contain(
                 "HybridResolveAdaptiveReflectionTier"));
+            Assert.That(opaqueSnapshot, Does.Contain(
+                "imageStore(OpaqueSnapshot"));
+            Assert.That(opaqueSnapshot, Does.Contain(
+                "imageLoad(OpaqueSceneColor"));
+            Assert.That(forward, Does.Contain(
+                "OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX"));
+            Assert.That(forward, Does.Contain(
+                "EvaluateTransparentReflectionSpecular("));
+            Assert.That(forward, Does.Contain(
+                "ForwardTraceTransparentSsr("));
+            Assert.That(forward, Does.Contain(
+                "ForwardTraceTransparentRayReflection("));
+            Assert.That(forward, Does.Contain(
+                "ForwardMaterialSamplesSceneReflections("));
+            Assert.That(common, Does.Contain(
+                "UnpackForwardMaterialBlendMode(controls1.x)"));
+            Assert.That(forward, Does.Contain(
+                "TRANSPARENT_REFLECTION_BUDGET_REJECT_COUNTER"));
+            Assert.That(forward, Does.Contain(
+                "fallbackSpecular * (1.0 - geometricWeight)"));
+            Assert.That(forward, Does.Contain(
+                "Environment.SpecularIntensity owns only the global IBL share"));
+            Assert.That(forward, Does.Contain(
+                "globalLod) * header.GlobalFallbackIntensity *"));
+            Assert.That(forward, Does.Not.Contain(
+                "geometric.Radiance * header.Intensity *\n" +
+                "        (fresnel * brdf.x + brdf.y) * environment.SpecularIntensity"));
+            Assert.That(forward, Does.Not.Contain(
+                "transparentReflectionEnergyBoost"));
             Assert.That(normalizedForward, Does.Contain(
                 "#if !NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT\n" +
                 "    if (reflectionDebugActive)"));
@@ -869,15 +952,15 @@ public sealed class HybridReflectionContractsTests
             Assert.That(forward, Does.Contain(
                 "float roughnessFootprintVariance"));
             Assert.That(forward, Does.Contain(
-                "roughnessDx = dFdx(roughness)"));
+                "roughnessDx = dFdx(physicalRoughness)"));
             Assert.That(forward, Does.Contain(
-                "roughnessDy = dFdy(roughness)"));
+                "roughnessDy = dFdy(physicalRoughness)"));
             Assert.That(forward, Does.Contain(
                 "alphaSquared + normalVariance + roughnessFootprintVariance"));
             Assert.That(forward, Does.Contain(
                 "SampleMaterialTextureFootprint("));
             Assert.That(forward, Does.Contain(
-                "authoredRoughness = max(authoredRoughness, footprintRoughness)"));
+                "reflectionFootprintRoughness = max("));
             Assert.That(forward, Does.Contain(
                 "representableFrequencyShare = mix(0.55, 0.85, roughness)"));
             Assert.That(forward, Does.Contain(
@@ -887,11 +970,11 @@ public sealed class HybridReflectionContractsTests
             Assert.That(resolve, Does.Contain(
                 "vec3 fresnel = HybridFresnelSchlickRoughness"));
             Assert.That(payload, Does.Contain(
-                "NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 3u"));
+                "NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 4u"));
             Assert.That(payload, Does.Contain(
                 "NJULF_HYBRID_REFLECTION_SPECULAR_OCCLUSION_MASK = 0x3fu"));
             Assert.That(ReflectionSettings.ReceiverPayloadAbiVersion,
-                Is.EqualTo(3u));
+                Is.EqualTo(4u));
             Assert.That(runtime, Does.Contain(
                 "SynchronizePreviousHybridFrame(commandBuffer)"));
             Assert.That(runtime, Does.Contain(

@@ -183,8 +183,14 @@ namespace Njulf.Rendering.Resources
         public const int DdgiAreaLightCounterBase =
             ThickTransmissionCounterBase + ThickTransmissionCounterCount;
         public const int DdgiAreaLightCounterCount = 4;
-        public const int CounterCount =
+        public const int TransparentReflectionCounterBase =
             DdgiAreaLightCounterBase + DdgiAreaLightCounterCount;
+        public const int TransparentReflectionTaskCounter =
+            TransparentReflectionCounterBase;
+        public const int TransparentReflectionCounterCount = 8;
+        public const int CounterCount =
+            TransparentReflectionCounterBase +
+            TransparentReflectionCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -230,6 +236,9 @@ namespace Njulf.Rendering.Resources
         private readonly DdgiAreaLightGpuCounters[]
             _lastCompletedDdgiAreaLightCounters =
                 new DdgiAreaLightGpuCounters[FramesInFlight];
+        private readonly TransparentReflectionGpuCounters[]
+            _lastCompletedTransparentReflectionCounters =
+                new TransparentReflectionGpuCounters[FramesInFlight];
         private readonly DebugDdgiOverlayGpuCounters[]
             _lastCompletedDebugDdgiOverlayCounters =
                 new DebugDdgiOverlayGpuCounters[FramesInFlight];
@@ -390,6 +399,24 @@ namespace Njulf.Rendering.Resources
                     SampleAcceptCount: counters[DdgiAreaLightCounterBase + 1],
                     InvalidPdfCount: counters[DdgiAreaLightCounterBase + 2],
                     VisibilityRayCount: counters[DdgiAreaLightCounterBase + 3]);
+            _lastCompletedTransparentReflectionCounters[frameIndex] =
+                new TransparentReflectionGpuCounters(
+                    RayRequests:
+                        counters[TransparentReflectionCounterBase + 0],
+                    EstimatedSsrHits:
+                        counters[TransparentReflectionCounterBase + 1],
+                    EstimatedRayHits:
+                        counters[TransparentReflectionCounterBase + 2],
+                    EstimatedRayMisses:
+                        counters[TransparentReflectionCounterBase + 3],
+                    EstimatedBudgetRejected:
+                        counters[TransparentReflectionCounterBase + 4],
+                    EstimatedDdgiFallbacks:
+                        counters[TransparentReflectionCounterBase + 5],
+                    EstimatedProbeFallbacks:
+                        counters[TransparentReflectionCounterBase + 6],
+                    EstimatedEnvironmentFallbacks:
+                        counters[TransparentReflectionCounterBase + 7]);
 
             _lastCompletedCounters[frameIndex] = new GpuMeshletCounters(
                 checked((int)counters[0]),
@@ -1043,6 +1070,13 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _lastCompletedDdgiAreaLightCounters[frameIndex];
+        }
+
+        public TransparentReflectionGpuCounters
+            GetLastCompletedTransparentReflectionCounters(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedTransparentReflectionCounters[frameIndex];
         }
 
         public DebugDdgiOverlayGpuCounters

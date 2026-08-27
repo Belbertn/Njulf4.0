@@ -24,6 +24,14 @@ internal static class Program
 {
     public static int Main(string[] args)
     {
+        if (SampleBistroReflectionQualificationCli.TryRun(
+                args,
+                Console.Out,
+                Console.Error,
+                out int reflectionQualificationExitCode))
+        {
+            return reflectionQualificationExitCode;
+        }
         if (SampleBenchmarkDdgiTransientVerificationCli.TryRun(
                 args,
                 Console.Out,
@@ -560,7 +568,10 @@ internal sealed class HelloGame : Game
             advancedGiStartup,
             requestAdvancedGiRestart: RequestAdvancedGiRestart,
             requestAdvancedGiFeatureRestart:
-                RequestAdvancedGiFeatureRestart);
+                RequestAdvancedGiFeatureRestart,
+            loadModel: _sceneLoader is null
+                ? null
+                : _sceneLoader.LoadModelForRuntimeMetadata);
         _editorPanels = new EditorImGuiPanels();
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
             _editorController.SetScenePath(Path.Combine(AppContext.BaseDirectory, "Scenes", "SampleScene.njscene.json"));
@@ -2098,9 +2109,9 @@ internal sealed class HelloGame : Game
         _materialGiRolloutBootstrap.Apply(settings, Console.Out);
         if (_sceneKind == SampleSceneKind.Bistro)
         {
-            // Keep the scene aligned with the engine-wide C5-on default after
-            // rollout mutation. ApplySmokeRenderSettings runs after this, so
-            // an explicit command-line Off remains authoritative.
+            // Keep the scene aligned with the engine-wide tiered C5 default
+            // after rollout mutation. ApplySmokeRenderSettings runs after
+            // this, so an explicit command-line Off remains authoritative.
             SampleBistroGlobalIlluminationProfile
                 .ConfigurePostAdvancedGiRollout(settings);
         }

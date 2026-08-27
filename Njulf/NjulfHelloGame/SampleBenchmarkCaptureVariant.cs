@@ -46,6 +46,8 @@ public static class SampleBenchmarkCaptureVariant
         "reflection-ddgi-lobe";
     public const string ReflectionReceiverMaterial =
         "reflection-receiver-material";
+    public const string ReflectionRoughnessInputs =
+        "reflection-roughness-inputs";
     public const string DirectionalShadowForcedRefresh =
         "directional-shadow-forced-refresh";
     public const string DecalMaterialPrefix = "decal-material:";
@@ -170,6 +172,10 @@ public static class SampleBenchmarkCaptureVariant
                 settings.Reflections.DebugView =
                     ReflectionDebugView.ReceiverMaterial;
                 return normalized;
+            case ReflectionRoughnessInputs:
+                settings.Reflections.DebugView =
+                    ReflectionDebugView.RoughnessInputs;
+                return normalized;
             case DirectionalShadowForcedRefresh:
                 settings.Shadows.ForceStaticCascadeCacheRefresh = true;
                 return normalized;
@@ -203,6 +209,7 @@ public static class SampleBenchmarkCaptureVariant
             DdgiDiffuseOnly or DdgiDirectionalReceiverOff or
             ReflectionSourceSelection or ReflectionDetailBudget or
             ReflectionDdgiLobe or ReflectionReceiverMaterial or
+            ReflectionRoughnessInputs or
             DirectionalShadowForcedRefresh)
         {
             return normalized;
@@ -238,6 +245,7 @@ public static class SampleBenchmarkCaptureVariant
             $"{DdgiDirectionalReceiverOff}, " +
             $"{ReflectionSourceSelection}, {ReflectionDetailBudget}, " +
             $"{ReflectionDdgiLobe}, {ReflectionReceiverMaterial}, " +
+            $"{ReflectionRoughnessInputs}, " +
             $"{DirectionalShadowForcedRefresh}, " +
             $"or {DecalMaterialPrefix}<index>.",
             nameof(variant));

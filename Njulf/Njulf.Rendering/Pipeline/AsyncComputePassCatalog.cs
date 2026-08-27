@@ -62,6 +62,7 @@ public static class AsyncComputePassCatalog
         Graphics("HybridReflectionTemporalPass", "Raw reflection result, motion, and previous history", "Spatial reflection filter", "Current history publication is part of the serial reflection denoising transaction."),
         Graphics("HybridReflectionSpatialPass", "Current reflection history and receiver payload", "Reflection composite", "The ping-pong filter has an immediate SceneColor consumer."),
         Graphics("HybridReflectionCompositePass", "Filtered reflection history and SceneColor", "Forward transparency", "SceneColor storage mutation must complete before transparent color-attachment rendering."),
+        Graphics("OpaqueSceneColorSnapshotPass", "Opaque SceneColor after reflection composition", "Sorted and weighted transparent SSR", "The immutable snapshot reuses hybrid filter scratch and is consumed immediately by fragment sampling."),
         Graphics("TiledLightCullingPass", "Depth", "Forward+", "Immediate consumer and shared light-tile buffer retain graphics-queue execution."),
         Graphics("SimpleDdgiLightTreePass", "Canonical light buffer and revisions", "Simple DDGI ray-hit shading", "Inactive-bank publication, state verification readback, and the immediate trace consumer share the graphics-queue descriptor transaction."),
         Graphics("AmbientOcclusionPass", "Depth", "AO blur/forward", "Producer is retained with graphics; only the blur chain is independently profitable."),

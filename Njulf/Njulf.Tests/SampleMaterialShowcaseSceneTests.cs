@@ -102,4 +102,34 @@ public sealed class SampleMaterialShowcaseSceneTests
             Assert.That(evidence.Facts.HasUnsupportedNestedMedium, Is.False);
         });
     }
+
+    [Test]
+    public void Showcase_ContainsExplicitThinGlassReflectionTarget()
+    {
+        string root = TestContext.CurrentContext.TestDirectory;
+        while (!File.Exists(Path.Combine(
+                   root,
+                   "NjulfHelloGame",
+                   "SampleMaterialShowcaseScene.cs")))
+        {
+            root = Directory.GetParent(root)?.FullName ??
+                throw new DirectoryNotFoundException(
+                    "Could not locate SampleMaterialShowcaseScene.cs.");
+        }
+
+        string source = File.ReadAllText(Path.Combine(
+            root,
+            "NjulfHelloGame",
+            "SampleMaterialShowcaseScene.cs"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("ReflectionTest.ThinGlassPane"));
+            Assert.That(source, Does.Contain(
+                "shadingModel: MaterialShadingModel.ThinGlass"));
+            Assert.That(source, Does.Contain(
+                "blendMode: MaterialBlendMode.AlphaBlend"));
+            Assert.That(source, Does.Contain("TransmissionFactor = 0.96f"));
+            Assert.That(source, Does.Contain("roughness: 0.05f"));
+        });
+    }
 }

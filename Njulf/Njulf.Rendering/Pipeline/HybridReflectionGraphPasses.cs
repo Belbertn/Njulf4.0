@@ -188,3 +188,30 @@ internal sealed class HybridReflectionCompositePass : HybridReflectionGraphPass
         SceneRenderingData sceneData) =>
         Runtime.RecordComposite(commandBuffer, frameIndex, sceneData);
 }
+
+internal sealed class OpaqueSceneColorSnapshotPass : HybridReflectionGraphPass
+{
+    public OpaqueSceneColorSnapshotPass(
+        VulkanContext context,
+        SwapchainManager swapchain,
+        BindlessHeap bindlessHeap,
+        HybridReflectionVulkanRuntime runtime)
+        : base("OpaqueSceneColorSnapshotPass", context, swapchain,
+            bindlessHeap, runtime)
+    {
+    }
+
+    public override bool ShouldExecute(
+        int frameIndex,
+        SceneRenderingData sceneData) =>
+        Runtime.ShouldSnapshotOpaqueSceneColor(sceneData);
+
+    public override void Execute(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        SceneRenderingData sceneData) =>
+        Runtime.RecordOpaqueSceneColorSnapshot(
+            commandBuffer,
+            frameIndex,
+            sceneData);
+}

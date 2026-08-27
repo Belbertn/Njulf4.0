@@ -31,12 +31,6 @@ public sealed class GlobalIlluminationDefaultsTests
                     preset,
                     forceForBenchmark: true),
                 Is.True);
-            Assert.That(
-                ForwardPlusPass.ShouldConsumeSimpleDdgiReceiverCache(
-                    preset,
-                    forceForBenchmark: false,
-                    hybridReflectionOwnsDirectionalRadiance: true),
-                Is.EqualTo(expectedCacheConsumption || preset == RenderQualityPreset.DdgiHigh));
         });
     }
 
@@ -92,15 +86,26 @@ public sealed class GlobalIlluminationDefaultsTests
         });
     }
 
-    [TestCase(RenderQualityPreset.Low)]
-    [TestCase(RenderQualityPreset.Medium)]
-    [TestCase(RenderQualityPreset.High)]
-    [TestCase(RenderQualityPreset.Ultra)]
-    [TestCase(RenderQualityPreset.DdgiHigh)]
-    public void NewSettings_EnableBoundedAdvancedGiPathsByDefault(
-        RenderQualityPreset preset)
+    [TestCase(RenderQualityPreset.Low,
+        SimpleDdgiNearFieldResidualMode.Off)]
+    [TestCase(RenderQualityPreset.Medium,
+        SimpleDdgiNearFieldResidualMode.Off)]
+    [TestCase(RenderQualityPreset.High,
+        SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
+    [TestCase(RenderQualityPreset.Ultra,
+        SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
+    [TestCase(RenderQualityPreset.DdgiHigh,
+        SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
+    public void QualityPresets_SelectBoundedAdvancedGiPaths(
+        RenderQualityPreset preset,
+        SimpleDdgiNearFieldResidualMode expectedNearFieldResidualMode)
     {
         var settings = new RenderSettings();
+        settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
+            expectedNearFieldResidualMode ==
+                SimpleDdgiNearFieldResidualMode.Off
+                    ? SimpleDdgiNearFieldResidualMode.HiZAdaptive
+                    : SimpleDdgiNearFieldResidualMode.Off;
 
         settings.ApplyQualityPreset(preset);
 
@@ -117,8 +122,7 @@ public sealed class GlobalIlluminationDefaultsTests
             Assert.That(gi.GiCausticMode,
                 Is.EqualTo(GiCausticMode.WorldCacheExperiment));
             Assert.That(gi.SimpleDdgiNearFieldResidualMode,
-                Is.EqualTo(SimpleDdgiNearFieldResidualMode
-                    .HiZAdaptive));
+                Is.EqualTo(expectedNearFieldResidualMode));
             Assert.That(gi.DdgiRayTracingPipelineExperimentEnabled, Is.False,
                 "C2/SER remains explicitly excluded.");
         });

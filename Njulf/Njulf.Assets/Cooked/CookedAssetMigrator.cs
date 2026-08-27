@@ -278,8 +278,19 @@ public static class CookedAssetMigrator
         try
         {
             using (var reader = new CookedAssetReader(sourcePath))
-            using (var writer = new CookedAssetWriter(writePath, reader.Header.AssetKind, reader.Header.SourceHash, reader.Header.ImportSettingsHash, reader.Header.DependencyListHash, reader.Header.BuildToolVersion, reader.Header.Flags))
             {
+                if (reader.Header.AssetKind == CookedAssetKind.Model &&
+                    reader.Header.FormatMinor <
+                        CookedModelImportContract.MinimumFormatMinor)
+                {
+                    throw new NotSupportedException(
+                        $"Cooked model '{sourcePath}' uses legacy format " +
+                        $"{reader.Header.FormatMajor}.{reader.Header.FormatMinor}; " +
+                        "its import semantics cannot be reconstructed by migration. " +
+                        "Recook the model from its source asset.");
+                }
+
+                using var writer = new CookedAssetWriter(writePath, reader.Header.AssetKind, reader.Header.SourceHash, reader.Header.ImportSettingsHash, reader.Header.DependencyListHash, reader.Header.BuildToolVersion, reader.Header.Flags);
                 foreach (CookedSectionEntry section in reader.Sections.OrderBy(section => section.Offset))
                     MigrateSection(reader, writer, section);
                 writer.Complete();

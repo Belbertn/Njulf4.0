@@ -49,9 +49,11 @@ public readonly record struct CookedFormatVersion(ushort Major, ushort Minor);
 
 public static class CookedFormatVersions
 {
-    // 1.3 adds optional imported-light metadata to the model manifest. Readers
-    // retain 1.0-1.2 compatibility by materializing an empty collection.
-    public static CookedFormatVersion Model { get; } = new(1, 3);
+    // 1.4 defines ImportSettingsHash on model headers/manifests as the stable
+    // source-import semantic contract. Source-path resolution rejects older
+    // models because their import convention cannot be proven; direct
+    // .njmodel requests remain authoritative and retain legacy compatibility.
+    public static CookedFormatVersion Model { get; } = new(1, 4);
     // 1.3 appends conservative geometric-normal cones to meshlets. Legacy
     // 1.0-1.2 meshlets load with cone culling disabled and can be recooked
     // incrementally.

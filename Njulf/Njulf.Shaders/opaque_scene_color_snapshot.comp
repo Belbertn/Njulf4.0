@@ -1,0 +1,18 @@
+#version 460
+
+// Reuse the hybrid-reflection local descriptor set. Opaque reflection
+// composition has finished, so binding 9 is no longer filter scratch and can
+// become the immutable source sampled by every subsequent transparent layer.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(rgba16f, set = 3, binding = 9) uniform writeonly image2D OpaqueSnapshot;
+layout(rgba16f, set = 3, binding = 10) uniform readonly image2D OpaqueSceneColor;
+
+void main()
+{
+    ivec2 coordinate = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dimensions = imageSize(OpaqueSnapshot);
+    if (any(greaterThanEqual(coordinate, dimensions)))
+        return;
+    imageStore(OpaqueSnapshot, coordinate,
+        max(imageLoad(OpaqueSceneColor, coordinate), vec4(0.0)));
+}

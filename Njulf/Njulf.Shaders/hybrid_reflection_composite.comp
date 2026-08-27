@@ -34,12 +34,32 @@ void main()
             : imageLoad(HybridRawRadiance, pixel);
     vec4 scene = imageLoad(HybridSceneColor, pixel);
 
+    if (pc.DebugView == 17u)
+    {
+        uvec4 payload = texelFetch(HybridReceiverPayload, pixel, 0);
+        vec3 roughnessInputs = vec3(0.0);
+        if (HybridReflectionPayloadValid(payload))
+        {
+            float physical =
+                HybridReflectionPayloadPhysicalRoughness(payload);
+            float scheduling =
+                HybridReflectionPayloadSchedulingRoughness(payload);
+            roughnessInputs = vec3(
+                physical,
+                scheduling,
+                abs(scheduling - physical));
+        }
+        imageStore(HybridSceneColor, pixel,
+            vec4(roughnessInputs, scene.a));
+        return;
+    }
+
     if (pc.DebugView == 16u)
     {
         uvec4 payload = texelFetch(HybridReceiverPayload, pixel, 0);
         vec3 material = HybridReflectionPayloadValid(payload)
             ? vec3(
-                HybridReflectionPayloadRoughness(payload),
+                HybridReflectionPayloadPhysicalRoughness(payload),
                 HybridMaximumComponent(HybridReflectionPayloadF0(payload)),
                 HybridReflectionPayloadSpecularOcclusion(payload))
             : vec3(0.0);
@@ -66,7 +86,7 @@ void main()
         }
         uint lobeFlags = HybridReflectionPayloadLobeFlags(payload);
         uint tier = HybridResolveAdaptiveReflectionTier(
-            HybridReflectionPayloadRoughness(payload),
+            HybridReflectionPayloadSchedulingRoughness(payload),
             HybridReflectionPayloadF0(payload),
             HybridReflectionPayloadSpecularOcclusion(payload),
             lobeFlags,

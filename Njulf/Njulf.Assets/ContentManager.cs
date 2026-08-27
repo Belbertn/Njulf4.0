@@ -430,10 +430,16 @@ namespace Njulf.Assets
             ContentLoadOptions options)
         {
             bool strict = CookedRuntimePolicy.Strict;
+            ulong? expectedImportContractHash =
+                CreateExpectedModelImportContractHash(
+                    requestedPath,
+                    sourcePath,
+                    options);
             string gateKey = CreateModelLoadGateKey<T>(
                 requestedPath,
                 sourcePath,
-                strict);
+                strict,
+                expectedImportContractHash);
             ModelLoadGate gate = AcquireModelLoadGate(gateKey);
             gate.Semaphore.Wait();
             try
@@ -450,6 +456,7 @@ namespace Njulf.Assets
                         requestedPath,
                         sourcePath,
                         strict,
+                        expectedImportContractHash,
                         _useResolverSnapshots);
                 if (resolution.Status == CookedResolutionStatus.Found)
                 {
@@ -513,10 +520,16 @@ namespace Njulf.Assets
             CancellationToken cancellationToken)
         {
             bool strict = CookedRuntimePolicy.Strict;
+            ulong? expectedImportContractHash =
+                CreateExpectedModelImportContractHash(
+                    requestedPath,
+                    sourcePath,
+                    options);
             string gateKey = CreateModelLoadGateKey<T>(
                 requestedPath,
                 sourcePath,
-                strict);
+                strict,
+                expectedImportContractHash);
             ModelLoadGate gate = AcquireModelLoadGate(gateKey);
             bool entered = false;
             try
@@ -536,6 +549,7 @@ namespace Njulf.Assets
                         requestedPath,
                         sourcePath,
                         strict,
+                        expectedImportContractHash,
                         cacheGeneration),
                     cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
@@ -566,12 +580,14 @@ namespace Njulf.Assets
             string requestedPath,
             string sourcePath,
             bool strict,
+            ulong? expectedImportContractHash,
             long cacheGeneration)
         {
             CookedResolution resolution = _cookedResolver.ResolveModel(
                 requestedPath,
                 sourcePath,
                 strict,
+                expectedImportContractHash,
                 _useResolverSnapshots);
             if (resolution.Status != CookedResolutionStatus.Found)
             {
@@ -622,7 +638,8 @@ namespace Njulf.Assets
             string cookedKey = CreateCookedCacheKey<T>(
                 snapshot,
                 readerFlags,
-                expectedSourceHash);
+                expectedSourceHash,
+                resolution.ExpectedImportContractHash);
             lock (_stateLock)
             {
                 ThrowIfDisposed();
@@ -779,7 +796,8 @@ namespace Njulf.Assets
             string cookedKey = CreateCookedCacheKey<T>(
                 snapshot,
                 readerFlags,
-                expectedSourceHash);
+                expectedSourceHash,
+                resolution.ExpectedImportContractHash);
             lock (_stateLock)
             {
                 ThrowIfDisposed();
@@ -994,26 +1012,51 @@ namespace Njulf.Assets
         private static string CreateCookedCacheKey<T>(
             CookedModelPackageSnapshot snapshot,
             CookedAssetReaderFlags readerFlags,
-            ulong? expectedSourceHash)
+            ulong? expectedSourceHash,
+            ulong? expectedImportContractHash)
         {
             string sourceIdentity = expectedSourceHash.HasValue
                 ? expectedSourceHash.Value.ToString(
                     "x16",
                     System.Globalization.CultureInfo.InvariantCulture)
                 : "none";
+            string importContractIdentity = expectedImportContractHash.HasValue
+                ? expectedImportContractHash.Value.ToString(
+                    "x16",
+                    System.Globalization.CultureInfo.InvariantCulture)
+                : "authoritative-package";
             return string.Join(
                 '|',
                 typeof(T).FullName,
                 snapshot.PackagePath,
                 $"sha256={snapshot.Sha256}",
                 $"readerFlags={(uint)readerFlags}",
-                $"expectedSourceHash={sourceIdentity}");
+                $"expectedSourceHash={sourceIdentity}",
+                $"expectedImportContractHash={importContractIdentity}");
+        }
+
+        private static ulong? CreateExpectedModelImportContractHash(
+            string requestedPath,
+            string sourcePath,
+            ContentLoadOptions options)
+        {
+            if (Path.GetExtension(requestedPath).Equals(
+                    ".njmodel",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return CookedModelImportContract.Compute(
+                sourcePath,
+                options.ImporterOptions ?? ImporterOptions.Default);
         }
 
         private static string CreateModelLoadGateKey<T>(
             string requestedPath,
             string sourcePath,
-            bool strict)
+            bool strict,
+            ulong? expectedImportContractHash)
         {
             bool requestedCooked = Path.GetExtension(requestedPath).Equals(
                 ".njmodel",
@@ -1023,6 +1066,7 @@ namespace Njulf.Assets
                 typeof(T).FullName,
                 Path.GetFullPath(sourcePath),
                 $"requestedCooked={requestedCooked}",
+                $"expectedImportContractHash={(expectedImportContractHash.HasValue ? expectedImportContractHash.Value.ToString("x16", System.Globalization.CultureInfo.InvariantCulture) : "authoritative-package")}",
                 $"strict={strict}",
                 $"readerFlags={(uint)CookedRuntimePolicy.ReaderFlags}");
         }

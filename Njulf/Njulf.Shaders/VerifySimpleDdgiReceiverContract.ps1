@@ -68,6 +68,11 @@ $exactOpaqueDemandModuleNames = @(
     'foliage_mesh.mesh.spv'
 )
 
+$transparentReflectionTelemetryModuleNames = @(
+    'forward.frag.spv',
+    'forward_weighted_oit.frag.spv'
+)
+
 $receiverCacheFragmentModuleNames = @(
     'forward_opaque_ddgi_cache_required.frag.spv',
     'forward_opaque_simple_ddgi_cache_required.frag.spv',
@@ -152,9 +157,17 @@ foreach ($moduleName in $receiverModuleNames) {
     }
     # Three optimized gather sites share the lock-free epoch marker, deduplicated
     # receiver-demand claim, overflow rollback, exact fixed-summary counters,
-    # and one B1 interpolation-mass accumulation each. Pin the complete protocol.
-    if ($functionalAtomicAdds -ne 14) {
-        $violations.Add("${moduleName}: found $functionalAtomicAdds OpAtomicIAdd instruction(s), expected 14")
+    # and one B1 interpolation-mass accumulation each. Transparent receivers
+    # append four sparse scene-reflection source estimates without changing the
+    # DDGI receiver protocol itself.
+    $expectedAtomicAdds = if (
+        $transparentReflectionTelemetryModuleNames -contains $moduleName) {
+        18
+    } else {
+        14
+    }
+    if ($functionalAtomicAdds -ne $expectedAtomicAdds) {
+        $violations.Add("${moduleName}: found $functionalAtomicAdds OpAtomicIAdd instruction(s), expected $expectedAtomicAdds")
     }
     if ($functionalAtomicOrs -ne 3) {
         $violations.Add("${moduleName}: found $functionalAtomicOrs OpAtomicOr instruction(s), expected 3")

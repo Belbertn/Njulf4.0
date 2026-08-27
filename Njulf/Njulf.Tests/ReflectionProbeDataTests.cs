@@ -37,7 +37,15 @@ namespace Njulf.Tests
                 DebugProbeIndex = 9,
                 DebugCubemapFace = 4,
                 DebugMipLevel = 9,
-                DebugView = ReflectionDebugView.ProbeIndex
+                DebugView = ReflectionDebugView.ProbeIndex,
+                SsrMaxSteps = 71,
+                SsrMaxDistance = 83f,
+                SsrConfidenceThreshold = 0.73f,
+                RayQueryHitLightLimit = 5
+            };
+            var transparency = new TransparencySettings
+            {
+                SceneReflectionRayTaskBudget = 98_304
             };
 
             GPUReflectionProbeHeader header = ReflectionProbeData.BuildHeader(
@@ -45,7 +53,8 @@ namespace Njulf.Tests
                 settings,
                 BindlessIndex.ReflectionProbeCubemapArrayTexture,
                 BindlessIndex.ReflectionProbeDebugTexture,
-                mipCount: 5);
+                mipCount: 5,
+                transparency);
 
             Assert.Multiple(() =>
             {
@@ -60,6 +69,12 @@ namespace Njulf.Tests
                 Assert.That(header.DebugProbeIndex, Is.EqualTo(1));
                 Assert.That(header.DebugCubemapFace, Is.EqualTo(4));
                 Assert.That(header.DebugMipLevel, Is.EqualTo(4));
+                Assert.That(header.SsrMaximumSteps, Is.EqualTo(71u));
+                Assert.That(header.SsrMaximumDistance, Is.EqualTo(83f));
+                Assert.That(header.SsrConfidenceThreshold, Is.EqualTo(0.73f));
+                Assert.That(header.SceneReflectionRayTaskBudget,
+                    Is.EqualTo(98_304u));
+                Assert.That(header.RayQueryHitLightLimit, Is.EqualTo(5u));
             });
         }
 

@@ -53,9 +53,9 @@ internal static class SampleBistroGlobalIlluminationProfile
         // confidence before it admits the global environment fallback.
         gi.SimpleDdgiRoughSpecularMinimumRoughness = 0.55f;
         gi.SimpleDdgiRoughSpecularFullWeightRoughness = 0.70f;
-        // Do not reserve the unqualified C5 residual. Its completion witness
-        // is invalid in production captures, so it contributes no lighting;
-        // DDGI remains the stable low-frequency and off-screen owner.
+        // High-class profiles pair DDGI's stable low-frequency and off-screen
+        // ownership with the bounded C5 screen-space residual for nearby
+        // indirect-light detail.
         ConfigurePostAdvancedGiRollout(settings);
         // Keep the steady-state tier unchanged. During an actual lighting
         // transition, spend the already-bounded urgent lane on the full set of
@@ -80,14 +80,20 @@ internal static class SampleBistroGlobalIlluminationProfile
     }
 
     /// <summary>
-    /// Reasserts Bistro's scene-local advanced-GI policy after the global
-    /// rollout bootstrap. Explicit smoke/CLI overrides are applied afterwards.
+    /// Reasserts the quality tier's C5 policy after the global rollout
+    /// bootstrap. Explicit smoke/CLI overrides are applied afterwards.
     /// </summary>
     public static void ConfigurePostAdvancedGiRollout(RenderSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            SimpleDdgiNearFieldResidualMode.Off;
+            settings.QualityPreset is
+                RenderQualityPreset.High or
+                RenderQualityPreset.DdgiHigh or
+                RenderQualityPreset.Ultra
+                    ? GlobalIlluminationSettings
+                        .DefaultSimpleDdgiNearFieldResidualMode
+                    : SimpleDdgiNearFieldResidualMode.Off;
     }
 
     private static void ConfigureEnvironment(EnvironmentSettings environment)

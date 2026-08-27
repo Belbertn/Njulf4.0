@@ -841,8 +841,7 @@ namespace Njulf.Rendering.Pipeline
                 bool receiverCacheEligible = ShouldConsumeSimpleDdgiReceiverCache(
                                                  _settings.QualityPreset,
                                                  _settings.Diagnostics
-                                                     .ForceForwardGiReceiverCacheForBenchmark,
-                                                 _hybridReflectionReceiverEnabledForCurrentView) &&
+                                                     .ForceForwardGiReceiverCacheForBenchmark) &&
                                              !giCausticReceiverEnabled &&
                                              receiverGatherDispatchable;
                 // B1 owns an exact opaque receiver producer in this compute
@@ -2218,8 +2217,7 @@ namespace Njulf.Rendering.Pipeline
                    ShouldConsumeSimpleDdgiReceiverCache(
                        _settings.QualityPreset,
                        _settings.Diagnostics
-                           .ForceForwardGiReceiverCacheForBenchmark,
-                       _hybridReflectionReceiverEnabledForCurrentView) &&
+                           .ForceForwardGiReceiverCacheForBenchmark) &&
                    !_settings.Diagnostics.ForceExactForwardGiGatherForBenchmark &&
                    !_recordingReflectionCapture &&
                    !ShouldWriteMaterialTransportProvenance();
@@ -2227,18 +2225,17 @@ namespace Njulf.Rendering.Pipeline
 
         internal static bool ShouldConsumeSimpleDdgiReceiverCache(
             RenderQualityPreset qualityPreset,
-            bool forceForBenchmark,
-            bool hybridReflectionOwnsDirectionalRadiance = false)
+            bool forceForBenchmark)
         {
-            // The 12x12 gather lattice remains the diffuse owner when the
-            // hybrid-reflection path independently owns directional glossy
-            // radiance. This keeps DDGI High inside the 1080p60 budget while
-            // preserving exact gathers for other high-quality configurations.
+            // The cache samples a depth-derived representative once per 12x12
+            // tile and cannot retain normal/material discontinuities. Hybrid
+            // reflection owns directional glossy radiance only; it does not make
+            // this coarse lattice a valid diffuse owner for a high-quality tier.
+            // Keep DdgiHigh on exact per-fragment gathers and reserve the cache
+            // for explicitly lower-cost presets and controlled benchmark pairs.
             return forceForBenchmark ||
                    qualityPreset is RenderQualityPreset.Low or
-                       RenderQualityPreset.Medium ||
-                   qualityPreset == RenderQualityPreset.DdgiHigh &&
-                   hybridReflectionOwnsDirectionalRadiance;
+                       RenderQualityPreset.Medium;
         }
 
         internal bool CanConsumeSimpleDdgiReceiverCacheForCurrentView =>
@@ -2686,7 +2683,8 @@ namespace Njulf.Rendering.Pipeline
                 ReflectionDebugView.Confidence or
                 ReflectionDebugView.SourceSelection or
                 ReflectionDebugView.DetailBudget or
-                ReflectionDebugView.ReceiverMaterial;
+                ReflectionDebugView.ReceiverMaterial or
+                ReflectionDebugView.RoughnessInputs;
             if (!supportedReflectionDebug || sceneData.DebugViewMode != 0u ||
                 sceneData.AmbientOcclusionDebugView != AmbientOcclusionDebugView.None ||
                 sceneData.TransparencyDebugView != TransparencyDebugView.None ||

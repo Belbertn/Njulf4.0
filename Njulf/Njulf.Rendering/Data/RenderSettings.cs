@@ -908,7 +908,12 @@ namespace Njulf.Rendering.Data
         /// Receiver material inputs: roughness in red, maximum F0 in green,
         /// and indirect-specular visibility in blue.
         /// </summary>
-        ReceiverMaterial = 16
+        ReceiverMaterial = 16,
+        /// <summary>
+        /// Authored physical roughness in red, conservative reflection-work
+        /// scheduling roughness in green, and their absolute delta in blue.
+        /// </summary>
+        RoughnessInputs = 17
     }
 
     public enum TransparencyMode : uint
@@ -1461,8 +1466,11 @@ namespace Njulf.Rendering.Data
 
     public sealed class TransparencySettings
     {
+        public const int MaximumSceneReflectionRayTaskBudget = 4_194_304;
+
         private int _maxTransparentMeshlets = 262144;
         private float _alphaDiscardThreshold = 0.001f;
+        private int _sceneReflectionRayTaskBudget = 65_536;
         private int _thickTransmissionRayTaskBudget = 262_144;
         private int _thickTransmissionMaximumInterfaces =
             BoundedDielectricMediaStack.MaximumInterfaces;
@@ -1484,6 +1492,20 @@ namespace Njulf.Rendering.Data
         public ThickTransmissionMode ThickTransmissionMode { get; set; } =
             ThickTransmissionMode.RayQuery;
         public DispersionMode DispersionMode { get; set; } = DispersionMode.Off;
+
+        /// <summary>
+        /// Maximum transparent fragments admitted to the scene-reflection
+        /// ray-query recovery path in one frame. SSR and analytic fallbacks
+        /// remain available when this bounded budget is zero or exhausted.
+        /// </summary>
+        public int SceneReflectionRayTaskBudget
+        {
+            get => _sceneReflectionRayTaskBudget;
+            set => _sceneReflectionRayTaskBudget = Math.Clamp(
+                value,
+                0,
+                MaximumSceneReflectionRayTaskBudget);
+        }
 
         public int ThickTransmissionRayTaskBudget
         {
@@ -1955,7 +1977,7 @@ namespace Njulf.Rendering.Data
     public sealed class ReflectionSettings
     {
         public const int ShaderMaxProbesPerPixel = 4;
-        public const uint ReceiverPayloadAbiVersion = 3;
+        public const uint ReceiverPayloadAbiVersion = 4;
 
         private int _maxProbes = 8;
         private int _maxProbesPerPixel = 2;
@@ -5257,7 +5279,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 18;
+        public const int SerializationVersion = 19;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5379,6 +5401,19 @@ namespace Njulf.Rendering.Data
                 GlobalIlluminationSettings
                     .DefaultSimpleDdgiDirectionalGuidingMode;
 
+            // C5 is part of the High-class production profile. Lower tiers do
+            // not reserve its immutable trace, history, filter, and composite
+            // resources. Applying a preset deliberately restores the tier
+            // default; persisted settings and explicit runtime/CLI overrides
+            // are applied after the preset and may still opt out.
+            GlobalIllumination.SimpleDdgiNearFieldResidualMode = preset is
+                RenderQualityPreset.High or
+                RenderQualityPreset.DdgiHigh or
+                RenderQualityPreset.Ultra
+                    ? GlobalIlluminationSettings
+                        .DefaultSimpleDdgiNearFieldResidualMode
+                    : SimpleDdgiNearFieldResidualMode.Off;
+
             switch (preset)
             {
                 case RenderQualityPreset.Low:
@@ -5439,6 +5474,8 @@ namespace Njulf.Rendering.Data
                     Shadows.AreaShadowSampleCount = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     Transparency.ReceiveGlobalIllumination = false;
+                    Transparency.SampleReflections = false;
+                    Transparency.SceneReflectionRayTaskBudget = 0;
                     Decals.ReceiveGlobalIllumination = false;
                     break;
                 case RenderQualityPreset.Medium:
@@ -5507,6 +5544,8 @@ namespace Njulf.Rendering.Data
                     // Dynamic diffuse GI is intentionally not sampled by
                     // layered forward receivers in this quality tier.
                     Transparency.ReceiveGlobalIllumination = false;
+                    Transparency.SampleReflections = false;
+                    Transparency.SceneReflectionRayTaskBudget = 0;
                     Decals.ReceiveGlobalIllumination = false;
                     break;
                 case RenderQualityPreset.DdgiHigh:
@@ -5572,6 +5611,8 @@ namespace Njulf.Rendering.Data
                     Shadows.AreaShadowSampleCount = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     Transparency.ReceiveGlobalIllumination = true;
+                    Transparency.SampleReflections = true;
+                    Transparency.SceneReflectionRayTaskBudget = 65_536;
                     Decals.ReceiveGlobalIllumination = true;
                     break;
                 case RenderQualityPreset.Ultra:
@@ -5635,9 +5676,11 @@ namespace Njulf.Rendering.Data
                     Shadows.AreaShadowSampleCount = 2;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     Transparency.ReceiveGlobalIllumination = true;
+                    Transparency.SampleReflections = true;
+                    Transparency.SceneReflectionRayTaskBudget = 131_072;
                     Decals.ReceiveGlobalIllumination = true;
                     break;
-                default:
+                case RenderQualityPreset.High:
                     ResolutionScale = 1.0f;
                     DynamicResolution.Enabled = false;
                     Bloom.Enabled = true;
@@ -5705,6 +5748,8 @@ namespace Njulf.Rendering.Data
                     Shadows.AreaShadowSampleCount = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     Transparency.ReceiveGlobalIllumination = true;
+                    Transparency.SampleReflections = true;
+                    Transparency.SceneReflectionRayTaskBudget = 65_536;
                     Decals.ReceiveGlobalIllumination = true;
                     break;
             }
@@ -5904,7 +5949,8 @@ namespace Njulf.Rendering.Data
             // Version 16 persists the froxel volumetric-fog contract. Version 17
             // persists the hybrid-reflection mode, quality budgets, and filters.
             // Version 18 persists bounded thick-transmission, nested-media,
-            // water-boundary, and optional RGB-dispersion budgets.
+            // water-boundary, and optional RGB-dispersion budgets. Version 19
+            // persists the bounded transparent scene-reflection ray budget.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -6290,6 +6336,7 @@ namespace Njulf.Rendering.Data
             public bool ReceiveShadows { get; init; } = true;
             public bool ReceiveGlobalIllumination { get; init; } = true;
             public bool SampleReflections { get; init; } = true;
+            public int? SceneReflectionRayTaskBudget { get; init; }
             public bool SortPerMeshlet { get; init; } = true;
             public int MaxTransparentMeshlets { get; init; } = 262_144;
             public float AlphaDiscardThreshold { get; init; } = 0.001f;
@@ -6320,6 +6367,8 @@ namespace Njulf.Rendering.Data
                 ReceiveShadows = settings.ReceiveShadows,
                 ReceiveGlobalIllumination = settings.ReceiveGlobalIllumination,
                 SampleReflections = settings.SampleReflections,
+                SceneReflectionRayTaskBudget =
+                    settings.SceneReflectionRayTaskBudget,
                 SortPerMeshlet = settings.SortPerMeshlet,
                 MaxTransparentMeshlets = settings.MaxTransparentMeshlets,
                 AlphaDiscardThreshold = settings.AlphaDiscardThreshold,
@@ -6349,6 +6398,11 @@ namespace Njulf.Rendering.Data
                 settings.ReceiveShadows = ReceiveShadows;
                 settings.ReceiveGlobalIllumination = ReceiveGlobalIllumination;
                 settings.SampleReflections = SampleReflections;
+                if (SceneReflectionRayTaskBudget.HasValue)
+                {
+                    settings.SceneReflectionRayTaskBudget =
+                        SceneReflectionRayTaskBudget.Value;
+                }
                 settings.SortPerMeshlet = SortPerMeshlet;
                 settings.MaxTransparentMeshlets = MaxTransparentMeshlets;
                 settings.AlphaDiscardThreshold = AlphaDiscardThreshold;

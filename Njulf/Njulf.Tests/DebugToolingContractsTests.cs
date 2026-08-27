@@ -103,7 +103,9 @@ namespace Njulf.Tests
                 ("thick transmission", RendererDiagnosticsBuffer.ThickTransmissionCounterBase,
                     RendererDiagnosticsBuffer.ThickTransmissionCounterCount),
                 ("DDGI area-light sampling", RendererDiagnosticsBuffer.DdgiAreaLightCounterBase,
-                    RendererDiagnosticsBuffer.DdgiAreaLightCounterCount)
+                    RendererDiagnosticsBuffer.DdgiAreaLightCounterCount),
+                ("transparent reflections", RendererDiagnosticsBuffer.TransparentReflectionCounterBase,
+                    RendererDiagnosticsBuffer.TransparentReflectionCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -168,8 +170,12 @@ namespace Njulf.Tests
                     Is.EqualTo(RendererDiagnosticsBuffer.ThickTransmissionCounterBase));
                 Assert.That(RendererDiagnosticsBuffer.ThickTransmissionCounterCount,
                     Is.EqualTo(1));
+                Assert.That(RendererDiagnosticsBuffer.TransparentReflectionTaskCounter,
+                    Is.EqualTo(RendererDiagnosticsBuffer.TransparentReflectionCounterBase));
+                Assert.That(RendererDiagnosticsBuffer.TransparentReflectionCounterCount,
+                    Is.EqualTo(8));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
-                    Is.EqualTo(RendererDiagnosticsBuffer.DdgiAreaLightCounterBase + 4));
+                    Is.EqualTo(RendererDiagnosticsBuffer.TransparentReflectionCounterBase + 8));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount *
                                             sizeof(uint)));
@@ -206,6 +212,10 @@ namespace Njulf.Tests
                     "THICK_TRANSMISSION_COUNTER_BASE ="));
                 Assert.That(commonShader, Does.Contain(
                     "DDGI_AREA_LIGHT_COUNTER_BASE ="));
+                Assert.That(commonShader, Does.Contain(
+                    "TRANSPARENT_REFLECTION_COUNTER_BASE ="));
+                Assert.That(commonShader, Does.Contain(
+                    "TRANSPARENT_REFLECTION_ENVIRONMENT_FALLBACK_COUNTER ="));
                 Assert.That(simpleSharedShader, Does.Contain(
                     "void RecordSimpleDdgiVolumeEnergyEvidence("));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -816,6 +826,9 @@ namespace Njulf.Tests
                     (uint)ReflectionDebugView.ReceiverMaterial,
                     Is.EqualTo(16u));
                 Assert.That(
+                    (uint)ReflectionDebugView.RoughnessInputs,
+                    Is.EqualTo(17u));
+                Assert.That(
                     shader,
                     Does.Contain(
                         "REFLECTION_DEBUG_DDGI_DIRECTIONAL_RADIANCE_LOBE = 11u"));
@@ -846,6 +859,10 @@ namespace Njulf.Tests
                     controller,
                     Does.Contain(
                         "ReflectionDebugView.DetailBudget => ReflectionDebugView.ReceiverMaterial"));
+                Assert.That(
+                    controller,
+                    Does.Contain(
+                        "ReflectionDebugView.ReceiverMaterial => ReflectionDebugView.RoughnessInputs"));
             });
         }
 
@@ -864,6 +881,8 @@ namespace Njulf.Tests
                 Assert.That(shader, Does.Contain(
                     "? mix(1.0, probeMaxLod, roughness)"));
                 Assert.That(shader, Does.Contain(
+                    "EstimateReflectionSchedulingRoughness("));
+                Assert.That(shader, Does.Not.Contain(
                     "roughness = FilterSpecularRoughness(roughness, normal);"));
                 Assert.That(prefilter, Does.Contain(
                     "float medianNeighbour = 0.5 *"));
@@ -923,6 +942,12 @@ namespace Njulf.Tests
         public void ForwardDebugViews_PreserveGeometryDecalCoverage()
         {
             string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string normalized = shader.Replace("\r\n", "\n");
+            int genericMain = normalized.IndexOf(
+                "#else\nvoid main()",
+                StringComparison.Ordinal);
+            Assert.That(genericMain, Is.GreaterThanOrEqualTo(0));
+            string genericForward = normalized[genericMain..];
 
             Assert.Multiple(() =>
             {
@@ -933,10 +958,10 @@ namespace Njulf.Tests
                     shader,
                     Does.Contain("WriteForwardColor(vec4(finalDiffuseIndirect, forwardDebugOutputAlpha));"));
                 Assert.That(
-                    shader,
+                    genericForward,
                     Does.Not.Contain("WriteForwardColor(vec4(reflectionDebugColor, 1.0));"));
                 Assert.That(
-                    shader,
+                    genericForward,
                     Does.Not.Contain("WriteForwardColor(vec4(finalDiffuseIndirect, 1.0));"));
             });
         }

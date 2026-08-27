@@ -706,10 +706,14 @@ public sealed class CookedAssetTests
         string modelPath = Path.Combine(modelDirectory, "triangle.njmodel");
         CookedMeshPayload mesh = CreateTrianglePayload();
         ulong sourceHash = CookedHash.File(sourcePath);
+        ulong importContractHash = CookedModelImportContract.Compute(
+            sourcePath,
+            ImporterOptions.Default);
         CookedPackage.WriteMesh(meshPath, mesh, sourceHash, 1, 2);
         CookedPackage.WriteMaterials(materialPath, new CookedMaterialTable([ModelMaterial.Default]), sourceHash, 1, 2);
         var manifest = new CookedModelManifest(
-            CookedPackage.StableAssetId(sourcePath), "Triangle", sourcePath, sourceHash, 1, 2,
+            CookedPackage.StableAssetId(sourcePath), "Triangle", sourcePath,
+            sourceHash, importContractHash, 2,
             new CookedAssetReference("triangle.meshes.njmesh", CookedHash.File(meshPath)),
             new CookedAssetReference("../materials/triangle.materials.njmat", CookedHash.File(materialPath)),
             null,

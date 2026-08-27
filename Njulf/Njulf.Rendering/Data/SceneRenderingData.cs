@@ -66,6 +66,11 @@ namespace Njulf.Rendering.Data
         public int MaskedObjectCount { get; set; }
         public int TransparentObjectCount { get; set; }
         /// <summary>
+        /// Visible lit alpha/transmission objects eligible to sample the
+        /// immutable opaque SceneColor snapshot for reflections.
+        /// </summary>
+        public int TransparentReflectionReceiverObjectCount { get; set; }
+        /// <summary>
         /// Visible alpha-blended objects whose material has the explicit
         /// zero-thickness dielectric transport classification.
         /// </summary>
@@ -81,6 +86,7 @@ namespace Njulf.Rendering.Data
         public int SolidMeshletCount { get; set; }
         public int MaskedMeshletCount { get; set; }
         public int TransparentMeshletCount { get; set; }
+        public int TransparentReflectionReceiverMeshletCount { get; set; }
         /// <summary>
         /// Admitted transparent draw commands using the ThinGlass class. This
         /// is compared with <see cref="TransparentMeshletCount"/> before the
@@ -91,6 +97,12 @@ namespace Njulf.Rendering.Data
         public int BlendMaterialCount { get; set; }
         public int MaskMaterialCount { get; set; }
         public int GeometryDecalMaterialCount { get; set; }
+        public bool TransparentSampleReflections { get; set; } = true;
+        public int TransparentSceneReflectionRayTaskBudget { get; set; }
+        public bool OpaqueSceneColorSnapshotAvailable { get; set; }
+        public bool HasTransparentReflectionReceivers =>
+            TransparentReflectionReceiverObjectCount > 0 &&
+            TransparentReflectionReceiverMeshletCount > 0;
         public int TransparentSortCandidateCount { get; set; }
         public long TransparentSortMicroseconds { get; set; }
         public int TransparentOverflowCount { get; set; }
@@ -807,6 +819,30 @@ namespace Njulf.Rendering.Data
         public uint HybridReflectionDdgiFallbackCount { get; set; }
         public uint HybridReflectionProbeFallbackCount { get; set; }
         public uint HybridReflectionEnvironmentFallbackCount { get; set; }
+        public uint TransparentReflectionRayRequestCount { get; set; }
+        public uint TransparentReflectionEstimatedSsrHitCount { get; set; }
+        public uint TransparentReflectionEstimatedRayHitCount { get; set; }
+        public uint TransparentReflectionEstimatedRayMissCount { get; set; }
+        public uint TransparentReflectionEstimatedBudgetRejectedCount
+        {
+            get;
+            set;
+        }
+        public uint TransparentReflectionEstimatedDdgiFallbackCount
+        {
+            get;
+            set;
+        }
+        public uint TransparentReflectionEstimatedProbeFallbackCount
+        {
+            get;
+            set;
+        }
+        public uint TransparentReflectionEstimatedEnvironmentFallbackCount
+        {
+            get;
+            set;
+        }
         public long GpuHybridReflectionSsrMicroseconds { get; set; }
         public long GpuHybridReflectionRayQueryMicroseconds { get; set; }
         public long GpuHybridReflectionDdgiBaseMicroseconds { get; set; }
@@ -1683,17 +1719,22 @@ namespace Njulf.Rendering.Data
             SolidObjectCount = 0;
             MaskedObjectCount = 0;
             TransparentObjectCount = 0;
+            TransparentReflectionReceiverObjectCount = 0;
             ThinGlassObjectCount = 0;
             GeometryDecalObjectCount = 0;
             OpaqueMeshletCount = 0;
             SolidMeshletCount = 0;
             MaskedMeshletCount = 0;
             TransparentMeshletCount = 0;
+            TransparentReflectionReceiverMeshletCount = 0;
             ThinGlassMeshletCount = 0;
             GeometryDecalMeshletCount = 0;
             BlendMaterialCount = 0;
             MaskMaterialCount = 0;
             GeometryDecalMaterialCount = 0;
+            TransparentSampleReflections = true;
+            TransparentSceneReflectionRayTaskBudget = 0;
+            OpaqueSceneColorSnapshotAvailable = false;
             TransparentSortCandidateCount = 0;
             TransparentSortMicroseconds = 0;
             TransparentOverflowCount = 0;
@@ -2384,6 +2425,14 @@ namespace Njulf.Rendering.Data
             HybridReflectionDdgiFallbackCount = 0;
             HybridReflectionProbeFallbackCount = 0;
             HybridReflectionEnvironmentFallbackCount = 0;
+            TransparentReflectionRayRequestCount = 0;
+            TransparentReflectionEstimatedSsrHitCount = 0;
+            TransparentReflectionEstimatedRayHitCount = 0;
+            TransparentReflectionEstimatedRayMissCount = 0;
+            TransparentReflectionEstimatedBudgetRejectedCount = 0;
+            TransparentReflectionEstimatedDdgiFallbackCount = 0;
+            TransparentReflectionEstimatedProbeFallbackCount = 0;
+            TransparentReflectionEstimatedEnvironmentFallbackCount = 0;
             GpuHybridReflectionSsrMicroseconds = 0;
             GpuHybridReflectionRayQueryMicroseconds = 0;
             GpuHybridReflectionDdgiBaseMicroseconds = 0;

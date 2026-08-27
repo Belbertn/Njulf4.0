@@ -112,7 +112,8 @@ namespace Njulf.Rendering.Data
             ReflectionSettings settings,
             int probeCubemapArrayTextureIndex,
             int debugTextureIndex,
-            uint mipCount)
+            uint mipCount,
+            TransparencySettings? transparencySettings = null)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
@@ -140,7 +141,17 @@ namespace Njulf.Rendering.Data
                 DebugView = (uint)settings.DebugView,
                 DebugProbeIndex = settings.DebugProbeIndex,
                 DebugCubemapFace = settings.DebugCubemapFace,
-                DebugMipLevel = settings.DebugMipLevel
+                DebugMipLevel = settings.DebugMipLevel,
+                SsrMaximumSteps = checked((uint)settings.SsrMaxSteps),
+                SsrMaximumDistance = settings.SsrMaxDistance,
+                SsrConfidenceThreshold = settings.SsrConfidenceThreshold,
+                SceneReflectionRayTaskBudget = checked((uint)Math.Max(
+                    0,
+                    transparencySettings?.SceneReflectionRayTaskBudget ??
+                    0)),
+                RayQueryHitLightLimit = checked((uint)Math.Max(
+                    0,
+                    settings.RayQueryHitLightLimit))
             };
         }
 

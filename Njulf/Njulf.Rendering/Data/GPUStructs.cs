@@ -362,7 +362,8 @@ namespace Njulf.Rendering.Data
         public Vector4 EmissiveOffsetScale;
         public Vector4 TextureRotations;
         public Vector4 TextureTexCoordSets;
-        // x = occlusion rotation, y = occlusion UV set, z/w reserved.
+        // x = occlusion rotation, y = occlusion UV set, z = exact
+        // MaterialBlendMode for transparent lighting policy, w reserved.
         public Vector4 OcclusionBinding;
         public int AlbedoTextureIndex;
         public int NormalTextureIndex;
@@ -443,6 +444,8 @@ namespace Njulf.Rendering.Data
     {
         public const uint UvSetBits = 4u;
         public const uint UvSetMask = (1u << (int)UvSetBits) - 1u;
+        public const int BlendModeShift = 20;
+        public const uint BlendModeMask = 0x07u;
 
         public Vector4 Albedo;
         public Vector4 Emissive;
@@ -457,7 +460,8 @@ namespace Njulf.Rendering.Data
         public uint FeatureFlags;
         public uint TransportFlags;
         // Four bits each: base color, normal, metallic/roughness, emissive,
-        // and occlusion UV-set selectors.
+        // and occlusion UV-set selectors. Bits 20..22 carry the exact
+        // MaterialBlendMode used by transparent lighting policy.
         public uint PackedUvSets;
         // One bit per selector above. A set bit means offset=(0,0), scale=(1,1),
         // and rotation=0, so the cold transform payload need not be read.
@@ -473,7 +477,8 @@ namespace Njulf.Rendering.Data
                 PackUvSet(material.TextureTexCoordSets.Y, 1) |
                 PackUvSet(material.TextureTexCoordSets.Z, 2) |
                 PackUvSet(material.TextureTexCoordSets.W, 3) |
-                PackUvSet(material.OcclusionBinding.Y, 4);
+                PackUvSet(material.OcclusionBinding.Y, 4) |
+                PackBlendMode(material.OcclusionBinding.Z);
             uint identityTransformMask = 0u;
             SetIdentityTransformBit(
                 ref identityTransformMask,
@@ -533,6 +538,18 @@ namespace Njulf.Rendering.Data
                 0,
                 (int)UvSetMask);
             return encoded << checked(selectorIndex * (int)UvSetBits);
+        }
+
+        private static uint PackBlendMode(float blendMode)
+        {
+            if (!float.IsFinite(blendMode))
+                blendMode = 0f;
+
+            uint encoded = (uint)System.Math.Clamp(
+                (int)System.MathF.Round(blendMode),
+                0,
+                (int)BlendModeMask);
+            return encoded << BlendModeShift;
         }
 
         private static void SetIdentityTransformBit(
@@ -1129,6 +1146,10 @@ namespace Njulf.Rendering.Data
         private const uint DecalReceiveShadowsFlag = 1u << 6;
         private const uint ThickTransmissionRayQueryEnabledFlag = 1u << 7;
         private const uint ThickTransmissionDispersionEnabledFlag = 1u << 10;
+        private const int EffectiveReflectionModeShift = 11;
+        private const uint EffectiveReflectionModeMask = 0x07u;
+        private const uint TransparentSampleReflectionsFlag = 1u << 14;
+        private const uint OpaqueSceneColorSnapshotAvailableFlag = 1u << 15;
         // Keep the forward push-constant ABI at 256 bytes. The low diagnostic
         // bits are already part of the shader contract. Bit 30 selects the
         // frame-local opaque DDGI receiver cache. Bit 31 enables reflection
@@ -1326,7 +1347,10 @@ namespace Njulf.Rendering.Data
             bool decalReceiveShadows = false,
             bool ddgiReceiverCacheEnabled = false,
             bool thickTransmissionRayQueryEnabled = false,
-            bool thickTransmissionDispersionEnabled = false)
+            bool thickTransmissionDispersionEnabled = false,
+            ReflectionMode effectiveReflectionMode = ReflectionMode.Disabled,
+            bool transparentSampleReflections = false,
+            bool opaqueSceneColorSnapshotAvailable = false)
         {
             return (ddgiForwardEstimateCountersEnabled ? DdgiForwardEstimateCountersEnabledFlag : 0u) |
                    (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u) |
@@ -1339,6 +1363,13 @@ namespace Njulf.Rendering.Data
                        ? ThickTransmissionRayQueryEnabledFlag : 0u) |
                    (thickTransmissionDispersionEnabled
                        ? ThickTransmissionDispersionEnabledFlag : 0u) |
+                   (((uint)effectiveReflectionMode &
+                     EffectiveReflectionModeMask) <<
+                    EffectiveReflectionModeShift) |
+                   (transparentSampleReflections
+                       ? TransparentSampleReflectionsFlag : 0u) |
+                   (opaqueSceneColorSnapshotAvailable
+                       ? OpaqueSceneColorSnapshotAvailableFlag : 0u) |
                    (ddgiReceiverCacheEnabled ? DdgiReceiverCacheEnabledFlag : 0u) |
                    ((directionalShadowPreviewCascade & DirectionalShadowPreviewCascadeMask) <<
                     DirectionalShadowPreviewCascadeShift);
@@ -1666,6 +1697,14 @@ namespace Njulf.Rendering.Data
         public int DebugProbeIndex;
         public int DebugCubemapFace;
         public int DebugMipLevel;
+        public uint SsrMaximumSteps;
+        public float SsrMaximumDistance;
+        public float SsrConfidenceThreshold;
+        public uint SceneReflectionRayTaskBudget;
+        public uint RayQueryHitLightLimit;
+        public uint Padding0;
+        public uint Padding1;
+        public uint Padding2;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

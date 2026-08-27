@@ -863,10 +863,18 @@ namespace Njulf.Rendering.Descriptors
         public const int SimpleDdgiSampledVisibilityTextureBase =
             SimpleDdgiSampledIrradianceTextureBase + MaxSimpleDdgiSampledAtlasTextureGroups;
 
-        /// <summary>First dynamically allocated material texture index</summary>
-        public const int FirstDynamicTextureIndex =
+        /// <summary>
+        /// Immutable opaque SceneColor snapshot sampled by transparent SSR.
+        /// The physical image reuses hybrid-reflection filter scratch after
+        /// opaque reflection composition has completed.
+        /// </summary>
+        public const int OpaqueSceneColorSnapshotTexture =
             SimpleDdgiSampledVisibilityTextureBase +
             MaxSimpleDdgiSampledAtlasTextureGroups;
+
+        /// <summary>First dynamically allocated material texture index</summary>
+        public const int FirstDynamicTextureIndex =
+            OpaqueSceneColorSnapshotTexture + 1;
 
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;

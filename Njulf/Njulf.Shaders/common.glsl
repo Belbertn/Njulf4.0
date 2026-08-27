@@ -356,7 +356,8 @@ const int AREA_LIGHT_LTC_AMPLITUDE_TEXTURE_INDEX = 41;
 const int SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT = 128;
 const int SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX = 42;
 const int SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX = 170;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 298;
+const int OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX = 298;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 299;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -671,7 +672,8 @@ struct GPUMaterialData
     vec4 EmissiveOffsetScale;
     vec4 TextureRotations;
     vec4 TextureTexCoordSets;
-    // x = occlusion rotation, y = occlusion texcoord set, z/w reserved.
+    // x = occlusion rotation, y = occlusion texcoord set, z = exact
+    // MaterialBlendMode for transparent lighting policy, w reserved.
     vec4 OcclusionBinding;
     int AlbedoTextureIndex;
     int NormalTextureIndex;
@@ -1362,6 +1364,14 @@ struct GPUReflectionProbeHeader
     int DebugProbeIndex;
     int DebugCubemapFace;
     int DebugMipLevel;
+    uint SsrMaximumSteps;
+    float SsrMaximumDistance;
+    float SsrConfidenceThreshold;
+    uint SceneReflectionRayTaskBudget;
+    uint RayQueryHitLightLimit;
+    uint Padding0;
+    uint Padding1;
+    uint Padding2;
 };
 
 struct GPUReflectionProbe
@@ -1563,7 +1573,7 @@ const int SIZEOF_GPU_SPOT_SHADOW = 112;
 const int SIZEOF_GPU_POINT_SHADOW = 432;
 const int SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX = 16;
 const int SIZEOF_GPU_ENVIRONMENT_DATA = 48;
-const int SIZEOF_GPU_REFLECTION_PROBE_HEADER = 48;
+const int SIZEOF_GPU_REFLECTION_PROBE_HEADER = 80;
 const int SIZEOF_GPU_REFLECTION_PROBE = 144;
 const int SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER = 80;
 const int SIZEOF_GPU_DDGI_PROBE_VOLUME = 144;
@@ -2303,6 +2313,24 @@ const uint DDGI_AREA_LIGHT_INVALID_PDF_COUNTER =
     DDGI_AREA_LIGHT_COUNTER_BASE + 2u;
 const uint DDGI_AREA_LIGHT_VISIBILITY_RAY_COUNTER =
     DDGI_AREA_LIGHT_COUNTER_BASE + 3u;
+const uint TRANSPARENT_REFLECTION_COUNTER_BASE =
+    DDGI_AREA_LIGHT_COUNTER_BASE + 4u;
+const uint TRANSPARENT_REFLECTION_TASK_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 0u;
+const uint TRANSPARENT_REFLECTION_SSR_HIT_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 1u;
+const uint TRANSPARENT_REFLECTION_RAY_HIT_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 2u;
+const uint TRANSPARENT_REFLECTION_RAY_MISS_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 3u;
+const uint TRANSPARENT_REFLECTION_BUDGET_REJECT_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 4u;
+const uint TRANSPARENT_REFLECTION_DDGI_FALLBACK_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 5u;
+const uint TRANSPARENT_REFLECTION_PROBE_FALLBACK_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 6u;
+const uint TRANSPARENT_REFLECTION_ENVIRONMENT_FALLBACK_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 7u;
 const float SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_SUM_SCALE = 256.0;
 const float SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_MAX_SCALE = 65535.0;
 const float DDGI_MANY_LIGHT_PDF_SCALE = 1048576.0;
@@ -3493,6 +3521,11 @@ float UnpackForwardMaterialUvSet(uint packedUvSets, uint selectorIndex)
     return float((packedUvSets >> (selectorIndex * 4u)) & 0x0fu);
 }
 
+float UnpackForwardMaterialBlendMode(uint packedUvSets)
+{
+    return float((packedUvSets >> 20u) & 0x07u);
+}
+
 GPUMaterialData ReadForwardMaterial(uint materialIndex)
 {
     const vec4 identityOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
@@ -3545,7 +3578,7 @@ GPUMaterialData ReadForwardMaterial(uint materialIndex)
     material.OcclusionBinding = vec4(
         0.0,
         UnpackForwardMaterialUvSet(controls1.x, 4u),
-        0.0,
+        UnpackForwardMaterialBlendMode(controls1.x),
         0.0);
     material.BaseColorOffsetScale = identityOffsetScale;
     material.NormalOffsetScale = identityOffsetScale;
@@ -4609,6 +4642,10 @@ GPUReflectionProbeHeader ReadReflectionProbeHeader()
     uvec4 textureControls = ReadStorageAlignedUVec4Uniform(bufferIndex, 0u);
     uvec4 lightingControls = ReadStorageAlignedUVec4Uniform(bufferIndex, 4u);
     uvec4 debugControls = ReadStorageAlignedUVec4Uniform(bufferIndex, 8u);
+    uvec4 screenTraceControls =
+        ReadStorageAlignedUVec4Uniform(bufferIndex, 12u);
+    uvec4 rayTraceControls =
+        ReadStorageAlignedUVec4Uniform(bufferIndex, 16u);
     GPUReflectionProbeHeader header;
     header.ProbeCount = int(textureControls.x);
     header.MaxProbesPerPixel = int(textureControls.y);
@@ -4622,6 +4659,14 @@ GPUReflectionProbeHeader ReadReflectionProbeHeader()
     header.DebugProbeIndex = int(debugControls.y);
     header.DebugCubemapFace = int(debugControls.z);
     header.DebugMipLevel = int(debugControls.w);
+    header.SsrMaximumSteps = screenTraceControls.x;
+    header.SsrMaximumDistance = uintBitsToFloat(screenTraceControls.y);
+    header.SsrConfidenceThreshold = uintBitsToFloat(screenTraceControls.z);
+    header.SceneReflectionRayTaskBudget = screenTraceControls.w;
+    header.RayQueryHitLightLimit = rayTraceControls.x;
+    header.Padding0 = rayTraceControls.y;
+    header.Padding1 = rayTraceControls.z;
+    header.Padding2 = rayTraceControls.w;
     return header;
 }
 

@@ -66,7 +66,7 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
             Assert.That(gi.SimpleDdgiRoughSpecularFullWeightRoughness, Is.EqualTo(0.70f));
             Assert.That(
                 gi.SimpleDdgiNearFieldResidualMode,
-                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
             Assert.That(gi.SimpleDdgiTransportSolverRelaxation, Is.EqualTo(0.90f));
             Assert.That(gi.SimpleDdgiAuthoredVolumes, Is.Empty);
             Assert.That(gi.SimpleDdgiRefinementBricksEnabled, Is.False);
@@ -101,6 +101,7 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
             Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.03125f));
             Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(4.0f));
             Assert.That(settings.Shadows.MaxShadowDistance, Is.EqualTo(120.0f));
+            Assert.That(settings.Reflections.Enabled, Is.True);
             Assert.That(
                 settings.Reflections.Mode,
                 Is.EqualTo(ReflectionMode.HybridRayQuery));
@@ -119,18 +120,32 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
         });
     }
 
-    [Test]
-    public void PostRolloutPolicy_KeepsUnqualifiedC5Disabled()
+    [TestCase(RenderQualityPreset.Low,
+        SimpleDdgiNearFieldResidualMode.Off)]
+    [TestCase(RenderQualityPreset.Medium,
+        SimpleDdgiNearFieldResidualMode.Off)]
+    [TestCase(RenderQualityPreset.High,
+        SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
+    [TestCase(RenderQualityPreset.DdgiHigh,
+        SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
+    [TestCase(RenderQualityPreset.Ultra,
+        SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
+    public void PostRolloutPolicy_FollowsQualityTier(
+        RenderQualityPreset preset,
+        SimpleDdgiNearFieldResidualMode expectedMode)
     {
         var settings = new RenderSettings();
+        settings.ApplyQualityPreset(preset);
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            SimpleDdgiNearFieldResidualMode.Off;
+            expectedMode == SimpleDdgiNearFieldResidualMode.Off
+                ? SimpleDdgiNearFieldResidualMode.HiZAdaptive
+                : SimpleDdgiNearFieldResidualMode.Off;
 
         SampleBistroGlobalIlluminationProfile
             .ConfigurePostAdvancedGiRollout(settings);
 
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
-            Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+            Is.EqualTo(expectedMode));
     }
 }

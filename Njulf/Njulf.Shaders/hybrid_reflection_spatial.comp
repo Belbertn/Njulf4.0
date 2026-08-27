@@ -68,7 +68,8 @@ void main()
         return;
     }
 
-    float centerRoughness = HybridReflectionPayloadRoughness(centerPayload);
+    float centerRoughness =
+        HybridReflectionPayloadPhysicalRoughness(centerPayload);
     vec3 centerNormal = HybridSpatialFilterNormal(
         centerPayload, centerRoughness);
     uint centerIdentity = HybridReceiverIdentity(centerPayload);
@@ -101,7 +102,7 @@ void main()
                 !HybridFinite(sampleValue))
                 continue;
             float sampleRoughness =
-                HybridReflectionPayloadRoughness(samplePayload);
+                HybridReflectionPayloadPhysicalRoughness(samplePayload);
             vec3 sampleNormal = HybridSpatialFilterNormal(
                 samplePayload, sampleRoughness);
             float sampleDepth = texelFetch(

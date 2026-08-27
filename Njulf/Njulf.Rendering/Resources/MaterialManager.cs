@@ -1553,6 +1553,10 @@ namespace Njulf.Rendering.Resources
 
                 ValidateMaterialTextureIndices(material);
                 GPUMaterialData updated = material;
+                MaterialRenderMetadata updatedMetadata =
+                    MaterialRenderMetadata.FromGpuMaterial(updated);
+                updated.OcclusionBinding.Z =
+                    (float)updatedMetadata.BlendMode;
                 updated.ExtensionDataIndex = slot.Data.ExtensionDataIndex;
                 updated.TextureContentRevision = slot.Data.TextureContentRevision;
                 updated.PackedMeanGiDirectionalDiffuseBaseRg = 0;
@@ -1586,7 +1590,7 @@ namespace Njulf.Rendering.Resources
                     MaterialRenderMetadata.FromGpuMaterial(updated),
                     slot.TextureHandles);
                 slot.TransportProfile = MaterialDefinitionV1Adapter.CreateTransportProfile(updated);
-                slot.Metadata = MaterialRenderMetadata.FromGpuMaterial(updated);
+                slot.Metadata = updatedMetadata;
                 slot.AspectRevisions = AdvanceAspectRevisions(
                     slot.AspectRevisions,
                     MaterialChangeMask.All,
@@ -1938,6 +1942,7 @@ namespace Njulf.Rendering.Resources
                 Array.Empty<string>();
             GPUMaterialData storedMaterial = material;
             storedMaterial.ExtensionDataIndex = -1;
+            storedMaterial.OcclusionBinding.Z = (float)metadata.BlendMode;
             if (!supportsTransportV2)
             {
                 // Raw/V1 registrations do not carry the six-half directional
@@ -3981,6 +3986,7 @@ namespace Njulf.Rendering.Resources
             int previousExtensionIndex = slot.Data.ExtensionDataIndex;
             int retiredExtensionIndex = -1;
             GPUMaterialData data = compiled.GpuMaterial;
+            data.OcclusionBinding.Z = (float)compiled.Metadata.BlendMode;
             // This revision describes runtime texture publication, not
             // compiler output. Preserve it through authored recompiles; the
             // texture-change path advances it after this payload is applied.

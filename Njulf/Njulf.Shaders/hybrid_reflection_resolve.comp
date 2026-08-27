@@ -217,7 +217,7 @@ void main()
     uint source = HybridMetadataSource(metadata.x);
     float confidence = HybridMetadataConfidence(metadata.x);
     vec3 incidentRadiance = max(raw.rgb, vec3(0.0));
-    float roughness = HybridReflectionPayloadRoughness(payload);
+    float roughness = HybridReflectionPayloadPhysicalRoughness(payload);
     vec3 normal = HybridReflectionPayloadShadingNormal(payload);
     vec3 reflectionNormal = HybridReflectionTraceNormal(payload);
     vec3 viewDirection = normalize(

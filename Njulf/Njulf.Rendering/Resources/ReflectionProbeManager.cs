@@ -690,7 +690,8 @@ namespace Njulf.Rendering.Resources
                 _settings.Reflections,
                 BindlessIndex.ReflectionProbeCubemapArrayTexture,
                 BindlessIndex.ReflectionProbeDebugTexture,
-                _probeMipCount);
+                _probeMipCount,
+                _settings.Transparency);
             GpuBufferUploader.UploadHeaderAndSpanToBuffer(
                 _context,
                 _bufferManager,
@@ -1153,6 +1154,15 @@ namespace Njulf.Rendering.Resources
             hash = Add(hash, BitConverter.SingleToUInt32Bits(_settings.Reflections.GlobalFallbackIntensity));
             hash = Add(hash, _settings.Reflections.BoxProjectionEnabled ? 1u : 0u);
             hash = Add(hash, _settings.Reflections.ProbeBlendingEnabled ? 1u : 0u);
+            hash = Add(hash, (uint)_settings.Reflections.SsrMaxSteps);
+            hash = Add(hash, BitConverter.SingleToUInt32Bits(
+                _settings.Reflections.SsrMaxDistance));
+            hash = Add(hash, BitConverter.SingleToUInt32Bits(
+                _settings.Reflections.SsrConfidenceThreshold));
+            hash = Add(hash, (uint)_settings.Reflections.RayQueryHitLightLimit);
+            hash = Add(hash, _settings.Transparency.SampleReflections ? 1u : 0u);
+            hash = Add(hash, (uint)_settings.Transparency
+                .SceneReflectionRayTaskBudget);
             return hash;
         }
 

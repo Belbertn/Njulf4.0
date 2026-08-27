@@ -11,14 +11,6 @@ namespace Njulf.Assets.Cooked;
 
 public sealed class ModelAssetCooker : IDisposable
 {
-    private const int MaterialTransportMetadataRevision = 3;
-    // Included in the incremental-cook identity. Bump whenever the authored
-    // material-to-texture mip policy changes without changing file layout.
-    private const int MaterialTexturePolicyRevision = 2;
-    // Included in the incremental-cook identity. Bump whenever generated mesh
-    // topology or LOD policy changes without changing the binary file layout.
-    private const int MeshLodAlgorithmRevision = 2;
-
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".gltf", ".glb", ".obj", ".fbx", ".dae", ".3ds", ".blend", ".ply", ".stl"
@@ -520,7 +512,14 @@ public sealed class ModelAssetCooker : IDisposable
         progress.ReportStageStart(AssetCookStage.IncrementalCheck);
         stageTimer.Restart();
         ulong sourceHash = CookedHash.File(sourcePath);
-        ulong settingsHash = session.SettingsHash;
+        ulong importContractHash = CookedModelImportContract.Compute(
+            sourcePath,
+            options.ImporterOptions);
+        ulong settingsHash = CookedHash.Ordered(new[]
+        {
+            ("cook-settings", session.SettingsHash),
+            ("model-import-contract", importContractHash)
+        });
         string databaseKey = NormalizeRelative(outputRoot, sourcePath);
         CookedAssetDatabaseEntry? previousEntry = session.GetEntry(databaseKey);
         var dependencies = new SortedDictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
@@ -695,7 +694,7 @@ public sealed class ModelAssetCooker : IDisposable
             model.Name,
             sourcePath.Replace('\\', '/'),
             sourceHash,
-            settingsHash,
+            importContractHash,
             dependencyHash,
             new CookedAssetReference(Path.GetFileName(meshPath), meshContentHash),
             new CookedAssetReference(NormalizeRelative(modelDirectory, materialPath), materialContentHash),
@@ -712,6 +711,7 @@ public sealed class ModelAssetCooker : IDisposable
                 options,
                 sourcePath,
                 manifest,
+                settingsHash,
                 model,
                 processed,
                 mesh,
@@ -1197,14 +1197,14 @@ public sealed class ModelAssetCooker : IDisposable
             TextureOptions = platformTextureOptions,
             options.ToolVersion,
             options.Platform,
-            MaterialTransportMetadataRevision,
-            MaterialTexturePolicyRevision,
+            CookedModelImportContract.MaterialTransportMetadataRevision,
+            CookedModelImportContract.MaterialTexturePolicyRevision,
             AmazonBistroMaterialProfileRevision =
                 options.ImporterOptions.AssimpMaterialTextureConvention ==
                     AssimpMaterialTextureConvention.AmazonBistro
                     ? AmazonBistroMaterialProfile.ProfileRevision
                     : string.Empty,
-            MeshLodAlgorithmRevision,
+            CookedModelImportContract.MeshLodAlgorithmRevision,
             CausticTopologyAlgorithmVersion =
                 ModelGiCausticHeroTopologyAnalyzer.CurrentAlgorithmVersion,
             OpacityMicromapPayloadProducer =
@@ -1225,6 +1225,7 @@ public sealed class ModelAssetCooker : IDisposable
         ModelCookOptions options,
         string sourcePath,
         CookedModelManifest manifest,
+        ulong cookSettingsHash,
         ModelMesh model,
         ProcessedMeshAsset processed,
         CookedMeshPayload mesh,
@@ -1251,7 +1252,7 @@ public sealed class ModelAssetCooker : IDisposable
                 sourcePath,
                 manifest.AssetId,
                 manifest.SourceHash,
-                manifest.ImportSettingsHash,
+                cookSettingsHash,
                 manifest.DependencyListHash,
                 options.ToolVersion,
                 model,

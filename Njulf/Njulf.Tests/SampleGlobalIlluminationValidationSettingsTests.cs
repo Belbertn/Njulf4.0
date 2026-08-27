@@ -78,31 +78,50 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(nearExtentZ, Is.GreaterThanOrEqualTo(25.0f));
             Assert.That(settings.AutoExposure.Enabled, Is.True);
             Assert.That(settings.Reflections.Enabled, Is.True);
+            Assert.That(settings.Reflections.Mode,
+                Is.EqualTo(ReflectionMode.HybridRayQuery));
             Assert.That(
                 gi.SimpleDdgiNearFieldResidualMode,
-                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
         });
     }
 
-    [Test]
-    public void SponzaPostRolloutPolicy_KeepsUnqualifiedC5Disabled()
+    [TestCase(RenderQualityPreset.Low,
+        SimpleDdgiNearFieldResidualMode.Off)]
+    [TestCase(RenderQualityPreset.Medium,
+        SimpleDdgiNearFieldResidualMode.Off)]
+    [TestCase(RenderQualityPreset.High,
+        SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
+    [TestCase(RenderQualityPreset.DdgiHigh,
+        SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
+    [TestCase(RenderQualityPreset.Ultra,
+        SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
+    public void SponzaPostRolloutPolicy_FollowsQualityTier(
+        RenderQualityPreset preset,
+        SimpleDdgiNearFieldResidualMode expectedMode)
     {
         var settings = new RenderSettings();
+        settings.ApplyQualityPreset(preset);
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            SimpleDdgiNearFieldResidualMode.Off;
+            expectedMode == SimpleDdgiNearFieldResidualMode.Off
+                ? SimpleDdgiNearFieldResidualMode.HiZAdaptive
+                : SimpleDdgiNearFieldResidualMode.Off;
 
         SampleSponzaGlobalIlluminationProfile
             .ConfigurePostAdvancedGiRollout(settings);
 
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
-            Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+            Is.EqualTo(expectedMode));
     }
 
     [Test]
     public void SponzaPostRolloutPolicy_ExplicitC5FixtureEnablesResidual()
     {
         var settings = new RenderSettings();
+        settings.ApplyQualityPreset(RenderQualityPreset.Medium);
+        settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
+            SimpleDdgiNearFieldResidualMode.Off;
 
         SampleSponzaGlobalIlluminationProfile
             .ConfigurePostAdvancedGiRollout(
@@ -112,6 +131,30 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
             Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
+    }
+
+    [Test]
+    public void SponzaMediumMemoryProfile_UsesSsrWithoutC5()
+    {
+        var settings = new RenderSettings();
+
+        SamplePlazaGlobalIllumination.ConfigureRenderSettingsForMemoryProfile(
+            settings,
+            SamplePlazaGpuMemoryProfile.Medium);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.QualityPreset,
+                Is.EqualTo(RenderQualityPreset.Medium));
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+            Assert.That(settings.Reflections.Enabled, Is.True);
+            Assert.That(settings.Reflections.Mode,
+                Is.EqualTo(ReflectionMode.StaticProbesAndSsr));
+            Assert.That(settings.Reflections.RayQueryPixelBudgetFraction,
+                Is.Zero);
+        });
     }
 
     [Test]

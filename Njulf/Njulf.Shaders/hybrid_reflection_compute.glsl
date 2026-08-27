@@ -113,7 +113,7 @@ float HybridMaximumComponent(vec3 value)
 
 bool HybridReflectionRequiresSharpDetail(uvec4 payload)
 {
-    float roughness = HybridReflectionPayloadRoughness(payload);
+    float roughness = HybridReflectionPayloadPhysicalRoughness(payload);
     uint lobeFlags = HybridReflectionPayloadLobeFlags(payload);
     bool transmissive = (lobeFlags &
         NJULF_HYBRID_REFLECTION_LOBE_TRANSMISSIVE) != 0u;
@@ -131,7 +131,7 @@ vec3 HybridReflectionTraceNormal(uvec4 payload)
     if (HybridReflectionRequiresSharpDetail(payload))
         return shadingNormal;
     vec3 geometricNormal = HybridReflectionPayloadGeometricNormal(payload);
-    float roughness = HybridReflectionPayloadRoughness(payload);
+    float roughness = HybridReflectionPayloadPhysicalRoughness(payload);
     // Broad architectural and cloth lobes must converge to their footprint
     // normal before high-frequency normal-map detail can become reflection
     // sparkle. Sharp glass/mirrors take the early return above unchanged.

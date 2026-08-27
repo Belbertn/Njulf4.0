@@ -75,6 +75,8 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.ForwardMaterialDataBuffer), Is.EqualTo(nameof(BindlessIndex.ForwardMaterialDataBuffer)));
             Assert.That(
                 BindlessIndex.FirstDynamicTextureIndex,
+                Is.EqualTo(BindlessIndex.OpaqueSceneColorSnapshotTexture + 1));
+            Assert.That(BindlessIndex.OpaqueSceneColorSnapshotTexture,
                 Is.EqualTo(
                     BindlessIndex.SimpleDdgiSampledVisibilityTextureBase +
                     BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups));
@@ -138,6 +140,7 @@ public sealed class BindlessIndexTests
             ["FORWARD_MATERIAL_DATA_BUFFER_INDEX"] = BindlessIndex.ForwardMaterialDataBuffer,
             ["AREA_LIGHT_LTC_MATRIX_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcMatrixTexture,
             ["AREA_LIGHT_LTC_AMPLITUDE_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcAmplitudeTexture,
+            ["OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX"] = BindlessIndex.OpaqueSceneColorSnapshotTexture,
             ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount
         };
 

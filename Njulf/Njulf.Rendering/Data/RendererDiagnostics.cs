@@ -660,6 +660,35 @@ namespace Njulf.Rendering.Data
         public uint HybridReflectionDdgiFallbackCount { get; init; }
         public uint HybridReflectionProbeFallbackCount { get; init; }
         public uint HybridReflectionEnvironmentFallbackCount { get; init; }
+        public int TransparentReflectionReceiverObjectCount { get; init; }
+        public int TransparentReflectionReceiverMeshletCount { get; init; }
+        public int TransparentSampleReflections { get; init; }
+        public int OpaqueSceneColorSnapshotAvailable { get; init; }
+        public int TransparentSceneReflectionRayTaskBudget { get; init; }
+        public uint TransparentReflectionRayRequestCount { get; init; }
+        public uint TransparentReflectionEstimatedSsrHitCount { get; init; }
+        public uint TransparentReflectionEstimatedRayHitCount { get; init; }
+        public uint TransparentReflectionEstimatedRayMissCount { get; init; }
+        public uint TransparentReflectionEstimatedBudgetRejectedCount
+        {
+            get;
+            init;
+        }
+        public uint TransparentReflectionEstimatedDdgiFallbackCount
+        {
+            get;
+            init;
+        }
+        public uint TransparentReflectionEstimatedProbeFallbackCount
+        {
+            get;
+            init;
+        }
+        public uint TransparentReflectionEstimatedEnvironmentFallbackCount
+        {
+            get;
+            init;
+        }
         public long GpuHybridReflectionSsrMicroseconds { get; init; }
         public long GpuHybridReflectionRayQueryMicroseconds { get; init; }
         public long GpuHybridReflectionDdgiBaseMicroseconds { get; init; }

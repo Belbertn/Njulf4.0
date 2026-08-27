@@ -20,6 +20,12 @@ public sealed record CookedResolution(
     public ulong? ExpectedSourceHash { get; init; }
 
     /// <summary>
+    /// Source-import semantic identity requested by the caller. It is absent
+    /// for explicit .njmodel requests, which treat the package as authoritative.
+    /// </summary>
+    public ulong? ExpectedImportContractHash { get; init; }
+
+    /// <summary>
     /// Optional immutable model snapshot shared between resolution and load.
     /// It is only populated for consumers that opt in, preserving custom test
     /// and editor snapshot factories.
@@ -37,10 +43,25 @@ public sealed class CookedContentResolver
         string requestedPath,
         string sourcePath,
         bool strictSourceHash,
+        bool captureModelSnapshot = false) =>
+        ResolveModel(
+            requestedPath,
+            sourcePath,
+            strictSourceHash,
+            expectedImportContractHash: null,
+            captureModelSnapshot);
+
+    public CookedResolution ResolveModel(
+        string requestedPath,
+        string sourcePath,
+        bool strictSourceHash,
+        ulong? expectedImportContractHash,
         bool captureModelSnapshot = false)
     {
         bool packageRequestedDirectly = Path.GetExtension(requestedPath)
             .Equals(".njmodel", StringComparison.OrdinalIgnoreCase);
+        if (packageRequestedDirectly)
+            expectedImportContractHash = null;
         string candidate = packageRequestedDirectly
             ? Path.GetFullPath(sourcePath)
             : ResolvePlatformCandidate(requestedPath);
@@ -71,6 +92,38 @@ public sealed class CookedContentResolver
                     CookedAssetKind.Model,
                     flags,
                     sourceHash);
+            if (expectedImportContractHash.HasValue)
+            {
+                if (reader.Header.FormatMinor <
+                    CookedModelImportContract.MinimumFormatMinor)
+                {
+                    return new CookedResolution(
+                        CookedResolutionStatus.Invalid,
+                        candidate,
+                        $"cooked model format {reader.Header.FormatMajor}.{reader.Header.FormatMinor} predates the import-semantic contract; recook the source asset",
+                        reader.Header)
+                    {
+                        ExpectedSourceHash = sourceHash,
+                        ExpectedImportContractHash = expectedImportContractHash,
+                        ModelSnapshot = snapshot
+                    };
+                }
+
+                if (reader.Header.ImportSettingsHash !=
+                    expectedImportContractHash.Value)
+                {
+                    return new CookedResolution(
+                        CookedResolutionStatus.Invalid,
+                        candidate,
+                        $"cooked import contract mismatch (package 0x{reader.Header.ImportSettingsHash:x16}, expected 0x{expectedImportContractHash.Value:x16}); recook the source asset with the requested importer options",
+                        reader.Header)
+                    {
+                        ExpectedSourceHash = sourceHash,
+                        ExpectedImportContractHash = expectedImportContractHash,
+                        ModelSnapshot = snapshot
+                    };
+                }
+            }
             string reason = packageRequestedDirectly
                 ? "cooked package was explicitly requested"
                 : sourceHash.HasValue && reader.Header.SourceHash != sourceHash.Value
@@ -83,6 +136,7 @@ public sealed class CookedContentResolver
                 reader.Header)
             {
                 ExpectedSourceHash = sourceHash,
+                ExpectedImportContractHash = expectedImportContractHash,
                 ModelSnapshot = snapshot
             };
         }
@@ -94,7 +148,8 @@ public sealed class CookedContentResolver
                 ex.Message,
                 null)
             {
-                ExpectedSourceHash = sourceHash
+                ExpectedSourceHash = sourceHash,
+                ExpectedImportContractHash = expectedImportContractHash
             };
         }
     }

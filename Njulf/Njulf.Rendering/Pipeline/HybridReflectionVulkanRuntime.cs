@@ -68,6 +68,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     private VkPipeline _temporalPipeline;
     private VkPipeline _spatialPipeline;
     private VkPipeline _compositePipeline;
+    private VkPipeline _opaqueSceneColorSnapshotPipeline;
     private uint _allocatedWidth;
     private uint _allocatedHeight;
     private uint _allocatedTaskCapacity;
@@ -186,6 +187,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 "hybrid_reflection_spatial.comp.spv");
             _compositePipeline = CreatePipeline(
                 "hybrid_reflection_composite.comp.spv");
+            _opaqueSceneColorSnapshotPipeline = CreatePipeline(
+                "opaque_scene_color_snapshot.comp.spv");
             ScreenPipelinesAvailable = true;
             FailureDetail = string.Empty;
             TryCreateRayPipeline();
@@ -304,6 +307,13 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             SimpleDdgiDirectionalRadianceMode.Off &&
         _settings.GlobalIllumination.EffectiveSimpleDdgiGlossyTransportMode !=
             SimpleDdgiGlossyTransportMode.Off;
+
+    public bool ShouldSnapshotOpaqueSceneColor(
+        SceneRenderingData sceneData) =>
+        PrepareFrame(sceneData) &&
+        sceneData.TransparentPassEnabled &&
+        sceneData.TransparentSampleReflections &&
+        sceneData.HasTransparentReflectionReceivers;
 
     public void RecordSsr(
         CommandBuffer commandBuffer,
@@ -601,6 +611,33 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         _counterFrameSubmitted[bank] = true;
         _previousRevision = _currentRevision;
         _currentResetReasons = ReflectionHistoryResetReason.None;
+    }
+
+    public void RecordOpaqueSceneColorSnapshot(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        SceneRenderingData sceneData)
+    {
+        sceneData.OpaqueSceneColorSnapshotAvailable = false;
+        if (!ShouldSnapshotOpaqueSceneColor(sceneData))
+            return;
+
+        int bank = ValidateFrameIndex(frameIndex);
+        RenderTarget snapshot = Required(
+            _renderTargets.HybridReflectionFilterScratch,
+            "opaque SceneColor snapshot");
+        _renderTargets.SceneColor.TransitionToStorageReadWrite(commandBuffer);
+        snapshot.TransitionToStorageWrite(commandBuffer);
+        BindPipelineAndDescriptors(
+            commandBuffer,
+            _opaqueSceneColorSnapshotPipeline,
+            bank,
+            bindRayScene: false);
+        DispatchScreen(commandBuffer);
+        PublishComputeWrites(commandBuffer);
+        snapshot.TransitionToShaderRead(commandBuffer);
+        _renderTargets.SceneColor.TransitionToColorAttachment(commandBuffer);
+        sceneData.OpaqueSceneColorSnapshotAvailable = true;
     }
 
     public void OnTargetsRecreated()
@@ -1521,6 +1558,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         DestroyPipeline(ref _temporalPipeline);
         DestroyPipeline(ref _spatialPipeline);
         DestroyPipeline(ref _compositePipeline);
+        DestroyPipeline(ref _opaqueSceneColorSnapshotPipeline);
         if (_pipelineLayout.Handle != 0)
             _context.Api.DestroyPipelineLayout(
                 _context.Device, _pipelineLayout, null);

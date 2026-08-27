@@ -19,6 +19,8 @@ public sealed class TransparencyAndDecalSettingsTests
             Assert.That(settings.Transparency.DebugView, Is.EqualTo(TransparencyDebugView.None));
             Assert.That(settings.Transparency.ReceiveShadows, Is.True);
             Assert.That(settings.Transparency.SampleReflections, Is.True);
+            Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
+                Is.EqualTo(65_536));
             Assert.That(settings.Transparency.SortPerMeshlet, Is.True);
             Assert.That(settings.Transparency.MaxTransparentMeshlets, Is.EqualTo(262144));
             Assert.That(settings.Transparency.AlphaDiscardThreshold, Is.EqualTo(0.001f));
@@ -68,6 +70,7 @@ public sealed class TransparencyAndDecalSettingsTests
 
         settings.Transparency.MaxTransparentMeshlets = -1;
         settings.Transparency.AlphaDiscardThreshold = 1f;
+        settings.Transparency.SceneReflectionRayTaskBudget = -1;
         settings.Decals.GeometryDepthBias = 1f;
         settings.Decals.GeometrySlopeScaledDepthBias = 10f;
         settings.Decals.MaxProjectedDecals = 9999;
@@ -78,11 +81,63 @@ public sealed class TransparencyAndDecalSettingsTests
         {
             Assert.That(settings.Transparency.MaxTransparentMeshlets, Is.EqualTo(0));
             Assert.That(settings.Transparency.AlphaDiscardThreshold, Is.EqualTo(0.05f));
+            Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
+                Is.Zero);
             Assert.That(settings.Decals.GeometryDepthBias, Is.EqualTo(0.01f));
             Assert.That(settings.Decals.GeometrySlopeScaledDepthBias, Is.EqualTo(4f));
             Assert.That(settings.Decals.MaxProjectedDecals, Is.EqualTo(4096));
             Assert.That(settings.Decals.MaxProjectedDecalsPerTile, Is.EqualTo(256));
             Assert.That(settings.Decals.MaxProjectedDecalsPerPixel, Is.EqualTo(32));
+        });
+
+        settings.Transparency.SceneReflectionRayTaskBudget = int.MaxValue;
+        Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
+            Is.EqualTo(TransparencySettings.MaximumSceneReflectionRayTaskBudget));
+    }
+
+    [Test]
+    public void QualityPresets_EnableSceneReflectionsOnHighAndAbove()
+    {
+        var settings = new RenderSettings();
+
+        settings.ApplyQualityPreset(RenderQualityPreset.Low);
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Transparency.SampleReflections, Is.False);
+            Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
+                Is.Zero);
+        });
+
+        settings.ApplyQualityPreset(RenderQualityPreset.Medium);
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Transparency.SampleReflections, Is.False);
+            Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
+                Is.Zero);
+        });
+
+        foreach (RenderQualityPreset preset in new[]
+                 {
+                     RenderQualityPreset.High,
+                     RenderQualityPreset.DdgiHigh
+                 })
+        {
+            settings.ApplyQualityPreset(preset);
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.Transparency.SampleReflections, Is.True,
+                    preset.ToString());
+                Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
+                    Is.EqualTo(65_536), preset.ToString());
+            });
+        }
+
+        settings.ApplyQualityPreset(RenderQualityPreset.Ultra);
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Transparency.SampleReflections, Is.True);
+            Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
+                Is.EqualTo(131_072));
         });
     }
 }

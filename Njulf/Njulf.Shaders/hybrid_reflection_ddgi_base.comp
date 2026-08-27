@@ -107,7 +107,7 @@ bool HybridEvaluateDdgiReflection(
     uint directionalMode = SimpleDdgiDirectionalRadianceMode(
         params.residencyFlags);
     uint glossyMode = SimpleDdgiGlossyTransportMode(params.residencyFlags);
-    float roughness = HybridReflectionPayloadRoughness(payload);
+    float roughness = HybridReflectionPayloadPhysicalRoughness(payload);
     bool configured =
         (params.flags &
             (SIMPLE_DDGI_FLAG_ENABLED |
@@ -177,8 +177,8 @@ bool HybridDdgiSameSurface(
     // roughness texture can still vary inside it. Do not reconstruct a glossy
     // directional query across a visibly different lobe.
     if (abs(
-            HybridReflectionPayloadRoughness(referencePayload) -
-            HybridReflectionPayloadRoughness(candidatePayload)) > 0.08)
+            HybridReflectionPayloadPhysicalRoughness(referencePayload) -
+            HybridReflectionPayloadPhysicalRoughness(candidatePayload)) > 0.08)
     {
         return false;
     }
@@ -426,7 +426,7 @@ void HybridPrepareDdgiSharedCohorts(uint scale, uint maximumGroups)
 
         HybridDdgiSharedReferenceNormalRoughness[recordIndex] = vec4(
             HybridReflectionTraceNormal(referencePayload),
-            HybridReflectionPayloadRoughness(referencePayload));
+            HybridReflectionPayloadPhysicalRoughness(referencePayload));
         HybridDdgiSharedReferenceIdentityDistance[recordIndex] = uvec2(
             HybridReceiverIdentity(referencePayload),
             floatBitsToUint(length(
@@ -517,7 +517,8 @@ bool HybridFindDdgiCohort(
     HybridDdgiSharedTileRange(scale, firstTileIndex, tileCount);
     uint receiverIdentity = HybridReceiverIdentity(payload);
     vec3 receiverNormal = HybridReflectionTraceNormal(payload);
-    float receiverRoughness = HybridReflectionPayloadRoughness(payload);
+    float receiverRoughness =
+        HybridReflectionPayloadPhysicalRoughness(payload);
     float receiverDistance = length(
         pc.CameraPositionAndPadding.xyz - worldPosition);
 

@@ -186,7 +186,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSpotShadow>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUPointShadow>(), Is.EqualTo(432));
                 Assert.That(Marshal.SizeOf<GPULocalLightShadowIndex>(), Is.EqualTo(16));
-                Assert.That(Marshal.SizeOf<GPUReflectionProbeHeader>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<GPUReflectionProbeHeader>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUReflectionProbe>(), Is.EqualTo(144));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeVolumeHeader>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeVolume>(), Is.EqualTo(144));
@@ -318,14 +318,23 @@ namespace Njulf.Tests
             material.TextureTexCoordSets =
                 new Njulf.Core.Math.Vector4(1f, 2f, 3f, 4f);
             material.OcclusionBinding.Y = 5f;
+            material.OcclusionBinding.Z =
+                (float)MaterialBlendMode.PremultipliedAlpha;
             material.TextureRotations.X = 0.25f;
             packed = GPUForwardMaterialData.FromMaterial(material);
             uint expectedUvSets =
                 1u | (2u << 4) | (3u << 8) | (4u << 12) |
-                (5u << 16);
+                (5u << 16) |
+                ((uint)MaterialBlendMode.PremultipliedAlpha <<
+                 GPUForwardMaterialData.BlendModeShift);
             Assert.Multiple(() =>
             {
                 Assert.That(packed.PackedUvSets, Is.EqualTo(expectedUvSets));
+                Assert.That(
+                    (packed.PackedUvSets >>
+                     GPUForwardMaterialData.BlendModeShift) &
+                    GPUForwardMaterialData.BlendModeMask,
+                    Is.EqualTo((uint)MaterialBlendMode.PremultipliedAlpha));
                 Assert.That(
                     packed.IdentityTransformMask & 1u,
                     Is.Zero);
@@ -418,6 +427,18 @@ namespace Njulf.Tests
                         false,
                         ddgiReceiverCacheEnabled: true) & (1u << 31),
                     Is.Zero);
+                uint transparentReflectionFlags =
+                    GPUForwardPushConstants.PackDiagnosticFlags(
+                        false,
+                        effectiveReflectionMode: ReflectionMode.HybridRayQuery,
+                        transparentSampleReflections: true,
+                        opaqueSceneColorSnapshotAvailable: true);
+                Assert.That((transparentReflectionFlags >> 11) & 0x07u,
+                    Is.EqualTo((uint)ReflectionMode.HybridRayQuery));
+                Assert.That(transparentReflectionFlags & (1u << 14),
+                    Is.EqualTo(1u << 14));
+                Assert.That(transparentReflectionFlags & (1u << 15),
+                    Is.EqualTo(1u << 15));
                 Assert.That(
                     Marshal.SizeOf<GPUSimpleDdgiReceiverCachePushConstants>(),
                     Is.EqualTo(128));

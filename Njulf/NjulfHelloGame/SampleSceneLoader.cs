@@ -283,6 +283,23 @@ internal sealed class SampleSceneLoader
         return modelAsset;
     }
 
+    /// <summary>
+    /// Loads scene metadata with the same importer semantics as the visible
+    /// sample model. Editor-side light discovery must not issue a second,
+    /// default-convention request for an already-authored placement.
+    /// </summary>
+    internal Model LoadModelForRuntimeMetadata(string modelPath)
+    {
+        bool declaredByManifest = EnumerateManifestAssets().Any(candidate =>
+            string.Equals(candidate.Path, modelPath, StringComparison.Ordinal));
+        if (declaredByManifest)
+            return LoadModelAsset(modelPath);
+
+        return _content.Load<Model>(modelPath) ??
+            throw new InvalidOperationException(
+                $"Content manager returned null for scene model '{modelPath}'.");
+    }
+
     private ContentLoadOptions CreateModelLoadOptions(string modelPath)
     {
         SampleAssetReference? asset = EnumerateManifestAssets()

@@ -18,6 +18,7 @@ public sealed class ShaderBuildTests
         "hybrid_reflection_temporal.comp",
         "hybrid_reflection_spatial.comp",
         "hybrid_reflection_composite.comp",
+        "opaque_scene_color_snapshot.comp",
         "area_ray_shadow.comp",
         "forward.frag",
         "geometry_decal.frag",
@@ -73,7 +74,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(317));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(318));
 
         foreach (string shaderName in RequiredShaders)
         {

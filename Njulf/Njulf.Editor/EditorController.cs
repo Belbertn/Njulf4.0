@@ -30,6 +30,7 @@ public sealed class EditorController
     private readonly Action<string>? _requestAdvancedGiRestart;
     private readonly Action<AdvancedGiFeatureSelection>?
         _requestAdvancedGiFeatureRestart;
+    private readonly Func<string, Model>? _loadModel;
     private bool _previousDebugEnabled;
     private bool _previousCpuSnapshotsEnabled;
 
@@ -44,7 +45,8 @@ public sealed class EditorController
         AdvancedGiEditorStartupContext? advancedGiStartup = null,
         Action<string>? requestAdvancedGiRestart = null,
         Action<AdvancedGiFeatureSelection>?
-            requestAdvancedGiFeatureRestart = null)
+            requestAdvancedGiFeatureRestart = null,
+        Func<string, Model>? loadModel = null)
     {
         _scene = scene ?? throw new ArgumentNullException(nameof(scene));
         _content = content ?? throw new ArgumentNullException(nameof(content));
@@ -57,10 +59,15 @@ public sealed class EditorController
         _requestAdvancedGiRestart = requestAdvancedGiRestart;
         _requestAdvancedGiFeatureRestart =
             requestAdvancedGiFeatureRestart;
+        _loadModel = loadModel;
         Camera = camera;
         _lightStore = new LightManagerSceneLightStore(_lightManager);
         _materialStore = new MaterialManagerSceneMaterialOverrideStore(_materialManager);
-        ModelLightRuntimeController.Attach(_scene, _content, _lightStore);
+        ModelLightRuntimeController.Attach(
+            _scene,
+            _content,
+            _lightStore,
+            _loadModel);
     }
 
     public bool Enabled { get; private set; }
@@ -546,7 +553,11 @@ public sealed class EditorController
         _scene.Id = document.Id;
         _lightStore.Clear();
         new SceneDocumentLoader(_content).Populate(document, _scene, _lightStore, materials: _materialStore);
-        ModelLightRuntimeController.Attach(_scene, _content, _lightStore);
+        ModelLightRuntimeController.Attach(
+            _scene,
+            _content,
+            _lightStore,
+            _loadModel);
         IsDirty = false;
         Select(EditorSelection.None);
     }
@@ -605,7 +616,11 @@ public sealed class EditorController
 
     private ModelLightRuntimeController GetImportedModelLightController() =>
         _scene.GetComponent<ModelLightRuntimeController>() ??
-        ModelLightRuntimeController.Attach(_scene, _content, _lightStore);
+        ModelLightRuntimeController.Attach(
+            _scene,
+            _content,
+            _lightStore,
+            _loadModel);
 
     private bool IsImportedModelLight(Guid id) =>
         _scene.GetComponent<ModelLightRuntimeController>()?.IsImportedLight(id) == true;

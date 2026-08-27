@@ -399,6 +399,14 @@ internal sealed class SampleDiagnosticsReporter
             $"uploadUs={diagnostics.CpuReflectionProbeUploadMicroseconds}, captureRecordUs={diagnostics.CpuReflectionProbeCaptureRecordMicroseconds}, " +
             $"prefilterRecordUs={diagnostics.CpuReflectionProbePrefilterRecordMicroseconds}.");
         Console.WriteLine(
+            $"Frame diagnostics transparent reflections: enabled={diagnostics.TransparentSampleReflections}, snapshot={diagnostics.OpaqueSceneColorSnapshotAvailable}, " +
+            $"receivers={diagnostics.TransparentReflectionReceiverObjectCount}/{diagnostics.TransparentReflectionReceiverMeshletCount}, " +
+            $"rayBudget={diagnostics.TransparentSceneReflectionRayTaskBudget}, rayRequests={diagnostics.TransparentReflectionRayRequestCount}, " +
+            $"estimatedSources=ssr:{diagnostics.TransparentReflectionEstimatedSsrHitCount},rayHit:{diagnostics.TransparentReflectionEstimatedRayHitCount}," +
+            $"rayMiss:{diagnostics.TransparentReflectionEstimatedRayMissCount},budgetReject:{diagnostics.TransparentReflectionEstimatedBudgetRejectedCount}," +
+            $"ddgi:{diagnostics.TransparentReflectionEstimatedDdgiFallbackCount},probe:{diagnostics.TransparentReflectionEstimatedProbeFallbackCount}," +
+            $"environment:{diagnostics.TransparentReflectionEstimatedEnvironmentFallbackCount}.");
+        Console.WriteLine(
             $"Frame diagnostics culling: cpuListRole=cameraInvariantSuperset, objectCandidatesCpu={diagnostics.ObjectCandidatesCpu}, objectFrustumCulledCpu={diagnostics.ObjectFrustumCulledCpu}, " +
             $"meshletCandidatesCpu={diagnostics.MeshletCandidatesCpu}, meshletFrustumCulledCpu={diagnostics.MeshletFrustumCulledCpu}, " +
             $"meshletLodSkippedCpu={diagnostics.MeshletLodSkippedCpu}, lod0Submitted={diagnostics.MeshletLod0SubmittedCpu}, " +

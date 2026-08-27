@@ -267,6 +267,9 @@ namespace Njulf.Rendering
 
         private HybridReflectionCounterSnapshot _completedHybridReflectionCounters =
             HybridReflectionCounterSnapshot.Empty;
+        private TransparentReflectionGpuCounters
+            _completedTransparentReflectionCounters =
+                TransparentReflectionGpuCounters.Empty;
 
         private readonly DirectionalShadowCasterFrameCapture[] _directionalShadowCasterFrameCaptures =
             new DirectionalShadowCasterFrameCapture[FramesInFlight];
@@ -2065,6 +2068,9 @@ namespace Njulf.Rendering
             AddPassInstance(new HybridReflectionCompositePass(
                 _context, _swapchain, _bindlessHeap,
                 hybridReflectionRuntime));
+            AddPassInstance(new OpaqueSceneColorSnapshotPass(
+                _context, _swapchain, _bindlessHeap,
+                hybridReflectionRuntime));
 
             var transparentForwardPass = new TransparentForwardPass(
                 _context,
@@ -2788,6 +2794,10 @@ namespace Njulf.Rendering
             _completedHybridReflectionCounters =
                 _hybridReflectionRuntime?.GetLastCompletedCounters(
                     _currentFrame) ?? HybridReflectionCounterSnapshot.Empty;
+            _completedTransparentReflectionCounters =
+                _diagnosticsBuffer
+                    .GetLastCompletedTransparentReflectionCounters(
+                        _currentFrame);
             _completedFarFieldMaterialV2Counters =
                 _diagnosticsBuffer.GetLastCompletedFarFieldMaterialV2Counters(_currentFrame);
             _completedMaterialGiCounters = _diagnosticsBuffer.GetLastCompletedMaterialGiCounters(_currentFrame);
@@ -3722,6 +3732,11 @@ namespace Njulf.Rendering
             sceneData.TransparentReceiveShadows = Settings.Transparency.ReceiveShadows;
             sceneData.TransparentReceiveGlobalIllumination =
                 Settings.Transparency.ReceiveGlobalIllumination;
+            sceneData.TransparentSampleReflections =
+                Settings.Transparency.SampleReflections;
+            sceneData.TransparentSceneReflectionRayTaskBudget =
+                Settings.Transparency.SceneReflectionRayTaskBudget;
+            sceneData.OpaqueSceneColorSnapshotAvailable = false;
             sceneData.TransparentDdgiReceiverCountersEnabled = false;
             sceneData.DecalDebugView = Settings.Decals.DebugView;
             sceneData.GeometryDecalsEnabled = geometryDecalsEnabled;
@@ -4002,6 +4017,9 @@ namespace Njulf.Rendering
             ApplyCompletedHybridReflectionCounters(
                 sceneData,
                 _completedHybridReflectionCounters);
+            ApplyCompletedTransparentReflectionCounters(
+                sceneData,
+                _completedTransparentReflectionCounters);
             if (particlesAllowed)
                 ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
             if (!isolateSkinnedAnimationDebug)
@@ -9360,6 +9378,28 @@ namespace Njulf.Rendering
                 counters.EnvironmentFallbacks;
         }
 
+        private static void ApplyCompletedTransparentReflectionCounters(
+            SceneRenderingData sceneData,
+            in TransparentReflectionGpuCounters counters)
+        {
+            sceneData.TransparentReflectionRayRequestCount =
+                counters.RayRequests;
+            sceneData.TransparentReflectionEstimatedSsrHitCount =
+                counters.EstimatedSsrHits;
+            sceneData.TransparentReflectionEstimatedRayHitCount =
+                counters.EstimatedRayHits;
+            sceneData.TransparentReflectionEstimatedRayMissCount =
+                counters.EstimatedRayMisses;
+            sceneData.TransparentReflectionEstimatedBudgetRejectedCount =
+                counters.EstimatedBudgetRejected;
+            sceneData.TransparentReflectionEstimatedDdgiFallbackCount =
+                counters.EstimatedDdgiFallbacks;
+            sceneData.TransparentReflectionEstimatedProbeFallbackCount =
+                counters.EstimatedProbeFallbacks;
+            sceneData.TransparentReflectionEstimatedEnvironmentFallbackCount =
+                counters.EstimatedEnvironmentFallbacks;
+        }
+
         private static void ApplyCompletedGpuCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
         {
             sceneData.DepthTaskInvocations = counters.DepthCandidates;
@@ -10906,6 +10946,15 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.FoggedSceneColorTexture,
                 _renderTargets.FoggedSceneColor.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            ImageView opaqueSceneColorSnapshotView =
+                _renderTargets.HybridReflectionFilterScratch?.View ??
+                _textureManager.GetTextureView(
+                    _textureManager.DefaultBlackTexture);
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.OpaqueSceneColorSnapshotTexture,
+                opaqueSceneColorSnapshotView,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             RegisterAmbientOcclusionTextures();

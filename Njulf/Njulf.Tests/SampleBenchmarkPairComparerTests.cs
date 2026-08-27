@@ -804,6 +804,14 @@ public sealed class SampleBenchmarkPairComparerTests
         Assert.That(
             settings.Reflections.DebugView,
             Is.EqualTo(ReflectionDebugView.ReceiverMaterial));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ReflectionRoughnessInputs);
+        Assert.That(
+            settings.Reflections.DebugView,
+            Is.EqualTo(ReflectionDebugView.RoughnessInputs));
     }
 
     private static SampleBenchmarkReport CreateReport(

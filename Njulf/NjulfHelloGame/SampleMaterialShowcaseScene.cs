@@ -599,6 +599,33 @@ internal static class SampleMaterialShowcaseScene
             new CoreVector3(0f, 1.3f, -0.75f),
             new CoreVector3(8.8f, 2.6f, 0.12f));
 
+        MaterialHandle reflectionGlassPane = CreateExtensionMaterial(
+            materialManager,
+            "ReflectionTest.ThinGlassPane",
+            new CoreVector3(0.94f, 0.98f, 1.0f),
+            metallic: 0f,
+            roughness: 0.05f,
+            MaterialFeatureFlags.Transmission | MaterialFeatureFlags.Ior,
+            extension => extension with
+            {
+                TransmissionFactor = 0.96f,
+                TransmissionPolicy = GiTransmissionPolicy.ThinSurface,
+                ThinTransmissionTint = new CoreVector3(0.94f, 0.98f, 1.0f),
+                Ior = 1.52f,
+                ThicknessFactor = 0f,
+                CausticCasterPolicy = GiCausticCasterPolicy.Disabled
+            },
+            blendMode: MaterialBlendMode.AlphaBlend,
+            shadingModel: MaterialShadingModel.ThinGlass,
+            doubleSided: true);
+        AddBox(
+            scene,
+            boxMesh,
+            reflectionGlassPane,
+            "ReflectionTest.ThinGlassPane",
+            new CoreVector3(3.6f, 1.35f, -0.62f),
+            new CoreVector3(0.86f, 0.72f, 0.025f));
+
         AddMaterialTypePanel(
             scene,
             boxMesh,
@@ -818,7 +845,8 @@ internal static class SampleMaterialShowcaseScene
         float emissiveStrength = 1f,
         MaterialTextureBinding? normal = null,
         float normalScale = 1f,
-        MaterialShadingModel shadingModel = MaterialShadingModel.Pbr)
+        MaterialShadingModel shadingModel = MaterialShadingModel.Pbr,
+        bool doubleSided = false)
     {
         MaterialExtensionDefinition extension = configureExtension(MaterialExtensionDefinition.None);
         return materialManager.RegisterMaterialDefinition(new MaterialDefinition
@@ -831,6 +859,7 @@ internal static class SampleMaterialShowcaseScene
             RoughnessFactor = Math.Clamp(roughness, 0.04f, 1f),
             AlphaMode = IsTransparent(blendMode) ? MaterialAlphaMode.Blend : MaterialAlphaMode.Opaque,
             RenderBlendModeOverride = blendMode,
+            DoubleSided = doubleSided,
             Normal = normal ?? MaterialTextureBinding.Missing,
             NormalScale = Math.Clamp(normalScale, 0f, 2f),
             ShadingModel = shadingModel,

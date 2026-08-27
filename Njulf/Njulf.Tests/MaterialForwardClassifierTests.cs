@@ -139,6 +139,44 @@ namespace Njulf.Tests
             Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.SimpleOpaqueNormal));
         }
 
+        [Test]
+        public void SceneReflectionReceiverClassification_ExcludesNonPhysicalBlendsAndUnlitDecals()
+        {
+            var receiver = new MaterialRenderMetadata
+            {
+                BlendMode = MaterialBlendMode.AlphaBlend,
+                ShadingModel = MaterialShadingModel.ThinGlass
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(SceneDataBuilder.ReceivesSceneReflections(receiver),
+                    Is.True);
+                Assert.That(SceneDataBuilder.ReceivesSceneReflections(receiver with
+                {
+                    BlendMode = MaterialBlendMode.PremultipliedAlpha,
+                    ShadingModel = MaterialShadingModel.Pbr
+                }), Is.True);
+                Assert.That(SceneDataBuilder.ReceivesSceneReflections(receiver with
+                {
+                    BlendMode = MaterialBlendMode.Additive
+                }), Is.False);
+                Assert.That(SceneDataBuilder.ReceivesSceneReflections(receiver with
+                {
+                    BlendMode = MaterialBlendMode.Multiply
+                }), Is.False);
+                Assert.That(SceneDataBuilder.ReceivesSceneReflections(receiver with
+                {
+                    ShadingModel = MaterialShadingModel.Unlit
+                }), Is.False);
+                Assert.That(SceneDataBuilder.ReceivesSceneReflections(receiver with
+                {
+                    ShadingModel = MaterialShadingModel.Decal,
+                    SurfaceFlags = MaterialSurfaceFlags.GeometryDecal
+                }), Is.False);
+            });
+        }
+
         private static GPUMaterialData CreateDefaultMaterial()
         {
             return new GPUMaterialData

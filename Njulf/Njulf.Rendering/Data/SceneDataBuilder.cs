@@ -157,6 +157,8 @@ namespace Njulf.Rendering.Data
         private int _opaqueObjectCount;
         private int _maskedObjectCount;
         private int _transparentObjectCount;
+        private int _transparentReflectionReceiverObjectCount;
+        private int _transparentReflectionReceiverMeshletCount;
         private int _thinGlassObjectCount;
         private int _thinGlassMeshletCount;
         private int _geometryDecalObjectCount;
@@ -552,6 +554,8 @@ namespace Njulf.Rendering.Data
                     _opaqueObjectCount = 0;
                     _maskedObjectCount = 0;
                     _transparentObjectCount = 0;
+                    _transparentReflectionReceiverObjectCount = 0;
+                    _transparentReflectionReceiverMeshletCount = 0;
                     _thinGlassObjectCount = 0;
                     _thinGlassMeshletCount = 0;
                     _geometryDecalObjectCount = 0;
@@ -728,6 +732,8 @@ namespace Njulf.Rendering.Data
                     OpaqueObjectCount = _opaqueObjectCount,
                     MaskedObjectCount = _maskedObjectCount,
                     TransparentObjectCount = _transparentObjectCount,
+                    TransparentReflectionReceiverObjectCount =
+                        _transparentReflectionReceiverObjectCount,
                     ThinGlassObjectCount = _thinGlassObjectCount,
                     SolidObjectCount = _opaqueObjectCount,
                     GeometryDecalObjectCount = _geometryDecalObjectCount,
@@ -740,6 +746,8 @@ namespace Njulf.Rendering.Data
                     SolidMeshletCount = _solidDepthMeshletDrawCommands.Count,
                     MaskedMeshletCount = _maskedDepthMeshletDrawCommands.Count,
                     TransparentMeshletCount = _transparentMeshletDrawCommands.Count,
+                    TransparentReflectionReceiverMeshletCount =
+                        _transparentReflectionReceiverMeshletCount,
                     ThinGlassMeshletCount = _thinGlassMeshletCount,
                     GeometryDecalMeshletCount = _geometryDecalMeshletCount,
                     BlendMaterialCount = _blendMaterialCount,
@@ -1074,6 +1082,10 @@ namespace Njulf.Rendering.Data
                         {
                             case MaterialRenderMode.Blend:
                                 _transparentObjectCount++;
+                                if (ReceivesSceneReflections(metadata))
+                                {
+                                    _transparentReflectionReceiverObjectCount++;
+                                }
                                 if (forwardClass == MaterialForwardClass.ThinGlass)
                                     _thinGlassObjectCount++;
                                 break;
@@ -1236,6 +1248,7 @@ namespace Njulf.Rendering.Data
                                     transparentDistanceSquared,
                                     metadata.DecalLayer,
                                     forwardClass,
+                                    ReceivesSceneReflections(metadata),
                                     maxTransparentMeshlets);
                         }
                         else
@@ -1352,6 +1365,10 @@ namespace Njulf.Rendering.Data
                             {
                                 case MaterialRenderMode.Blend:
                                     _transparentObjectCount++;
+                                    if (ReceivesSceneReflections(metadata))
+                                    {
+                                        _transparentReflectionReceiverObjectCount++;
+                                    }
                                     if (forwardClass == MaterialForwardClass.ThinGlass)
                                         _thinGlassObjectCount++;
                                     break;
@@ -1515,6 +1532,7 @@ namespace Njulf.Rendering.Data
                                         transparentDistanceSquared,
                                         metadata.DecalLayer,
                                         forwardClass,
+                                        ReceivesSceneReflections(metadata),
                                         maxTransparentMeshlets);
                             }
                             else
@@ -1588,6 +1606,7 @@ namespace Njulf.Rendering.Data
             float distanceSquared,
             int layer,
             MaterialForwardClass forwardClass,
+            bool receivesSceneReflections,
             int maxTransparentMeshlets)
         {
             if (_transparentSortScratch.Count >= maxTransparentMeshlets)
@@ -1598,7 +1617,21 @@ namespace Njulf.Rendering.Data
 
             if (forwardClass == MaterialForwardClass.ThinGlass)
                 _thinGlassMeshletCount++;
+            if (receivesSceneReflections)
+                _transparentReflectionReceiverMeshletCount++;
             _transparentSortScratch.Add(new TransparentMeshletDraw(command, distanceSquared, layer));
+        }
+
+        internal static bool ReceivesSceneReflections(
+            MaterialRenderMetadata metadata)
+        {
+            ArgumentNullException.ThrowIfNull(metadata);
+            return !metadata.IsGeometryDecal &&
+                   (metadata.BlendMode is MaterialBlendMode.AlphaBlend or
+                       MaterialBlendMode.PremultipliedAlpha) &&
+                   (metadata.ShadingModel is MaterialShadingModel.Pbr or
+                       MaterialShadingModel.ThinGlass or
+                       MaterialShadingModel.SubsurfaceApproximation);
         }
 
         private void AddOpaqueForwardDraw(

@@ -944,6 +944,7 @@ internal sealed class SampleInputController
                 ReflectionDebugView.Confidence => ReflectionDebugView.SourceSelection,
                 ReflectionDebugView.SourceSelection => ReflectionDebugView.DetailBudget,
                 ReflectionDebugView.DetailBudget => ReflectionDebugView.ReceiverMaterial,
+                ReflectionDebugView.ReceiverMaterial => ReflectionDebugView.RoughnessInputs,
                 _ => ReflectionDebugView.None
             };
             PrintReflectionSettings("Reflection debug");

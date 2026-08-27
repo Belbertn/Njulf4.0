@@ -57,13 +57,17 @@ namespace Njulf.Rendering.Pipeline
 
             bool allTransparentSurfacesAreThinGlass =
                 AllTransparentSurfacesAreThinGlass(sceneData);
-            bool rayVariant =
+            bool existingRayVariantRequired =
                 !allTransparentSurfacesAreThinGlass &&
                 sceneData.TransparentObjectCount > 0 &&
                 (sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
                  DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
                  sceneData.EffectiveThickTransmissionMode ==
-                 ThickTransmissionMode.RayQuery) &&
+                 ThickTransmissionMode.RayQuery);
+            bool reflectionRayVariantRequired =
+                RequiresSceneReflectionRayVariant(sceneData);
+            bool rayVariant =
+                (existingRayVariantRequired || reflectionRayVariantRequired) &&
                 _meshPipeline.RayTransparentPipelinesAvailable &&
                 _raySceneDescriptors?.IsAvailable == true;
             if (sceneData.TransparentReceiveGlobalIllumination ||
@@ -209,7 +213,13 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.EffectiveThickTransmissionMode ==
                     ThickTransmissionMode.RayQuery,
                     thickTransmissionDispersionEnabled:
-                    sceneData.ThickTransmissionDispersionEnabled)
+                    sceneData.ThickTransmissionDispersionEnabled,
+                    effectiveReflectionMode:
+                    sceneData.EffectiveReflectionMode,
+                    transparentSampleReflections:
+                    sceneData.TransparentSampleReflections,
+                    opaqueSceneColorSnapshotAvailable:
+                    sceneData.OpaqueSceneColorSnapshotAvailable)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();
@@ -303,6 +313,18 @@ namespace Njulf.Rendering.Pipeline
                    sceneData.TransparentMeshletCount > 0 &&
                    sceneData.ThinGlassMeshletCount ==
                    sceneData.TransparentMeshletCount;
+        }
+
+        internal static bool RequiresSceneReflectionRayVariant(
+            SceneRenderingData sceneData)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+            return sceneData.TransparentSampleReflections &&
+                   sceneData.OpaqueSceneColorSnapshotAvailable &&
+                   sceneData.HasTransparentReflectionReceivers &&
+                   sceneData.EffectiveReflectionMode ==
+                   ReflectionMode.HybridRayQuery &&
+                   sceneData.TransparentSceneReflectionRayTaskBudget > 0;
         }
 
         private bool TrySelectExactFeedbackPipeline(

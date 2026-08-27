@@ -14,6 +14,13 @@
 #define FORWARD_THIN_GLASS_ONLY 0
 #endif
 
+#if defined(FORWARD_OPAQUE) || defined(FORWARD_SIMPLE_OPAQUE) || \
+    NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#define FORWARD_TRANSPARENT_REFLECTIONS_ACTIVE 0
+#else
+#define FORWARD_TRANSPARENT_REFLECTIONS_ACTIVE 1
+#endif
+
 #if DIRECTIONAL_TRANSPARENT_RAY_QUERY
 #extension GL_EXT_ray_query : require
 #endif
@@ -131,6 +138,7 @@ layout(early_fragment_tests) in;
 #if DIRECTIONAL_TRANSPARENT_RAY_QUERY
 layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #include "directional_ray_visibility.glsl"
+#include "ray_query_surface.glsl"
 #if !NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
 #include "thick_transmission_transport.glsl"
 #endif
@@ -413,6 +421,17 @@ const uint REFLECTION_DEBUG_LOCAL_REFLECTION_ONLY = 9u;
 const uint REFLECTION_DEBUG_GLOBAL_FALLBACK_ONLY = 10u;
 const uint REFLECTION_DEBUG_DDGI_DIRECTIONAL_RADIANCE_LOBE = 11u;
 const uint REFLECTION_DEBUG_SOURCE_OWNERSHIP = 12u;
+const uint REFLECTION_DEBUG_CONFIDENCE = 13u;
+const uint REFLECTION_DEBUG_SOURCE_SELECTION = 14u;
+const uint REFLECTION_DEBUG_DETAIL_BUDGET = 15u;
+const uint REFLECTION_DEBUG_RECEIVER_MATERIAL = 16u;
+const uint REFLECTION_DEBUG_ROUGHNESS_INPUTS = 17u;
+const uint FORWARD_REFLECTION_SOURCE_NONE = 0u;
+const uint FORWARD_REFLECTION_SOURCE_SSR = 1u;
+const uint FORWARD_REFLECTION_SOURCE_RAY_QUERY = 2u;
+const uint FORWARD_REFLECTION_SOURCE_DDGI = 3u;
+const uint FORWARD_REFLECTION_SOURCE_LOCAL_PROBE = 4u;
+const uint FORWARD_REFLECTION_SOURCE_ENVIRONMENT = 5u;
 const uint REFLECTION_ENABLED_FLAG = 1u << 0u;
 const uint REFLECTION_BOX_PROJECTION_ENABLED_FLAG = 1u << 1u;
 const uint REFLECTION_PROBE_BLENDING_ENABLED_FLAG = 1u << 2u;
@@ -577,6 +596,31 @@ bool ForwardThickTransmissionRayQueryEnabled()
 bool ForwardThickTransmissionDispersionEnabled()
 {
     return (pc.Push.DiagnosticFlags & (1u << 10u)) != 0u;
+}
+
+uint ForwardEffectiveReflectionMode()
+{
+    return (pc.Push.DiagnosticFlags >> 11u) & 0x07u;
+}
+
+bool ForwardTransparentSampleReflections()
+{
+    return (pc.Push.DiagnosticFlags & (1u << 14u)) != 0u;
+}
+
+bool ForwardOpaqueSceneColorSnapshotAvailable()
+{
+    return (pc.Push.DiagnosticFlags & (1u << 15u)) != 0u;
+}
+
+bool ForwardMaterialSamplesSceneReflections(
+    GPUMaterialData material,
+    bool geometryDecal)
+{
+    uint blendMode = uint(max(round(material.OcclusionBinding.z), 0.0));
+    return !geometryDecal &&
+        !GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_UNLIT) &&
+        blendMode >= 2u && blendMode <= 3u;
 }
 
 uint ForwardThickTransmissionMaximumInterfaces()
@@ -2579,7 +2623,13 @@ vec3 ResolveNormal(GPUMaterialData material, vec3 interpolatedNormal, vec4 inter
 {
     float facingSign = gl_FrontFacing ? 1.0 : -1.0;
 
-    vec3 tangentNormal = SampleMaterialTexture(material.NormalTextureIndex, uv).xyz * 2.0 - 1.0;
+    // Normal maps encode directions rather than colors. A conservative
+    // two-mip footprint prevents sub-pixel direction flips from becoming
+    // black N.L speckles after the decoded vector is normalized.
+    vec3 tangentNormal = SampleMaterialTextureFootprint(
+        material.NormalTextureIndex,
+        uv,
+        4.0).xyz * 2.0 - 1.0;
     if ((material.FeatureFlags & MATERIAL_FEATURE_NORMAL_GREEN_INVERTED) != 0u)
         tangentNormal.y = -tangentNormal.y;
     if ((material.FeatureFlags & MATERIAL_FEATURE_COMPRESSED_NORMAL_BC5) != 0u)
@@ -2610,27 +2660,35 @@ float GeometrySmith(float nDotV, float nDotL, float roughness)
     return GeometrySchlickGGX(nDotV, roughness) * GeometrySchlickGGX(nDotL, roughness);
 }
 
-float FilterSpecularRoughness(float roughness, vec3 shadingNormal)
+float EstimateReflectionSchedulingRoughness(
+    float physicalRoughness,
+    float conservativeFootprintRoughness,
+    vec3 shadingNormal)
 {
     // Normal and roughness maps can vary by substantially more than one
     // microfacet lobe in a screen pixel. Folding both footprints into alpha
     // prevents a single dark roughness texel (or normal-map spike) inside a
-    // broad material from scheduling an isolated SSR/ray-query firefly. A
-    // contiguous smooth pane has zero roughness variance and stays sharp.
+    // broad material from scheduling an isolated SSR/ray-query firefly. This
+    // value controls work selection only; authored physical roughness remains
+    // the sole BRDF, Fresnel, LUT, and prefiltered-radiance input.
     vec3 normalDx = dFdx(shadingNormal);
     vec3 normalDy = dFdy(shadingNormal);
     float normalVariance = clamp(
         0.5 * (dot(normalDx, normalDx) + dot(normalDy, normalDy)),
         0.0,
         0.18);
-    float roughnessDx = dFdx(roughness);
-    float roughnessDy = dFdy(roughness);
+    float roughnessDx = dFdx(physicalRoughness);
+    float roughnessDy = dFdy(physicalRoughness);
     float roughnessFootprintVariance = clamp(
         0.5 * (roughnessDx * roughnessDx +
             roughnessDy * roughnessDy),
         0.0,
         0.50);
-    float alphaSquared = roughness * roughness * roughness * roughness;
+    float schedulingBase = max(
+        physicalRoughness,
+        conservativeFootprintRoughness);
+    float alphaSquared = schedulingBase * schedulingBase *
+        schedulingBase * schedulingBase;
     return pow(clamp(
         alphaSquared + normalVariance + roughnessFootprintVariance,
         0.00000256,
@@ -2778,6 +2836,382 @@ vec3 ReflectionFaceColor(vec3 direction)
     return direction.z >= 0.0 ? vec3(0.2, 0.4, 1.0) : vec3(1.0, 0.85, 0.1);
 }
 
+vec3 EvaluatePbrLight(
+    vec3 albedo,
+    float metallic,
+    vec3 directionalDiffuseBase,
+    float roughness,
+    vec3 dielectricF0,
+    vec3 normal,
+    vec3 viewDirection,
+    vec3 lightDirection,
+    vec3 radiance,
+    out vec3 diffuseContribution);
+
+struct ForwardTransparentReflectionSample
+{
+    vec3 Radiance;
+    float Confidence;
+    uint Source;
+};
+
+vec3 ForwardReflectionSourceColor(uint source)
+{
+    if (source == FORWARD_REFLECTION_SOURCE_SSR)
+        return vec3(0.0, 0.9, 1.0);
+    if (source == FORWARD_REFLECTION_SOURCE_RAY_QUERY)
+        return vec3(1.0, 0.0, 0.9);
+    if (source == FORWARD_REFLECTION_SOURCE_DDGI)
+        return vec3(0.15, 1.0, 0.25);
+    if (source == FORWARD_REFLECTION_SOURCE_LOCAL_PROBE)
+        return vec3(1.0, 0.85, 0.0);
+    if (source == FORWARD_REFLECTION_SOURCE_ENVIRONMENT)
+        return vec3(0.1, 0.3, 1.0);
+    return vec3(0.0);
+}
+
+bool ForwardTransparentReflectionDiagnosticSample()
+{
+    uvec2 pixel = uvec2(max(floor(gl_FragCoord.xy), vec2(0.0)));
+    return (pixel.x & 7u) == 0u && (pixel.y & 7u) == 0u;
+}
+
+void ForwardAddTransparentReflectionEstimate(uint counter)
+{
+    if (!ForwardTransparentReflectionDiagnosticSample())
+        return;
+    uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counter],
+        64u);
+}
+
+bool ForwardTryReserveTransparentReflectionRay(
+    GPUReflectionProbeHeader header)
+{
+    uint budget = header.SceneReflectionRayTaskBudget;
+    if (budget == 0u)
+        return false;
+    uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+    uint taskIndex = atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            TRANSPARENT_REFLECTION_TASK_COUNTER],
+        1u);
+    if (taskIndex < budget)
+        return true;
+    ForwardAddTransparentReflectionEstimate(
+        TRANSPARENT_REFLECTION_BUDGET_REJECT_COUNTER);
+    return false;
+}
+
+bool ForwardTraceTransparentSsr(
+    GPUReflectionProbeHeader header,
+    vec3 worldPosition,
+    vec3 geometricNormal,
+    vec3 reflectionDirection,
+    float schedulingRoughness,
+    out ForwardTransparentReflectionSample result)
+{
+    result.Radiance = vec3(0.0);
+    result.Confidence = 0.0;
+    result.Source = FORWARD_REFLECTION_SOURCE_NONE;
+    if (!ForwardTransparentSampleReflections() ||
+        !ForwardOpaqueSceneColorSnapshotAvailable() ||
+        header.SsrMaximumSteps == 0u ||
+        header.SsrMaximumDistance <= 0.0 ||
+        dot(reflectionDirection, geometricNormal) <= 0.001)
+    {
+        return false;
+    }
+
+    uint stepCount = max(header.SsrMaximumSteps, 8u);
+    float maximumDistance = header.SsrMaximumDistance;
+    int mipCount = max(textureQueryLevels(
+        BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)]), 1);
+    float jitter = fract(sin(dot(gl_FragCoord.xy,
+        vec2(12.9898, 78.233))) * 43758.5453);
+    for (uint stepIndex = 0u; stepIndex < stepCount; ++stepIndex)
+    {
+        float normalizedStep =
+            (float(stepIndex) + 0.75 + jitter * 0.5) /
+            float(stepCount);
+        float distanceAlongRay = max(0.02,
+            normalizedStep * normalizedStep * maximumDistance);
+        vec3 samplePosition = worldPosition + reflectionDirection *
+            distanceAlongRay;
+        vec4 clip = MulRowMajor(
+            vec4(samplePosition, 1.0),
+            pc.Push.ViewProjectionMatrix);
+        if (any(isnan(clip)) || any(isinf(clip)) || clip.w <= 1.0e-6)
+            continue;
+        vec3 ndc = clip.xyz / clip.w;
+        vec2 uv = ndc.xy * 0.5 + vec2(0.5);
+        if (any(lessThan(uv, vec2(0.0))) ||
+            any(greaterThanEqual(uv, vec2(1.0))))
+        {
+            break;
+        }
+
+        float footprint = 1.0 + normalizedStep *
+            mix(4.0, 12.0, schedulingRoughness);
+        float mip = clamp(log2(footprint), 0.0,
+            float(mipCount - 1));
+        float sceneDepth = textureLod(
+            BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)],
+            uv,
+            mip).r;
+        float rayDepth = ndc.z;
+        float depthError = sceneDepth - rayDepth;
+        float thickness = 0.0015 + normalizedStep * 0.006 +
+            schedulingRoughness * 0.003;
+        if (sceneDepth <= 0.0 || depthError < 0.0 ||
+            depthError > thickness)
+        {
+            continue;
+        }
+
+        float fineDepth = textureLod(
+            BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)],
+            uv,
+            0.0).r;
+        float fineError = abs(fineDepth - rayDepth);
+        float edge = min(min(uv.x, uv.y),
+            min(1.0 - uv.x, 1.0 - uv.y));
+        float edgeConfidence = smoothstep(0.0, 0.08, edge);
+        float depthConfidence = 1.0 - clamp(
+            fineError / max(thickness, 1.0e-5), 0.0, 1.0);
+        float marchConfidence = 1.0 - float(stepIndex) /
+            float(max(stepCount, 1u));
+        float confidence = clamp(edgeConfidence * depthConfidence *
+            mix(0.5, 1.0, marchConfidence), 0.0, 1.0);
+        if (confidence < header.SsrConfidenceThreshold)
+            continue;
+
+        vec3 radiance = textureLod(
+            BindlessTextures[nonuniformEXT(
+                OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX)],
+            uv,
+            0.0).rgb;
+        if (any(isnan(radiance)) || any(isinf(radiance)))
+            return false;
+        result.Radiance = max(radiance, vec3(0.0));
+        result.Confidence = confidence;
+        result.Source = FORWARD_REFLECTION_SOURCE_SSR;
+        ForwardAddTransparentReflectionEstimate(
+            TRANSPARENT_REFLECTION_SSR_HIT_COUNTER);
+        return true;
+    }
+    return false;
+}
+
+#if DIRECTIONAL_TRANSPARENT_RAY_QUERY
+bool ForwardTransparentReflectionCandidatePasses(rayQueryEXT query)
+{
+    uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(
+        query, false);
+    GPUDdgiRayQueryInstance instance =
+        GiCausticReadRayQueryInstance(instanceIndex);
+    if (!GiCausticRayInstanceValid(instance))
+        return true;
+    if (GiCausticRayGeometryIsDecal(instance) ||
+        instance.GeometryClass == DDGI_RAY_GEOMETRY_VOLUME_TRANSMISSION ||
+        instance.GeometryClass == DDGI_RAY_GEOMETRY_WATER_SURFACE ||
+        (instance.GeometryFlags &
+            (DDGI_RAY_GEOMETRY_FLAG_VOLUME_TRANSMISSION |
+             DDGI_RAY_GEOMETRY_FLAG_WATER_SURFACE)) != 0u)
+    {
+        return false;
+    }
+    return GiCausticCandidatePassesOpacity(
+        instanceIndex,
+        rayQueryGetIntersectionPrimitiveIndexEXT(query, false),
+        rayQueryGetIntersectionBarycentricsEXT(query, false),
+        rayQueryGetIntersectionFrontFaceEXT(query, false));
+}
+
+bool ForwardTraceTransparentReflectionNearest(
+    vec3 origin,
+    vec3 direction,
+    float maximumDistance,
+    out RayQuerySurfaceHit hit)
+{
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, SceneTlas, gl_RayFlagsNoneEXT, 0xff,
+        origin, 0.002, direction, maximumDistance);
+    uint candidates = 0u;
+    bool exceeded = false;
+    while (rayQueryProceedEXT(query))
+    {
+        if (rayQueryGetIntersectionTypeEXT(query, false) !=
+            gl_RayQueryCandidateIntersectionTriangleEXT)
+        {
+            continue;
+        }
+        ++candidates;
+        if (candidates > 64u)
+        {
+            exceeded = true;
+            rayQueryTerminateEXT(query);
+            break;
+        }
+        if (ForwardTransparentReflectionCandidatePasses(query))
+            rayQueryConfirmIntersectionEXT(query);
+    }
+    if (exceeded || rayQueryGetIntersectionTypeEXT(query, true) ==
+            gl_RayQueryCommittedIntersectionNoneEXT)
+    {
+        return false;
+    }
+    return RayQuerySurfaceResolveCommittedHit(
+        query, origin, direction, hit);
+}
+
+vec3 ForwardShadeTransparentReflectionHit(
+    RayQuerySurfaceHit hit,
+    vec3 incomingDirection,
+    GPUEnvironmentData environment,
+    GPUReflectionProbeHeader header)
+{
+    vec4 baseColor = RayQuerySurfaceSampleBaseColor(hit);
+    vec2 metallicRoughness =
+        RayQuerySurfaceSampleMetallicRoughness(hit);
+    vec3 albedo = max(baseColor.rgb, vec3(0.0));
+    float metallic = clamp(metallicRoughness.x, 0.0, 1.0);
+    float roughness = clamp(metallicRoughness.y, 0.04, 1.0);
+    vec3 normal = RayQuerySurfaceOrientedNormal(hit);
+    vec3 viewDirection = normalize(-incomingDirection);
+    vec3 diffuseBase = albedo * (1.0 - metallic);
+    vec3 dielectricF0 = vec3(0.04);
+    vec3 radiance = RayQuerySurfaceSampleEmissive(hit);
+
+    uint lightLimit = min(header.RayQueryHitLightLimit,
+        ForwardTotalLightCount(pc.Push));
+    for (uint lightIndex = 0u; lightIndex < lightLimit; ++lightIndex)
+    {
+        GPULight light = ReadLight(lightIndex);
+        if (NjulfIsAreaLight(light))
+        {
+            NjulfAreaLightResult area = EvaluateNjulfAreaLightLtc(
+                light,
+                hit.Position,
+                normal,
+                viewDirection,
+                roughness,
+                diffuseBase,
+                mix(dielectricF0, albedo, metallic));
+            radiance += area.lighting;
+            continue;
+        }
+        vec3 lightDirection;
+        float attenuation = 1.0;
+        if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL)
+        {
+            lightDirection = normalize(-light.Direction);
+        }
+        else if (NjulfIsPunctualLight(light))
+        {
+            vec3 toLight = light.Position - hit.Position;
+            float distanceToLight = length(toLight);
+            if (distanceToLight <= 0.001 || distanceToLight >= light.Range ||
+                light.Range <= 0.0)
+            {
+                continue;
+            }
+            lightDirection = toLight / distanceToLight;
+            attenuation = EvaluateNjulfLightDistanceAttenuation(
+                light, distanceToLight) *
+                EvaluateNjulfIesProfile(light, -lightDirection);
+            if (light.Type == GPU_LIGHT_TYPE_SPOT)
+                attenuation *= EvaluateNjulfSpotAttenuation(
+                    light, lightDirection);
+        }
+        else
+        {
+            continue;
+        }
+        vec3 ignoredDiffuse;
+        vec3 incident = max(light.Color, vec3(0.0)) *
+            max(light.Intensity, 0.0) * attenuation;
+        radiance += EvaluatePbrLight(
+            albedo,
+            metallic,
+            diffuseBase,
+            roughness,
+            dielectricF0,
+            normal,
+            viewDirection,
+            lightDirection,
+            incident,
+            ignoredDiffuse);
+    }
+
+    vec3 environmentDiffuse = EvaluateEnvironmentDiffuseIrradiance(
+        environment, normal) * diffuseBase / GI_MATERIAL_PI;
+    vec3 indirectDiffuse = environmentDiffuse;
+    if (ForwardGlobalIlluminationEnabled() != 0u)
+    {
+        vec3 ddgiIrradiance = SampleSimpleDdgiIrradiance(
+            hit.Position, normal, viewDirection);
+        if (any(greaterThan(ddgiIrradiance, vec3(0.000001))))
+            indirectDiffuse = max(ddgiIrradiance, vec3(0.0)) *
+                diffuseBase / GI_MATERIAL_PI;
+    }
+    float nDotV = max(dot(normal, viewDirection), 0.0);
+    vec3 f0 = mix(dielectricF0, albedo, metallic);
+    vec3 fresnel = FresnelSchlickIndirectRoughness(
+        nDotV, f0, roughness);
+    vec2 brdf = texture(
+        BindlessTextures[nonuniformEXT(environment.BrdfLutTextureIndex)],
+        vec2(nDotV, roughness)).rg;
+    float maxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
+    vec3 indirectSpecular = SampleEnvironmentPrefilteredRadiance(
+        environment,
+        reflect(-viewDirection, normal),
+        roughness * maxLod) * (fresnel * brdf.x + brdf.y) *
+        environment.SpecularIntensity;
+    return clamp(radiance + indirectDiffuse + indirectSpecular,
+        vec3(0.0), vec3(65504.0));
+}
+
+bool ForwardTraceTransparentRayReflection(
+    GPUReflectionProbeHeader header,
+    vec3 worldPosition,
+    vec3 geometricNormal,
+    vec3 reflectionDirection,
+    GPUEnvironmentData environment,
+    out ForwardTransparentReflectionSample result)
+{
+    result.Radiance = vec3(0.0);
+    result.Confidence = 0.0;
+    result.Source = FORWARD_REFLECTION_SOURCE_NONE;
+    if (ForwardEffectiveReflectionMode() != 5u ||
+        !ForwardTryReserveTransparentReflectionRay(header))
+    {
+        return false;
+    }
+    RayQuerySurfaceHit hit;
+    if (!ForwardTraceTransparentReflectionNearest(
+            worldPosition + geometricNormal * 0.004,
+            reflectionDirection,
+            header.SsrMaximumDistance,
+            hit))
+    {
+        ForwardAddTransparentReflectionEstimate(
+            TRANSPARENT_REFLECTION_RAY_MISS_COUNTER);
+        return false;
+    }
+    result.Radiance = ForwardShadeTransparentReflectionHit(
+        hit, reflectionDirection, environment, header);
+    result.Confidence = clamp(1.0 - hit.Distance /
+        max(header.SsrMaximumDistance, 0.001), 0.65, 1.0);
+    result.Source = FORWARD_REFLECTION_SOURCE_RAY_QUERY;
+    ForwardAddTransparentReflectionEstimate(
+        TRANSPARENT_REFLECTION_RAY_HIT_COUNTER);
+    return true;
+}
+#endif
+
 vec3 EvaluateReflectionSpecular(
     GPUEnvironmentData environment,
     vec3 worldPosition,
@@ -2790,10 +3224,12 @@ vec3 EvaluateReflectionSpecular(
     vec3 ddgiDirectionalRadiance,
     float ddgiDirectionalConfidence,
     out bool debugActive,
-    out vec3 debugColor)
+    out vec3 debugColor,
+    out uint dominantSource)
 {
     debugActive = false;
     debugColor = vec3(0.0);
+    dominantSource = FORWARD_REFLECTION_SOURCE_NONE;
 
     GPUReflectionProbeHeader header = ReadReflectionProbeHeader();
     bool reflectionsEnabled = (header.Flags & REFLECTION_ENABLED_FLAG) != 0u;
@@ -2888,6 +3324,12 @@ vec3 EvaluateReflectionSpecular(
         0.0,
         1.0);
     float globalWeight = max(remainingWeight - ddgiWeight, 0.0);
+    dominantSource = localWeight >= ddgiWeight &&
+            localWeight >= globalWeight && localWeight > 0.0001
+        ? FORWARD_REFLECTION_SOURCE_LOCAL_PROBE
+        : ddgiWeight >= globalWeight && ddgiWeight > 0.0001
+            ? FORWARD_REFLECTION_SOURCE_DDGI
+            : FORWARD_REFLECTION_SOURCE_ENVIRONMENT;
     // A fully weighted local probe owns the reflected-radiance source. Avoid
     // an environment cubemap sample whose result would be multiplied by zero;
     // this keeps local-probe quality at the cost of the previous global-only
@@ -2898,13 +3340,17 @@ vec3 EvaluateReflectionSpecular(
         globalReflection = SampleEnvironmentPrefilteredRadiance(
             environment,
             reflectionDirection,
-            globalLod) * header.GlobalFallbackIntensity;
+            globalLod) * header.GlobalFallbackIntensity *
+            max(environment.SpecularIntensity, 0.0);
     }
     vec3 reflectedRadiance = (
         localReflection * localWeight +
         ddgiDirectionalRadiance * ddgiWeight +
         globalReflection * globalWeight) * header.Intensity;
-    vec3 specular = reflectedRadiance * (fresnel * brdf.x + brdf.y) * environment.SpecularIntensity * specularOcclusion;
+    // Environment.SpecularIntensity owns only the global IBL share above.
+    // Scene captures and DDGI remain visible when environment lighting is off.
+    vec3 specular = reflectedRadiance * (fresnel * brdf.x + brdf.y) *
+        specularOcclusion;
 
     if (header.DebugView != 0u)
     {
@@ -2930,6 +3376,8 @@ vec3 EvaluateReflectionSpecular(
             debugColor = ddgiDirectionalRadiance * header.Intensity;
         else if (header.DebugView == REFLECTION_DEBUG_SOURCE_OWNERSHIP)
             debugColor = vec3(localWeight, ddgiWeight, globalWeight);
+        else if (header.DebugView == REFLECTION_DEBUG_SOURCE_SELECTION)
+            debugColor = ForwardReflectionSourceColor(dominantSource);
         else
             debugColor = specular;
     }
@@ -2947,10 +3395,12 @@ vec3 EvaluateGlobalReflectionSpecular(
     vec3 ddgiDirectionalRadiance,
     float ddgiDirectionalConfidence,
     out bool debugActive,
-    out vec3 debugColor)
+    out vec3 debugColor,
+    out uint dominantSource)
 {
     debugActive = false;
     debugColor = vec3(0.0);
+    dominantSource = FORWARD_REFLECTION_SOURCE_NONE;
     GPUReflectionProbeHeader header = ReadReflectionProbeHeader();
     bool reflectionsEnabled = (header.Flags & REFLECTION_ENABLED_FLAG) != 0u;
     if (!reflectionsEnabled)
@@ -2959,14 +3409,18 @@ vec3 EvaluateGlobalReflectionSpecular(
     vec3 globalReflection = SampleEnvironmentPrefilteredRadiance(
         environment,
         reflectionDirection,
-        lod) * header.GlobalFallbackIntensity;
+        lod) * header.GlobalFallbackIntensity *
+        max(environment.SpecularIntensity, 0.0);
     float ddgiWeight = clamp(ddgiDirectionalConfidence, 0.0, 1.0);
+    dominantSource = ddgiWeight >= 0.5
+        ? FORWARD_REFLECTION_SOURCE_DDGI
+        : FORWARD_REFLECTION_SOURCE_ENVIRONMENT;
     vec3 reflectedRadiance = mix(
         globalReflection,
         ddgiDirectionalRadiance,
         ddgiWeight) * header.Intensity;
     vec3 specular = reflectedRadiance * (fresnel * brdf.x + brdf.y) *
-        environment.SpecularIntensity * specularOcclusion;
+        specularOcclusion;
 
     if (header.DebugView != 0u)
     {
@@ -2978,6 +3432,8 @@ vec3 EvaluateGlobalReflectionSpecular(
             debugColor = ddgiDirectionalRadiance * header.Intensity;
         else if (header.DebugView == REFLECTION_DEBUG_SOURCE_OWNERSHIP)
             debugColor = vec3(0.0, ddgiWeight, 1.0 - ddgiWeight);
+        else if (header.DebugView == REFLECTION_DEBUG_SOURCE_SELECTION)
+            debugColor = ForwardReflectionSourceColor(dominantSource);
         else
             debugColor = specular;
     }
@@ -2985,11 +3441,150 @@ vec3 EvaluateGlobalReflectionSpecular(
     return specular;
 }
 
+vec3 EvaluateTransparentReflectionSpecular(
+    GPUEnvironmentData environment,
+    vec3 worldPosition,
+    vec3 geometricNormal,
+    vec3 reflectionDirection,
+    float globalLod,
+    float physicalRoughness,
+    float schedulingRoughness,
+    vec2 brdf,
+    vec3 fresnel,
+    float specularOcclusion,
+    vec3 ddgiDirectionalRadiance,
+    float ddgiDirectionalConfidence,
+    bool allowLocalProbes,
+    bool sampleSceneReflections,
+    out bool debugActive,
+    out vec3 debugColor)
+{
+    uint fallbackSource;
+    vec3 fallbackSpecular = allowLocalProbes
+        ? EvaluateReflectionSpecular(
+            environment,
+            worldPosition,
+            reflectionDirection,
+            globalLod,
+            physicalRoughness,
+            brdf,
+            fresnel,
+            specularOcclusion,
+            ddgiDirectionalRadiance,
+            ddgiDirectionalConfidence,
+            debugActive,
+            debugColor,
+            fallbackSource)
+        : EvaluateGlobalReflectionSpecular(
+            environment,
+            reflectionDirection,
+            globalLod,
+            brdf,
+            fresnel,
+            specularOcclusion,
+            ddgiDirectionalRadiance,
+            ddgiDirectionalConfidence,
+            debugActive,
+            debugColor,
+            fallbackSource);
+
+    GPUReflectionProbeHeader header = ReadReflectionProbeHeader();
+    if (header.DebugView == REFLECTION_DEBUG_ROUGHNESS_INPUTS)
+    {
+        debugActive = true;
+        debugColor = vec3(
+            physicalRoughness,
+            schedulingRoughness,
+            abs(schedulingRoughness - physicalRoughness));
+        return debugColor;
+    }
+#if !FORWARD_TRANSPARENT_REFLECTIONS_ACTIVE
+    return fallbackSpecular;
+#else
+    uint effectiveMode = ForwardEffectiveReflectionMode();
+    bool geometricEnabled = sampleSceneReflections &&
+        ForwardTransparentSampleReflections() &&
+        ForwardOpaqueSceneColorSnapshotAvailable() &&
+        (effectiveMode == 3u || effectiveMode == 5u);
+    ForwardTransparentReflectionSample geometric;
+    geometric.Radiance = vec3(0.0);
+    geometric.Confidence = 0.0;
+    geometric.Source = FORWARD_REFLECTION_SOURCE_NONE;
+    bool geometricHit = false;
+    if (geometricEnabled)
+    {
+        geometricHit = ForwardTraceTransparentSsr(
+            header,
+            worldPosition,
+            geometricNormal,
+            reflectionDirection,
+            schedulingRoughness,
+            geometric);
+#if DIRECTIONAL_TRANSPARENT_RAY_QUERY
+        if (!geometricHit && effectiveMode == 5u)
+        {
+            geometricHit = ForwardTraceTransparentRayReflection(
+                header,
+                worldPosition,
+                geometricNormal,
+                reflectionDirection,
+                environment,
+                geometric);
+        }
+#endif
+    }
+
+    float geometricWeight = geometricHit
+        ? clamp(geometric.Confidence, 0.0, 1.0)
+        : 0.0;
+    vec3 geometricSpecular = geometric.Radiance * header.Intensity *
+        (fresnel * brdf.x + brdf.y) * specularOcclusion;
+    vec3 result = geometricSpecular * geometricWeight +
+        fallbackSpecular * (1.0 - geometricWeight);
+    uint selectedSource = geometricWeight >= 0.5
+        ? geometric.Source
+        : fallbackSource;
+
+    if (geometricEnabled)
+    {
+        if (selectedSource == FORWARD_REFLECTION_SOURCE_DDGI)
+            ForwardAddTransparentReflectionEstimate(
+                TRANSPARENT_REFLECTION_DDGI_FALLBACK_COUNTER);
+        else if (selectedSource == FORWARD_REFLECTION_SOURCE_LOCAL_PROBE)
+            ForwardAddTransparentReflectionEstimate(
+                TRANSPARENT_REFLECTION_PROBE_FALLBACK_COUNTER);
+        else if (selectedSource == FORWARD_REFLECTION_SOURCE_ENVIRONMENT)
+            ForwardAddTransparentReflectionEstimate(
+                TRANSPARENT_REFLECTION_ENVIRONMENT_FALLBACK_COUNTER);
+    }
+
+    if (header.DebugView == REFLECTION_DEBUG_SOURCE_SELECTION)
+    {
+        debugActive = true;
+        debugColor = ForwardReflectionSourceColor(selectedSource);
+    }
+    else if (header.DebugView == REFLECTION_DEBUG_CONFIDENCE)
+    {
+        debugActive = true;
+        debugColor = vec3(geometricWeight);
+    }
+    else if (header.DebugView == 7u)
+    {
+        debugActive = true;
+        debugColor = geometric.Source == FORWARD_REFLECTION_SOURCE_SSR
+            ? vec3(0.0, 1.0, 1.0)
+            : vec3(0.0);
+    }
+    return result;
+#endif
+}
+
 void EvaluateIbl(
     vec3 albedo,
     float metallic,
     vec3 diffuseReflectance,
     float roughness,
+    float reflectionSchedulingRoughness,
     vec3 dielectricF0,
     vec3 normal,
     vec3 viewDirection,
@@ -2997,6 +3592,7 @@ void EvaluateIbl(
     float indirectSpecularVisibility,
     vec3 ddgiDirectionalRadiance,
     float ddgiDirectionalConfidence,
+    bool sampleSceneReflections,
     out vec3 diffuseIbl,
     out vec3 specularIbl,
     out bool reflectionDebugActive,
@@ -3067,29 +3663,39 @@ void EvaluateIbl(
     // ThinGlass deliberately has no authored local-probe branch. DDGI owns
     // reflected scene radiance and the environment fills only its unsupported
     // confidence share.
-    specularIbl = EvaluateGlobalReflectionSpecular(
-        environment,
-        reflectionDirection,
-        globalLod,
-        brdf,
-        fresnel,
-        specularOcclusion,
-        ddgiDirectionalRadiance,
-        ddgiDirectionalConfidence,
-        reflectionDebugActive,
-        reflectionDebugColor);
-#else
-    specularIbl = EvaluateReflectionSpecular(
+    specularIbl = EvaluateTransparentReflectionSpecular(
         environment,
         fragWorldPosition,
+        normal,
         reflectionDirection,
         globalLod,
         roughness,
+        reflectionSchedulingRoughness,
         brdf,
         fresnel,
         specularOcclusion,
         ddgiDirectionalRadiance,
         ddgiDirectionalConfidence,
+        false,
+        sampleSceneReflections,
+        reflectionDebugActive,
+        reflectionDebugColor);
+#else
+    specularIbl = EvaluateTransparentReflectionSpecular(
+        environment,
+        fragWorldPosition,
+        normal,
+        reflectionDirection,
+        globalLod,
+        roughness,
+        reflectionSchedulingRoughness,
+        brdf,
+        fresnel,
+        specularOcclusion,
+        ddgiDirectionalRadiance,
+        ddgiDirectionalConfidence,
+        true,
+        sampleSceneReflections,
         reflectionDebugActive,
         reflectionDebugColor);
 #endif
@@ -4102,9 +4708,15 @@ void main()
 
     // AmazonBistroMaterialProfile is the explicit authority for window lobe
     // width. Do not multiply it by the FBX material's generic packed channel.
-    float roughness = FilterSpecularRoughness(
-        clamp(material.MetallicRoughnessAO.y, 0.04, 1.0),
-        normal);
+    float roughness = clamp(
+        material.MetallicRoughnessAO.y,
+        0.04,
+        1.0);
+    float reflectionSchedulingRoughness =
+        EstimateReflectionSchedulingRoughness(
+            roughness,
+            roughness,
+            normal);
 
     // ThinGlass is an explicit compiled material class, so only the dielectric
     // fields needed by this narrow shader are read from its extension record.
@@ -4209,19 +4821,28 @@ void main()
             vec2(nDotV, roughness)).rg;
         bool reflectionDebugActive;
         vec3 reflectionDebugColor;
-        reflectedSpecular = EvaluateGlobalReflectionSpecular(
+        reflectedSpecular = EvaluateTransparentReflectionSpecular(
             environment,
+            fragWorldPosition,
+            geometricNormal,
             reflectionDirection,
             roughness * maxLod,
+            roughness,
+            reflectionSchedulingRoughness,
             brdf,
             fresnel,
             1.0,
             ddgiDirectionalRadiance,
             ddgiDirectionalConfidence,
+            false,
+            ForwardMaterialSamplesSceneReflections(material, false),
             reflectionDebugActive,
             reflectionDebugColor);
         if (reflectionDebugActive)
-            reflectedSpecular = reflectionDebugColor;
+        {
+            WriteForwardColor(vec4(reflectionDebugColor, 1.0));
+            return;
+        }
     }
 
     float glassNdotV = clamp(
@@ -4432,6 +5053,7 @@ void main()
         material.MetallicRoughnessAO.y * armSample.g,
         0.04,
         1.0);
+    float reflectionFootprintRoughness = authoredRoughness;
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
     if (material.MetallicRoughnessTextureIndex != DEFAULT_BLACK_TEXTURE)
     {
@@ -4450,16 +5072,21 @@ void main()
                     4.0).g,
             0.04,
             1.0);
-        authoredRoughness = max(authoredRoughness, footprintRoughness);
+        reflectionFootprintRoughness = max(
+            reflectionFootprintRoughness,
+            footprintRoughness);
     }
 #endif
     float roughness = authoredRoughness;
     float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);
-    roughness = FilterSpecularRoughness(roughness, normal);
     // Preserve the isotropic lobe width for reflection scheduling. The
     // anisotropic BRDF adjustment below sharpens one axis, but a brushed lobe
     // remains broad overall and does not warrant isotropic full-rate tracing.
-    float reflectionSchedulingRoughness = roughness;
+    float reflectionSchedulingRoughness =
+        EstimateReflectionSchedulingRoughness(
+            roughness,
+            reflectionFootprintRoughness,
+            normal);
     float sampledOcclusion = material.OcclusionTextureIndex == DEFAULT_WHITE_TEXTURE
         ? 1.0
         : SampleMaterialTexture(
@@ -5240,6 +5867,7 @@ void main()
         metallic,
         diffuseReflectance,
         roughness,
+        reflectionSchedulingRoughness,
         dielectricF0,
         normal,
         viewDirection,
@@ -5247,6 +5875,7 @@ void main()
         indirectSpecularVisibility,
         ddgiDirectionalRadiance,
         ddgiDirectionalConfidence,
+        ForwardMaterialSamplesSceneReflections(material, geometryDecal),
         diffuseIbl,
         specularIbl,
         reflectionDebugActive,
@@ -6186,6 +6815,7 @@ void main()
         normal,
         mix(dielectricF0, albedo, metallic),
         roughness,
+        reflectionSchedulingRoughness,
         hybridSpecularOcclusion,
         hybridReflectionLobeFlags,
         // Meshlet IDs are rasterization details and change across otherwise

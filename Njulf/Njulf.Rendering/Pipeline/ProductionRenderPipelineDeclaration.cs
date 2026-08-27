@@ -55,6 +55,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         "HybridReflectionTemporalPass",
         "HybridReflectionSpatialPass",
         "HybridReflectionCompositePass",
+        "OpaqueSceneColorSnapshotPass",
         "TransparentForwardPass",
         "WeightedTransparentPass",
         "WeightedOitCompositePass",
@@ -679,8 +680,14 @@ internal sealed class ProductionRenderPipelineDeclaration
                     RenderGraphResourceId.HybridReflectionFilterScratch),
                 ReadWriteComputeStorage(RenderGraphResourceId.SceneColor,
                     ImageLayout.ColorAttachmentOptimal)),
+            Pass("OpaqueSceneColorSnapshotPass",
+                ReadComputeStorage(RenderGraphResourceId.SceneColor),
+                WriteComputeStorage(
+                    RenderGraphResourceId.HybridReflectionFilterScratch)),
             Pass("TransparentForwardPass",
                 ReadDepth(RenderGraphResourceId.SceneDepth),
+                ReadFragmentSampled(
+                    RenderGraphResourceId.HybridReflectionFilterScratch),
                 ReadFragmentAccelerationStructure(RenderGraphResourceId.TlasStorage),
                 ReadGraphicsStorage(RenderGraphResourceId.RayQueryInstanceMetadata),
                 Read(RenderGraphResourceId.DirectionalShadowMap),
@@ -712,6 +719,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
             Pass("WeightedTransparentPass",
                 ReadDepth(RenderGraphResourceId.SceneDepth),
+                ReadFragmentSampled(
+                    RenderGraphResourceId.HybridReflectionFilterScratch),
                 ReadFragmentAccelerationStructure(RenderGraphResourceId.TlasStorage),
                 ReadGraphicsStorage(RenderGraphResourceId.RayQueryInstanceMetadata),
                 Read(RenderGraphResourceId.DirectionalShadowMap),

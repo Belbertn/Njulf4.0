@@ -117,12 +117,9 @@ public sealed class OpacityMicromapModelPackageTests
             source,
             includeOpacityMicromap: true);
 
-        // Simulate a prior model format that pre-dates the optional section.
-        // The reader remains backward compatible, and migration should publish
-        // the current container without losing the independently validated data.
-        byte[] oldHeader = File.ReadAllBytes(sourcePackage.ModelPath);
-        BinaryPrimitives.WriteUInt16LittleEndian(oldHeader.AsSpan(8, 2), 1);
-        File.WriteAllBytes(sourcePackage.ModelPath, oldHeader);
+        // A current model carries a semantic import identity that can be
+        // preserved while migration rewrites sidecars and refreshes their
+        // content-hash references. Pre-1.4 models must be recooked instead.
 
         CookedMigrationReport report = CookedAssetMigrator.MigrateTree(source, output);
         string migratedPath = Path.Combine(output, "models", "fixture.njmodel");

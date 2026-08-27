@@ -6,7 +6,7 @@ Njulf resolves versioned, hashed cooked packages before source models. Cooked st
 
 ```powershell
 dotnet run --project Njulf.AssetTool -- cook model NjulfHelloGame/Strut.glb --out NjulfHelloGame/Cooked
-dotnet run --project Njulf.AssetTool -- cook model NjulfHelloGame/Assets/Bistro_v5_2/BistroExterior.fbx --out NjulfHelloGame/Cooked --backend Assimp --assimp-material-texture-convention SpecularGbIsRoughnessMetallic
+dotnet run --project Njulf.AssetTool -- cook model NjulfHelloGame/Assets/Bistro_v5_2/BistroExterior.fbx --out NjulfHelloGame/Cooked --backend Assimp --assimp-material-texture-convention AmazonBistro
 dotnet run --project Njulf.AssetTool -- cook folder NjulfHelloGame --out NjulfHelloGame/Cooked
 dotnet run --project Njulf.AssetTool -- cook changed NjulfHelloGame --out NjulfHelloGame/Cooked
 dotnet run --project Njulf.AssetTool -- clean-stale --out NjulfHelloGame/Cooked
@@ -15,6 +15,13 @@ dotnet run --project Njulf.AssetTool -- clean-stale --out NjulfHelloGame/Cooked
 `Cooked/` is generated output and is intentionally not version-controlled. After
 a fresh clone, run the folder cook before starting the normal cooked-only runtime
 or producing a Release build or publish.
+
+Amazon Bistro must be cooked with the explicit `AmazonBistro` material-texture
+convention shown above; the generic folder-cook default is `Standard` and cannot
+infer Bistro's glass and packed-map semantics. Source-path loads compare a stable
+import-semantic contract and reject mismatched or pre-1.4 model packages so a
+development build can re-import the source and a cooked-only build fails with a
+recook diagnostic. An explicitly requested `.njmodel` remains authoritative.
 
 The cooker defaults to the host RID and writes `Cooked/<rid>/`. Override it with `--platform win-x64`, `linux-x64`, or another supported desktop RID. `cook changed` skips an asset only when its source, effective settings, dependencies, tool version, platform, and every recorded output hash are unchanged. Package and database writes are atomic. Pass `--force` to rebuild.
 
