@@ -166,7 +166,7 @@ namespace Njulf.Rendering.Resources
             public DurableTextureRetirementProgress Progress { get; } = new();
         }
 
-        private readonly record struct DecodedStandardTexture(
+        internal readonly record struct DecodedStandardTexture(
             byte[] Data,
             int Width,
             int Height,
@@ -1528,7 +1528,7 @@ namespace Njulf.Rendering.Resources
             };
         }
 
-        private static DecodedStandardTexture DecodeStandardTexture(
+        internal static DecodedStandardTexture DecodeStandardTexture(
             ModelTextureSource source,
             byte[] encoded,
             string sourceIdentity)
@@ -1545,6 +1545,20 @@ namespace Njulf.Rendering.Resources
                         webP.Width,
                         webP.Height,
                         TextureTransportStatistics.WebPDecoderVersion);
+                }
+
+                if (DdsTextureDecoder.HasDdsSignature(encoded))
+                {
+                    DdsDecodedImage dds = DdsTextureDecoder.DecodeRgba8(
+                        encoded,
+                        sourceIdentity,
+                        MaximumRuntimeEncodedTextureBytes,
+                        MaximumRuntimeDecodedTexturePixels);
+                    return new DecodedStandardTexture(
+                        dds.Rgba8,
+                        dds.Width,
+                        dds.Height,
+                        TextureTransportStatistics.DdsDecoderVersion);
                 }
 
                 (int expectedWidth, int expectedHeight) =

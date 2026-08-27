@@ -5,7 +5,6 @@ using System.Text.Json.Serialization;
 using BCnEncoder.Decoder;
 using BCnEncoder.Encoder;
 using BCnEncoder.Shared;
-using BCnEncoder.Shared.ImageFiles;
 using CommunityToolkit.HighPerformance;
 using Ktx;
 using StbImageSharp;
@@ -102,7 +101,6 @@ public sealed class TextureCooker : ITextureCooker
     public const long DefaultMaximumRuntimeTransportPixels = 2048L * 2048L;
 
     private static ReadOnlySpan<byte> Ktx2Identifier => [0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A];
-    private static ReadOnlySpan<byte> DdsIdentifier => "DDS "u8;
     private const uint KtxSupercompressionNone = 0;
     private const uint KtxSupercompressionBasisLz = 1;
     private const uint KtxSupercompressionZstandard = 2;
@@ -278,11 +276,15 @@ public sealed class TextureCooker : ITextureCooker
             }
         }
 
-        if (IsDds(encoded))
+        if (DdsTextureDecoder.HasDdsSignature(encoded))
         {
             try
             {
-                DecodedDdsImage decoded = DecodeDdsRgba8(encoded, sourceIdentity, maximumPixels);
+                DdsDecodedImage decoded = DdsTextureDecoder.DecodeRgba8(
+                    encoded.ToArray(),
+                    sourceIdentity,
+                    maximumEncodedBytes,
+                    maximumPixels);
                 TextureTransportImage ddsTransportImage = TextureTransportImage.FromRgba8(
                     decoded.Rgba8,
                     decoded.Width,
@@ -547,12 +549,16 @@ public sealed class TextureCooker : ITextureCooker
                 TextureTransportStatistics.WebPDecoderVersion);
         }
 
-        if (IsDds(encoded))
+        if (DdsTextureDecoder.HasDdsSignature(encoded))
         {
-            DecodedDdsImage decoded;
+            DdsDecodedImage decoded;
             try
             {
-                decoded = DecodeDdsRgba8(encoded, source.CacheIdentity, int.MaxValue);
+                decoded = DdsTextureDecoder.DecodeRgba8(
+                    encoded,
+                    source.CacheIdentity,
+                    int.MaxValue,
+                    int.MaxValue);
             }
             catch (NotSupportedException)
             {
@@ -877,67 +883,6 @@ public sealed class TextureCooker : ITextureCooker
     }
 
     private static bool IsKtx2(ReadOnlySpan<byte> data) => data.Length >= 12 && data[..12].SequenceEqual(Ktx2Identifier);
-
-    private static bool IsDds(ReadOnlySpan<byte> data) =>
-        data.Length >= DdsIdentifier.Length && data[..DdsIdentifier.Length].SequenceEqual(DdsIdentifier);
-
-    private static DecodedDdsImage DecodeDdsRgba8(
-        ReadOnlySpan<byte> encoded,
-        string sourceIdentity,
-        long maximumPixels)
-    {
-        byte[] encodedArray = encoded.ToArray();
-        using var stream = new MemoryStream(encodedArray, writable: false);
-        DdsFile dds = DdsFile.Load(stream);
-        if (dds.Faces.Count != 1)
-        {
-            throw new NotSupportedException(
-                $"DDS texture '{sourceIdentity}' has {dds.Faces.Count} faces; only 2D textures are supported.");
-        }
-
-        DdsFace face = dds.Faces[0];
-        if (face.Width is 0 or > int.MaxValue || face.Height is 0 or > int.MaxValue)
-        {
-            throw new InvalidDataException(
-                $"DDS texture '{sourceIdentity}' has unsupported dimensions {face.Width}x{face.Height}.");
-        }
-
-        int width = checked((int)face.Width);
-        int height = checked((int)face.Height);
-        EnsureRuntimeTransportPixelBudget(width, height, maximumPixels, sourceIdentity);
-
-        var decoder = new BcDecoder();
-        if (!decoder.IsSupportedFormat(dds))
-        {
-            throw new NotSupportedException(
-                $"DDS texture '{sourceIdentity}' uses an unsupported pixel format.");
-        }
-        if (decoder.IsHdrFormat(dds))
-        {
-            throw new NotSupportedException(
-                $"DDS texture '{sourceIdentity}' is HDR; use a supported HDR source container instead.");
-        }
-
-        ColorRgba32[] colors = decoder.Decode(dds);
-        int expectedPixelCount = checked(width * height);
-        if (colors.Length != expectedPixelCount)
-        {
-            throw new InvalidDataException(
-                $"DDS decoder produced {colors.Length} pixels, expected {expectedPixelCount} for '{sourceIdentity}'.");
-        }
-
-        var rgba8 = new byte[checked(colors.Length * 4)];
-        for (int pixel = 0; pixel < colors.Length; pixel++)
-        {
-            int offset = pixel * 4;
-            rgba8[offset] = colors[pixel].r;
-            rgba8[offset + 1] = colors[pixel].g;
-            rgba8[offset + 2] = colors[pixel].b;
-            rgba8[offset + 3] = colors[pixel].a;
-        }
-
-        return new DecodedDdsImage(rgba8, width, height);
-    }
 
     private static Ktx2Description ParseKtx2(ReadOnlySpan<byte> data, string sourceName)
     {
@@ -2165,8 +2110,4 @@ public sealed class TextureCooker : ITextureCooker
         byte[] Rgba8,
         TextureTransportImage Image);
 
-    private readonly record struct DecodedDdsImage(
-        byte[] Rgba8,
-        int Width,
-        int Height);
 }

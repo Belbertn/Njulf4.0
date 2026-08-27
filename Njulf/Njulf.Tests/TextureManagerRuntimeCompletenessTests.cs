@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Rendering.Resources;
@@ -8,6 +9,36 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class TextureManagerRuntimeCompletenessTests
 {
+    [Test]
+    public void RuntimeStandardDecode_AcceptsDxt1Dds()
+    {
+        byte[] encoded = CreateDxt1Dds();
+        var source = new ModelTextureSource
+        {
+            Bytes = encoded,
+            CacheIdentity = "runtime-dxt1.dds",
+            DebugName = "runtime-dxt1.dds",
+            ContainerKind = TextureContainerKind.StandardImage
+        };
+
+        TextureManager.DecodedStandardTexture decoded =
+            TextureManager.DecodeStandardTexture(
+                source,
+                encoded,
+                source.CacheIdentity);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.Width, Is.EqualTo(4));
+            Assert.That(decoded.Height, Is.EqualTo(4));
+            Assert.That(
+                decoded.Decoder,
+                Is.EqualTo(TextureTransportStatistics.DdsDecoderVersion));
+            Assert.That(decoded.Data, Has.Length.EqualTo(4 * 4 * 4));
+            Assert.That(decoded.Data.AsSpan(0, 4).ToArray(), Is.EqualTo(new byte[] { 255, 0, 0, 255 }));
+        });
+    }
+
     [Test]
     public void RuntimeSourceRead_RejectsOversizedNonWebPFileBeforeAllocation()
     {
@@ -44,6 +75,37 @@ public sealed class TextureManagerRuntimeCompletenessTests
             if (File.Exists(path))
                 File.Delete(path);
         }
+    }
+
+    private static byte[] CreateDxt1Dds()
+    {
+        const int headerLength = 128;
+        const uint ddsdCaps = 0x00000001;
+        const uint ddsdHeight = 0x00000002;
+        const uint ddsdWidth = 0x00000004;
+        const uint ddsdPixelFormat = 0x00001000;
+        const uint ddsdLinearSize = 0x00080000;
+        const uint ddpfFourCc = 0x00000004;
+        const uint ddsCapsTexture = 0x00001000;
+        const uint dxt1 = 0x31545844;
+        var bytes = new byte[headerLength + 8];
+        "DDS "u8.CopyTo(bytes);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4, 4), 124);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(8, 4),
+            ddsdCaps | ddsdHeight | ddsdWidth | ddsdPixelFormat | ddsdLinearSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(12, 4), 4);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16, 4), 4);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(20, 4), 8);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(76, 4), 32);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(80, 4), ddpfFourCc);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(84, 4), dxt1);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(108, 4), ddsCapsTexture);
+
+        // One opaque DXT1 block: red endpoint selected by all sixteen texels.
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(headerLength, 2), 0xf800);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(headerLength + 2, 2), 0x07e0);
+        return bytes;
     }
 
     [Test]

@@ -1,6 +1,6 @@
 # Global Illumination Remaining Features Roadmap
 
-Last updated: 2026-08-23
+Last updated: 2026-08-27
 
 ## Current state
 
@@ -77,15 +77,15 @@ and stochastic blend. It does not provide physical thick refraction, nested medi
 or general participating-volume transport. The existing hero caustic cache is a
 useful specialized path, not a general solution.
 
-- [ ] Track ray entry and exit surfaces for closed dielectric objects.
-- [ ] Implement configurable IOR and total internal reflection.
-- [ ] Implement Beer-Lambert absorption and colored glass.
-- [ ] Support rough refraction and thickness-aware transmission.
-- [ ] Add a bounded nested dielectric/media stack.
-- [ ] Add water-surface integration and moving-water caustics.
-- [ ] Generalize caustics beyond hero-tagged emitters and receivers.
-- [ ] Add optional dispersion only after the base transport path is stable.
-- [ ] Define deterministic fallbacks for unsupported or over-budget paths.
+- [x] Track ray entry and exit surfaces for closed dielectric objects.
+- [x] Implement configurable IOR and total internal reflection.
+- [x] Implement Beer-Lambert absorption and colored glass.
+- [x] Support rough refraction and thickness-aware transmission.
+- [x] Add a bounded nested dielectric/media stack.
+- [x] Add water-surface integration and moving-water caustics.
+- [x] Generalize caustics beyond hero-tagged emitters and receivers.
+- [x] Add optional dispersion only after the base transport path is stable.
+- [x] Define deterministic fallbacks for unsupported or over-budget paths.
 
 ### P1: Analytical area lights //DONE
 
@@ -93,13 +93,13 @@ The analytical light manager currently supports point, directional, and spot
 lights. Emissive meshes cover some area-light use cases but do not replace
 controllable analytical lights.
 
-- [ ] Add rectangular lights.
-- [ ] Add disk lights.
-- [ ] Add tube/line lights if required by target content.
-- [ ] Use LTC evaluation for rasterized direct lighting.
-- [ ] Add correct area-light sampling or MIS at DDGI ray hits.
-- [ ] Add optional IES photometric profiles.
-- [ ] Include area lights in many-light scheduling, diagnostics, and mutation
+- [x] Add rectangular lights.
+- [x] Add disk lights.
+- [x] Add tube/line lights if required by target content.
+- [x] Use LTC evaluation for rasterized direct lighting.
+- [x] Add correct area-light sampling or MIS at DDGI ray hits.
+- [x] Add optional IES photometric profiles.
+- [x] Include area lights in many-light scheduling, diagnostics, and mutation
       invalidation.
 
 ### P1: Graduate dynamic and procedural geometry participation
