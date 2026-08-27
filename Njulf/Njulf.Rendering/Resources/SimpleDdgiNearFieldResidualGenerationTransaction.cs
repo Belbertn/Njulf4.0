@@ -90,6 +90,7 @@ public sealed class SimpleDdgiNearFieldResidualGenerationTransaction<TResources>
     private bool _hasRequestedLayout;
     private bool _hasQueuedLayout;
     private bool _canonicalFallbackRequired;
+    private bool _forceReplacementAllocation;
     private ulong _greatestActiveReferenceFenceValue;
     private ulong _generation;
     private ulong _peakLiveBytes;
@@ -206,7 +207,8 @@ public sealed class SimpleDdgiNearFieldResidualGenerationTransaction<TResources>
             bool repeatsQueuedRequest = _hasQueuedLayout || _pending is not null;
             _requestedLayout = layout;
             _hasRequestedLayout = true;
-            if (_active is { } active && active.Layout.Equals(layout))
+            if (!_forceReplacementAllocation &&
+                _active is { } active && active.Layout.Equals(layout))
             {
                 if (_pending is not null)
                 {
@@ -264,6 +266,30 @@ public sealed class SimpleDdgiNearFieldResidualGenerationTransaction<TResources>
         RequestReplacement(
             layout,
             SimpleDdgiNearFieldResidualExtentEnvelope.Exact(layout));
+
+    /// <summary>
+    /// Allocates a fresh generation even when the immutable layout is
+    /// unchanged. This is reserved for bounded recovery from repeated
+    /// fence-complete telemetry validation failures.
+    /// </summary>
+    public SimpleDdgiNearFieldResidualGenerationRequestResult RequestRebuild(
+        in SimpleDdgiNearFieldResidualLayout layout,
+        in SimpleDdgiNearFieldResidualExtentEnvelope extentEnvelope)
+    {
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            _forceReplacementAllocation = true;
+            try
+            {
+                return RequestReplacement(layout, extentEnvelope);
+            }
+            finally
+            {
+                _forceReplacementAllocation = false;
+            }
+        }
+    }
 
     /// <summary>
     /// Publishes the prepared generation atomically. The old generation is
@@ -390,7 +416,9 @@ public sealed class SimpleDdgiNearFieldResidualGenerationTransaction<TResources>
                 }
                 _backend.Destroy(_retired);
                 _retired = null;
-                _state = "active-history-invalid";
+                _state = _active is null && _canonicalFallbackRequired
+                    ? "terminal-retirement-complete"
+                    : "active-history-invalid";
             }
 
             if (_retired is null && _pending is null && _hasQueuedLayout)
@@ -420,6 +448,89 @@ public sealed class SimpleDdgiNearFieldResidualGenerationTransaction<TResources>
         {
             return !_disposed && !_canonicalFallbackRequired &&
                 _active is { } active && active.Layout.Equals(liveLayout);
+        }
+    }
+
+    /// <summary>
+    /// Suppresses execution and moves the active generation into the ordinary
+    /// fence retirement queue. The caller retries after polling if an older
+    /// hot-swap retiree still occupies the single bounded slot.
+    /// </summary>
+    public bool TryBeginTerminalRetirement(
+        ulong currentFrame,
+        out string failure)
+    {
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (_pending is not null)
+            {
+                _backend.Destroy(_pending);
+                _pending = null;
+            }
+            _hasQueuedLayout = false;
+            _queuedLayout = default;
+            _canonicalFallbackRequired = true;
+
+            if (_active is null)
+            {
+                _state = _retired is null
+                    ? "terminal-retirement-complete"
+                    : "terminal-retirement-pending";
+                failure = "valid";
+                return true;
+            }
+            if (_retired is not null || !_retirement.IsEmpty)
+            {
+                _state = "terminal-retirement-slot-occupied";
+                failure = _state;
+                return false;
+            }
+
+            SimpleDdgiNearFieldResidualGenerationAllocation<TResources>
+                active = _active;
+            _active = null;
+            ulong fenceValue = _greatestActiveReferenceFenceValue;
+            _greatestActiveReferenceFenceValue = 0UL;
+            if (fenceValue == 0UL)
+            {
+                _backend.Destroy(active);
+                _state = "terminal-retirement-complete";
+                failure = "valid";
+                return true;
+            }
+
+            var record = new GpuRetirementRecord(
+                active.Generation,
+                active.AllocatedBytes,
+                currentFrame,
+                GpuCompletionToken.ForFrameFence(fenceValue),
+                new GpuRetirementResource(
+                    GpuRetirementResourceKind.Allocation,
+                    active.Generation));
+            if (!_retirement.TryEnqueue(
+                    record,
+                    liveBytes: 0UL,
+                    out GpuRetirementAdmissionFailure admissionFailure))
+            {
+                _active = active;
+                _greatestActiveReferenceFenceValue = fenceValue;
+                failure = admissionFailure switch
+                {
+                    GpuRetirementAdmissionFailure.MemoryBudget =>
+                        "terminal-retirement-peak-budget-exceeded",
+                    GpuRetirementAdmissionFailure.Capacity =>
+                        "terminal-retirement-slot-occupied",
+                    _ => "terminal-retirement-admission-invalid"
+                };
+                _state = failure;
+                return false;
+            }
+
+            _retired = active;
+            _state = "terminal-retirement-pending";
+            failure = "valid";
+            return true;
         }
     }
 

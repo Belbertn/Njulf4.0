@@ -185,13 +185,15 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuIntegrationCapabilit
     bool DeviceLimitsAndActualAllocationRequirementsValidated = false)
 {
     public bool PreparePassRegistered { get; init; }
+    public bool FinalizePassRegistered { get; init; }
     public bool FrequencySeparationPassRegistered { get; init; }
     public bool IndirectDispatchContractValidated { get; init; }
     public bool SurfaceTableAvailable { get; init; }
 
     public bool IsReady => TracePassRegistered && TemporalPassRegistered &&
         FilterPassRegistered && CompositePassRegistered && ResetPassRegistered &&
-        PreparePassRegistered && FrequencySeparationPassRegistered &&
+        PreparePassRegistered && FinalizePassRegistered &&
+        FrequencySeparationPassRegistered &&
         IndirectDispatchContractValidated && SurfaceTableAvailable &&
         DirectDiffuseEmissiveAttachmentAvailable && HiZAvailable &&
         ReceiverMetadataAvailable && StableSampleRayInputAvailable &&
@@ -219,6 +221,8 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuIntegrationCapabilit
             }
             if (!PreparePassRegistered)
                 return "near-field-prepare-pass-not-integrated";
+            if (!FinalizePassRegistered)
+                return "near-field-finalize-pass-not-integrated";
             if (!FrequencySeparationPassRegistered)
                 return "near-field-frequency-separation-pass-not-integrated";
             if (!IndirectDispatchContractValidated)

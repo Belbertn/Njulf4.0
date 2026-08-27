@@ -158,11 +158,12 @@ foreach ($moduleName in $receiverModuleNames) {
     # Three optimized gather sites share the lock-free epoch marker, deduplicated
     # receiver-demand claim, overflow rollback, exact fixed-summary counters,
     # and one B1 interpolation-mass accumulation each. Transparent receivers
-    # append four sparse scene-reflection source estimates without changing the
-    # DDGI receiver protocol itself.
+    # append sparse source estimates plus exact SSR admission, reservation,
+    # sampling, and hit-budget evidence without changing the DDGI receiver
+    # protocol itself.
     $expectedAtomicAdds = if (
         $transparentReflectionTelemetryModuleNames -contains $moduleName) {
-        18
+        26
     } else {
         14
     }

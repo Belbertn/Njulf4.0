@@ -17,10 +17,11 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     /// Increment when any C5 GPU field, binding meaning, source ownership rule,
     /// or history-reuse rule changes.
     /// </summary>
-    // V12 is the production SSGI-v2 contract: prepared receivers, two-bank
-    // 48-byte hit metadata, structural reprojection, indirect execution and
-    // B3-frequency-separated reconstruction.
-    public const uint Version = 0x4335_000Cu;
+    // V13 makes the per-tile stream authoritative. A dedicated finalize
+    // dispatch reduces complete trace/temporal records into the header and
+    // publishes the completion marker last. It also separates estimator
+    // proposals from rays that actually entered the Hi-Z traversal.
+    public const uint Version = 0x4335_000Du;
 
     public const uint DirectDiffuseTraceSourceTerm = 1u << 0;
     public const uint EmissiveTraceSourceTerm = 1u << 1;
@@ -30,25 +31,35 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     public const uint HitMetadataByteCount = 48u;
     public const uint TraceFrameConstantsByteCount = 288u;
     public const uint TelemetryMagic = 0x4335_544Du;
-    public const uint TelemetryHeaderByteCount = 96u;
+    public const uint TelemetryHeaderByteCount = 128u;
     public const uint TelemetryHeaderWordCount = TelemetryHeaderByteCount / 4u;
-    // The first cache line retains trace/history/energy aggregates. Four
-    // additional words publish diagnostics-v3's independent receiver/hit
-    // identity/revision and source-reactive rejection counters.
-    public const uint TileRecordByteCount = 80u;
+    // The first twenty words retain the diagnostics-v3 payload. The appended
+    // words carry bounded per-tile proposal/traversal evidence consumed by the
+    // final reduction pass; two words remain reserved and must stay zero.
+    public const uint TileRecordByteCount = 96u;
     public const uint TileRecordWordCount = TileRecordByteCount / 4u;
     public const uint TelemetryTraceCompleteBit = 1u << 0;
     public const uint TelemetryTemporalCompleteBit = 1u << 1;
     public const uint TelemetryRequiredCompletionMask =
         TelemetryTraceCompleteBit | TelemetryTemporalCompleteBit;
+    public const uint TelemetryTraceRecordOverflowBit = 1u << 0;
+    public const uint TelemetryTemporalRecordOverflowBit = 1u << 1;
+    public const uint TelemetryTemporalRecordIdentityMismatchBit = 1u << 2;
+    public const uint TelemetryFinalizeRecordInvalidBit = 1u << 16;
+    public const uint TelemetryKnownOverflowFlags =
+        TelemetryTraceRecordOverflowBit |
+        TelemetryTemporalRecordOverflowBit |
+        TelemetryTemporalRecordIdentityMismatchBit |
+        TelemetryFinalizeRecordInvalidBit;
     public const uint ResetPushConstantByteCount = 32u;
+    public const uint FinalizePushConstantByteCount = 16u;
     public const uint TracePushConstantByteCount = 84u;
     public const uint TemporalPushConstantByteCount = 96u;
     public const uint FilterPushConstantByteCount = 48u;
     public const uint CompositePushConstantByteCount = 48u;
 
     public const uint MaximumTraceSteps = 256u;
-    // Retained only for managed source compatibility. V12 has no independent
+    // Retained only for managed source compatibility. V13 has no independent
     // mip-visit termination budget; each hierarchy sample consumes one trace
     // step. The telemetry peak is a saturating six-bit diagnostic.
     public const uint MaximumMipVisits = 32u;
@@ -85,8 +96,9 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     /// receiver metadata, and final canonical scene-color descriptors are
     /// externally owned by the renderer integration.
     /// </summary>
-    // V12 removes the third hit-metadata descriptor and adds four prepared
-    // receiver images, the frame-buffered surface table, and the compacted
+    // V13 retains the existing descriptor layout: no third hit-metadata
+    // descriptor, plus four prepared receiver images, the frame-buffered
+    // surface table, and the compacted
     // active-tile/indirect arena: 17 - 1 + 6 = 22.
     public const uint BaseOwnedDescriptorCount = 22u;
     public const uint FilterScratchDescriptorCount = 2u;
@@ -137,7 +149,9 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
             (nameof(GPUSimpleDdgiNearFieldResidualTelemetryHeader.RayHitCount), 40),
             (nameof(GPUSimpleDdgiNearFieldResidualTelemetryHeader.OverflowFlags), 60),
             (nameof(GPUSimpleDdgiNearFieldResidualTelemetryHeader.CandidateTileCount), 64),
-            (nameof(GPUSimpleDdgiNearFieldResidualTelemetryHeader.OverflowTileCount), 80));
+            (nameof(GPUSimpleDdgiNearFieldResidualTelemetryHeader.OverflowTileCount), 80),
+            (nameof(GPUSimpleDdgiNearFieldResidualTelemetryHeader.ProposalSampleCount), 88),
+            (nameof(GPUSimpleDdgiNearFieldResidualTelemetryHeader.ValidSampleCount), 108));
         Verify<GPUSimpleDdgiNearFieldResidualTileRecord>(
             TileRecordByteCount,
             (nameof(GPUSimpleDdgiNearFieldResidualTileRecord.TileIndex), 0),
@@ -148,7 +162,15 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
             (nameof(GPUSimpleDdgiNearFieldResidualTileRecord.SignedResidualEnergyBits), 44),
             (nameof(GPUSimpleDdgiNearFieldResidualTileRecord.FlagsAndMaximumDistance), 60),
             (nameof(GPUSimpleDdgiNearFieldResidualTileRecord.DetailedHistoryCounts0), 64),
-            (nameof(GPUSimpleDdgiNearFieldResidualTileRecord.DetailedHistoryCounts3), 76));
+            (nameof(GPUSimpleDdgiNearFieldResidualTileRecord.ProposalCounts), 76),
+            (nameof(GPUSimpleDdgiNearFieldResidualTileRecord.HitAndValidSampleCounts), 84),
+            (nameof(GPUSimpleDdgiNearFieldResidualTileRecord.Reserved23), 92));
+        Verify<GPUSimpleDdgiNearFieldResidualFinalizePushConstants>(
+            FinalizePushConstantByteCount,
+            (nameof(GPUSimpleDdgiNearFieldResidualFinalizePushConstants.AbiVersion), 0),
+            (nameof(GPUSimpleDdgiNearFieldResidualFinalizePushConstants.TileCount), 4),
+            (nameof(GPUSimpleDdgiNearFieldResidualFinalizePushConstants.TraceWidth), 8),
+            (nameof(GPUSimpleDdgiNearFieldResidualFinalizePushConstants.TraceHeight), 12));
         Verify<GPUSimpleDdgiNearFieldResidualTracePushConstants>(
             TracePushConstantByteCount,
             (nameof(GPUSimpleDdgiNearFieldResidualTracePushConstants.AbiVersion), 0),
@@ -332,8 +354,8 @@ public struct GPUSimpleDdgiNearFieldResidualPreparePushConstants
     public uint IndirectStageCount;
 }
 
-/// <summary>Fixed 96-byte identity, trace, and compaction header.</summary>
-[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 96)]
+/// <summary>Fixed 128-byte identity, trace, compaction, and proposal header.</summary>
+[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 128)]
 public struct GPUSimpleDdgiNearFieldResidualTelemetryHeader
 {
     public uint Magic;
@@ -357,17 +379,25 @@ public struct GPUSimpleDdgiNearFieldResidualTelemetryHeader
     public uint CompactedTileCount;
     public uint EmptyTileCount;
     public uint OverflowTileCount;
-    public uint Reserved21;
-    public uint Reserved22;
-    public uint Reserved23;
+    public uint InvalidSurfacePixelCount;
+    public uint ProposalSampleCount;
+    public uint GuidedProposalSampleCount;
+    public uint GuidedValidSampleCount;
+    public uint GuidedZeroContributionSampleCount;
+    public uint CosineProposalSampleCount;
+    public uint ValidSampleCount;
+    public uint Reserved28;
+    public uint Reserved29;
+    public uint Reserved30;
+    public uint Reserved31;
 }
 
 /// <summary>
-/// Bounded per-tile trace/history/energy payload (20 uint words). Counts0..2
+/// Bounded per-tile trace/history/energy payload (24 uint words). Counts0..2
 /// each pack four unsigned byte counters from least- to most-significant byte.
 /// Visit totals and peaks use their documented bounded bit lanes.
 /// </summary>
-[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 80)]
+[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 96)]
 public struct GPUSimpleDdgiNearFieldResidualTileRecord
 {
     public uint TileIndex;
@@ -389,7 +419,21 @@ public struct GPUSimpleDdgiNearFieldResidualTileRecord
     public uint DetailedHistoryCounts0;
     public uint DetailedHistoryCounts1;
     public uint DetailedHistoryCounts2;
-    public uint DetailedHistoryCounts3;
+    public uint ProposalCounts;
+    public uint GuidedAndTraversalCounts;
+    public uint HitAndValidSampleCounts;
+    public uint Reserved22;
+    public uint Reserved23;
+}
+
+/// <summary>16-byte post-temporal telemetry reduction push block.</summary>
+[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 16)]
+public struct GPUSimpleDdgiNearFieldResidualFinalizePushConstants
+{
+    public uint AbiVersion;
+    public uint TileCount;
+    public uint TraceWidth;
+    public uint TraceHeight;
 }
 
 /// <summary>84-byte trace push block mirrored by ddgi_near_field_residual_trace.comp.</summary>
@@ -565,6 +609,8 @@ public static class SimpleDdgiNearFieldResidualGpuBindings
     public const uint TemporalCurrentFullPayload = 18u;
     public const uint TemporalFrameConstants = 19u;
     public const uint TemporalSurfaceTable = 20u;
+
+    public const uint FinalizeTileRecords = 0u;
 
     public const uint FilterInput = 0u;
     public const uint FilterMetadata = 1u;

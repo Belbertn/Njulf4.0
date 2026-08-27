@@ -23,6 +23,8 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
                 0L, 101L, true),
             new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
                 0L, 53L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Finalize,
+                0L, 7L, true),
             new PassTiming(
                 SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(0),
                 0L, 29L, true),
@@ -46,11 +48,49 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
             Assert.That(timings.PrepareCompactionMicroseconds, Is.EqualTo(24UL));
             Assert.That(timings.RawTraceMicroseconds, Is.EqualTo(101UL));
             Assert.That(timings.TemporalMicroseconds, Is.EqualTo(53UL));
+            Assert.That(timings.FinalizationMicroseconds, Is.EqualTo(7UL));
             Assert.That(timings.FilterMicroseconds, Is.EqualTo(52UL));
             Assert.That(timings.FrequencySeparationMicroseconds,
                 Is.EqualTo(19UL));
             Assert.That(timings.CompositeMicroseconds, Is.EqualTo(17UL));
-            Assert.That(timings.TotalMicroseconds, Is.EqualTo(266UL));
+            Assert.That(timings.TotalMicroseconds, Is.EqualTo(273UL));
+        });
+    }
+
+    [Test]
+    public void StageTimingJoin_AcceptsAvailableSubMicrosecondStages()
+    {
+        var snapshot = new FrameTimingSnapshot(
+        [
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Reset,
+                0L, 0L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Prepare,
+                0L, 4L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Trace,
+                0L, 101L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
+                0L, 53L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Finalize,
+                0L, 0L, true),
+            new PassTiming(
+                SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(0),
+                0L, 29L, true),
+            new PassTiming(
+                SimpleDdgiNearFieldResidualGpuPassNames.FrequencySeparation,
+                0L, 19L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Composite,
+                0L, 17L, true)
+        ]);
+
+        bool available = SimpleDdgiNearFieldResidualVulkanRuntime
+            .TryResolveStageTimings(snapshot, 1, out var timings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(available, Is.True);
+            Assert.That(timings.PrepareCompactionMicroseconds, Is.EqualTo(4UL));
+            Assert.That(timings.FinalizationMicroseconds, Is.Zero);
+            Assert.That(timings.TotalMicroseconds, Is.EqualTo(223UL));
         });
     }
 
@@ -67,6 +107,8 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
                 0L, 2L, true),
             new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
                 0L, 3L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Finalize,
+                0L, 1L, true),
             new PassTiming(
                 SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(0),
                 0L, 4L, true),
@@ -77,12 +119,21 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
                 0L, 5L, true)
         ]);
 
-        Assert.That(
-            SimpleDdgiNearFieldResidualVulkanRuntime.TryResolveStageTimings(
+        bool available = SimpleDdgiNearFieldResidualVulkanRuntime
+            .TryResolveStageTimings(
                 snapshot,
                 2,
-                out _),
-            Is.False);
+                calibratedSourceMicroseconds: 0UL,
+                sourceCostAuthoritative: false,
+                out _,
+                out string unavailablePass);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(available, Is.False);
+            Assert.That(unavailablePass, Is.EqualTo(
+                SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(1)));
+        });
     }
 
     [Test]
@@ -183,6 +234,54 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
     }
 
     [Test]
+    public void NewSubmission_PreservesLastAuthoritativeCommonFrameTimings()
+    {
+        var memory = new SimpleDdgiNearFieldResidualMemoryTelemetry(
+            1_024UL, 1_024UL, 992UL, 992UL, 0UL);
+        var timings = new SimpleDdgiNearFieldResidualStageTimings(
+            SourceMicroseconds: 0UL,
+            RawTraceMicroseconds: 101UL,
+            TemporalMicroseconds: 53UL,
+            FilterMicroseconds: 29UL,
+            CompositeMicroseconds: 17UL)
+        {
+            PrepareCompactionMicroseconds = 4UL,
+            FinalizationMicroseconds = 1UL,
+            FrequencySeparationMicroseconds = 19UL
+        };
+        SimpleDdgiNearFieldResidualDiagnostics authoritative =
+            SimpleDdgiNearFieldResidualDiagnostics.CreateAuthoritative(
+                completedFrameSerial: 17UL,
+                ageFrames: 0U,
+                memory,
+                timings,
+                SimpleDdgiNearFieldResidualTraceTelemetry.Empty,
+                SimpleDdgiNearFieldResidualHistoryTelemetry.Empty,
+                SimpleDdgiNearFieldResidualEnergyTelemetry.Empty,
+                SimpleDdgiNearFieldResidualTileTelemetry.Empty,
+                SimpleDdgiNearFieldResidualCaptureIdentifiers.None);
+
+        SimpleDdgiNearFieldResidualDiagnostics telemetry =
+            SimpleDdgiNearFieldResidualVulkanRuntime
+                .CreatePendingReadbackDiagnostics(
+                    authoritative,
+                    memory,
+                    pendingFrameSerial: 20UL);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(telemetry.Readback.State,
+                Is.EqualTo(SimpleDdgiNearFieldResidualReadbackState.Available));
+            Assert.That(telemetry.IsAuthoritativeReadback, Is.True);
+            Assert.That(telemetry.Readback.CompletedFrameSerial, Is.EqualTo(17UL));
+            Assert.That(telemetry.Readback.AgeFrames, Is.EqualTo(3U));
+            Assert.That(telemetry.Timings, Is.EqualTo(timings));
+            Assert.That(telemetry.Readback.Reason,
+                Does.Contain("newer frame is awaiting readback"));
+        });
+    }
+
+    [Test]
     public void FenceCompletionValidator_RequiresExactTileCoverageAndHeaderSums()
     {
         SimpleDdgiNearFieldResidualLayout layout =
@@ -235,6 +334,9 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
             uint halfDistance = BitConverter.HalfToUInt16Bits((Half)7.5f);
             words[word + 15] = halfDistance |
                 (SimpleDdgiNearFieldResidualGpuAbi.TelemetryRequiredCompletionMask << 16);
+            words[word + 19] = rays;
+            words[word + 20] = (rays << 9) | (rays << 18);
+            words[word + 21] = hits | (rays << 9);
             validSum += valid;
             invalidSum += invalid;
             raySum += rays;
@@ -263,6 +365,13 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         words[18] = 1U;
         words[19] = tileCount - 1U;
         words[20] = 0U;
+        words[21] = 0U;
+        words[22] = raySum;
+        words[23] = 0U;
+        words[24] = 0U;
+        words[25] = 0U;
+        words[26] = raySum;
+        words[27] = raySum;
 
         bool validReadback =
             SimpleDdgiNearFieldResidualCompletionValidator.TryValidate(
@@ -291,11 +400,26 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
                 Is.EqualTo(1.0 / 56.0).Within(1.0e-6));
         });
 
+        int firstTileWord = checked((int)
+            SimpleDdgiNearFieldResidualGpuAbi.TelemetryHeaderWordCount);
+        uint firstTileCompletion = words[firstTileWord + 15];
+        words[firstTileWord + 15] = 0U;
+        words[15] = SimpleDdgiNearFieldResidualGpuAbi
+            .TelemetryFinalizeRecordInvalidBit;
+        Assert.That(SimpleDdgiNearFieldResidualCompletionValidator.TryValidate(
+            words, layout, 17UL, out _, out reason), Is.False);
+        Assert.That(reason, Is.EqualTo(
+            "near-field-completion-finalize-record-count-mismatch:" +
+            "recorded=0;compacted=1;flags=0x00010000"));
+        words[firstTileWord + 15] = firstTileCompletion;
+        words[15] = 0U;
+
         words[8]--;
         Assert.That(SimpleDdgiNearFieldResidualCompletionValidator.TryValidate(
             words, layout, 17UL, out _, out reason), Is.False);
         Assert.That(reason, Is.EqualTo(
-            "near-field-completion-header-summary-mismatch"));
+            "near-field-completion-candidate-receivers-mismatch:" +
+            "header=63,tiles=64"));
     }
 
     private static uint PackTileCounts(uint x, uint y, uint z, uint w)

@@ -189,7 +189,7 @@ public sealed class SampleBistroQualityCaptureHarnessTests
     }
 
     [Test]
-    public void SchemaV8_SerializesDdgiAndSeparateProbeLifecycleEvidence()
+    public void SchemaV9_SerializesDdgiAndTransparentReflectionEvidence()
     {
         ReflectionProbeLifecycleFrameSnapshot current =
             CreateReflectionLifecycleFrame(
@@ -263,9 +263,9 @@ public sealed class SampleBistroQualityCaptureHarnessTests
         Assert.Multiple(() =>
         {
             Assert.That(SampleBistroQualityCaptureContract.Schema,
-                Is.EqualTo("bistro-quality-run/v8"));
+                Is.EqualTo("bistro-quality-run/v9"));
             Assert.That(document.RootElement.GetProperty("Schema").GetString(),
-                Is.EqualTo("bistro-quality-run/v8"));
+                Is.EqualTo("bistro-quality-run/v9"));
             Assert.That(frame.ReflectionProbeCurrentLifecycle, Is.EqualTo(current));
             Assert.That(frame.ReflectionProbeCompletedLifecycle, Is.EqualTo(completed));
             Assert.That(frame.ReflectionProbeCurrentCaptureBudget, Is.EqualTo(budget));

@@ -151,7 +151,11 @@ namespace Njulf.Rendering.Data
                     0)),
                 RayQueryHitLightLimit = checked((uint)Math.Max(
                     0,
-                    settings.RayQueryHitLightLimit))
+                    settings.RayQueryHitLightLimit)),
+                SceneReflectionSsrSampleBudget = checked((uint)Math.Max(
+                    0,
+                    transparencySettings?.SceneReflectionSsrSampleBudget ??
+                    0))
             };
         }
 

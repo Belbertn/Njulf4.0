@@ -45,7 +45,8 @@ namespace Njulf.Tests
             };
             var transparency = new TransparencySettings
             {
-                SceneReflectionRayTaskBudget = 98_304
+                SceneReflectionRayTaskBudget = 98_304,
+                SceneReflectionSsrSampleBudget = 7_340_032
             };
 
             GPUReflectionProbeHeader header = ReflectionProbeData.BuildHeader(
@@ -75,6 +76,8 @@ namespace Njulf.Tests
                 Assert.That(header.SceneReflectionRayTaskBudget,
                     Is.EqualTo(98_304u));
                 Assert.That(header.RayQueryHitLightLimit, Is.EqualTo(5u));
+                Assert.That(header.SceneReflectionSsrSampleBudget,
+                    Is.EqualTo(7_340_032u));
             });
         }
 

@@ -1,12 +1,13 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Njulf.Rendering.Data;
 
 namespace NjulfHelloGame;
 
 public sealed record SampleBistroReflectionQualificationResult
 {
-    public const string CurrentSchema = "bistro-reflection-qualification/v1";
+    public const string CurrentSchema = "bistro-reflection-qualification/v2";
 
     public string Schema { get; init; } = CurrentSchema;
     public bool Passed { get; init; }
@@ -27,6 +28,17 @@ public sealed record SampleBistroReflectionQualificationResult
     public ulong DdgiFallbackCount { get; init; }
     public ulong ProbeFallbackCount { get; init; }
     public ulong EnvironmentFallbackCount { get; init; }
+    public int SortedAlphaTelemetryFrameCount { get; init; }
+    public int WeightedOitTelemetryFrameCount { get; init; }
+    public ulong TransparentSsrEligibleCount { get; init; }
+    public ulong TransparentSsrAdmittedCount { get; init; }
+    public ulong TransparentSsrReservedSampleCount { get; init; }
+    public ulong TransparentSsrActualSampleCount { get; init; }
+    public ulong TransparentSsrHitCount { get; init; }
+    public ulong TransparentSsrBudgetRejectedCount { get; init; }
+    public ulong TransparentRayRequestCount { get; init; }
+    public ulong TransparentRayAdmittedCount { get; init; }
+    public ulong TransparentRayBudgetRejectedCount { get; init; }
     public long SsrGpuMicroseconds { get; init; }
     public long RayQueryGpuMicroseconds { get; init; }
     public long DdgiBaseGpuMicroseconds { get; init; }
@@ -50,6 +62,10 @@ public static class SampleBistroReflectionQualification
     private const int OnFirstFrame = 68;
     private const int OnLastFrame = 175;
     private const int LateOffFirstFrame = 185;
+    private const int SortedAlphaStableFirstFrame = 8;
+    private const int SortedAlphaStableLastFrame = 111;
+    private const int WeightedOitStableFirstFrame = 128;
+    private const int WeightedOitStableLastFrame = 231;
     private static readonly string[] ExpectedArtifacts =
     [
         "000-beauty",
@@ -123,7 +139,8 @@ public static class SampleBistroReflectionQualification
                 SampleBistroQualityCaptureContract.FirstMeasuredFrame + index);
             if (frame.AbsoluteFrameIndex != expected.AbsoluteFrameIndex ||
                 frame.LoopFrameIndex != expected.LoopFrameIndex ||
-                frame.HybridRayQueryEnabled != expected.HybridRayQueryEnabled)
+                frame.HybridRayQueryEnabled != expected.HybridRayQueryEnabled ||
+                frame.TransparencyMode != expected.TransparencyMode)
             {
                 failures.Add(
                     $"Frame {index} does not match the deterministic " +
@@ -256,6 +273,25 @@ public static class SampleBistroReflectionQualification
                 "recorded no GPU work.");
         }
 
+        SampleBistroQualityFrameTelemetry[] sortedAlpha = valid
+            .Where(static frame =>
+                frame.LoopFrameIndex >= SortedAlphaStableFirstFrame &&
+                frame.LoopFrameIndex <= SortedAlphaStableLastFrame &&
+                frame.TransparencyMode == TransparencyMode.SortedAlphaBlend)
+            .ToArray();
+        SampleBistroQualityFrameTelemetry[] weightedOit = valid
+            .Where(static frame =>
+                frame.LoopFrameIndex >= WeightedOitStableFirstFrame &&
+                frame.LoopFrameIndex <= WeightedOitStableLastFrame &&
+                frame.TransparencyMode == TransparencyMode.WeightedBlendedOit)
+            .ToArray();
+        TransparentBranchEvidence sortedEvidence =
+            ValidateTransparentBranch(sortedAlpha, "sorted-alpha", failures);
+        TransparentBranchEvidence weightedEvidence =
+            ValidateTransparentBranch(weightedOit, "weighted-OIT", failures);
+        TransparentBranchEvidence transparentEvidence =
+            sortedEvidence + weightedEvidence;
+
         ValidateArtifacts(report.Artifacts ?? [], runDirectory, failures);
 
         return new SampleBistroReflectionQualificationResult
@@ -281,6 +317,21 @@ public static class SampleBistroReflectionQualification
             DdgiFallbackCount = ddgiFallbacks,
             ProbeFallbackCount = probeFallbacks,
             EnvironmentFallbackCount = environmentFallbacks,
+            SortedAlphaTelemetryFrameCount = sortedAlpha.Length,
+            WeightedOitTelemetryFrameCount = weightedOit.Length,
+            TransparentSsrEligibleCount = transparentEvidence.SsrEligible,
+            TransparentSsrAdmittedCount = transparentEvidence.SsrAdmitted,
+            TransparentSsrReservedSampleCount =
+                transparentEvidence.SsrReservedSamples,
+            TransparentSsrActualSampleCount =
+                transparentEvidence.SsrActualSamples,
+            TransparentSsrHitCount = transparentEvidence.SsrHits,
+            TransparentSsrBudgetRejectedCount =
+                transparentEvidence.SsrBudgetRejected,
+            TransparentRayRequestCount = transparentEvidence.RayRequests,
+            TransparentRayAdmittedCount = transparentEvidence.RayAdmitted,
+            TransparentRayBudgetRejectedCount =
+                transparentEvidence.RayBudgetRejected,
             SsrGpuMicroseconds = ssrGpu,
             RayQueryGpuMicroseconds = rayGpu,
             DdgiBaseGpuMicroseconds = ddgiGpu,
@@ -290,6 +341,106 @@ public static class SampleBistroReflectionQualification
             CompositeGpuMicroseconds = compositeGpu,
             Failures = failures.ToArray()
         };
+    }
+
+    private static TransparentBranchEvidence ValidateTransparentBranch(
+        IReadOnlyList<SampleBistroQualityFrameTelemetry> frames,
+        string label,
+        ICollection<string> failures)
+    {
+        if (frames.Count == 0)
+        {
+            failures.Add($"The stable {label} transparency window is empty.");
+            return default;
+        }
+
+        foreach (SampleBistroQualityFrameTelemetry frame in frames)
+        {
+            ulong eligible = frame.TransparentReflectionExactSsrEligibleCount;
+            ulong admitted = frame.TransparentReflectionExactSsrAdmittedCount;
+            ulong rejected =
+                frame.TransparentReflectionExactSsrBudgetRejectedCount;
+            ulong reserved =
+                frame.TransparentReflectionExactSsrReservedSampleCount;
+            ulong actual = frame.TransparentReflectionExactSsrActualSampleCount;
+            ulong hits = frame.TransparentReflectionExactSsrHitCount;
+            ulong rayRequests = frame.TransparentReflectionRayRequestCount;
+            ulong rayAdmitted =
+                frame.TransparentReflectionExactRayAdmittedCount;
+            ulong rayRejected =
+                frame.TransparentReflectionExactRayBudgetRejectedCount;
+            if (frame.TransparentSceneReflectionSsrSampleBudget <= 0 ||
+                eligible != admitted + rejected ||
+                actual > reserved ||
+                reserved >
+                    (ulong)frame.TransparentSceneReflectionSsrSampleBudget ||
+                hits > admitted ||
+                rayRequests != rayAdmitted + rayRejected)
+            {
+                failures.Add(
+                    $"The {label} transparent reflection counters are " +
+                    $"inconsistent at loop frame {frame.LoopFrameIndex}.");
+                break;
+            }
+        }
+
+        var evidence = new TransparentBranchEvidence(
+            Sum(frames, static frame =>
+                frame.TransparentReflectionExactSsrEligibleCount),
+            Sum(frames, static frame =>
+                frame.TransparentReflectionExactSsrAdmittedCount),
+            Sum(frames, static frame =>
+                frame.TransparentReflectionExactSsrReservedSampleCount),
+            Sum(frames, static frame =>
+                frame.TransparentReflectionExactSsrActualSampleCount),
+            Sum(frames, static frame =>
+                frame.TransparentReflectionExactSsrHitCount),
+            Sum(frames, static frame =>
+                frame.TransparentReflectionExactSsrBudgetRejectedCount),
+            Sum(frames, static frame =>
+                frame.TransparentReflectionRayRequestCount),
+            Sum(frames, static frame =>
+                frame.TransparentReflectionExactRayAdmittedCount),
+            Sum(frames, static frame =>
+                frame.TransparentReflectionExactRayBudgetRejectedCount));
+        if (evidence.SsrEligible == 0 || evidence.SsrAdmitted == 0 ||
+            evidence.SsrReservedSamples == 0 ||
+            evidence.SsrActualSamples == 0 || evidence.SsrHits == 0)
+        {
+            failures.Add(
+                $"The {label} path produced no useful transparent SSR work.");
+        }
+        if (evidence.RayRequests == 0 || evidence.RayAdmitted == 0)
+        {
+            failures.Add(
+                $"The {label} path produced no admitted transparent ray work.");
+        }
+        return evidence;
+    }
+
+    private readonly record struct TransparentBranchEvidence(
+        ulong SsrEligible,
+        ulong SsrAdmitted,
+        ulong SsrReservedSamples,
+        ulong SsrActualSamples,
+        ulong SsrHits,
+        ulong SsrBudgetRejected,
+        ulong RayRequests,
+        ulong RayAdmitted,
+        ulong RayBudgetRejected)
+    {
+        public static TransparentBranchEvidence operator +(
+            TransparentBranchEvidence left,
+            TransparentBranchEvidence right) => new(
+                checked(left.SsrEligible + right.SsrEligible),
+                checked(left.SsrAdmitted + right.SsrAdmitted),
+                checked(left.SsrReservedSamples + right.SsrReservedSamples),
+                checked(left.SsrActualSamples + right.SsrActualSamples),
+                checked(left.SsrHits + right.SsrHits),
+                checked(left.SsrBudgetRejected + right.SsrBudgetRejected),
+                checked(left.RayRequests + right.RayRequests),
+                checked(left.RayAdmitted + right.RayAdmitted),
+                checked(left.RayBudgetRejected + right.RayBudgetRejected));
     }
 
     private static void ValidateArtifacts(

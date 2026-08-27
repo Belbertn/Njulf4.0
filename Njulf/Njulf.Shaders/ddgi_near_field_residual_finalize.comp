@@ -1,0 +1,205 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_near_field_residual.glsl"
+
+// One workgroup performs the final integer reduction. Every earlier C5 stage
+// is separated from this dispatch by a compute-write barrier, so the complete
+// tile stream is immutable here. The completion word is deliberately written
+// only after every summary word has been published.
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) buffer FinalizeTileRecordsBuffer
+{
+    uint words[];
+} finalizeTileRecords;
+
+layout(push_constant) uniform NearFieldFinalizePushBlock
+{
+    SimpleDdgiNearFieldResidualFinalizePushConstants pc;
+};
+
+const uint C5_FINALIZE_RECORDED_TILES = 0u;
+const uint C5_FINALIZE_COVERED_RECEIVERS = 1u;
+const uint C5_FINALIZE_TRACED_RAYS = 2u;
+const uint C5_FINALIZE_RAY_HITS = 3u;
+const uint C5_FINALIZE_INVALID_RECEIVERS = 4u;
+const uint C5_FINALIZE_INVALID_RAYS = 5u;
+const uint C5_FINALIZE_INVALID_CANDIDATES = 6u;
+const uint C5_FINALIZE_PROPOSALS = 7u;
+const uint C5_FINALIZE_GUIDED_PROPOSALS = 8u;
+const uint C5_FINALIZE_GUIDED_VALID = 9u;
+const uint C5_FINALIZE_GUIDED_ZERO = 10u;
+const uint C5_FINALIZE_COSINE_PROPOSALS = 11u;
+const uint C5_FINALIZE_VALID_SAMPLES = 12u;
+const uint C5_FINALIZE_INVALID_RECORDS = 13u;
+const uint C5_FINALIZE_SUM_COUNT = 14u;
+const uint C5_FINALIZE_LANE_COUNT = 128u;
+
+shared uint c5FinalizeLaneSums[
+    C5_FINALIZE_LANE_COUNT * C5_FINALIZE_SUM_COUNT];
+
+uint C5UnpackNine(uint packed, uint lane)
+{
+    return (packed >> (lane * 9u)) & 0x1ffu;
+}
+
+void main()
+{
+    uint lane = gl_LocalInvocationIndex;
+    uint wordLength = uint(finalizeTileRecords.words.length());
+    if (pc.abiVersion != SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION ||
+        wordLength < SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS)
+        return;
+
+    uint laneSums[C5_FINALIZE_SUM_COUNT];
+    for (uint sumIndex = 0u; sumIndex < C5_FINALIZE_SUM_COUNT; ++sumIndex)
+        laneSums[sumIndex] = 0u;
+
+    for (uint tileIndex = lane;
+         tileIndex < pc.tileCount;
+         tileIndex += gl_WorkGroupSize.x)
+    {
+        uint recordBase = SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS +
+            tileIndex * SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS;
+        if (recordBase > wordLength ||
+            SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS >
+                wordLength - recordBase)
+        {
+            laneSums[C5_FINALIZE_INVALID_RECORDS]++;
+            continue;
+        }
+
+        uint completion = finalizeTileRecords.words[recordBase + 15u] >> 16u;
+        if (completion == 0u)
+            continue;
+        if ((completion &
+                (SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE |
+                 SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TEMPORAL_COMPLETE)) !=
+                (SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE |
+                 SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TEMPORAL_COMPLETE) ||
+            finalizeTileRecords.words[recordBase] != tileIndex ||
+            finalizeTileRecords.words[recordBase + 22u] != 0u ||
+            finalizeTileRecords.words[recordBase + 23u] != 0u)
+        {
+            laneSums[C5_FINALIZE_INVALID_RECORDS]++;
+            continue;
+        }
+
+        uint traceCounts0 = finalizeTileRecords.words[recordBase + 1u];
+        uint covered = traceCounts0 & 0x7fu;
+        uint invalidCandidates = (traceCounts0 >> 14u) & 0x7fu;
+        uint tracedRays = (traceCounts0 >> 21u) & 0x1ffu;
+        uint invalidReceivers =
+            (finalizeTileRecords.words[recordBase + 2u] >> 8u) & 0xffu;
+        uint invalidRays =
+            (finalizeTileRecords.words[recordBase + 2u] >> 16u) & 0xffu;
+        uint proposalCounts = finalizeTileRecords.words[recordBase + 19u];
+        uint guidedAndTraversal =
+            finalizeTileRecords.words[recordBase + 20u];
+        uint hitAndValid = finalizeTileRecords.words[recordBase + 21u];
+        uint proposals = C5UnpackNine(proposalCounts, 0u);
+        uint guidedProposals = C5UnpackNine(proposalCounts, 1u);
+        uint guidedValid = C5UnpackNine(proposalCounts, 2u);
+        uint guidedZero = C5UnpackNine(guidedAndTraversal, 0u);
+        uint cosineProposals = C5UnpackNine(guidedAndTraversal, 1u);
+        uint independentlyPackedTraced =
+            C5UnpackNine(guidedAndTraversal, 2u);
+        uint hits = C5UnpackNine(hitAndValid, 0u);
+        uint validSamples = C5UnpackNine(hitAndValid, 1u);
+        if (independentlyPackedTraced != tracedRays ||
+            guidedProposals + cosineProposals != proposals ||
+            guidedValid > guidedProposals || guidedZero > guidedValid ||
+            validSamples > proposals || tracedRays > proposals ||
+            hits > tracedRays)
+        {
+            laneSums[C5_FINALIZE_INVALID_RECORDS]++;
+            continue;
+        }
+
+        laneSums[C5_FINALIZE_RECORDED_TILES]++;
+        laneSums[C5_FINALIZE_COVERED_RECEIVERS] += covered;
+        laneSums[C5_FINALIZE_TRACED_RAYS] += tracedRays;
+        laneSums[C5_FINALIZE_RAY_HITS] += hits;
+        laneSums[C5_FINALIZE_INVALID_RECEIVERS] += invalidReceivers;
+        laneSums[C5_FINALIZE_INVALID_RAYS] += invalidRays;
+        laneSums[C5_FINALIZE_INVALID_CANDIDATES] += invalidCandidates;
+        laneSums[C5_FINALIZE_PROPOSALS] += proposals;
+        laneSums[C5_FINALIZE_GUIDED_PROPOSALS] += guidedProposals;
+        laneSums[C5_FINALIZE_GUIDED_VALID] += guidedValid;
+        laneSums[C5_FINALIZE_GUIDED_ZERO] += guidedZero;
+        laneSums[C5_FINALIZE_COSINE_PROPOSALS] += cosineProposals;
+        laneSums[C5_FINALIZE_VALID_SAMPLES] += validSamples;
+    }
+
+    uint laneBase = lane * C5_FINALIZE_SUM_COUNT;
+    for (uint sumIndex = 0u; sumIndex < C5_FINALIZE_SUM_COUNT; ++sumIndex)
+        c5FinalizeLaneSums[laneBase + sumIndex] = laneSums[sumIndex];
+    barrier();
+
+    for (uint stride = C5_FINALIZE_LANE_COUNT >> 1u;
+         stride > 0u;
+         stride >>= 1u)
+    {
+        if (lane < stride)
+        {
+            uint sourceBase = (lane + stride) * C5_FINALIZE_SUM_COUNT;
+            for (uint sumIndex = 0u;
+                 sumIndex < C5_FINALIZE_SUM_COUNT;
+                 ++sumIndex)
+            {
+                c5FinalizeLaneSums[laneBase + sumIndex] +=
+                    c5FinalizeLaneSums[sourceBase + sumIndex];
+            }
+        }
+        barrier();
+    }
+
+    if (lane != 0u)
+        return;
+
+    uint compactedTiles = finalizeTileRecords.words[18u];
+    bool complete =
+        c5FinalizeLaneSums[C5_FINALIZE_INVALID_RECORDS] == 0u &&
+        c5FinalizeLaneSums[C5_FINALIZE_RECORDED_TILES] == compactedTiles;
+    uint tracedRays = c5FinalizeLaneSums[C5_FINALIZE_TRACED_RAYS];
+    uint hits = c5FinalizeLaneSums[C5_FINALIZE_RAY_HITS];
+
+    finalizeTileRecords.words[4u] = pc.traceWidth;
+    finalizeTileRecords.words[5u] = pc.traceHeight;
+    finalizeTileRecords.words[8u] =
+        c5FinalizeLaneSums[C5_FINALIZE_COVERED_RECEIVERS];
+    finalizeTileRecords.words[9u] = tracedRays;
+    finalizeTileRecords.words[10u] = hits;
+    finalizeTileRecords.words[11u] = tracedRays - min(tracedRays, hits);
+    finalizeTileRecords.words[12u] =
+        c5FinalizeLaneSums[C5_FINALIZE_INVALID_RECEIVERS];
+    finalizeTileRecords.words[13u] =
+        c5FinalizeLaneSums[C5_FINALIZE_INVALID_RAYS];
+    finalizeTileRecords.words[14u] =
+        c5FinalizeLaneSums[C5_FINALIZE_INVALID_CANDIDATES];
+    finalizeTileRecords.words[22u] =
+        c5FinalizeLaneSums[C5_FINALIZE_PROPOSALS];
+    finalizeTileRecords.words[23u] =
+        c5FinalizeLaneSums[C5_FINALIZE_GUIDED_PROPOSALS];
+    finalizeTileRecords.words[24u] =
+        c5FinalizeLaneSums[C5_FINALIZE_GUIDED_VALID];
+    finalizeTileRecords.words[25u] =
+        c5FinalizeLaneSums[C5_FINALIZE_GUIDED_ZERO];
+    finalizeTileRecords.words[26u] =
+        c5FinalizeLaneSums[C5_FINALIZE_COSINE_PROPOSALS];
+    finalizeTileRecords.words[27u] =
+        c5FinalizeLaneSums[C5_FINALIZE_VALID_SAMPLES];
+    finalizeTileRecords.words[28u] = 0u;
+    finalizeTileRecords.words[29u] = 0u;
+    finalizeTileRecords.words[30u] = 0u;
+    finalizeTileRecords.words[31u] = 0u;
+    if (!complete)
+        finalizeTileRecords.words[15u] |= 1u << 16u;
+
+    memoryBarrierBuffer();
+    finalizeTileRecords.words[7u] = complete && compactedTiles != 0u
+        ? SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE |
+          SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TEMPORAL_COMPLETE
+        : 0u;
+}

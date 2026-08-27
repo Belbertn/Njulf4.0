@@ -158,7 +158,7 @@ namespace Njulf.Rendering.Pipeline
         DirectionalShadowScratch,
         DirectionalShadowDiagnostics,
         DirectionalShadowCounters,
-        // C5 V12 append-only resources.
+        // C5 V13 append-only resources.
         NearFieldPreparedDepthFootprint,
         NearFieldPreparedReceiverPayload,
         NearFieldPreparedMotion,

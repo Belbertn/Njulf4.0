@@ -114,11 +114,19 @@ namespace Njulf.Rendering.Debug
                 ulong* timestamps = passQuery.Queue == TimestampQueue.Compute ? computeTimestamps : graphicsTimestamps;
                 ulong start = timestamps[passQuery.StartQuery];
                 ulong end = timestamps[passQuery.EndQuery];
-                long gpuMicroseconds = FrameTimingSnapshot.ConvertTimestampDeltaToMicroseconds(
+                bool gpuAvailable = FrameTimingSnapshot.TryConvertTimestampDeltaToMicroseconds(
                     start,
                     end,
-                    _context.TimestampPeriodNanoseconds);
-                timings.Add(new PassTiming(passQuery.Name, 0, gpuMicroseconds, gpuMicroseconds > 0));
+                    _context.TimestampPeriodNanoseconds,
+                    out long gpuMicroseconds);
+                // A positive timestamp delta can legitimately round to 0 us.
+                // Availability describes whether the query completed, not the
+                // display precision of its converted duration.
+                timings.Add(new PassTiming(
+                    passQuery.Name,
+                    0,
+                    gpuMicroseconds,
+                    gpuAvailable));
             }
 
             _completedSnapshots[frameIndex] = new FrameTimingSnapshot(timings);

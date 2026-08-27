@@ -401,7 +401,12 @@ internal sealed class SampleDiagnosticsReporter
         Console.WriteLine(
             $"Frame diagnostics transparent reflections: enabled={diagnostics.TransparentSampleReflections}, snapshot={diagnostics.OpaqueSceneColorSnapshotAvailable}, " +
             $"receivers={diagnostics.TransparentReflectionReceiverObjectCount}/{diagnostics.TransparentReflectionReceiverMeshletCount}, " +
-            $"rayBudget={diagnostics.TransparentSceneReflectionRayTaskBudget}, rayRequests={diagnostics.TransparentReflectionRayRequestCount}, " +
+            $"ssrSampleBudget={diagnostics.TransparentSceneReflectionSsrSampleBudget}, rayBudget={diagnostics.TransparentSceneReflectionRayTaskBudget}, " +
+            $"exactSsr=eligible:{diagnostics.TransparentReflectionExactSsrEligibleCount},admitted:{diagnostics.TransparentReflectionExactSsrAdmittedCount}," +
+            $"reserved:{diagnostics.TransparentReflectionExactSsrReservedSampleCount},actual:{diagnostics.TransparentReflectionExactSsrActualSampleCount}," +
+            $"hits:{diagnostics.TransparentReflectionExactSsrHitCount},rejected:{diagnostics.TransparentReflectionExactSsrBudgetRejectedCount}, " +
+            $"exactRays=requested:{diagnostics.TransparentReflectionRayRequestCount},admitted:{diagnostics.TransparentReflectionExactRayAdmittedCount}," +
+            $"rejected:{diagnostics.TransparentReflectionExactRayBudgetRejectedCount}, " +
             $"estimatedSources=ssr:{diagnostics.TransparentReflectionEstimatedSsrHitCount},rayHit:{diagnostics.TransparentReflectionEstimatedRayHitCount}," +
             $"rayMiss:{diagnostics.TransparentReflectionEstimatedRayMissCount},budgetReject:{diagnostics.TransparentReflectionEstimatedBudgetRejectedCount}," +
             $"ddgi:{diagnostics.TransparentReflectionEstimatedDdgiFallbackCount},probe:{diagnostics.TransparentReflectionEstimatedProbeFallbackCount}," +
@@ -658,21 +663,38 @@ internal sealed class SampleDiagnosticsReporter
             $"{nearFieldResidual.Memory.AllocatedBytes}/" +
             $"{nearFieldResidual.Memory.PeakAllocatedBytes}/" +
             $"{nearFieldResidual.Memory.RetiredBytes}, " +
-            $"us source/trace/temporal/filter/composite=" +
+            $"us source/prepare/trace/temporal/finalize/filter/frequency/composite=" +
             $"{nearFieldResidual.Timings.SourceMicroseconds}/" +
+            $"{nearFieldResidual.Timings.PrepareCompactionMicroseconds}/" +
             $"{nearFieldResidual.Timings.RawTraceMicroseconds}/" +
             $"{nearFieldResidual.Timings.TemporalMicroseconds}/" +
+            $"{nearFieldResidual.Timings.FinalizationMicroseconds}/" +
             $"{nearFieldResidual.Timings.FilterMicroseconds}/" +
+            $"{nearFieldResidual.Timings.FrequencySeparationMicroseconds}/" +
             $"{nearFieldResidual.Timings.CompositeMicroseconds}, " +
             $"trace hit/miss/edge/nonfinite={nearFieldResidual.Trace.RayHitCount}/" +
             $"{nearFieldResidual.Trace.RayMissCount}/" +
             $"{nearFieldResidual.Trace.EdgeRejectedCount}/" +
             $"{nearFieldResidual.Trace.NonFiniteRejectedCount}, " +
+            $"samples proposals/valid/guided/guided-valid/guided-zero/cosine/traced=" +
+            $"{nearFieldResidual.Trace.ProposalSampleCount}/" +
+            $"{nearFieldResidual.Trace.ValidSampleCount}/" +
+            $"{nearFieldResidual.Trace.GuidedProposalSampleCount}/" +
+            $"{nearFieldResidual.Trace.GuidedValidSampleCount}/" +
+            $"{nearFieldResidual.Trace.GuidedZeroContributionSampleCount}/" +
+            $"{nearFieldResidual.Trace.CosineProposalSampleCount}/" +
+            $"{nearFieldResidual.Trace.RaysLaunched}, " +
             $"history accepted/rejected={nearFieldResidual.History.AcceptedHistoryCount}/" +
             $"{nearFieldResidual.History.RejectedHistoryCount}, " +
             $"tiles compacted/candidate/overflow={nearFieldResidual.Tiles.CompactedTileCount}/" +
             $"{nearFieldResidual.Tiles.CandidateTileCount}/" +
             $"{nearFieldResidual.Tiles.OverflowTileCount}, " +
+            $"recovery invalid/rebuild/pending/deadline=" +
+            $"{nearFieldResidual.Recovery.ConsecutiveInvalidTelemetryFrames}/" +
+            $"{nearFieldResidual.Recovery.GenerationRebuildAttemptCount}/" +
+            $"{nearFieldResidual.Recovery.GenerationRebuildPending}/" +
+            $"{nearFieldResidual.Recovery.ValidationDeadlineFrame}, " +
+            $"lastFailure='{nearFieldResidual.Recovery.LastFailureReason}', " +
             $"status='{nearFieldResidual.Readback.Reason}'.");
     }
 

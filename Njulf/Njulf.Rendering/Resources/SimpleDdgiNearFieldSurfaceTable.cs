@@ -18,7 +18,7 @@ public enum SimpleDdgiNearFieldSurfaceFlags : uint
 }
 
 /// <summary>
-/// V12 surface-table element addressed by the 16-bit token in the receiver
+/// V13 surface-table element addressed by the 16-bit token in the receiver
 /// payload. Entries are immutable after a frame bank is sealed.
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4, Size = 16)]

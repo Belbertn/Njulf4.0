@@ -515,7 +515,7 @@ public sealed class AdvancedGiRenderGraphModesTests
                 Is.EqualTo(RenderGraphResourceLifetime.Transient));
             Assert.That(descriptors.ContainsKey(
                 RenderGraphResourceId.NearFieldResidualHitMetadata), Is.False,
-                "V12 has no separate trace metadata allocation.");
+                "V13 has no separate trace metadata allocation.");
             Assert.That(descriptors[RenderGraphResourceId.NearFieldResidualHistory].Kind,
                 Is.EqualTo(RenderGraphResourceKind.ImageChain));
             Assert.That(descriptors[RenderGraphResourceId.NearFieldResidualHistoryMetadata].Kind,

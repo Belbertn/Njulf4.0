@@ -52,7 +52,7 @@ public readonly record struct SimpleDdgiNearFieldViewTraceConfiguration(
 }
 
 /// <summary>
-/// CPU oracle for V12's perspective-correct view-space Hi-Z DDA. Projection
+/// CPU oracle for V13's perspective-correct view-space Hi-Z DDA. Projection
 /// storage convention is irrelevant because hierarchy samples are already
 /// positive linear view depths.
 /// </summary>

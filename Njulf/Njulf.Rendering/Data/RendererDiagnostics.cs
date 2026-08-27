@@ -665,6 +665,7 @@ namespace Njulf.Rendering.Data
         public int TransparentSampleReflections { get; init; }
         public int OpaqueSceneColorSnapshotAvailable { get; init; }
         public int TransparentSceneReflectionRayTaskBudget { get; init; }
+        public int TransparentSceneReflectionSsrSampleBudget { get; init; }
         public uint TransparentReflectionRayRequestCount { get; init; }
         public uint TransparentReflectionEstimatedSsrHitCount { get; init; }
         public uint TransparentReflectionEstimatedRayHitCount { get; init; }
@@ -689,6 +690,14 @@ namespace Njulf.Rendering.Data
             get;
             init;
         }
+        public uint TransparentReflectionExactSsrEligibleCount { get; init; }
+        public uint TransparentReflectionExactSsrAdmittedCount { get; init; }
+        public uint TransparentReflectionExactSsrReservedSampleCount { get; init; }
+        public uint TransparentReflectionExactSsrActualSampleCount { get; init; }
+        public uint TransparentReflectionExactSsrHitCount { get; init; }
+        public uint TransparentReflectionExactSsrBudgetRejectedCount { get; init; }
+        public uint TransparentReflectionExactRayAdmittedCount { get; init; }
+        public uint TransparentReflectionExactRayBudgetRejectedCount { get; init; }
         public long GpuHybridReflectionSsrMicroseconds { get; init; }
         public long GpuHybridReflectionRayQueryMicroseconds { get; init; }
         public long GpuHybridReflectionDdgiBaseMicroseconds { get; init; }

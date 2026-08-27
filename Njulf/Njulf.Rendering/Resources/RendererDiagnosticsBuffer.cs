@@ -187,7 +187,23 @@ namespace Njulf.Rendering.Resources
             DdgiAreaLightCounterBase + DdgiAreaLightCounterCount;
         public const int TransparentReflectionTaskCounter =
             TransparentReflectionCounterBase;
-        public const int TransparentReflectionCounterCount = 8;
+        public const int TransparentReflectionSsrEligibleCounter =
+            TransparentReflectionCounterBase + 8;
+        public const int TransparentReflectionSsrAdmittedCounter =
+            TransparentReflectionCounterBase + 9;
+        public const int TransparentReflectionSsrReservedSampleCounter =
+            TransparentReflectionCounterBase + 10;
+        public const int TransparentReflectionSsrActualSampleCounter =
+            TransparentReflectionCounterBase + 11;
+        public const int TransparentReflectionSsrExactHitCounter =
+            TransparentReflectionCounterBase + 12;
+        public const int TransparentReflectionSsrBudgetRejectedCounter =
+            TransparentReflectionCounterBase + 13;
+        public const int TransparentReflectionRayAdmittedCounter =
+            TransparentReflectionCounterBase + 14;
+        public const int TransparentReflectionRayBudgetRejectedCounter =
+            TransparentReflectionCounterBase + 15;
+        public const int TransparentReflectionCounterCount = 16;
         public const int CounterCount =
             TransparentReflectionCounterBase +
             TransparentReflectionCounterCount;
@@ -416,7 +432,25 @@ namespace Njulf.Rendering.Resources
                     EstimatedProbeFallbacks:
                         counters[TransparentReflectionCounterBase + 6],
                     EstimatedEnvironmentFallbacks:
-                        counters[TransparentReflectionCounterBase + 7]);
+                        counters[TransparentReflectionCounterBase + 7])
+                {
+                    ExactSsrEligible =
+                        counters[TransparentReflectionCounterBase + 8],
+                    ExactSsrAdmitted =
+                        counters[TransparentReflectionCounterBase + 9],
+                    ExactSsrReservedSamples =
+                        counters[TransparentReflectionCounterBase + 10],
+                    ExactSsrActualSamples =
+                        counters[TransparentReflectionCounterBase + 11],
+                    ExactSsrHits =
+                        counters[TransparentReflectionCounterBase + 12],
+                    ExactSsrBudgetRejected =
+                        counters[TransparentReflectionCounterBase + 13],
+                    ExactRayAdmitted =
+                        counters[TransparentReflectionCounterBase + 14],
+                    ExactRayBudgetRejected =
+                        counters[TransparentReflectionCounterBase + 15]
+                };
 
             _lastCompletedCounters[frameIndex] = new GpuMeshletCounters(
                 checked((int)counters[0]),

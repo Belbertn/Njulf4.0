@@ -33,11 +33,28 @@ namespace Njulf.Rendering.Debug
 
         public static long ConvertTimestampDeltaToMicroseconds(ulong start, ulong end, float timestampPeriodNanoseconds)
         {
+            return TryConvertTimestampDeltaToMicroseconds(
+                start,
+                end,
+                timestampPeriodNanoseconds,
+                out long microseconds)
+                ? microseconds
+                : 0L;
+        }
+
+        public static bool TryConvertTimestampDeltaToMicroseconds(
+            ulong start,
+            ulong end,
+            float timestampPeriodNanoseconds,
+            out long microseconds)
+        {
+            microseconds = 0L;
             if (end <= start || timestampPeriodNanoseconds <= 0.0f)
-                return 0;
+                return false;
 
             double nanoseconds = (end - start) * (double)timestampPeriodNanoseconds;
-            return (long)Math.Round(nanoseconds / 1000.0);
+            microseconds = (long)Math.Round(nanoseconds / 1000.0);
+            return true;
         }
     }
 }

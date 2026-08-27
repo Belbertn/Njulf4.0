@@ -127,6 +127,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             latePasses.Add("SimpleDdgiNearFieldResidualPreparePass");
             latePasses.Add("SimpleDdgiNearFieldResidualTracePass");
             latePasses.Add("SimpleDdgiNearFieldResidualTemporalPass");
+            latePasses.Add("SimpleDdgiNearFieldResidualFinalizePass");
             for (int iteration = 0;
                  iteration < modes.NearFieldProfile.FilterIterationCount;
                  iteration++)
@@ -1099,6 +1100,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                         RenderGraphResourceId.NearFieldResidualHistoryNormals,
                         historyBinding: RenderGraphHistoryBindingSelection.Current),
                     WriteComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualTileBuffers)),
+                Pass("SimpleDdgiNearFieldResidualFinalizePass",
+                    ReadWriteComputeBuffer(
                         RenderGraphResourceId.NearFieldResidualTileBuffers))
             ]);
 

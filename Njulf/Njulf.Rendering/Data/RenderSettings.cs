@@ -1467,10 +1467,12 @@ namespace Njulf.Rendering.Data
     public sealed class TransparencySettings
     {
         public const int MaximumSceneReflectionRayTaskBudget = 4_194_304;
+        public const int MaximumSceneReflectionSsrSampleBudget = 16_777_216;
 
         private int _maxTransparentMeshlets = 262144;
         private float _alphaDiscardThreshold = 0.001f;
         private int _sceneReflectionRayTaskBudget = 65_536;
+        private int _sceneReflectionSsrSampleBudget = 4_194_304;
         private int _thickTransmissionRayTaskBudget = 262_144;
         private int _thickTransmissionMaximumInterfaces =
             BoundedDielectricMediaStack.MaximumInterfaces;
@@ -1505,6 +1507,20 @@ namespace Njulf.Rendering.Data
                 value,
                 0,
                 MaximumSceneReflectionRayTaskBudget);
+        }
+
+        /// <summary>
+        /// Maximum Hi-Z depth samples reserved by transparent scene-reflection
+        /// SSR in one frame. Each admitted fragment reserves its complete
+        /// worst-case march before issuing its first depth sample.
+        /// </summary>
+        public int SceneReflectionSsrSampleBudget
+        {
+            get => _sceneReflectionSsrSampleBudget;
+            set => _sceneReflectionSsrSampleBudget = Math.Clamp(
+                value,
+                0,
+                MaximumSceneReflectionSsrSampleBudget);
         }
 
         public int ThickTransmissionRayTaskBudget
@@ -5279,7 +5295,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 19;
+        public const int SerializationVersion = 20;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5476,6 +5492,7 @@ namespace Njulf.Rendering.Data
                     Transparency.ReceiveGlobalIllumination = false;
                     Transparency.SampleReflections = false;
                     Transparency.SceneReflectionRayTaskBudget = 0;
+                    Transparency.SceneReflectionSsrSampleBudget = 0;
                     Decals.ReceiveGlobalIllumination = false;
                     break;
                 case RenderQualityPreset.Medium:
@@ -5546,6 +5563,7 @@ namespace Njulf.Rendering.Data
                     Transparency.ReceiveGlobalIllumination = false;
                     Transparency.SampleReflections = false;
                     Transparency.SceneReflectionRayTaskBudget = 0;
+                    Transparency.SceneReflectionSsrSampleBudget = 0;
                     Decals.ReceiveGlobalIllumination = false;
                     break;
                 case RenderQualityPreset.DdgiHigh:
@@ -5613,6 +5631,7 @@ namespace Njulf.Rendering.Data
                     Transparency.ReceiveGlobalIllumination = true;
                     Transparency.SampleReflections = true;
                     Transparency.SceneReflectionRayTaskBudget = 65_536;
+                    Transparency.SceneReflectionSsrSampleBudget = 4_194_304;
                     Decals.ReceiveGlobalIllumination = true;
                     break;
                 case RenderQualityPreset.Ultra:
@@ -5678,6 +5697,7 @@ namespace Njulf.Rendering.Data
                     Transparency.ReceiveGlobalIllumination = true;
                     Transparency.SampleReflections = true;
                     Transparency.SceneReflectionRayTaskBudget = 131_072;
+                    Transparency.SceneReflectionSsrSampleBudget = 8_388_608;
                     Decals.ReceiveGlobalIllumination = true;
                     break;
                 case RenderQualityPreset.High:
@@ -5750,6 +5770,7 @@ namespace Njulf.Rendering.Data
                     Transparency.ReceiveGlobalIllumination = true;
                     Transparency.SampleReflections = true;
                     Transparency.SceneReflectionRayTaskBudget = 65_536;
+                    Transparency.SceneReflectionSsrSampleBudget = 4_194_304;
                     Decals.ReceiveGlobalIllumination = true;
                     break;
             }
@@ -5951,6 +5972,8 @@ namespace Njulf.Rendering.Data
             // Version 18 persists bounded thick-transmission, nested-media,
             // water-boundary, and optional RGB-dispersion budgets. Version 19
             // persists the bounded transparent scene-reflection ray budget.
+            // Version 20 independently bounds transparent SSR Hi-Z samples;
+            // missing values inherit the selected preset's safe budget.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -6337,6 +6360,7 @@ namespace Njulf.Rendering.Data
             public bool ReceiveGlobalIllumination { get; init; } = true;
             public bool SampleReflections { get; init; } = true;
             public int? SceneReflectionRayTaskBudget { get; init; }
+            public int? SceneReflectionSsrSampleBudget { get; init; }
             public bool SortPerMeshlet { get; init; } = true;
             public int MaxTransparentMeshlets { get; init; } = 262_144;
             public float AlphaDiscardThreshold { get; init; } = 0.001f;
@@ -6369,6 +6393,8 @@ namespace Njulf.Rendering.Data
                 SampleReflections = settings.SampleReflections,
                 SceneReflectionRayTaskBudget =
                     settings.SceneReflectionRayTaskBudget,
+                SceneReflectionSsrSampleBudget =
+                    settings.SceneReflectionSsrSampleBudget,
                 SortPerMeshlet = settings.SortPerMeshlet,
                 MaxTransparentMeshlets = settings.MaxTransparentMeshlets,
                 AlphaDiscardThreshold = settings.AlphaDiscardThreshold,
@@ -6402,6 +6428,11 @@ namespace Njulf.Rendering.Data
                 {
                     settings.SceneReflectionRayTaskBudget =
                         SceneReflectionRayTaskBudget.Value;
+                }
+                if (SceneReflectionSsrSampleBudget.HasValue)
+                {
+                    settings.SceneReflectionSsrSampleBudget =
+                        SceneReflectionSsrSampleBudget.Value;
                 }
                 settings.SortPerMeshlet = SortPerMeshlet;
                 settings.MaxTransparentMeshlets = MaxTransparentMeshlets;
@@ -7397,7 +7428,7 @@ namespace Njulf.Rendering.Data
                     settings.GiCausticQualificationId = GiCausticQualificationId;
                 // GPU/evidence/source semantics all changed for v14. Preserve
                 // authored mode intent, but never carry a pre-v14 credential
-                // into the V12/V6 admission path.
+                // into the V13/V6 admission path.
                 if (sourceVersion >= 14 &&
                     SimpleDdgiNearFieldResidualQualificationId != null)
                 {

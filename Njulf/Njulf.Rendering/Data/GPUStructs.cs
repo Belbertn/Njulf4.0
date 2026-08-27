@@ -306,7 +306,7 @@ namespace Njulf.Rendering.Data
         public int SkinnedVertexOffset;
         public int SkinningEnabled;
         public Matrix4x4 PreviousWorldMatrix;
-        // C5 V12 publication metadata. The visible-object index remains the
+        // C5 V13 publication metadata. The visible-object index remains the
         // frame-local 16-bit surface token; these fields make the table entry
         // stable across compaction, sorting, and scene rebuilds.
         public uint NearFieldStableObjectId;
@@ -1702,7 +1702,7 @@ namespace Njulf.Rendering.Data
         public float SsrConfidenceThreshold;
         public uint SceneReflectionRayTaskBudget;
         public uint RayQueryHitLightLimit;
-        public uint Padding0;
+        public uint SceneReflectionSsrSampleBudget;
         public uint Padding1;
         public uint Padding2;
     }

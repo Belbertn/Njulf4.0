@@ -6,13 +6,13 @@
 // C5 is intentionally a separate, opt-in ABI.  These stages are not part of
 // the global bindless contract until the renderer has explicitly created the
 // source attachment, history identity resources, barriers, and dispatch path.
-// V12 is the production SSGI-v2 ABI.
+// V13 makes complete per-tile records the sole source for header summaries.
 // Keep this in lockstep with SimpleDdgiNearFieldResidualGpuAbi.
-const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000cu;
+const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000du;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_MAGIC = 0x4335544du;
-const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS = 24u;
+const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS = 32u;
 const uint SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS = 64u;
-const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS = 20u;
+const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS = 24u;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE = 1u << 0u;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TEMPORAL_COMPLETE = 1u << 1u;
 const uint SIMPLE_DDGI_NEAR_FIELD_DIRECT_DIFFUSE_SOURCE = 1u << 0u;
@@ -134,7 +134,11 @@ struct SimpleDdgiNearFieldResidualTileRecord
     uint detailedHistoryCounts0;
     uint detailedHistoryCounts1;
     uint detailedHistoryCounts2;
-    uint detailedHistoryCounts3;
+    uint proposalCounts;
+    uint guidedAndTraversalCounts;
+    uint hitAndValidSampleCounts;
+    uint reserved22;
+    uint reserved23;
 };
 
 uint SimpleDdgiNearFieldPackTraceCounts(
@@ -191,6 +195,14 @@ struct SimpleDdgiNearFieldResidualResetPushConstants
     uint frameSerialLow;
     uint frameSerialHigh;
     uint tileCount;
+};
+
+struct SimpleDdgiNearFieldResidualFinalizePushConstants
+{
+    uint abiVersion;
+    uint tileCount;
+    uint traceWidth;
+    uint traceHeight;
 };
 
 struct SimpleDdgiNearFieldResidualPreparePushConstants

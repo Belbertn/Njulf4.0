@@ -22,11 +22,13 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTraceFrameConstants>(),
                 Is.EqualTo(288));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTelemetryHeader>(),
-                Is.EqualTo(96));
+                Is.EqualTo(128));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTileRecord>(),
-                Is.EqualTo(80));
+                Is.EqualTo(96));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualResetPushConstants>(),
                 Is.EqualTo(32));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualFinalizePushConstants>(),
+                Is.EqualTo(16));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTracePushConstants>(),
                 Is.EqualTo(84));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTemporalPushConstants>(),
@@ -528,7 +530,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
     }
 
     [Test]
-    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV12Contract()
+    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV13Contract()
     {
         string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
         string shared = File.ReadAllText(Path.Combine(shaderDirectory,
@@ -537,8 +539,12 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             "ddgi_near_field_residual_temporal.comp"));
         string reset = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_reset.comp"));
+        string prepare = File.ReadAllText(Path.Combine(shaderDirectory,
+            "ddgi_near_field_residual_prepare.comp"));
         string trace = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_trace.comp"));
+        string finalize = File.ReadAllText(Path.Combine(shaderDirectory,
+            "ddgi_near_field_residual_finalize.comp"));
         string filter = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_filter.comp"));
         string frequency = File.ReadAllText(Path.Combine(shaderDirectory,
@@ -553,10 +559,16 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             FindRepoDirectory("Njulf.Rendering"),
             "Resources",
             "SimpleDdgiNearFieldResidualVulkanRuntime.cs"));
+        int finalizeBarrier = finalize.LastIndexOf(
+            "memoryBarrierBuffer",
+            StringComparison.Ordinal);
+        int finalizeCompletionPublish = finalize.LastIndexOf(
+            "finalizeTileRecords.words[7u] =",
+            StringComparison.Ordinal);
 
         Assert.Multiple(() =>
         {
-            Assert.That(shared, Does.Contain("0x4335000cu"));
+            Assert.That(shared, Does.Contain("0x4335000du"));
             Assert.That(shared, Does.Contain("uvec2 receiverIdentity;"));
             Assert.That(shared, Does.Contain("uvec2 hitIdentity;"));
             Assert.That(shared, Does.Not.Contain("uvec4 identity;"));
@@ -583,6 +595,19 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(frequency, Does.Contain(
                 "vec3 lowSignal = vec3(0.0)"));
             Assert.That(trace, Does.Contain("c5TileHit"));
+            Assert.That(trace, Does.Contain("C5_PROPOSAL_GUIDED"));
+            Assert.That(trace, Does.Contain("C5_PROPOSAL_COSINE"));
+            Assert.That(finalize, Does.Contain(
+                "finalizeTileRecords.words[7u]"));
+            Assert.That(finalize, Does.Contain("memoryBarrierBuffer"));
+            Assert.That(finalize, Does.Contain("c5FinalizeLaneSums"));
+            Assert.That(finalize, Does.Contain(
+                "stride = C5_FINALIZE_LANE_COUNT >> 1u"));
+            Assert.That(finalize, Does.Not.Contain("atomicAdd("));
+            Assert.That(finalize, Does.Not.Contain("atomicOr("));
+            Assert.That(finalizeCompletionPublish,
+                Is.GreaterThan(finalizeBarrier),
+                "C5 completion must be the final telemetry publication.");
             Assert.That(trace, Does.Contain(
                 "metadata.receiverIdentity = uvec2("));
             Assert.That(trace, Does.Contain(
@@ -616,6 +641,12 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(reset, Does.Contain("ResetHitMetadataBuffer"));
             Assert.That(reset, Does.Contain("ResetTileRecordsBuffer"));
             Assert.That(reset, Does.Contain("SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION"));
+            Assert.That(prepare, Does.Contain(
+                "uint activeTileRowStride = (pc.traceWidth + 7u) / 8u;"));
+            Assert.That(prepare, Does.Contain(
+                "gl_WorkGroupID.y * activeTileRowStride + gl_WorkGroupID.x"));
+            Assert.That(prepare, Does.Not.Contain(
+                "gl_WorkGroupID.y * gl_NumWorkGroups.x"));
             Assert.That(passSource, Does.Contain(
                 "images[3] = Sampled(validityRead, _bindlessHeap.HiZSampler)"));
             Assert.That(passSource, Does.Contain(
@@ -684,7 +715,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(SimpleDdgiNearFieldResidualGpuAbi.Version,
-                Is.EqualTo(0x4335_000Cu));
+                Is.EqualTo(0x4335_000Du));
             Assert.That(shared, Does.Match(
                 $@"const\s+uint\s+SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION\s*=\s*{Regex.Escape(abiLiteral)}\s*;"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualHitMetadata"));
@@ -692,6 +723,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                 "struct SimpleDdgiNearFieldResidualTraceFrameConstants"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualTileRecord"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualResetPushConstants"));
+            Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualFinalizePushConstants"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualTracePushConstants"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualTemporalPushConstants"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualFilterPushConstants"));
@@ -710,6 +742,9 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                 Is.Not.Null);
             Assert.That(typeof(SimpleDdgiNearFieldResidualGpuIntegrationCapabilities)
                 .GetProperty(nameof(SimpleDdgiNearFieldResidualGpuIntegrationCapabilities.CompositePassRegistered)),
+                Is.Not.Null);
+            Assert.That(typeof(SimpleDdgiNearFieldResidualGpuIntegrationCapabilities)
+                .GetProperty(nameof(SimpleDdgiNearFieldResidualGpuIntegrationCapabilities.FinalizePassRegistered)),
                 Is.Not.Null);
         });
 
@@ -835,6 +870,14 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                 "TemporalFrameConstantsBuffer"),
             (SimpleDdgiNearFieldResidualGpuBindings.TemporalSurfaceTable,
                 "TemporalSurfaceTableBuffer"));
+        AssertShaderStageContract(
+            shaderDirectory,
+            "ddgi_near_field_residual_finalize.comp",
+            "NearFieldFinalizePushBlock",
+            nameof(GPUSimpleDdgiNearFieldResidualFinalizePushConstants),
+            "SimpleDdgiNearFieldResidualFinalizePushConstants",
+            (SimpleDdgiNearFieldResidualGpuBindings.FinalizeTileRecords,
+                "FinalizeTileRecordsBuffer"));
         AssertShaderStageContract(
             shaderDirectory,
             "ddgi_near_field_residual_filter.comp",
@@ -1036,6 +1079,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             DeviceLimitsAndActualAllocationRequirementsValidated: true)
         {
             PreparePassRegistered = true,
+            FinalizePassRegistered = true,
             FrequencySeparationPassRegistered = true,
             IndirectDispatchContractValidated = true,
             SurfaceTableAvailable = true

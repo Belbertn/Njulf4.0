@@ -77,6 +77,7 @@ public sealed class RenderSettingsFileIoTests
             settings.Transparency.ThickTransmissionMaximumCandidatesPerInterface = 24;
             settings.Transparency.ThickTransmissionMaximumDistance = 175f;
             settings.Transparency.SceneReflectionRayTaskBudget = 77_777;
+            settings.Transparency.SceneReflectionSsrSampleBudget = 5_242_880;
             settings.Decals.ReceiveGlobalIllumination = true;
             settings.Decals.ReceiveShadows = false;
 
@@ -110,10 +111,13 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Transparency.SceneReflectionRayTaskBudget,
                     Is.EqualTo(77_777));
                 Assert.That(
+                    loaded.Transparency.SceneReflectionSsrSampleBudget,
+                    Is.EqualTo(5_242_880));
+                Assert.That(
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(19));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(20));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));
@@ -289,6 +293,45 @@ public sealed class RenderSettingsFileIoTests
                 Assert.That(loaded.Transparency.SampleReflections, Is.True);
                 Assert.That(loaded.Transparency.SceneReflectionRayTaskBudget,
                     Is.EqualTo(65_536));
+                Assert.That(loaded.Transparency.SceneReflectionSsrSampleBudget,
+                    Is.EqualTo(4_194_304));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_Version19WithoutSsrBudgetUsesPresetDefault()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "version-19-transparency.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 19,
+                  "QualityPreset": 3,
+                  "Transparency": {
+                    "Enabled": true,
+                    "SampleReflections": true,
+                    "SceneReflectionRayTaskBudget": 131072
+                  }
+                }
+                """);
+
+            RenderSettings loaded = RenderSettings.Load(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.QualityPreset,
+                    Is.EqualTo(RenderQualityPreset.Ultra));
+                Assert.That(loaded.Transparency.SceneReflectionRayTaskBudget,
+                    Is.EqualTo(131_072));
+                Assert.That(loaded.Transparency.SceneReflectionSsrSampleBudget,
+                    Is.EqualTo(8_388_608));
             });
         }
         finally

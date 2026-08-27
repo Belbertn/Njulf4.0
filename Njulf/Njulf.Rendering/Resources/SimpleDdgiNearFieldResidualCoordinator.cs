@@ -19,6 +19,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
 {
     internal const ulong ExperimentBudgetBytes = 96UL * 1024UL * 1024UL;
     internal const ulong HotSwapBudgetBytes = 192UL * 1024UL * 1024UL;
+    internal const ulong RecoveryValidationWindowFrames = 8UL;
 
     private readonly VulkanContext _context;
 
@@ -48,6 +49,15 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
     private AdvancedGiCandidateAuthorization _candidateAuthorization;
     private bool _hasEvidence;
     private bool _usesCandidateAuthorization;
+    private bool _recoveryRebuildAttempted;
+    private uint _recoveryRebuildAttemptCount;
+    private string _lastRecoveryFailureReason = string.Empty;
+    private bool _recoveryRebuildPendingCommit;
+    private bool _awaitingRecoveryWitness;
+    private ulong _recoveryValidationDeadlineFrame;
+    private ulong _recoveryGeneration;
+    private bool _terminalRetirementPending;
+    private string _terminalRetirementReason = string.Empty;
     private bool _disposed;
     private string _reason = "near-field-disabled";
 
@@ -87,7 +97,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
     }
 
     public SimpleDdgiNearFieldResidualGpuRuntimeSnapshot RuntimeSnapshot =>
-        IsGenerationExecutable ? _runtime!.Snapshot : default;
+        _runtime?.Snapshot ?? default;
 
     public SimpleDdgiNearFieldResidualGenerationSnapshot GenerationSnapshot =>
         _generations?.Snapshot ?? default;
@@ -96,8 +106,40 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
     {
         get
         {
-            if (IsGenerationExecutable && _runtime is { } runtime)
-                return runtime.Diagnostics;
+            if (_runtime is { } runtime)
+            {
+                SimpleDdgiNearFieldResidualDiagnostics diagnostics =
+                    runtime.Diagnostics;
+                if (_generations is not { } liveGenerations)
+                    return diagnostics;
+
+                SimpleDdgiNearFieldResidualGenerationSnapshot generation =
+                    liveGenerations.Snapshot;
+                return diagnostics with
+                {
+                    Memory = new SimpleDdgiNearFieldResidualMemoryTelemetry(
+                        Plan.Layout.TotalBytes,
+                        Plan.Active ? Plan.Layout.TotalBytes : 0UL,
+                        generation.LiveBytes,
+                        generation.PeakLiveBytes,
+                        generation.RetiredBytes),
+                    Recovery = diagnostics.Recovery with
+                    {
+                        GenerationRebuildAttemptCount =
+                            _recoveryRebuildAttemptCount,
+                        GenerationRebuildPending =
+                            _awaitingRecoveryWitness ||
+                            runtime.RequiresGenerationRebuild,
+                        ValidationDeadlineFrame = _awaitingRecoveryWitness
+                            ? _recoveryValidationDeadlineFrame
+                            : 0UL,
+                        LastFailureReason = string.IsNullOrWhiteSpace(
+                            diagnostics.Recovery.LastFailureReason)
+                                ? _lastRecoveryFailureReason
+                                : diagnostics.Recovery.LastFailureReason
+                    }
+                };
+            }
 
             if (_generations is { } generations)
             {
@@ -177,6 +219,15 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
         _candidate = request.CandidateAuthorized ? request.Candidate : null;
         _candidateAuthorization = request.CandidateAuthorization;
         _usesCandidateAuthorization = _candidate is not null;
+        _recoveryRebuildAttempted = false;
+        _recoveryRebuildAttemptCount = 0U;
+        _lastRecoveryFailureReason = string.Empty;
+        _recoveryRebuildPendingCommit = false;
+        _awaitingRecoveryWitness = false;
+        _recoveryValidationDeadlineFrame = 0UL;
+        _recoveryGeneration = 0UL;
+        _terminalRetirementPending = false;
+        _terminalRetirementReason = string.Empty;
 
         SimpleDdgiNearFieldResidualProfile profile =
             _candidate?.Configuration.Profile ??
@@ -403,17 +454,220 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
         ulong currentFrame)
     {
         ThrowIfDisposed();
+        bool readbackAccepted = false;
         if (_runtime is { } runtime)
         {
-            _ = runtime.TryReadCompletedFrame(
+            readbackAccepted = runtime.TryReadCompletedFrame(
                 frameIndex,
                 timestamps,
                 out _);
+            string failureReason = runtime.Diagnostics.Recovery.LastFailureReason;
+            if (!string.IsNullOrWhiteSpace(failureReason))
+                _lastRecoveryFailureReason = failureReason;
+        }
+
+        if (_terminalRetirementPending)
+        {
+            return ContinueTerminalRetirement(
+                completedGraphicsFenceValue,
+                currentFrame);
+        }
+
+        if (_recoveryRebuildPendingCommit)
+        {
+            NearFieldResidualPublication publication =
+                AdvanceGenerationAtFrameBoundary(
+                    completedGraphicsFenceValue,
+                    currentFrame);
+            if (publication.Executable)
+            {
+                BeginRecoveryValidationWindow(currentFrame);
+                return publication;
+            }
+
+            return publication.Changed
+                ? publication
+                : NearFieldResidualPublication.Suppress(
+                    PipelineConfiguration,
+                    "near-field-recovery-rebuild-awaiting-frame-boundary");
+        }
+
+        if (_awaitingRecoveryWitness)
+        {
+            bool generationMatches = GenerationSnapshot.ActiveGeneration ==
+                _recoveryGeneration;
+            if (generationMatches && readbackAccepted &&
+                _runtime is { HasValidCompletionWitness: true })
+            {
+                _awaitingRecoveryWitness = false;
+                _recoveryValidationDeadlineFrame = 0UL;
+                _recoveryGeneration = 0UL;
+                _recoveryRebuildAttempted = false;
+            }
+            else if (!generationMatches ||
+                     _runtime is { RequiresGenerationRebuild: true } ||
+                     currentFrame >= _recoveryValidationDeadlineFrame)
+            {
+                return BeginTerminalRetirement(
+                    "near-field-rebuilt-generation-did-not-produce-valid-witness",
+                    completedGraphicsFenceValue,
+                    currentFrame);
+            }
+        }
+
+        if (_runtime is { RequiresGenerationRebuild: true })
+        {
+            if (_recoveryRebuildAttempted)
+            {
+                return BeginTerminalRetirement(
+                    "near-field-telemetry-failed-after-generation-rebuild",
+                    completedGraphicsFenceValue,
+                    currentFrame);
+            }
+
+            return RequestRecoveryRebuild(
+                completedGraphicsFenceValue,
+                currentFrame);
         }
 
         return AdvanceGenerationAtFrameBoundary(
             completedGraphicsFenceValue,
             currentFrame);
+    }
+
+    private NearFieldResidualPublication RequestRecoveryRebuild(
+        ulong completedGraphicsFenceValue,
+        ulong currentFrame)
+    {
+        if (_generations is not { } generations)
+        {
+            return BeginTerminalRetirement(
+                "near-field-recovery-generation-controller-unavailable",
+                completedGraphicsFenceValue,
+                currentFrame);
+        }
+
+        SimpleDdgiNearFieldResidualGenerationRequestResult request =
+            generations.RequestRebuild(
+                Plan.Layout,
+                ResolveReplacementEnvelope(Plan.Layout));
+        _recoveryRebuildAttempted = true;
+        _recoveryRebuildAttemptCount = _recoveryRebuildAttemptCount ==
+            uint.MaxValue
+                ? uint.MaxValue
+                : _recoveryRebuildAttemptCount + 1U;
+        if (!request.Accepted)
+        {
+            return BeginTerminalRetirement(
+                "near-field-recovery-rebuild-rejected:" + request.Reason,
+                completedGraphicsFenceValue,
+                currentFrame);
+        }
+        if (!request.ReplacementReady && !string.Equals(
+                request.Reason,
+                "replacement-deferred-until-retirement",
+                StringComparison.Ordinal))
+        {
+            return BeginTerminalRetirement(
+                "near-field-recovery-rebuild-allocation-failed:" +
+                request.Reason,
+                completedGraphicsFenceValue,
+                currentFrame);
+        }
+
+        _recoveryRebuildPendingCommit = true;
+        NearFieldResidualPublication publication =
+            AdvanceGenerationAtFrameBoundary(
+                completedGraphicsFenceValue,
+                currentFrame);
+        if (publication.Executable)
+        {
+            BeginRecoveryValidationWindow(currentFrame);
+            return publication;
+        }
+
+        return publication.Changed
+            ? publication
+            : NearFieldResidualPublication.Suppress(
+                PipelineConfiguration,
+                request.ReplacementReady
+                    ? "near-field-recovery-rebuild-awaiting-frame-boundary"
+                    : request.Reason);
+    }
+
+    private void BeginRecoveryValidationWindow(ulong currentFrame)
+    {
+        _recoveryRebuildPendingCommit = false;
+        _awaitingRecoveryWitness = true;
+        _recoveryGeneration = GenerationSnapshot.ActiveGeneration;
+        _recoveryValidationDeadlineFrame = ulong.MaxValue - currentFrame <
+            RecoveryValidationWindowFrames
+            ? ulong.MaxValue
+            : currentFrame + RecoveryValidationWindowFrames;
+    }
+
+    private NearFieldResidualPublication BeginTerminalRetirement(
+        string reason,
+        ulong completedGraphicsFenceValue,
+        ulong currentFrame)
+    {
+        _terminalRetirementPending = true;
+        _terminalRetirementReason = string.IsNullOrWhiteSpace(reason)
+            ? "near-field-persistent-telemetry-failure"
+            : reason.Trim();
+        _awaitingRecoveryWitness = false;
+        _recoveryRebuildPendingCommit = false;
+        _runtime?.SuppressForFenceSafeRetirement(_terminalRetirementReason);
+        return ContinueTerminalRetirement(
+            completedGraphicsFenceValue,
+            currentFrame);
+    }
+
+    private NearFieldResidualPublication ContinueTerminalRetirement(
+        ulong completedGraphicsFenceValue,
+        ulong currentFrame)
+    {
+        if (_generations is not { } generations)
+        {
+            return FinalizeTerminalRetirement();
+        }
+
+        var progress = new GpuCompletionProgress(
+            completedGraphicsFenceValue,
+            0UL,
+            0UL);
+        _ = generations.PollCompleted(progress, currentFrame);
+        _ = generations.TryBeginTerminalRetirement(
+            currentFrame,
+            out _);
+        _ = generations.PollCompleted(progress, currentFrame);
+        if (generations.Snapshot.LiveBytes != 0UL)
+        {
+            return NearFieldResidualPublication.Suppress(
+                PipelineConfiguration,
+                _terminalRetirementReason);
+        }
+
+        generations.Dispose();
+        _generations = null;
+        _runtime = null;
+        return FinalizeTerminalRetirement();
+    }
+
+    private NearFieldResidualPublication FinalizeTerminalRetirement()
+    {
+        int filterIterationCount = Math.Max(
+            0,
+            Plan.Layout.FilterIterationCount);
+        string reason = _terminalRetirementReason;
+        _terminalRetirementPending = false;
+        InvalidateState(
+            reason,
+            GiExperimentFallbackReason.ResourceIncomplete);
+        return NearFieldResidualPublication.Disable(
+            reason,
+            filterIterationCount,
+            releaseUnmanagedTargets: false);
     }
 
     public NearFieldResidualRecreationPreparation

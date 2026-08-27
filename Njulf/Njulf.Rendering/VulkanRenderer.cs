@@ -1814,6 +1814,9 @@ namespace Njulf.Rendering
                 AddPassInstance(new SimpleDdgiNearFieldResidualTemporalPass(
                     _context, _swapchain, _bindlessHeap,
                     nearFieldRuntimeProvider));
+                AddPassInstance(new SimpleDdgiNearFieldResidualFinalizePass(
+                    _context, _swapchain, _bindlessHeap,
+                    nearFieldRuntimeProvider));
                 for (int iteration = 0;
                      iteration < _nearFieldResidual.Plan.Layout
                          .FilterIterationCount;
@@ -3736,6 +3739,8 @@ namespace Njulf.Rendering
                 Settings.Transparency.SampleReflections;
             sceneData.TransparentSceneReflectionRayTaskBudget =
                 Settings.Transparency.SceneReflectionRayTaskBudget;
+            sceneData.TransparentSceneReflectionSsrSampleBudget =
+                Settings.Transparency.SceneReflectionSsrSampleBudget;
             sceneData.OpaqueSceneColorSnapshotAvailable = false;
             sceneData.TransparentDdgiReceiverCountersEnabled = false;
             sceneData.DecalDebugView = Settings.Decals.DebugView;
@@ -9398,6 +9403,22 @@ namespace Njulf.Rendering
                 counters.EstimatedProbeFallbacks;
             sceneData.TransparentReflectionEstimatedEnvironmentFallbackCount =
                 counters.EstimatedEnvironmentFallbacks;
+            sceneData.TransparentReflectionExactSsrEligibleCount =
+                counters.ExactSsrEligible;
+            sceneData.TransparentReflectionExactSsrAdmittedCount =
+                counters.ExactSsrAdmitted;
+            sceneData.TransparentReflectionExactSsrReservedSampleCount =
+                counters.ExactSsrReservedSamples;
+            sceneData.TransparentReflectionExactSsrActualSampleCount =
+                counters.ExactSsrActualSamples;
+            sceneData.TransparentReflectionExactSsrHitCount =
+                counters.ExactSsrHits;
+            sceneData.TransparentReflectionExactSsrBudgetRejectedCount =
+                counters.ExactSsrBudgetRejected;
+            sceneData.TransparentReflectionExactRayAdmittedCount =
+                counters.ExactRayAdmitted;
+            sceneData.TransparentReflectionExactRayBudgetRejectedCount =
+                counters.ExactRayBudgetRejected;
         }
 
         private static void ApplyCompletedGpuCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
@@ -10372,12 +10393,13 @@ namespace Njulf.Rendering
                 _renderGraph,
                 _advancedGiAdmission.GraphModes);
             var c5PassNames = new List<string>(
-                publication.FilterIterationCount + 6)
+                publication.FilterIterationCount + 7)
             {
                 SimpleDdgiNearFieldResidualGpuPassNames.Reset,
                 SimpleDdgiNearFieldResidualGpuPassNames.Prepare,
                 SimpleDdgiNearFieldResidualGpuPassNames.Trace,
                 SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
+                SimpleDdgiNearFieldResidualGpuPassNames.Finalize,
                 SimpleDdgiNearFieldResidualGpuPassNames.FrequencySeparation,
                 SimpleDdgiNearFieldResidualGpuPassNames.Composite
             };

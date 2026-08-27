@@ -54,6 +54,12 @@ shared uint c5TileHit[64];
 shared uint c5TileCovered[64];
 shared uint c5TileReasonFlags[64];
 shared uint c5TileRayLaunched[64];
+shared uint c5TileProposalCount[64];
+shared uint c5TileGuidedProposalCount[64];
+shared uint c5TileGuidedValidCount[64];
+shared uint c5TileGuidedZeroCount[64];
+shared uint c5TileCosineProposalCount[64];
+shared uint c5TileValidSampleCount[64];
 shared uint c5TileTraceSteps[64];
 shared uint c5TileMipVisits[64];
 shared uint c5TileMaximumTraceSteps[64];
@@ -73,6 +79,10 @@ const uint C5_TRACE_REASON_NORMAL = 1u << 6u;
 const uint C5_TRACE_REASON_SOURCE = 1u << 7u;
 const uint C5_TRACE_REASON_NONFINITE = 1u << 8u;
 const uint C5_TRACE_REASON_MISS = 1u << 9u;
+
+const uint C5_PROPOSAL_NONE = 0u;
+const uint C5_PROPOSAL_GUIDED = 1u;
+const uint C5_PROPOSAL_COSINE = 2u;
 
 bool IsInsideUv(vec2 uv)
 {
@@ -728,6 +738,12 @@ void RecordTileSummary(uint tileIndex)
     uint hitCount = 0u;
     uint invalidCount = 0u;
     uint raysLaunched = 0u;
+    uint proposalCount = 0u;
+    uint guidedProposalCount = 0u;
+    uint guidedValidCount = 0u;
+    uint guidedZeroCount = 0u;
+    uint cosineProposalCount = 0u;
+    uint validSampleCount = 0u;
     uint screenExits = 0u;
     uint invalidReceivers = 0u;
     uint invalidRays = 0u;
@@ -748,6 +764,12 @@ void RecordTileSummary(uint tileIndex)
             continue;
         coveredCount++;
         raysLaunched += c5TileRayLaunched[lane];
+        proposalCount += c5TileProposalCount[lane];
+        guidedProposalCount += c5TileGuidedProposalCount[lane];
+        guidedValidCount += c5TileGuidedValidCount[lane];
+        guidedZeroCount += c5TileGuidedZeroCount[lane];
+        cosineProposalCount += c5TileCosineProposalCount[lane];
+        validSampleCount += c5TileValidSampleCount[lane];
         totalSteps += c5TileTraceSteps[lane];
         totalMipVisits += c5TileMipVisits[lane];
         totalRefinementVisits += c5TileRefinementVisits[lane];
@@ -815,26 +837,23 @@ void RecordTileSummary(uint tileIndex)
     traceTileRecords.words[recordBase + 16u] = 0u;
     traceTileRecords.words[recordBase + 17u] = 0u;
     traceTileRecords.words[recordBase + 18u] = 0u;
-    traceTileRecords.words[recordBase + 19u] = 0u;
+    traceTileRecords.words[recordBase + 19u] =
+        (proposalCount & 0x1ffu) |
+        ((guidedProposalCount & 0x1ffu) << 9u) |
+        ((guidedValidCount & 0x1ffu) << 18u);
+    traceTileRecords.words[recordBase + 20u] =
+        (guidedZeroCount & 0x1ffu) |
+        ((cosineProposalCount & 0x1ffu) << 9u) |
+        ((raysLaunched & 0x1ffu) << 18u);
+    traceTileRecords.words[recordBase + 21u] =
+        (hitCount & 0x1ffu) |
+        ((validSampleCount & 0x1ffu) << 9u);
+    traceTileRecords.words[recordBase + 22u] = 0u;
+    traceTileRecords.words[recordBase + 23u] = 0u;
 
-    // Aggregate once per tile; no trace pixel performs a global atomic.
-    atomicAdd(traceTileRecords.words[8u], coveredCount);
-    atomicAdd(traceTileRecords.words[9u], raysLaunched);
-    // Tile validity counts estimator candidates, including a legitimate
-    // zero-valued miss. The aggregate hit/miss pair retains actual ray-query
-    // semantics for diagnostics.
-    atomicAdd(traceTileRecords.words[10u], hitCount);
-    atomicAdd(traceTileRecords.words[11u], raysLaunched - hitCount);
-    atomicAdd(traceTileRecords.words[12u], invalidReceivers);
-    atomicAdd(traceTileRecords.words[13u], invalidRays);
-    atomicAdd(traceTileRecords.words[14u], invalidCount);
-    if (tileIndex == 0u)
-    {
-        traceTileRecords.words[4u] = pc.traceWidth;
-        traceTileRecords.words[5u] = pc.traceHeight;
-        atomicOr(traceTileRecords.words[7u],
-            SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE);
-    }
+    // Header aggregation is intentionally absent here. The finalize dispatch
+    // runs after every temporal tile write, derives all summary words from
+    // these immutable records, and publishes the completion marker last.
 }
 
 bool EvaluateSingleCandidate(
@@ -848,7 +867,8 @@ bool EvaluateSingleCandidate(
     out uint rayLaunched,
     out uint traceSteps,
     out uint mipVisits,
-    out uint refinementVisits)
+    out uint refinementVisits,
+    out uint proposalClass)
 {
     nearEstimate = vec3(0.0);
     confidence = 0.0;
@@ -858,6 +878,7 @@ bool EvaluateSingleCandidate(
     traceSteps = 0u;
     mipVisits = 0u;
     refinementVisits = 0u;
+    proposalClass = C5_PROPOSAL_NONE;
     if (pc.abiVersion != SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION ||
         !SimpleDdgiNearFieldTraceSourcesAllowed(pc.traceSourceTerms) ||
         !SimpleDdgiNearFieldHasFlag(pc.flags,
@@ -926,8 +947,9 @@ bool EvaluateSingleCandidate(
     vec3 receiverWorldPosition;
     vec3 generationDirection;
     float generationPdf;
-    bool guidedProposal = pc.raysPerPixel >= 2u && rayOrdinal > 0u &&
+    bool guidedRequested = pc.raysPerPixel >= 2u && rayOrdinal > 0u &&
         (rayOrdinal & 1u) != 0u;
+    bool guidedProposal = false;
     ivec2 guidedTargetPixel = ivec2(-1);
     float guidedTargetDepth = 0.0;
     vec4 projectedStart;
@@ -961,6 +983,29 @@ bool EvaluateSingleCandidate(
     }
     float receiverPixelFootprint = C5ReceiverPixelFootprintMeters(
         receiverUv, startDepth, receiverWorldPosition);
+
+    // Receiver identity owns temporal/spatial reuse. Populate it before
+    // proposal construction so a valid guided zero branch retains stable
+    // history identity without pretending that a Hi-Z ray was launched.
+    metadata.receiverLinearDepth = startDepth;
+    metadata.hitLinearDepth = startDepth;
+    SimpleDdgiNearFieldSetMetadataFlags(metadata,
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE |
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_ATTACHMENT_VERIFIED |
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED);
+    SimpleDdgiNearFieldSetReceiverFootprint(metadata, receiverSource.a);
+    metadata.receiverIdentity = uvec2(
+        receiverSurface.stableObjectId, receiverSurface.stableMaterialId);
+    metadata.hitIdentity = uvec2(0u);
+    metadata.packedReceiverRevisions =
+        receiverSurface.packedObjectMaterialRevisions;
+    metadata.packedHitUv = packHalf2x16(receiverUv);
+
+    bool guideAvailable = C5GuideWeightSum() > 0.0;
+    guidedProposal = guidedRequested && guideAvailable;
+    proposalClass = guidedProposal
+        ? C5_PROPOSAL_GUIDED
+        : C5_PROPOSAL_COSINE;
     bool directionCreated = guidedProposal
         ? C5CreateSourceGuidedDirection(
             receiverPixel,
@@ -980,8 +1025,23 @@ bool EvaluateSingleCandidate(
             receiverShading,
             generationDirection,
             generationPdf);
-    if (!directionCreated ||
-        !C5CreateProjectedRay(
+    if (!directionCreated)
+    {
+        if (guidedProposal)
+        {
+            // The guide distribution exists, but its selected mass maps to a
+            // self, back-facing, out-of-range, or otherwise unusable target.
+            // That is a legitimate zero-contribution proposal, not an
+            // invalid/non-finite sample and not a traced ray.
+            failureFlags = C5_TRACE_REASON_SOURCE | C5_TRACE_REASON_MISS;
+            confidence = 1.0;
+            return true;
+        }
+        failureFlags = C5_TRACE_REASON_INVALID_RAY |
+            C5_TRACE_REASON_NONFINITE;
+        return false;
+    }
+    if (!C5CreateProjectedRay(
             receiverWorldPosition,
             generationDirection,
             receiverPixelFootprint,
@@ -993,23 +1053,6 @@ bool EvaluateSingleCandidate(
         return false;
     }
     rayLaunched = 1u;
-
-    // Receiver identity owns temporal/spatial reuse. Populate it before the
-    // stochastic trace so a bounded miss can still contribute a valid zero
-    // Monte Carlo sample and preserve the receiver's accumulation.
-    metadata.receiverLinearDepth = startDepth;
-    metadata.hitLinearDepth = startDepth;
-    SimpleDdgiNearFieldSetMetadataFlags(metadata,
-        SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE |
-        SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_ATTACHMENT_VERIFIED |
-        SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED);
-    SimpleDdgiNearFieldSetReceiverFootprint(metadata, receiverSource.a);
-    metadata.receiverIdentity = uvec2(
-        receiverSurface.stableObjectId, receiverSurface.stableMaterialId);
-    metadata.hitIdentity = uvec2(0u);
-    metadata.packedReceiverRevisions =
-        receiverSurface.packedObjectMaterialRevisions;
-    metadata.packedHitUv = packHalf2x16(receiverUv);
 
     vec2 hitUv;
     float hitRayDepth;
@@ -1138,8 +1181,9 @@ bool EvaluateSingleCandidate(
         hitWorldPosition,
         hitGeometric,
         generationDirection);
-    float guidedWeight = float(pc.raysPerPixel / 2u) /
-        float(pc.raysPerPixel);
+    float guidedWeight = guideAvailable
+        ? float(pc.raysPerPixel / 2u) / float(pc.raysPerPixel)
+        : 0.0;
     float mixturePdf = (1.0 - guidedWeight) * cosinePdf +
         guidedWeight * guidedPdf;
     float monteCarloWeight = mixturePdf > 0.0
@@ -1190,7 +1234,13 @@ bool EvaluateCandidate(
     out uint mipVisits,
     out uint maximumTraceSteps,
     out uint maximumMipVisits,
-    out uint refinementVisits)
+    out uint refinementVisits,
+    out uint proposalCount,
+    out uint guidedProposalCount,
+    out uint guidedValidCount,
+    out uint guidedZeroCount,
+    out uint cosineProposalCount,
+    out uint validSampleCount)
 {
     nearEstimate = vec3(0.0);
     confidence = 0.0;
@@ -1203,13 +1253,18 @@ bool EvaluateCandidate(
     maximumTraceSteps = 0u;
     maximumMipVisits = 0u;
     refinementVisits = 0u;
+    proposalCount = 0u;
+    guidedProposalCount = 0u;
+    guidedValidCount = 0u;
+    guidedZeroCount = 0u;
+    cosineProposalCount = 0u;
+    validSampleCount = 0u;
     if (pc.raysPerPixel == 0u || pc.raysPerPixel > 4u)
     {
         failureFlags = C5_TRACE_REASON_INVALID_RAY;
         return false;
     }
 
-    uint validSampleCount = 0u;
     float confidenceSum = 0.0;
     float representativeScore = -1.0;
     bool hasRepresentative = false;
@@ -1225,6 +1280,7 @@ bool EvaluateCandidate(
         uint singleTraceSteps;
         uint singleMipVisits;
         uint singleRefinementVisits;
+        uint singleProposalClass;
         bool singleValid = EvaluateSingleCandidate(
             pixel,
             metadataIndex,
@@ -1236,7 +1292,16 @@ bool EvaluateCandidate(
             singleRayLaunched,
             singleTraceSteps,
             singleMipVisits,
-            singleRefinementVisits);
+            singleRefinementVisits,
+            singleProposalClass);
+        if (singleProposalClass != C5_PROPOSAL_NONE)
+        {
+            proposalCount++;
+            if (singleProposalClass == C5_PROPOSAL_GUIDED)
+                guidedProposalCount++;
+            else
+                cosineProposalCount++;
+        }
         rayLaunched += singleRayLaunched;
         traceSteps += singleTraceSteps;
         mipVisits += singleMipVisits;
@@ -1251,6 +1316,11 @@ bool EvaluateCandidate(
             SimpleDdgiNearFieldMetadataFlags(singleMetadata),
             SIMPLE_DDGI_NEAR_FIELD_FLAG_SCREEN_SPACE_HIT);
         validSampleCount++;
+        if (singleProposalClass == C5_PROPOSAL_GUIDED)
+        {
+            guidedValidCount++;
+            guidedZeroCount += screenHit ? 0u : 1u;
+        }
         rayHitCount += screenHit ? 1u : 0u;
         nearEstimate += singleNear;
         // A miss remains a zero Monte Carlo sample while retaining a small
@@ -1269,16 +1339,16 @@ bool EvaluateCandidate(
         }
     }
 
-    if (rayLaunched == 0u || validSampleCount == 0u || !hasRepresentative)
+    if (proposalCount == 0u || validSampleCount == 0u || !hasRepresentative)
     {
         failureFlags |= C5_TRACE_REASON_INVALID_RAY;
         return false;
     }
-    float reciprocalLaunched = 1.0 / float(rayLaunched);
-    nearEstimate *= reciprocalLaunched;
-    float validRayCoverage = float(validSampleCount) * reciprocalLaunched;
-    confidence = clamp(confidenceSum * reciprocalLaunched *
-        validRayCoverage, 0.0, 1.0);
+    float reciprocalProposal = 1.0 / float(proposalCount);
+    nearEstimate *= reciprocalProposal;
+    float validSampleCoverage = float(validSampleCount) * reciprocalProposal;
+    confidence = clamp(confidenceSum * reciprocalProposal *
+        validSampleCoverage, 0.0, 1.0);
     return SimpleDdgiNearFieldFinite(nearEstimate) &&
         SimpleDdgiNearFieldFinite(confidence) && confidence > 0.0;
 }
@@ -1345,10 +1415,18 @@ void main()
     uint maximumTraceSteps = 0u;
     uint maximumMipVisits = 0u;
     uint refinementVisits = 0u;
+    uint proposalCount = 0u;
+    uint guidedProposalCount = 0u;
+    uint guidedValidCount = 0u;
+    uint guidedZeroCount = 0u;
+    uint cosineProposalCount = 0u;
+    uint validSampleCount = 0u;
     bool valid = covered && EvaluateCandidate(
         pixel, metadataIndex, nearEstimate, confidence, metadata,
         failureFlags, rayLaunched, rayHitCount, traceSteps, mipVisits,
-        maximumTraceSteps, maximumMipVisits, refinementVisits);
+        maximumTraceSteps, maximumMipVisits, refinementVisits,
+        proposalCount, guidedProposalCount, guidedValidCount,
+        guidedZeroCount, cosineProposalCount, validSampleCount);
 
     c5TileCovered[localIndex] = covered ? 1u : 0u;
     c5TileValid[localIndex] = valid ? 1u : 0u;
@@ -1356,6 +1434,12 @@ void main()
     c5TileConfidence[localIndex] = valid ? confidence : 0.0;
     c5TileReasonFlags[localIndex] = failureFlags;
     c5TileRayLaunched[localIndex] = rayLaunched;
+    c5TileProposalCount[localIndex] = proposalCount;
+    c5TileGuidedProposalCount[localIndex] = guidedProposalCount;
+    c5TileGuidedValidCount[localIndex] = guidedValidCount;
+    c5TileGuidedZeroCount[localIndex] = guidedZeroCount;
+    c5TileCosineProposalCount[localIndex] = cosineProposalCount;
+    c5TileValidSampleCount[localIndex] = validSampleCount;
     c5TileTraceSteps[localIndex] = traceSteps;
     c5TileMipVisits[localIndex] = mipVisits;
     c5TileMaximumTraceSteps[localIndex] = maximumTraceSteps;
@@ -1368,13 +1452,6 @@ void main()
     if (localIndex == 0u)
     {
         RecordTileSummary(tileIndex);
-        if (activeIndex == 0u)
-        {
-            traceTileRecords.words[4u] = pc.traceWidth;
-            traceTileRecords.words[5u] = pc.traceHeight;
-            atomicOr(traceTileRecords.words[7u],
-                SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE);
-        }
     }
     barrier();
 

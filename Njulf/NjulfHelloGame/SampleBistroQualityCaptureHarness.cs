@@ -41,7 +41,11 @@ public sealed record SampleBistroQualityFrameState(
     float DirectionalLightScale,
     float DirectionalLightYawOffsetRadians,
     bool HybridRayQueryEnabled,
-    bool LightingEventActive);
+    bool LightingEventActive)
+{
+    public TransparencyMode TransparencyMode { get; init; } =
+        TransparencyMode.SortedAlphaBlend;
+}
 
 /// <summary>
 /// Deterministic camera and lighting contract used by Bistro quality captures
@@ -51,7 +55,7 @@ public sealed record SampleBistroQualityFrameState(
 /// </summary>
 public sealed class SampleBistroQualityCaptureContract
 {
-    public const string Schema = "bistro-quality-run/v8";
+    public const string Schema = "bistro-quality-run/v9";
     public const int Width = 1920;
     public const int Height = 1080;
     public const int FramesPerSecond = 60;
@@ -191,7 +195,14 @@ public sealed class SampleBistroQualityCaptureContract
             lightScale,
             directionOffset,
             hybridRayQueryEnabled,
-            eventActive);
+            eventActive)
+        {
+            TransparencyMode =
+                Variant == SampleBistroQualityCaptureVariant.HybridRayQueryAb &&
+                loopFrameIndex >= LoopFrameCount / 2
+                    ? TransparencyMode.WeightedBlendedOit
+                    : TransparencyMode.SortedAlphaBlend
+        };
     }
 
     public SampleBistroQualityCameraBookmark ResolveCamera(int loopFrameIndex)
@@ -396,6 +407,18 @@ public sealed record SampleBistroQualityFrameTelemetry(
     public long GpuHybridReflectionTemporalMicroseconds { get; init; }
     public long GpuHybridReflectionSpatialMicroseconds { get; init; }
     public long GpuHybridReflectionCompositeMicroseconds { get; init; }
+    public TransparencyMode TransparencyMode { get; init; } =
+        TransparencyMode.SortedAlphaBlend;
+    public int TransparentSceneReflectionSsrSampleBudget { get; init; }
+    public uint TransparentReflectionRayRequestCount { get; init; }
+    public uint TransparentReflectionExactSsrEligibleCount { get; init; }
+    public uint TransparentReflectionExactSsrAdmittedCount { get; init; }
+    public uint TransparentReflectionExactSsrReservedSampleCount { get; init; }
+    public uint TransparentReflectionExactSsrActualSampleCount { get; init; }
+    public uint TransparentReflectionExactSsrHitCount { get; init; }
+    public uint TransparentReflectionExactSsrBudgetRejectedCount { get; init; }
+    public uint TransparentReflectionExactRayAdmittedCount { get; init; }
+    public uint TransparentReflectionExactRayBudgetRejectedCount { get; init; }
 }
 
 public sealed record SampleBistroQualityGateResult(
@@ -464,6 +487,10 @@ internal sealed class SampleBistroQualityRuntimeController
     private readonly Light _baseDirectionalLight;
     private readonly ReflectionMode _baseReflectionMode;
     private readonly float _baseRayQueryPixelBudgetFraction;
+    private readonly TransparencyMode _baseTransparencyMode;
+    private readonly bool _baseTransparentSampleReflections;
+    private readonly int _baseTransparentRayTaskBudget;
+    private readonly int _baseTransparentSsrSampleBudget;
     private readonly bool _baseAutoExposureEnabled;
     private readonly float _baseExposure;
     private SampleBistroQualityFrameState? _lastAppliedState;
@@ -494,6 +521,13 @@ internal sealed class SampleBistroQualityRuntimeController
         _baseReflectionMode = renderer.Settings.Reflections.Mode;
         _baseRayQueryPixelBudgetFraction =
             renderer.Settings.Reflections.RayQueryPixelBudgetFraction;
+        _baseTransparencyMode = renderer.Settings.Transparency.Mode;
+        _baseTransparentSampleReflections =
+            renderer.Settings.Transparency.SampleReflections;
+        _baseTransparentRayTaskBudget =
+            renderer.Settings.Transparency.SceneReflectionRayTaskBudget;
+        _baseTransparentSsrSampleBudget =
+            renderer.Settings.Transparency.SceneReflectionSsrSampleBudget;
         _baseAutoExposureEnabled = renderer.Settings.AutoExposure.Enabled;
         _baseExposure = renderer.Settings.Exposure;
     }
@@ -519,6 +553,13 @@ internal sealed class SampleBistroQualityRuntimeController
         _renderer.Settings.Reflections.Mode = _baseReflectionMode;
         _renderer.Settings.Reflections.RayQueryPixelBudgetFraction =
             _baseRayQueryPixelBudgetFraction;
+        _renderer.Settings.Transparency.Mode = _baseTransparencyMode;
+        _renderer.Settings.Transparency.SampleReflections =
+            _baseTransparentSampleReflections;
+        _renderer.Settings.Transparency.SceneReflectionRayTaskBudget =
+            _baseTransparentRayTaskBudget;
+        _renderer.Settings.Transparency.SceneReflectionSsrSampleBudget =
+            _baseTransparentSsrSampleBudget;
         _renderer.Settings.Exposure = _baseExposure;
         _renderer.Settings.AutoExposure.Enabled = _baseAutoExposureEnabled;
     }
@@ -575,6 +616,14 @@ internal sealed class SampleBistroQualityRuntimeController
                 state.HybridRayQueryEnabled
                     ? _baseRayQueryPixelBudgetFraction
                     : 0.0f;
+            _renderer.Settings.Transparency.Mode = state.TransparencyMode;
+            _renderer.Settings.Transparency.SampleReflections = true;
+            _renderer.Settings.Transparency.SceneReflectionRayTaskBudget =
+                state.HybridRayQueryEnabled
+                    ? Math.Max(_baseTransparentRayTaskBudget, 65_536)
+                    : 0;
+            _renderer.Settings.Transparency.SceneReflectionSsrSampleBudget =
+                Math.Max(_baseTransparentSsrSampleBudget, 4_194_304);
         }
     }
 
@@ -888,7 +937,28 @@ internal sealed class SampleBistroQualityCaptureRunner
                 GpuHybridReflectionSpatialMicroseconds =
                     diagnostics.GpuHybridReflectionSpatialMicroseconds,
                 GpuHybridReflectionCompositeMicroseconds =
-                    diagnostics.GpuHybridReflectionCompositeMicroseconds
+                    diagnostics.GpuHybridReflectionCompositeMicroseconds,
+                TransparencyMode = diagnostics.TransparencyMode,
+                TransparentSceneReflectionSsrSampleBudget =
+                    diagnostics.TransparentSceneReflectionSsrSampleBudget,
+                TransparentReflectionRayRequestCount =
+                    diagnostics.TransparentReflectionRayRequestCount,
+                TransparentReflectionExactSsrEligibleCount =
+                    diagnostics.TransparentReflectionExactSsrEligibleCount,
+                TransparentReflectionExactSsrAdmittedCount =
+                    diagnostics.TransparentReflectionExactSsrAdmittedCount,
+                TransparentReflectionExactSsrReservedSampleCount =
+                    diagnostics.TransparentReflectionExactSsrReservedSampleCount,
+                TransparentReflectionExactSsrActualSampleCount =
+                    diagnostics.TransparentReflectionExactSsrActualSampleCount,
+                TransparentReflectionExactSsrHitCount =
+                    diagnostics.TransparentReflectionExactSsrHitCount,
+                TransparentReflectionExactSsrBudgetRejectedCount =
+                    diagnostics.TransparentReflectionExactSsrBudgetRejectedCount,
+                TransparentReflectionExactRayAdmittedCount =
+                    diagnostics.TransparentReflectionExactRayAdmittedCount,
+                TransparentReflectionExactRayBudgetRejectedCount =
+                    diagnostics.TransparentReflectionExactRayBudgetRejectedCount
             };
             _frames.Add(frame);
         }

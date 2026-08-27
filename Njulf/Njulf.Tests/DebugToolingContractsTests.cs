@@ -173,9 +173,9 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.TransparentReflectionTaskCounter,
                     Is.EqualTo(RendererDiagnosticsBuffer.TransparentReflectionCounterBase));
                 Assert.That(RendererDiagnosticsBuffer.TransparentReflectionCounterCount,
-                    Is.EqualTo(8));
+                    Is.EqualTo(16));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
-                    Is.EqualTo(RendererDiagnosticsBuffer.TransparentReflectionCounterBase + 8));
+                    Is.EqualTo(RendererDiagnosticsBuffer.TransparentReflectionCounterBase + 16));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount *
                                             sizeof(uint)));
@@ -216,6 +216,10 @@ namespace Njulf.Tests
                     "TRANSPARENT_REFLECTION_COUNTER_BASE ="));
                 Assert.That(commonShader, Does.Contain(
                     "TRANSPARENT_REFLECTION_ENVIRONMENT_FALLBACK_COUNTER ="));
+                Assert.That(commonShader, Does.Contain(
+                    "TRANSPARENT_REFLECTION_SSR_RESERVED_SAMPLE_COUNTER ="));
+                Assert.That(commonShader, Does.Contain(
+                    "TRANSPARENT_REFLECTION_RAY_EXACT_BUDGET_REJECT_COUNTER ="));
                 Assert.That(simpleSharedShader, Does.Contain(
                     "void RecordSimpleDdgiVolumeEnergyEvidence("));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -1145,6 +1149,43 @@ namespace Njulf.Tests
                 timestampPeriodNanoseconds: 4.0f);
 
             Assert.That(microseconds, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void GpuTimingSnapshot_SubMicrosecondDeltaRemainsAvailable()
+        {
+            bool available = FrameTimingSnapshot.TryConvertTimestampDeltaToMicroseconds(
+                start: 100,
+                end: 101,
+                timestampPeriodNanoseconds: 1.0f,
+                out long microseconds);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(available, Is.True);
+                Assert.That(microseconds, Is.Zero);
+            });
+        }
+
+        [TestCase(100UL, 100UL, 1.0f)]
+        [TestCase(101UL, 100UL, 1.0f)]
+        [TestCase(100UL, 101UL, 0.0f)]
+        public void GpuTimingSnapshot_InvalidDeltaIsUnavailable(
+            ulong start,
+            ulong end,
+            float timestampPeriodNanoseconds)
+        {
+            bool available = FrameTimingSnapshot.TryConvertTimestampDeltaToMicroseconds(
+                start,
+                end,
+                timestampPeriodNanoseconds,
+                out long microseconds);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(available, Is.False);
+                Assert.That(microseconds, Is.Zero);
+            });
         }
 
         [Test]

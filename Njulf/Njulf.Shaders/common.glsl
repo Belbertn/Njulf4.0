@@ -1194,6 +1194,28 @@ uint ForwardTotalLightCount(GPUForwardPushConstants pushConstants)
         FORWARD_TOTAL_LIGHT_COUNT_MASK;
 }
 
+// Scale-invariant geometric-normal offset from Ray Tracing Gems. The integer
+// ULP displacement remains effective far from the origin while the small
+// floating displacement handles coordinates whose exponent is near zero.
+vec3 NjulfOffsetRayOrigin(vec3 position, vec3 geometricNormal)
+{
+    const float origin = 1.0 / 32.0;
+    const float floatScale = 1.0 / 65536.0;
+    const float integerScale = 256.0;
+    ivec3 integerOffset = ivec3(integerScale * geometricNormal);
+    ivec3 positionBits = floatBitsToInt(position);
+    positionBits += ivec3(
+        position.x < 0.0 ? -integerOffset.x : integerOffset.x,
+        position.y < 0.0 ? -integerOffset.y : integerOffset.y,
+        position.z < 0.0 ? -integerOffset.z : integerOffset.z);
+    vec3 ulpOffsetPosition = intBitsToFloat(positionBits);
+    vec3 nearOriginPosition = position + floatScale * geometricNormal;
+    return mix(
+        ulpOffsetPosition,
+        nearOriginPosition,
+        lessThan(abs(position), vec3(origin)));
+}
+
 uint ForwardDirectionalLightCount(GPUForwardPushConstants pushConstants)
 {
     return min(
@@ -1369,7 +1391,7 @@ struct GPUReflectionProbeHeader
     float SsrConfidenceThreshold;
     uint SceneReflectionRayTaskBudget;
     uint RayQueryHitLightLimit;
-    uint Padding0;
+    uint SceneReflectionSsrSampleBudget;
     uint Padding1;
     uint Padding2;
 };
@@ -2331,6 +2353,22 @@ const uint TRANSPARENT_REFLECTION_PROBE_FALLBACK_COUNTER =
     TRANSPARENT_REFLECTION_COUNTER_BASE + 6u;
 const uint TRANSPARENT_REFLECTION_ENVIRONMENT_FALLBACK_COUNTER =
     TRANSPARENT_REFLECTION_COUNTER_BASE + 7u;
+const uint TRANSPARENT_REFLECTION_SSR_ELIGIBLE_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 8u;
+const uint TRANSPARENT_REFLECTION_SSR_ADMITTED_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 9u;
+const uint TRANSPARENT_REFLECTION_SSR_RESERVED_SAMPLE_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 10u;
+const uint TRANSPARENT_REFLECTION_SSR_ACTUAL_SAMPLE_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 11u;
+const uint TRANSPARENT_REFLECTION_SSR_EXACT_HIT_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 12u;
+const uint TRANSPARENT_REFLECTION_SSR_BUDGET_REJECT_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 13u;
+const uint TRANSPARENT_REFLECTION_RAY_ADMITTED_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 14u;
+const uint TRANSPARENT_REFLECTION_RAY_EXACT_BUDGET_REJECT_COUNTER =
+    TRANSPARENT_REFLECTION_COUNTER_BASE + 15u;
 const float SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_SUM_SCALE = 256.0;
 const float SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_MAX_SCALE = 65535.0;
 const float DDGI_MANY_LIGHT_PDF_SCALE = 1048576.0;
@@ -4664,7 +4702,7 @@ GPUReflectionProbeHeader ReadReflectionProbeHeader()
     header.SsrConfidenceThreshold = uintBitsToFloat(screenTraceControls.z);
     header.SceneReflectionRayTaskBudget = screenTraceControls.w;
     header.RayQueryHitLightLimit = rayTraceControls.x;
-    header.Padding0 = rayTraceControls.y;
+    header.SceneReflectionSsrSampleBudget = rayTraceControls.y;
     header.Padding1 = rayTraceControls.z;
     header.Padding2 = rayTraceControls.w;
     return header;

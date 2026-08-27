@@ -204,18 +204,44 @@ has an explicit readback state. Only `Available` with both timestamp and
 counter readback valid is a measured GPU sample. `PendingRendererIntegration`
 can report an admitted CPU memory plan but deliberately reports zero live
 allocation, timings, counters, energy, and capture IDs; it must never be used
-to claim a C5 implementation ran. The current renderer records dedicated C5
-passes and counter readback only after evidence-bound admission; incomplete
-frames remain pending or faulted. Snapshot migrations never infer C5 telemetry
-from a mode bit.
+to claim a C5 implementation ran. The renderer records dedicated reset,
+prepare, trace, temporal, optional filter/frequency, composite, and finalize
+passes only after evidence-bound admission. The V13 finalize dispatch reduces
+immutable per-tile records and publishes the completion word last; no earlier
+workgroup may claim whole-frame completion. Snapshot migrations never infer C5
+telemetry from a mode bit.
+
+Starting another frame does not erase the last common-frame sample. An
+`Available` sample remains authoritative while a newer readback is in flight;
+`AgeFrames` advances and the status states that newer work is pending. A valid
+positive timestamp delta also remains available when its display conversion
+rounds below one microsecond to `0 us`. If a required timestamp is genuinely
+absent, the pending status names the exact pass instead of presenting the whole
+stage set as zero-cost work.
+
+A single fence-complete validation failure retains the last valid witness and
+increments the recovery streak. The last rejected stage-specific integrity
+reason remains visible after a later valid frame so an intermittent fault cannot
+erase its own evidence. Three consecutive failures suppress new C5 work and
+request one fresh generation even when the layout is unchanged. The replacement
+has eight frames to produce an authoritative witness. A failed rebuild or missed
+deadline enters fence-backed terminal retirement; effective mode may become
+`Off/ResourceIncomplete` only after active, pending, and retired C5 allocations
+reach zero live bytes. Adaptive tiers encode compacted tile identities with the
+active trace-width stride, not the larger admitted-allocation stride; trace,
+temporal, finalization, and CPU validation therefore address the same dense tile
+domain after a resolution transition.
 
 For an authoritative C5 frame, inspect its exclusive source/raw-trace/temporal/
-filter/composite timings together with rays/hits/misses, bounded-step and
-mip-visit rejects, history accepts/rejects, variance clipping, signed and
-absolute residual energy, tile compaction/overflow, and exact requested/
-admitted/allocated/peak/retired bytes. A non-finite statistic, incomplete
-readback, stale source/layout identity, or missing reference capture is a
-failed qualification sample, not a zero-cost or zero-error result.
+filter/composite/finalize timings together with exact cosine/guided proposal,
+valid-sample, rays/hits/misses, bounded-step and mip-visit reject, history
+accept/reject, variance clipping, signed and absolute residual energy, tile
+compaction/overflow, and requested/admitted/allocated/peak/retired byte
+counters. Proposal totals must equal cosine plus guided proposals; guided zero
+samples must be a subset of valid guided proposals; rays and valid samples may
+not exceed proposals. A non-finite statistic, incomplete readback, stale
+source/layout identity, or missing reference capture is a failed qualification
+sample, not a zero-cost or zero-error result.
 
 Performance snapshot schemas add these contracts incrementally: v5 C5, v6/v7
 C1 lifecycle/content, v8 C3, v9 C4, and v10 B1. Opening an older schema

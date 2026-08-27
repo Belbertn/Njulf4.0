@@ -554,7 +554,7 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
                 Is.EqualTo(valid.TileBuffersBytes *
                     (ulong)RenderingConstants.FramesInFlight));
             Assert.That(valid.HitMetadataBytes, Is.Zero,
-                "V12 writes trace metadata directly into the current history bank.");
+                "V13 writes trace metadata directly into the current history bank.");
             Assert.That(valid.HistoryRadianceBytes, Is.GreaterThan(0));
             Assert.That(valid.HistoryNormalBytes, Is.GreaterThan(0));
             Assert.That(rejected.IsValid, Is.False);

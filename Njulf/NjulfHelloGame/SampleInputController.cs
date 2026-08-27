@@ -2871,6 +2871,7 @@ internal sealed class SampleInputController
             $"{prefix}: {(transparency.Enabled ? "enabled" : "disabled")}, mode={transparency.Mode}, " +
             $"debug={transparency.DebugView}, receiveShadows={(transparency.ReceiveShadows ? "on" : "off")}, " +
             $"sampleReflections={(transparency.SampleReflections ? "on" : "off")}, sortPerMeshlet={(transparency.SortPerMeshlet ? "on" : "off")}, " +
+            $"ssrSamples={transparency.SceneReflectionSsrSampleBudget}, reflectionRays={transparency.SceneReflectionRayTaskBudget}, " +
             $"maxMeshlets={transparency.MaxTransparentMeshlets}, alphaDiscard={transparency.AlphaDiscardThreshold:F4}, " +
             $"geometryDecals={(decals.GeometryDecalsEnabled ? "on" : "off")}, decalDebug={decals.DebugView}, " +
             $"decalBias={decals.GeometryDepthBias:F5}, decalSlopeBias={decals.GeometrySlopeScaledDepthBias:F2}");

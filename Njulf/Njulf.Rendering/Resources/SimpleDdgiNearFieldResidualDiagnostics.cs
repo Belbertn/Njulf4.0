@@ -66,6 +66,13 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
             ulong validSum = 0UL;
             ulong invalidSum = 0UL;
             ulong raysLaunched = 0UL;
+            ulong rayHitSum = 0UL;
+            ulong proposalSampleCount = 0UL;
+            ulong guidedProposalSampleCount = 0UL;
+            ulong guidedValidSampleCount = 0UL;
+            ulong guidedZeroContributionSampleCount = 0UL;
+            ulong cosineProposalSampleCount = 0UL;
+            ulong validSampleCount = 0UL;
             ulong screenExits = 0UL;
             ulong invalidReceivers = 0UL;
             ulong invalidRays = 0UL;
@@ -116,9 +123,19 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
                 ? 0U
                 : SimpleDdgiNearFieldResidualGpuAbi
                     .TelemetryRequiredCompletionMask;
-            if (overflowTiles != 0U || words[15] != 0U)
+            uint overflowFlags = words[15];
+            if (overflowTiles != 0U)
             {
                 reason = "near-field-completion-tile-list-overflow";
+                return false;
+            }
+            if (overflowFlags != 0U)
+            {
+                reason = DescribeOverflowFlags(
+                    overflowFlags,
+                    words,
+                    tileCount,
+                    compactedTiles);
                 return false;
             }
             if (words[0] != SimpleDdgiNearFieldResidualGpuAbi.TelemetryMagic ||
@@ -137,7 +154,8 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
                 emptyTiles > candidateTiles ||
                 activeTiles + emptyTiles != candidateTiles ||
                 compactedTiles + overflowTiles != activeTiles ||
-                words[22] != 0U || words[23] != 0U)
+                words[28] != 0U || words[29] != 0U ||
+                words[30] != 0U || words[31] != 0U)
             {
                 reason = "near-field-completion-header-identity-invalid";
                 return false;
@@ -213,6 +231,25 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
                     UnpackTileCount(detailedHistory0, 3);
                 uint tileSourceReactiveRejects =
                     UnpackTileCount(detailedHistory1, 0);
+                uint proposalCounts = words[word + 19];
+                uint guidedAndTraversalCounts = words[word + 20];
+                uint hitAndValidSampleCounts = words[word + 21];
+                uint tileProposalCount = UnpackNineBitCount(
+                    proposalCounts, 0);
+                uint tileGuidedProposalCount = UnpackNineBitCount(
+                    proposalCounts, 1);
+                uint tileGuidedValidCount = UnpackNineBitCount(
+                    proposalCounts, 2);
+                uint tileGuidedZeroCount = UnpackNineBitCount(
+                    guidedAndTraversalCounts, 0);
+                uint tileCosineProposalCount = UnpackNineBitCount(
+                    guidedAndTraversalCounts, 1);
+                uint tileTracedRayCount = UnpackNineBitCount(
+                    guidedAndTraversalCounts, 2);
+                uint tileRayHitCount = UnpackNineBitCount(
+                    hitAndValidSampleCounts, 0);
+                uint tileValidSampleCount = UnpackNineBitCount(
+                    hitAndValidSampleCounts, 1);
                 uint visitTotals = words[word + 7];
                 uint peakAndRefinement = words[word + 8];
                 uint tileTotalTraceSteps = visitTotals & 0xffffU;
@@ -229,7 +266,16 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
                     Math.Min(TileHeight, layout.TraceHeight - tileY * TileHeight)));
                 if (covered != expectedCovered || valid > covered ||
                     invalid > covered || valid + invalid != covered ||
-                    rays > covered * 4U || valid > rays ||
+                    rays > covered * 4U ||
+                    tileProposalCount > covered * 4U ||
+                    tileTracedRayCount != rays ||
+                    tileGuidedProposalCount + tileCosineProposalCount !=
+                        tileProposalCount ||
+                    tileGuidedValidCount > tileGuidedProposalCount ||
+                    tileGuidedZeroCount > tileGuidedValidCount ||
+                    tileValidSampleCount > tileProposalCount ||
+                    tileTracedRayCount > tileProposalCount ||
+                    tileRayHitCount > tileTracedRayCount ||
                     tileHistoryCandidates > valid ||
                     tileHistoryAccepted > tileHistoryCandidates ||
                     tileScreenExits > covered || tileInvalidReceivers > covered ||
@@ -262,7 +308,7 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
                         tileEpochRejects ||
                     UnpackTileCount(detailedHistory2, 3) !=
                         tileInvalidCurrent ||
-                    words[word + 19] != 0U ||
+                    words[word + 22] != 0U || words[word + 23] != 0U ||
                     tileNonFiniteEnergy > tileHistoryCandidates ||
                     tileTotalTraceSteps >
                         rays * SimpleDdgiNearFieldResidualGpuAbi.MaximumTraceSteps ||
@@ -323,6 +369,19 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
                 validSum = checked(validSum + valid);
                 invalidSum = checked(invalidSum + invalid);
                 raysLaunched = checked(raysLaunched + rays);
+                rayHitSum = checked(rayHitSum + tileRayHitCount);
+                proposalSampleCount = checked(
+                    proposalSampleCount + tileProposalCount);
+                guidedProposalSampleCount = checked(
+                    guidedProposalSampleCount + tileGuidedProposalCount);
+                guidedValidSampleCount = checked(
+                    guidedValidSampleCount + tileGuidedValidCount);
+                guidedZeroContributionSampleCount = checked(
+                    guidedZeroContributionSampleCount + tileGuidedZeroCount);
+                cosineProposalSampleCount = checked(
+                    cosineProposalSampleCount + tileCosineProposalCount);
+                validSampleCount = checked(
+                    validSampleCount + tileValidSampleCount);
                 screenExits = checked(screenExits + tileScreenExits);
                 invalidReceivers = checked(invalidReceivers + tileInvalidReceivers);
                 invalidRays = checked(invalidRays + tileInvalidRays);
@@ -385,19 +444,57 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
             ulong rayMisses = words[11];
             ulong maximumCandidateReceivers = checked(
                 (ulong)layout.TraceWidth * (ulong)layout.TraceHeight);
-            if (coveredSum > maximumCandidateReceivers ||
-                recordedTiles != compactedTiles ||
-                validSum + invalidSum != coveredSum ||
-                words[8] != (uint)coveredSum || words[9] != (uint)raysLaunched ||
-                rayHits > raysLaunched ||
-                rayMisses != raysLaunched - rayHits ||
-                words[12] != (uint)invalidReceivers ||
-                words[13] != (uint)invalidRays ||
-                words[14] != (uint)invalidSum)
-            {
-                reason = "near-field-completion-header-summary-mismatch";
-                return false;
-            }
+            if (coveredSum > maximumCandidateReceivers)
+                return SummaryMismatch("covered-capacity",
+                    maximumCandidateReceivers, coveredSum, out reason);
+            if (recordedTiles != compactedTiles)
+                return SummaryMismatch("recorded-tiles",
+                    compactedTiles, recordedTiles, out reason);
+            if (validSum + invalidSum != coveredSum)
+                return SummaryMismatch("receiver-validity",
+                    coveredSum, validSum + invalidSum, out reason);
+            if (words[8] != coveredSum)
+                return SummaryMismatch("candidate-receivers",
+                    words[8], coveredSum, out reason);
+            if (words[9] != raysLaunched)
+                return SummaryMismatch("traced-rays",
+                    words[9], raysLaunched, out reason);
+            if (rayHits != rayHitSum)
+                return SummaryMismatch("ray-hits",
+                    rayHits, rayHitSum, out reason);
+            if (rayHits > raysLaunched)
+                return SummaryMismatch("ray-hit-upper-bound",
+                    raysLaunched, rayHits, out reason);
+            if (rayMisses != raysLaunched - rayHits)
+                return SummaryMismatch("ray-misses",
+                    rayMisses, raysLaunched - rayHits, out reason);
+            if (words[12] != invalidReceivers)
+                return SummaryMismatch("invalid-receivers",
+                    words[12], invalidReceivers, out reason);
+            if (words[13] != invalidRays)
+                return SummaryMismatch("invalid-rays",
+                    words[13], invalidRays, out reason);
+            if (words[14] != invalidSum)
+                return SummaryMismatch("invalid-candidates",
+                    words[14], invalidSum, out reason);
+            if (words[22] != proposalSampleCount)
+                return SummaryMismatch("proposal-samples",
+                    words[22], proposalSampleCount, out reason);
+            if (words[23] != guidedProposalSampleCount)
+                return SummaryMismatch("guided-proposals",
+                    words[23], guidedProposalSampleCount, out reason);
+            if (words[24] != guidedValidSampleCount)
+                return SummaryMismatch("guided-valid-samples",
+                    words[24], guidedValidSampleCount, out reason);
+            if (words[25] != guidedZeroContributionSampleCount)
+                return SummaryMismatch("guided-zero-samples",
+                    words[25], guidedZeroContributionSampleCount, out reason);
+            if (words[26] != cosineProposalSampleCount)
+                return SummaryMismatch("cosine-proposals",
+                    words[26], cosineProposalSampleCount, out reason);
+            if (words[27] != validSampleCount)
+                return SummaryMismatch("valid-samples",
+                    words[27], validSampleCount, out reason);
 
             witness = new SimpleDdgiNearFieldResidualCompletionWitness(
                 completedFrameSerial,
@@ -414,7 +511,16 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
                     depthRejects,
                     normalRejects,
                     sourceRejects,
-                    nonFiniteRejects),
+                    nonFiniteRejects)
+                {
+                    ProposalSampleCount = proposalSampleCount,
+                    GuidedProposalSampleCount = guidedProposalSampleCount,
+                    GuidedValidSampleCount = guidedValidSampleCount,
+                    GuidedZeroContributionSampleCount =
+                        guidedZeroContributionSampleCount,
+                    CosineProposalSampleCount = cosineProposalSampleCount,
+                    ValidSampleCount = validSampleCount
+                },
                 new SimpleDdgiNearFieldResidualHistoryTelemetry(
                     historyCandidates,
                     historyAccepted,
@@ -474,8 +580,112 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
         }
     }
 
+    private static string DescribeOverflowFlags(
+        uint flags,
+        ReadOnlySpan<uint> words,
+        int tileCount,
+        uint compactedTiles)
+    {
+        if ((flags & SimpleDdgiNearFieldResidualGpuAbi
+                .TelemetryFinalizeRecordInvalidBit) != 0U)
+        {
+            uint recordedTiles = 0U;
+            for (int tileIndex = 0; tileIndex < tileCount; tileIndex++)
+            {
+                int record = checked(HeaderWordCount + tileIndex * TileWordCount);
+                uint completion = words[record + 15] >> 16;
+                if (completion == 0U)
+                    continue;
+                recordedTiles++;
+                if ((completion & SimpleDdgiNearFieldResidualGpuAbi
+                        .TelemetryRequiredCompletionMask) !=
+                    SimpleDdgiNearFieldResidualGpuAbi
+                        .TelemetryRequiredCompletionMask)
+                {
+                    return $"near-field-completion-finalize-record-completion-" +
+                           $"invalid:tile={tileIndex};mask=0x{completion:X4};" +
+                           $"flags=0x{flags:X8}";
+                }
+                if (words[record] != (uint)tileIndex)
+                {
+                    return $"near-field-completion-finalize-record-index-" +
+                           $"invalid:tile={tileIndex};record={words[record]};" +
+                           $"flags=0x{flags:X8}";
+                }
+                if (words[record + 22] != 0U || words[record + 23] != 0U)
+                {
+                    return $"near-field-completion-finalize-record-reserved-" +
+                           $"invalid:tile={tileIndex};flags=0x{flags:X8}";
+                }
+
+                uint traceCounts = words[record + 1];
+                uint tracedRays = (traceCounts >> 21) & 0x1ffU;
+                uint proposals = UnpackNineBitCount(words[record + 19], 0);
+                uint guided = UnpackNineBitCount(words[record + 19], 1);
+                uint guidedValid = UnpackNineBitCount(words[record + 19], 2);
+                uint guidedZero = UnpackNineBitCount(words[record + 20], 0);
+                uint cosine = UnpackNineBitCount(words[record + 20], 1);
+                uint independentlyPackedTraced =
+                    UnpackNineBitCount(words[record + 20], 2);
+                uint hits = UnpackNineBitCount(words[record + 21], 0);
+                uint validSamples = UnpackNineBitCount(words[record + 21], 1);
+                if (independentlyPackedTraced != tracedRays ||
+                    guided + cosine != proposals || guidedValid > guided ||
+                    guidedZero > guidedValid || validSamples > proposals ||
+                    tracedRays > proposals || hits > tracedRays)
+                {
+                    return $"near-field-completion-finalize-record-counts-" +
+                           $"invalid:tile={tileIndex};proposals={proposals};" +
+                           $"guided={guided};guidedValid={guidedValid};" +
+                           $"guidedZero={guidedZero};cosine={cosine};" +
+                           $"traced={tracedRays};packedTraced=" +
+                           $"{independentlyPackedTraced};hits={hits};" +
+                           $"valid={validSamples};flags=0x{flags:X8}";
+                }
+            }
+            if (recordedTiles != compactedTiles)
+            {
+                return $"near-field-completion-finalize-record-count-" +
+                       $"mismatch:recorded={recordedTiles};" +
+                       $"compacted={compactedTiles};flags=0x{flags:X8}";
+            }
+        }
+
+        string stage = (flags & SimpleDdgiNearFieldResidualGpuAbi
+                .TelemetryTemporalRecordIdentityMismatchBit) != 0U
+            ? "temporal-record-identity-mismatch"
+            : (flags & SimpleDdgiNearFieldResidualGpuAbi
+                    .TelemetryTemporalRecordOverflowBit) != 0U
+                ? "temporal-record-overflow"
+                : (flags & SimpleDdgiNearFieldResidualGpuAbi
+                        .TelemetryTraceRecordOverflowBit) != 0U
+                    ? "trace-record-overflow"
+                    : (flags & SimpleDdgiNearFieldResidualGpuAbi
+                            .TelemetryFinalizeRecordInvalidBit) != 0U
+                        ? "finalize-record-invalid"
+                        : "unknown";
+        uint unknown = flags & ~SimpleDdgiNearFieldResidualGpuAbi
+            .TelemetryKnownOverflowFlags;
+        return $"near-field-completion-{stage}:flags=0x{flags:X8};" +
+               $"unknown=0x{unknown:X8}";
+    }
+
     private static uint UnpackTileCount(uint packed, int lane) =>
         (packed >> checked(lane * 8)) & 0xffU;
+
+    private static uint UnpackNineBitCount(uint packed, int lane) =>
+        (packed >> checked(lane * 9)) & 0x1ffU;
+
+    private static bool SummaryMismatch(
+        string invariant,
+        ulong headerValue,
+        ulong tileValue,
+        out string reason)
+    {
+        reason = $"near-field-completion-{invariant}-mismatch:" +
+            $"header={headerValue},tiles={tileValue}";
+        return false;
+    }
 }
 
 /// <summary>
@@ -640,6 +850,9 @@ public readonly record struct SimpleDdgiNearFieldResidualStageTimings(
     /// <summary>Reset plus receiver preparation and GPU tile compaction.</summary>
     public ulong PrepareCompactionMicroseconds { get; init; }
 
+    /// <summary>Post-temporal authoritative tile-to-header reduction.</summary>
+    public ulong FinalizationMicroseconds { get; init; }
+
     /// <summary>B3-sized low estimate and signed band construction.</summary>
     public ulong FrequencySeparationMicroseconds { get; init; }
 
@@ -661,10 +874,12 @@ public readonly record struct SimpleDdgiNearFieldResidualStageTimings(
         SaturatingAdd(
             TemporalMicroseconds,
             SaturatingAdd(
-                FilterMicroseconds,
+                FinalizationMicroseconds,
                 SaturatingAdd(
-                    FrequencySeparationMicroseconds,
-                    CompositeMicroseconds))));
+                    FilterMicroseconds,
+                    SaturatingAdd(
+                        FrequencySeparationMicroseconds,
+                        CompositeMicroseconds)))));
 
     [JsonIgnore]
     public ulong ExclusiveComputeMicroseconds => SaturatingAdd(
@@ -674,10 +889,12 @@ public readonly record struct SimpleDdgiNearFieldResidualStageTimings(
             SaturatingAdd(
                 TemporalMicroseconds,
                 SaturatingAdd(
-                    FilterMicroseconds,
+                    FinalizationMicroseconds,
                     SaturatingAdd(
-                        FrequencySeparationMicroseconds,
-                        CompositeMicroseconds)))));
+                        FilterMicroseconds,
+                        SaturatingAdd(
+                            FrequencySeparationMicroseconds,
+                            CompositeMicroseconds))))));
 
     private static ulong SaturatingAdd(ulong left, ulong right) =>
         ulong.MaxValue - left < right ? ulong.MaxValue : left + right;
@@ -703,6 +920,13 @@ public readonly record struct SimpleDdgiNearFieldResidualTraceTelemetry(
     ulong TraceSourceRejectedCount,
     ulong NonFiniteRejectedCount)
 {
+    public ulong ProposalSampleCount { get; init; }
+    public ulong GuidedProposalSampleCount { get; init; }
+    public ulong GuidedValidSampleCount { get; init; }
+    public ulong GuidedZeroContributionSampleCount { get; init; }
+    public ulong CosineProposalSampleCount { get; init; }
+    public ulong ValidSampleCount { get; init; }
+
     public static SimpleDdgiNearFieldResidualTraceTelemetry Empty { get; } = new(
         0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL, 0UL);
 }
@@ -806,6 +1030,33 @@ public readonly record struct SimpleDdgiNearFieldResidualCaptureIdentifiers(
 }
 
 /// <summary>
+/// Recovery state for rejected fence-complete telemetry frames. A transient
+/// rejection does not invalidate the last authoritative witness or alter the
+/// adaptive governor. Three consecutive failures request one generation-safe
+/// rebuild; a rebuilt generation has a bounded validation window.
+/// </summary>
+public readonly record struct SimpleDdgiNearFieldResidualRecoveryTelemetry(
+    uint ConsecutiveInvalidTelemetryFrames,
+    uint GenerationRebuildAttemptCount,
+    bool GenerationRebuildPending,
+    ulong ValidationDeadlineFrame,
+    string LastFailureReason)
+{
+    public static SimpleDdgiNearFieldResidualRecoveryTelemetry Empty { get; } =
+        new(0U, 0U, false, 0UL, string.Empty);
+
+    public SimpleDdgiNearFieldResidualRecoveryTelemetry Normalize() => new(
+        ConsecutiveInvalidTelemetryFrames,
+        GenerationRebuildAttemptCount,
+        GenerationRebuildPending,
+        GenerationRebuildPending ? ValidationDeadlineFrame : 0UL,
+        string.IsNullOrWhiteSpace(LastFailureReason)
+            ? string.Empty
+            : SimpleDdgiNearFieldResidualDiagnosticsText.NormalizeReason(
+                LastFailureReason));
+}
+
+/// <summary>
 /// CPU-owned resolution-governor state paired with the fence-complete timing
 /// sample. SampledExtent names the dispatch measured by the current timings;
 /// ActiveExtent names the next dispatch extent after applying that sample.
@@ -883,11 +1134,14 @@ public sealed record SimpleDdgiNearFieldResidualDiagnostics(
     SimpleDdgiNearFieldResidualTileTelemetry Tiles,
     SimpleDdgiNearFieldResidualCaptureIdentifiers CaptureIdentifiers)
 {
-    public const uint CurrentContractVersion = 3U;
+    public const uint CurrentContractVersion = 4U;
 
     public SimpleDdgiNearFieldResidualAdaptiveResolutionTelemetry
         AdaptiveResolution { get; init; } =
             SimpleDdgiNearFieldResidualAdaptiveResolutionTelemetry.Empty;
+
+    public SimpleDdgiNearFieldResidualRecoveryTelemetry Recovery { get; init; } =
+        SimpleDdgiNearFieldResidualRecoveryTelemetry.Empty;
 
     [JsonIgnore]
     public bool IsAuthoritativeReadback => Readback.IsAuthoritative;
@@ -1070,7 +1324,8 @@ public sealed record SimpleDdgiNearFieldResidualDiagnostics(
                 countersAreValid ? Tiles : SimpleDdgiNearFieldResidualTileTelemetry.Empty,
                 SimpleDdgiNearFieldResidualCaptureIdentifiers.None)
             {
-                AdaptiveResolution = AdaptiveResolution.Normalize()
+                AdaptiveResolution = AdaptiveResolution.Normalize(),
+                Recovery = Recovery.Normalize()
             };
         }
 
@@ -1100,6 +1355,7 @@ public sealed record SimpleDdgiNearFieldResidualDiagnostics(
             Readback = readback,
             Memory = memory,
             AdaptiveResolution = AdaptiveResolution.Normalize(),
+            Recovery = Recovery.Normalize(),
             CaptureIdentifiers = CaptureIdentifiers.Normalize()
         };
     }

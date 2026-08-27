@@ -63,10 +63,11 @@ $shaderFiles = @($allShaderFiles | Where-Object {
 $algorithmicAtomicCounts = @{
     # Lock-free, bounded receiver demand, exact gather attribution, and one
     # accumulated B1 interpolation-mass add per optimized gather site.
-    # Transparent scene reflections add four statically distinct sparse
-    # source-estimate atomics. Opaque siblings compile the feature out and
-    # retain their established counts below.
-    'forward.frag.spv' = 18
+    # Transparent scene reflections retain four sparse source-estimate atomics
+    # and add exact, frame-global SSR admission/reservation/sample/hit budget
+    # accounting. Opaque siblings compile the feature out and retain their
+    # established counts below.
+    'forward.frag.spv' = 26
     'forward_opaque_ddgi.frag.spv' = 14
     'forward_opaque_ddgi_provenance.frag.spv' = 14
     'forward_opaque_simple_ddgi.frag.spv' = 14
@@ -103,19 +104,19 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_opaque_simple_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_opaque_simple_full_input_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
-    'forward_weighted_oit.frag.spv' = 18
+    'forward_weighted_oit.frag.spv' = 26
     # The depth-backed transparent cache-only variant does not execute the
     # ordinary receiver gather, but retains the same sparse source telemetry.
-    'forward_transparent_ddgi_cache_required.frag.spv' = 4
+    'forward_transparent_ddgi_cache_required.frag.spv' = 12
     # The directional-only ThinGlass program touches only the four continuous
     # tetrahedral owners. Its bounded atomics are the sparse receiver-demand
     # and contribution handshake; diffuse visibility/recovery sites are absent.
-    'forward_transparent_thin_glass.frag.spv' = 8
+    'forward_transparent_thin_glass.frag.spv' = 16
     # Normal ray-query transparent variants contain both bounded optical-task
     # admission and the DDGI gather used to shade a committed reflection hit.
     # All of those sites are reachable only after the frame-local ray budget.
-    'forward_transparent_ray.frag.spv' = 37
-    'forward_weighted_oit_ray.frag.spv' = 37
+    'forward_transparent_ray.frag.spv' = 47
+    'forward_weighted_oit_ray.frag.spv' = 47
     'fog.comp.spv' = 14
     'particle.vert.spv' = 14
     'foliage_grass.mesh.spv' = 14
@@ -130,16 +131,16 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_ddgi_b1_provenance.frag.spv' = 21
     'forward_opaque_simple_full_input_ddgi_b1.frag.spv' = 21
     'forward_opaque_simple_full_input_ddgi_b1_provenance.frag.spv' = 21
-    'forward_transparent_ddgi_b1.frag.spv' = 25
+    'forward_transparent_ddgi_b1.frag.spv' = 33
     # ThinGlass adds the same seven exact surface-attribution operations to its
     # four functional receiver operations.
-    'forward_transparent_thin_glass_ddgi_b1.frag.spv' = 15
-    'forward_weighted_oit_ddgi_b1.frag.spv' = 25
+    'forward_transparent_thin_glass_ddgi_b1.frag.spv' = 23
+    'forward_weighted_oit_ddgi_b1.frag.spv' = 33
     # glslc outlines the shared receiver/hit-gather machinery in the combined
     # ray+B1 programs, so their static SPIR-V instruction count is lower than
     # the non-ray B1 siblings while preserving the bounded runtime operations.
-    'forward_transparent_ray_ddgi_b1.frag.spv' = 11
-    'forward_weighted_oit_ray_ddgi_b1.frag.spv' = 11
+    'forward_transparent_ray_ddgi_b1.frag.spv' = 13
+    'forward_weighted_oit_ray_ddgi_b1.frag.spv' = 13
     'foliage_forward_ddgi_b1.frag.spv' = 21
     'foliage_forward_ddgi_b1_provenance.frag.spv' = 21
     'fog_b1.comp.spv' = 20

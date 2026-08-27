@@ -99,6 +99,7 @@ namespace Njulf.Rendering.Data
         public int GeometryDecalMaterialCount { get; set; }
         public bool TransparentSampleReflections { get; set; } = true;
         public int TransparentSceneReflectionRayTaskBudget { get; set; }
+        public int TransparentSceneReflectionSsrSampleBudget { get; set; }
         public bool OpaqueSceneColorSnapshotAvailable { get; set; }
         public bool HasTransparentReflectionReceivers =>
             TransparentReflectionReceiverObjectCount > 0 &&
@@ -843,6 +844,14 @@ namespace Njulf.Rendering.Data
             get;
             set;
         }
+        public uint TransparentReflectionExactSsrEligibleCount { get; set; }
+        public uint TransparentReflectionExactSsrAdmittedCount { get; set; }
+        public uint TransparentReflectionExactSsrReservedSampleCount { get; set; }
+        public uint TransparentReflectionExactSsrActualSampleCount { get; set; }
+        public uint TransparentReflectionExactSsrHitCount { get; set; }
+        public uint TransparentReflectionExactSsrBudgetRejectedCount { get; set; }
+        public uint TransparentReflectionExactRayAdmittedCount { get; set; }
+        public uint TransparentReflectionExactRayBudgetRejectedCount { get; set; }
         public long GpuHybridReflectionSsrMicroseconds { get; set; }
         public long GpuHybridReflectionRayQueryMicroseconds { get; set; }
         public long GpuHybridReflectionDdgiBaseMicroseconds { get; set; }
@@ -1734,6 +1743,7 @@ namespace Njulf.Rendering.Data
             GeometryDecalMaterialCount = 0;
             TransparentSampleReflections = true;
             TransparentSceneReflectionRayTaskBudget = 0;
+            TransparentSceneReflectionSsrSampleBudget = 0;
             OpaqueSceneColorSnapshotAvailable = false;
             TransparentSortCandidateCount = 0;
             TransparentSortMicroseconds = 0;
@@ -2433,6 +2443,14 @@ namespace Njulf.Rendering.Data
             TransparentReflectionEstimatedDdgiFallbackCount = 0;
             TransparentReflectionEstimatedProbeFallbackCount = 0;
             TransparentReflectionEstimatedEnvironmentFallbackCount = 0;
+            TransparentReflectionExactSsrEligibleCount = 0;
+            TransparentReflectionExactSsrAdmittedCount = 0;
+            TransparentReflectionExactSsrReservedSampleCount = 0;
+            TransparentReflectionExactSsrActualSampleCount = 0;
+            TransparentReflectionExactSsrHitCount = 0;
+            TransparentReflectionExactSsrBudgetRejectedCount = 0;
+            TransparentReflectionExactRayAdmittedCount = 0;
+            TransparentReflectionExactRayBudgetRejectedCount = 0;
             GpuHybridReflectionSsrMicroseconds = 0;
             GpuHybridReflectionRayQueryMicroseconds = 0;
             GpuHybridReflectionDdgiBaseMicroseconds = 0;

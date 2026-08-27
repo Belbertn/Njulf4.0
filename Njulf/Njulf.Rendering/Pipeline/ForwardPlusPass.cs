@@ -213,7 +213,7 @@ namespace Njulf.Rendering.Pipeline
             "hybrid-reflection-receiver-disabled";
 
         /// <summary>
-        /// Publishes the source attachments and extent-bound V12 contract for
+        /// Publishes the source attachments and extent-bound V13 contract for
         /// a newly committed C5 generation. The renderer calls this only at a
         /// frame boundary while the old generation is no longer recordable.
         /// </summary>

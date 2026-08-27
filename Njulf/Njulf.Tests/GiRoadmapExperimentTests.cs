@@ -569,7 +569,7 @@ public sealed class GiRoadmapExperimentTests
             Assert.That(plan.AllocatedBytes, Is.GreaterThan(0UL));
             Assert.That(plan.Layout.TraceSourceBytes, Is.GreaterThan(0UL));
             Assert.That(plan.Layout.HitMetadataBytes, Is.Zero,
-                "V12 trace writes directly into the current 48-byte history bank.");
+                "V13 trace writes directly into the current 48-byte history bank.");
             Assert.That(plan.TraceBytes, Is.EqualTo(
                 plan.Memory.NearFieldTraceTargets.AllocatedBytes));
             Assert.That(plan.HistoryBytes, Is.EqualTo(

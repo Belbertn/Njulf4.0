@@ -21,6 +21,8 @@ public sealed class TransparencyAndDecalSettingsTests
             Assert.That(settings.Transparency.SampleReflections, Is.True);
             Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
                 Is.EqualTo(65_536));
+            Assert.That(settings.Transparency.SceneReflectionSsrSampleBudget,
+                Is.EqualTo(4_194_304));
             Assert.That(settings.Transparency.SortPerMeshlet, Is.True);
             Assert.That(settings.Transparency.MaxTransparentMeshlets, Is.EqualTo(262144));
             Assert.That(settings.Transparency.AlphaDiscardThreshold, Is.EqualTo(0.001f));
@@ -71,6 +73,7 @@ public sealed class TransparencyAndDecalSettingsTests
         settings.Transparency.MaxTransparentMeshlets = -1;
         settings.Transparency.AlphaDiscardThreshold = 1f;
         settings.Transparency.SceneReflectionRayTaskBudget = -1;
+        settings.Transparency.SceneReflectionSsrSampleBudget = -1;
         settings.Decals.GeometryDepthBias = 1f;
         settings.Decals.GeometrySlopeScaledDepthBias = 10f;
         settings.Decals.MaxProjectedDecals = 9999;
@@ -83,6 +86,8 @@ public sealed class TransparencyAndDecalSettingsTests
             Assert.That(settings.Transparency.AlphaDiscardThreshold, Is.EqualTo(0.05f));
             Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
                 Is.Zero);
+            Assert.That(settings.Transparency.SceneReflectionSsrSampleBudget,
+                Is.Zero);
             Assert.That(settings.Decals.GeometryDepthBias, Is.EqualTo(0.01f));
             Assert.That(settings.Decals.GeometrySlopeScaledDepthBias, Is.EqualTo(4f));
             Assert.That(settings.Decals.MaxProjectedDecals, Is.EqualTo(4096));
@@ -91,8 +96,11 @@ public sealed class TransparencyAndDecalSettingsTests
         });
 
         settings.Transparency.SceneReflectionRayTaskBudget = int.MaxValue;
+        settings.Transparency.SceneReflectionSsrSampleBudget = int.MaxValue;
         Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
             Is.EqualTo(TransparencySettings.MaximumSceneReflectionRayTaskBudget));
+        Assert.That(settings.Transparency.SceneReflectionSsrSampleBudget,
+            Is.EqualTo(TransparencySettings.MaximumSceneReflectionSsrSampleBudget));
     }
 
     [Test]
@@ -106,6 +114,8 @@ public sealed class TransparencyAndDecalSettingsTests
             Assert.That(settings.Transparency.SampleReflections, Is.False);
             Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
                 Is.Zero);
+            Assert.That(settings.Transparency.SceneReflectionSsrSampleBudget,
+                Is.Zero);
         });
 
         settings.ApplyQualityPreset(RenderQualityPreset.Medium);
@@ -113,6 +123,8 @@ public sealed class TransparencyAndDecalSettingsTests
         {
             Assert.That(settings.Transparency.SampleReflections, Is.False);
             Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
+                Is.Zero);
+            Assert.That(settings.Transparency.SceneReflectionSsrSampleBudget,
                 Is.Zero);
         });
 
@@ -129,6 +141,8 @@ public sealed class TransparencyAndDecalSettingsTests
                     preset.ToString());
                 Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
                     Is.EqualTo(65_536), preset.ToString());
+                Assert.That(settings.Transparency.SceneReflectionSsrSampleBudget,
+                    Is.EqualTo(4_194_304), preset.ToString());
             });
         }
 
@@ -138,6 +152,8 @@ public sealed class TransparencyAndDecalSettingsTests
             Assert.That(settings.Transparency.SampleReflections, Is.True);
             Assert.That(settings.Transparency.SceneReflectionRayTaskBudget,
                 Is.EqualTo(131_072));
+            Assert.That(settings.Transparency.SceneReflectionSsrSampleBudget,
+                Is.EqualTo(8_388_608));
         });
     }
 }

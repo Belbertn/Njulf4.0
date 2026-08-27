@@ -1163,6 +1163,8 @@ namespace Njulf.Rendering.Resources
             hash = Add(hash, _settings.Transparency.SampleReflections ? 1u : 0u);
             hash = Add(hash, (uint)_settings.Transparency
                 .SceneReflectionRayTaskBudget);
+            hash = Add(hash, (uint)_settings.Transparency
+                .SceneReflectionSsrSampleBudget);
             return hash;
         }
 

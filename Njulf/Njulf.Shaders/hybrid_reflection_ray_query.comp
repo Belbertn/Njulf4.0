@@ -345,7 +345,7 @@ void main()
 
     RayQuerySurfaceHit hit;
     if (HybridTraceNearest(
-            worldPosition + geometricNormal * 0.004,
+            NjulfOffsetRayOrigin(worldPosition, geometricNormal),
             reflectionDirection,
             pc.CameraPositionAndMaximumDistance.w,
             hit))

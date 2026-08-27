@@ -227,6 +227,90 @@ public sealed class SimpleDdgiNearFieldResidualGenerationTransactionTests
     }
 
     [Test]
+    public void RecoveryRebuild_WithUnchangedLayout_PublishesFreshGeneration()
+    {
+        SimpleDdgiNearFieldResidualLayout layout = Layout(320, 180);
+        var backend = new FakeBackend();
+        using var transaction = Create(backend);
+        Assert.That(transaction.TryInitialize(layout, out _), Is.True);
+
+        SimpleDdgiNearFieldResidualGenerationRequestResult request =
+            transaction.RequestRebuild(
+                layout,
+                SimpleDdgiNearFieldResidualExtentEnvelope.Exact(layout));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(request.Accepted, Is.True);
+            Assert.That(request.ReplacementReady, Is.True);
+            Assert.That(transaction.Snapshot.ActiveGeneration, Is.EqualTo(1UL));
+            Assert.That(transaction.Snapshot.PendingGeneration, Is.EqualTo(2UL));
+            Assert.That(transaction.Snapshot.LiveBytes,
+                Is.EqualTo(layout.TotalBytes * 2UL));
+        });
+
+        Assert.That(transaction.TryCommitAtFrameBoundary(
+            greatestReferencingFrameFenceValue: 0UL,
+            currentFrame: 2UL,
+            out string failure), Is.True, failure);
+        Assert.Multiple(() =>
+        {
+            Assert.That(transaction.Snapshot.ActiveGeneration, Is.EqualTo(2UL));
+            Assert.That(transaction.Snapshot.PendingGeneration, Is.Zero);
+            Assert.That(transaction.Snapshot.RetiredGeneration, Is.Zero);
+            Assert.That(transaction.Snapshot.LiveBytes,
+                Is.EqualTo(layout.TotalBytes));
+            Assert.That(backend.AllocatedWidths,
+                Is.EqualTo(new[] { 320, 320 }));
+            Assert.That(backend.DestroyedGenerations,
+                Is.EqualTo(new[] { 1UL }));
+        });
+    }
+
+    [Test]
+    public void TerminalRetirement_DropsPendingAndReleasesActiveAfterFence()
+    {
+        SimpleDdgiNearFieldResidualLayout first = Layout(320, 180);
+        SimpleDdgiNearFieldResidualLayout pending = Layout(640, 360);
+        var backend = new FakeBackend();
+        using var transaction = Create(backend);
+        Assert.That(transaction.TryInitialize(first, out _), Is.True);
+        Assert.That(transaction.RecordActiveReference(17UL), Is.True);
+        Assert.That(transaction.RequestReplacement(pending).ReplacementReady,
+            Is.True);
+
+        Assert.That(transaction.TryBeginTerminalRetirement(
+            currentFrame: 15UL,
+            out string failure), Is.True, failure);
+        Assert.Multiple(() =>
+        {
+            Assert.That(transaction.Snapshot.ActiveGeneration, Is.Zero);
+            Assert.That(transaction.Snapshot.PendingGeneration, Is.Zero);
+            Assert.That(transaction.Snapshot.RetiredGeneration, Is.EqualTo(1UL));
+            Assert.That(transaction.Snapshot.CanonicalFallbackRequired, Is.True);
+            Assert.That(transaction.Snapshot.LiveBytes,
+                Is.EqualTo(first.TotalBytes));
+            Assert.That(backend.DestroyedGenerations,
+                Is.EqualTo(new[] { 2UL }));
+        });
+
+        Assert.That(transaction.PollCompleted(
+            new GpuCompletionProgress(16UL, 0UL, 0UL), 16UL), Is.Zero);
+        Assert.That(transaction.Snapshot.LiveBytes, Is.EqualTo(first.TotalBytes));
+        Assert.That(transaction.PollCompleted(
+            new GpuCompletionProgress(17UL, 0UL, 0UL), 17UL), Is.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(transaction.Snapshot.RetiredGeneration, Is.Zero);
+            Assert.That(transaction.Snapshot.LiveBytes, Is.Zero);
+            Assert.That(transaction.Snapshot.State,
+                Is.EqualTo("terminal-retirement-complete"));
+            Assert.That(backend.DestroyedGenerations,
+                Is.EqualTo(new[] { 2UL, 1UL }));
+        });
+    }
+
+    [Test]
     public void ProductionTransaction_HasNinetySixAndOneNinetyTwoMiBLimitsAndNoWaitApi()
     {
         Assert.Multiple(() =>

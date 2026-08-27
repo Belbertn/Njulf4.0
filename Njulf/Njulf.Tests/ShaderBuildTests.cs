@@ -24,6 +24,7 @@ public sealed class ShaderBuildTests
         "geometry_decal.frag",
         "forward_transparent_thin_glass.frag",
         "forward_transparent_thin_glass_ddgi_b1.frag",
+        "ddgi_near_field_residual_finalize.comp",
         "ddgi_simple_trace.comp",
         "ddgi_simple_transport.comp",
         "ddgi_simple_directional_prepare.comp",
@@ -74,7 +75,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(318));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(319));
 
         foreach (string shaderName in RequiredShaders)
         {

@@ -2886,12 +2886,50 @@ void ForwardAddTransparentReflectionEstimate(uint counter)
         64u);
 }
 
+void ForwardAddTransparentReflectionExact(uint counter, uint value)
+{
+    uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counter],
+        value);
+}
+
+bool ForwardTryReserveTransparentSsr(
+    GPUReflectionProbeHeader header,
+    out uint reservedSamples)
+{
+    // Every march step may issue both a hierarchical lookup and a full-detail
+    // confirmation before continuing. Reserve that exact worst case before
+    // the first lookup so over-budget fragments cannot partially execute.
+    reservedSamples = max(header.SsrMaximumSteps, 8u) * 2u;
+    uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+    uint taskIndex = atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            TRANSPARENT_REFLECTION_SSR_ELIGIBLE_COUNTER],
+        1u);
+    uint maximumTraces = header.SceneReflectionSsrSampleBudget /
+        reservedSamples;
+    if (taskIndex >= maximumTraces)
+    {
+        ForwardAddTransparentReflectionExact(
+            TRANSPARENT_REFLECTION_SSR_BUDGET_REJECT_COUNTER,
+            1u);
+        return false;
+    }
+    ForwardAddTransparentReflectionExact(
+        TRANSPARENT_REFLECTION_SSR_ADMITTED_COUNTER,
+        1u);
+    ForwardAddTransparentReflectionExact(
+        TRANSPARENT_REFLECTION_SSR_RESERVED_SAMPLE_COUNTER,
+        reservedSamples);
+    return true;
+}
+
 bool ForwardTryReserveTransparentReflectionRay(
     GPUReflectionProbeHeader header)
 {
     uint budget = header.SceneReflectionRayTaskBudget;
-    if (budget == 0u)
-        return false;
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
         pc.Push.CurrentFrameIndex;
     uint taskIndex = atomicAdd(
@@ -2899,7 +2937,15 @@ bool ForwardTryReserveTransparentReflectionRay(
             TRANSPARENT_REFLECTION_TASK_COUNTER],
         1u);
     if (taskIndex < budget)
+    {
+        ForwardAddTransparentReflectionExact(
+            TRANSPARENT_REFLECTION_RAY_ADMITTED_COUNTER,
+            1u);
         return true;
+    }
+    ForwardAddTransparentReflectionExact(
+        TRANSPARENT_REFLECTION_RAY_EXACT_BUDGET_REJECT_COUNTER,
+        1u);
     ForwardAddTransparentReflectionEstimate(
         TRANSPARENT_REFLECTION_BUDGET_REJECT_COUNTER);
     return false;
@@ -2925,7 +2971,12 @@ bool ForwardTraceTransparentSsr(
         return false;
     }
 
+    uint reservedSamples;
+    if (!ForwardTryReserveTransparentSsr(header, reservedSamples))
+        return false;
+
     uint stepCount = max(header.SsrMaximumSteps, 8u);
+    uint actualSamples = 0u;
     float maximumDistance = header.SsrMaximumDistance;
     int mipCount = max(textureQueryLevels(
         BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)]), 1);
@@ -2961,6 +3012,7 @@ bool ForwardTraceTransparentSsr(
             BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)],
             uv,
             mip).r;
+        ++actualSamples;
         float rayDepth = ndc.z;
         float depthError = sceneDepth - rayDepth;
         float thickness = 0.0015 + normalizedStep * 0.006 +
@@ -2975,6 +3027,7 @@ bool ForwardTraceTransparentSsr(
             BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)],
             uv,
             0.0).r;
+        ++actualSamples;
         float fineError = abs(fineDepth - rayDepth);
         float edge = min(min(uv.x, uv.y),
             min(1.0 - uv.x, 1.0 - uv.y));
@@ -2994,14 +3047,28 @@ bool ForwardTraceTransparentSsr(
             uv,
             0.0).rgb;
         if (any(isnan(radiance)) || any(isinf(radiance)))
+        {
+            ForwardAddTransparentReflectionExact(
+                TRANSPARENT_REFLECTION_SSR_ACTUAL_SAMPLE_COUNTER,
+                actualSamples);
             return false;
+        }
         result.Radiance = max(radiance, vec3(0.0));
         result.Confidence = confidence;
         result.Source = FORWARD_REFLECTION_SOURCE_SSR;
         ForwardAddTransparentReflectionEstimate(
             TRANSPARENT_REFLECTION_SSR_HIT_COUNTER);
+        ForwardAddTransparentReflectionExact(
+            TRANSPARENT_REFLECTION_SSR_ACTUAL_SAMPLE_COUNTER,
+            actualSamples);
+        ForwardAddTransparentReflectionExact(
+            TRANSPARENT_REFLECTION_SSR_EXACT_HIT_COUNTER,
+            1u);
         return true;
     }
+    ForwardAddTransparentReflectionExact(
+        TRANSPARENT_REFLECTION_SSR_ACTUAL_SAMPLE_COUNTER,
+        actualSamples);
     return false;
 }
 
@@ -3186,13 +3253,14 @@ bool ForwardTraceTransparentRayReflection(
     result.Confidence = 0.0;
     result.Source = FORWARD_REFLECTION_SOURCE_NONE;
     if (ForwardEffectiveReflectionMode() != 5u ||
+        dot(reflectionDirection, geometricNormal) <= 0.001 ||
         !ForwardTryReserveTransparentReflectionRay(header))
     {
         return false;
     }
     RayQuerySurfaceHit hit;
     if (!ForwardTraceTransparentReflectionNearest(
-            worldPosition + geometricNormal * 0.004,
+            NjulfOffsetRayOrigin(worldPosition, geometricNormal),
             reflectionDirection,
             header.SsrMaximumDistance,
             hit))
@@ -3587,6 +3655,7 @@ void EvaluateIbl(
     float reflectionSchedulingRoughness,
     vec3 dielectricF0,
     vec3 normal,
+    vec3 geometricNormal,
     vec3 viewDirection,
     float ambientOcclusion,
     float indirectSpecularVisibility,
@@ -3666,7 +3735,7 @@ void EvaluateIbl(
     specularIbl = EvaluateTransparentReflectionSpecular(
         environment,
         fragWorldPosition,
-        normal,
+        geometricNormal,
         reflectionDirection,
         globalLod,
         roughness,
@@ -3684,7 +3753,7 @@ void EvaluateIbl(
     specularIbl = EvaluateTransparentReflectionSpecular(
         environment,
         fragWorldPosition,
-        normal,
+        geometricNormal,
         reflectionDirection,
         globalLod,
         roughness,
@@ -5870,6 +5939,7 @@ void main()
         reflectionSchedulingRoughness,
         dielectricF0,
         normal,
+        geometricNormal,
         viewDirection,
         indirectAo,
         indirectSpecularVisibility,

@@ -552,6 +552,8 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.OpaqueSceneColorSnapshotAvailable ? 1 : 0,
             TransparentSceneReflectionRayTaskBudget =
                 sceneData.TransparentSceneReflectionRayTaskBudget,
+            TransparentSceneReflectionSsrSampleBudget =
+                sceneData.TransparentSceneReflectionSsrSampleBudget,
             TransparentReflectionRayRequestCount =
                 sceneData.TransparentReflectionRayRequestCount,
             TransparentReflectionEstimatedSsrHitCount =
@@ -569,6 +571,22 @@ internal sealed class RendererDiagnosticsAssembler
             TransparentReflectionEstimatedEnvironmentFallbackCount =
                 sceneData
                     .TransparentReflectionEstimatedEnvironmentFallbackCount,
+            TransparentReflectionExactSsrEligibleCount =
+                sceneData.TransparentReflectionExactSsrEligibleCount,
+            TransparentReflectionExactSsrAdmittedCount =
+                sceneData.TransparentReflectionExactSsrAdmittedCount,
+            TransparentReflectionExactSsrReservedSampleCount =
+                sceneData.TransparentReflectionExactSsrReservedSampleCount,
+            TransparentReflectionExactSsrActualSampleCount =
+                sceneData.TransparentReflectionExactSsrActualSampleCount,
+            TransparentReflectionExactSsrHitCount =
+                sceneData.TransparentReflectionExactSsrHitCount,
+            TransparentReflectionExactSsrBudgetRejectedCount =
+                sceneData.TransparentReflectionExactSsrBudgetRejectedCount,
+            TransparentReflectionExactRayAdmittedCount =
+                sceneData.TransparentReflectionExactRayAdmittedCount,
+            TransparentReflectionExactRayBudgetRejectedCount =
+                sceneData.TransparentReflectionExactRayBudgetRejectedCount,
             GpuHybridReflectionSsrMicroseconds =
                 sceneData.GpuHybridReflectionSsrMicroseconds,
             GpuHybridReflectionRayQueryMicroseconds =

@@ -521,7 +521,7 @@ namespace Njulf.Rendering.Resources
                     SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat)
             {
                 throw new ArgumentException(
-                    "C5 generation allocation requires a valid V12 layout.",
+                    "C5 generation allocation requires a valid V13 layout.",
                     nameof(layout));
             }
 
@@ -909,7 +909,7 @@ namespace Njulf.Rendering.Resources
                 layout.TraceResolutionScale is not (0.5f or 0.25f or 0.125f))
             {
                 throw new ArgumentException(
-                    "C5 replacement render targets require a valid V12 layout.",
+                    "C5 replacement render targets require a valid V13 layout.",
                     nameof(layout));
             }
             if (NearFieldDirectSource is null)

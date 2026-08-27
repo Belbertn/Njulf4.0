@@ -925,12 +925,6 @@ void RecordTemporalTileSummary(uint tileIndex)
             sourceRevisionRejects,
             epochRejects,
             invalidCurrentCount));
-    temporalTileRecords.words[recordBase + 19u] = 0u;
-    if (tileIndex == 0u)
-    {
-        atomicOr(temporalTileRecords.words[7u],
-            SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TEMPORAL_COMPLETE);
-    }
 }
 
 void main()
@@ -1012,11 +1006,6 @@ void main()
     if (lane == 0u)
     {
         RecordTemporalTileSummary(tileIndex);
-        if (activeIndex == 0u)
-        {
-            atomicOr(temporalTileRecords.words[7u],
-                SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TEMPORAL_COMPLETE);
-        }
     }
     barrier();
 

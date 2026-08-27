@@ -45,6 +45,12 @@ public sealed class SampleBistroReflectionQualificationTests
             Assert.That(result.RayQueryOverflowCount, Is.Zero);
             Assert.That(result.DdgiFallbackCount, Is.GreaterThan(0));
             Assert.That(result.ProbeFallbackCount, Is.Zero);
+            Assert.That(result.SortedAlphaTelemetryFrameCount,
+                Is.GreaterThan(0));
+            Assert.That(result.WeightedOitTelemetryFrameCount,
+                Is.GreaterThan(0));
+            Assert.That(result.TransparentSsrHitCount, Is.GreaterThan(0));
+            Assert.That(result.TransparentRayAdmittedCount, Is.GreaterThan(0));
         });
     }
 
@@ -150,6 +156,7 @@ public sealed class SampleBistroReflectionQualificationTests
                     AbsoluteFrameIndex = state.AbsoluteFrameIndex,
                     LoopFrameIndex = state.LoopFrameIndex,
                     HybridRayQueryEnabled = state.HybridRayQueryEnabled,
+                    TransparencyMode = state.TransparencyMode,
                     HybridReflectionCountersReadbackValid = 1,
                     HybridReflectionSsrHitCount = 1,
                     HybridReflectionRayQueryRequestCount =
@@ -166,7 +173,18 @@ public sealed class SampleBistroReflectionQualificationTests
                     GpuHybridReflectionResolveMicroseconds = 1,
                     GpuHybridReflectionTemporalMicroseconds = 1,
                     GpuHybridReflectionSpatialMicroseconds = 1,
-                    GpuHybridReflectionCompositeMicroseconds = 1
+                    GpuHybridReflectionCompositeMicroseconds = 1,
+                    TransparentSceneReflectionSsrSampleBudget = 4_194_304,
+                    TransparentReflectionExactSsrEligibleCount = 3,
+                    TransparentReflectionExactSsrAdmittedCount = 2,
+                    TransparentReflectionExactSsrReservedSampleCount = 130,
+                    TransparentReflectionExactSsrActualSampleCount = 96,
+                    TransparentReflectionExactSsrHitCount = 1,
+                    TransparentReflectionExactSsrBudgetRejectedCount = 1,
+                    TransparentReflectionRayRequestCount =
+                        rayEvidence ? 3u : 0u,
+                    TransparentReflectionExactRayAdmittedCount =
+                        rayEvidence ? 3u : 0u
                 };
             })
             .ToArray();

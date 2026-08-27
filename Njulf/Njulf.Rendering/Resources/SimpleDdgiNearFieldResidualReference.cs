@@ -748,7 +748,7 @@ public static class SimpleDdgiNearFieldTraceReference
             {
                 // Refinement depth tests consume the same global trace-step
                 // budget as hierarchy tests. There is deliberately no second
-                // mip-visit rejection in V12.
+                // mip-visit rejection in V13.
                 if (mipVisits >= configuration.MaximumSteps)
                     break;
                 float mid = 0.5f * (lo + hi);

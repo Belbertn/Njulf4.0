@@ -326,8 +326,13 @@ void main()
         atomicOr(prepareTelemetry.words[15u], 1u);
         return;
     }
+    // Prepare clears the complete admitted allocation, so gl_NumWorkGroups.x
+    // is the allocation stride rather than the current adaptive trace stride.
+    // Tile identities must remain dense in the active extent because every
+    // indirect consumer decodes them with the active trace width.
+    uint activeTileRowStride = (pc.traceWidth + 7u) / 8u;
     activeTiles.words[pc.activeTileHeaderWords + activeIndex] =
-        gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+        gl_WorkGroupID.y * activeTileRowStride + gl_WorkGroupID.x;
     atomicAdd(activeTiles.words[2], 1u); // compacted tiles
     atomicAdd(prepareTelemetry.words[18u], 1u);
     // Each indirect stage uses one workgroup per active tile.

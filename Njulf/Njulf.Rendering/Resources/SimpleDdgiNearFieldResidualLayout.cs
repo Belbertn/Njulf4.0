@@ -54,7 +54,7 @@ public readonly record struct SimpleDdgiNearFieldResidualProfile(
         SourceFormat: SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat,
         MaximumTraceSteps: 48,
         // Retained in the managed signature for source compatibility only.
-        // V12 charges every depth test to MaximumTraceSteps and never rejects
+        // V13 charges every depth test to MaximumTraceSteps and never rejects
         // a trace through a separate mip-visit budget.
         MaximumMipVisits: 32,
         BinaryRefinementSteps: 4,
@@ -323,7 +323,7 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
             ulong rawCandidate = CalculateImageBytes(
                 traceWidth, traceHeight, Rgba16FloatBytesPerPixel,
                 profile.ImageRowAlignment, profile.ImageAllocationGranularity);
-            // Trace writes the current history metadata bank directly. V12
+            // Trace writes the current history metadata bank directly. V13
             // deliberately has no third per-pixel metadata allocation.
             const ulong hitMetadata = 0UL;
             ulong historyRadiance = checked(2UL * CalculateImageBytes(

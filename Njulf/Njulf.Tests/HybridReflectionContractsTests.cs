@@ -306,24 +306,32 @@ public sealed class HybridReflectionContractsTests
             Assert.That(medium.Transparency.SampleReflections, Is.False);
             Assert.That(medium.Transparency.SceneReflectionRayTaskBudget,
                 Is.Zero);
+            Assert.That(medium.Transparency.SceneReflectionSsrSampleBudget,
+                Is.Zero);
             Assert.That(high.Reflections.Enabled, Is.True);
             Assert.That(high.Reflections.Mode,
                 Is.EqualTo(ReflectionMode.HybridRayQuery));
             Assert.That(high.Transparency.SampleReflections, Is.True);
             Assert.That(high.Transparency.SceneReflectionRayTaskBudget,
                 Is.EqualTo(65_536));
+            Assert.That(high.Transparency.SceneReflectionSsrSampleBudget,
+                Is.EqualTo(4_194_304));
             Assert.That(ddgiHigh.Reflections.Enabled, Is.True);
             Assert.That(ddgiHigh.Reflections.Mode,
                 Is.EqualTo(ReflectionMode.HybridRayQuery));
             Assert.That(ddgiHigh.Transparency.SampleReflections, Is.True);
             Assert.That(ddgiHigh.Transparency.SceneReflectionRayTaskBudget,
                 Is.EqualTo(65_536));
+            Assert.That(ddgiHigh.Transparency.SceneReflectionSsrSampleBudget,
+                Is.EqualTo(4_194_304));
             Assert.That(ultra.Reflections.Enabled, Is.True);
             Assert.That(ultra.Reflections.Mode,
                 Is.EqualTo(ReflectionMode.HybridRayQuery));
             Assert.That(ultra.Transparency.SampleReflections, Is.True);
             Assert.That(ultra.Transparency.SceneReflectionRayTaskBudget,
                 Is.EqualTo(131_072));
+            Assert.That(ultra.Transparency.SceneReflectionSsrSampleBudget,
+                Is.EqualTo(8_388_608));
             Assert.That(ultra.Reflections.RayQueryPixelBudgetFraction,
                 Is.GreaterThan(high.Reflections.RayQueryPixelBudgetFraction));
             Assert.That(HybridReflectionBudgetPlanner.ResolveRayQueryCapacity(
@@ -750,6 +758,19 @@ public sealed class HybridReflectionContractsTests
         int environmentFallback = resolve.IndexOf(
             "SampleEnvironmentPrefilteredRadiance",
             StringComparison.Ordinal);
+        int transparentSsrStart = forward.IndexOf(
+            "bool ForwardTraceTransparentSsr(",
+            StringComparison.Ordinal);
+        int transparentRayStart = forward.IndexOf(
+            "bool ForwardTraceTransparentRayReflection(",
+            StringComparison.Ordinal);
+        string transparentSsr = forward[transparentSsrStart..transparentRayStart];
+        int transparentSsrReservation = transparentSsr.IndexOf(
+            "ForwardTryReserveTransparentSsr(header, reservedSamples)",
+            StringComparison.Ordinal);
+        int firstTransparentHiZAccess = transparentSsr.IndexOf(
+            "textureQueryLevels(",
+            StringComparison.Ordinal);
 
         Assert.Multiple(() =>
         {
@@ -924,7 +945,36 @@ public sealed class HybridReflectionContractsTests
             Assert.That(forward, Does.Contain(
                 "ForwardTraceTransparentSsr("));
             Assert.That(forward, Does.Contain(
+                "ForwardTryReserveTransparentSsr("));
+            Assert.That(forward, Does.Contain(
+                "reservedSamples = max(header.SsrMaximumSteps, 8u) * 2u"));
+            Assert.That(forward, Does.Contain(
+                "header.SceneReflectionSsrSampleBudget /"));
+            Assert.That(forward, Does.Contain(
+                "TRANSPARENT_REFLECTION_SSR_ACTUAL_SAMPLE_COUNTER"));
+            Assert.That(forward, Does.Contain(
+                "TRANSPARENT_REFLECTION_SSR_BUDGET_REJECT_COUNTER"));
+            Assert.That(transparentSsrReservation, Is.GreaterThanOrEqualTo(0));
+            Assert.That(firstTransparentHiZAccess,
+                Is.GreaterThan(transparentSsrReservation),
+                "Transparent SSR must reject over-budget work before any Hi-Z access.");
+            Assert.That(forward, Does.Contain(
                 "ForwardTraceTransparentRayReflection("));
+            Assert.That(forward, Does.Contain(
+                "dot(reflectionDirection, geometricNormal) <= 0.001"));
+            Assert.That(forward, Does.Contain(
+                "NjulfOffsetRayOrigin(worldPosition, geometricNormal)"));
+            Assert.That(normalizedForward, Does.Contain(
+                "fragWorldPosition,\n        geometricNormal,\n" +
+                "        reflectionDirection"));
+            Assert.That(normalizedForward, Does.Not.Contain(
+                "fragWorldPosition,\n        normal,\n" +
+                "        reflectionDirection"));
+            Assert.That(ray, Does.Contain(
+                "NjulfOffsetRayOrigin(worldPosition, geometricNormal)"));
+            Assert.That(common, Does.Contain(
+                "vec3 NjulfOffsetRayOrigin("));
+            Assert.That(common, Does.Contain("floatBitsToInt(position)"));
             Assert.That(forward, Does.Contain(
                 "ForwardMaterialSamplesSceneReflections("));
             Assert.That(common, Does.Contain(
