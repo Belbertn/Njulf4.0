@@ -285,13 +285,8 @@ internal sealed class ModelUploadRollbackLedger
         lock (_lock)
         {
             ThrowIfOwnershipClosedLocked();
-            if (_trackedMeshes.Count != 0)
-            {
-                throw new InvalidOperationException(
-                    "Model mesh ownership can be tracked only once.");
-            }
             if (meshes.Count >
-                _trackedMeshes.Capacity)
+                _trackedMeshes.Capacity - _trackedMeshes.Count)
             {
                 throw new InvalidOperationException(
                     "The model rollback ledger did not reserve enough mesh ownership capacity.");

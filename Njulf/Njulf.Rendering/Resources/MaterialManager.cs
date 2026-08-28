@@ -1796,13 +1796,20 @@ namespace Njulf.Rendering.Resources
 
                 int finalReferenceCount =
                     checked(slot.ReferenceCount + 1);
-                TextureOwnershipDelta ownership =
-                    ComputeTextureOwnershipDelta(
-                        Array.Empty<TextureHandle>(),
-                        slot.TextureHandles,
-                        logicalReferenceCount: 1);
-                RetainTextureReferencesTransactional(
-                    ownership.Retains);
+                if (_textureReferences is IBulkTextureReferenceManager bulk)
+                {
+                    bulk.RetainTextures(slot.TextureHandles);
+                }
+                else
+                {
+                    TextureOwnershipDelta ownership =
+                        ComputeTextureOwnershipDelta(
+                            Array.Empty<TextureHandle>(),
+                            slot.TextureHandles,
+                            logicalReferenceCount: 1);
+                    RetainTextureReferencesTransactional(
+                        ownership.Retains);
+                }
 
                 slot.ReferenceCount = finalReferenceCount;
                 _materials[handle.Index] = slot;

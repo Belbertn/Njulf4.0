@@ -40,9 +40,12 @@ namespace Njulf.Rendering
     /// - VulkanRenderer RECORDS COMMANDS ONLY: does not own Vulkan objects, only records commands into managers' resources
     /// - Passes ONLY RECORD COMMANDS: VulkanRenderer calls methods on passes which record into command buffers
     /// </summary>
-    public unsafe class VulkanRenderer : IRenderer, IScenePipelinePreparer,
+    public unsafe class VulkanRenderer : IRenderer, IRendererFrameState,
+        IScenePipelinePreparer,
         IStartupLatencyReporter, IRendererDebugTools, IDisposable
     {
+        public bool IsFrameInProgress => _lifetime.FrameInProgress;
+
         internal static IReadOnlyList<string> ProductionRenderPassOrder =>
             ProductionRenderPipelineDeclaration.Instance.PassOrder;
 
@@ -331,6 +334,7 @@ namespace Njulf.Rendering
         private bool _lastFogTargetEnabled = true;
         private bool _lastMaterialTransportProvenanceTargetEnabled;
         private bool _lastHybridReflectionTargetEnabled;
+        private bool _hybridReflectionTargetProvisioned;
         private float _lastHybridReflectionRayBudgetFraction;
         private Extent2D _lastSceneRenderExtent;
         private float _lastEffectiveResolutionScale = 1.0f;
@@ -343,6 +347,8 @@ namespace Njulf.Rendering
         public RenderBudgetSnapshot LastBudgetSnapshot => _lastBudgetSnapshot;
         public DeviceRequirementReport? SelectedDeviceRequirementReport => _context.SelectedDeviceRequirementReport;
         public MemoryHeapBudgetSnapshot CurrentMemoryHeapBudget => _context.GetMemoryHeapBudgetSnapshot();
+        public RendererValidationMessageSnapshot ValidationMessageSnapshot =>
+            _context.ValidationMessageSnapshot;
         public DebugDrawList DebugDraw => _debugOverlayBuilder.DrawList;
         public DebugOverlaySettings DebugOverlays => Settings.Debug;
 
@@ -1240,6 +1246,8 @@ namespace Njulf.Rendering
                 ResolveEffectiveAmbientOcclusionMode();
             bool motionVectorTargetEnabled =
                 ResolveSurfaceHistoryConsumers().RequiresMotionVectors();
+            bool hybridReflectionTargetEnabled =
+                ResolveHybridReflectionTargetProvisioning();
             _renderTargets = new RenderTargetManager(
                 _context,
                 sceneRenderExtent,
@@ -1263,7 +1271,7 @@ namespace Njulf.Rendering
                 giCausticScreenLayout:
                 _giCaustic.Plan.GpuLayout.ScreenResolve,
                 hybridReflectionsEnabled:
-                IsHybridReflectionTargetEnabled(Settings),
+                hybridReflectionTargetEnabled,
                 ambientOcclusionMode: effectiveAmbientOcclusionMode);
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAmbientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
@@ -1276,7 +1284,7 @@ namespace Njulf.Rendering
             _lastMaterialTransportProvenanceTargetEnabled =
                 materialTransportProvenanceTargetEnabled;
             _lastHybridReflectionTargetEnabled =
-                IsHybridReflectionTargetEnabled(Settings);
+                hybridReflectionTargetEnabled;
             _lastHybridReflectionRayBudgetFraction =
                 Settings.Reflections.RayQueryPixelBudgetFraction;
             _lastSceneRenderExtent = sceneRenderExtent;
@@ -1582,7 +1590,14 @@ namespace Njulf.Rendering
             _foliageCullPass =
                 new FoliageCullPass(_context, _bindlessHeap, _bufferManager, _foliageManager, _foliagePipeline);
             _sceneOpaqueCompactionPass =
-                new SceneOpaqueCompactionPass(_context, _swapchain, _bindlessHeap, _meshPipeline, _bufferManager);
+                new SceneOpaqueCompactionPass(
+                    _context,
+                    _swapchain,
+                    _bindlessHeap,
+                    _meshPipeline,
+                    _bufferManager,
+                    _deleter,
+                    _sync);
             _forwardVisibilityCompactionPass = new ForwardVisibilityCompactionPass(_context, _swapchain, _bindlessHeap,
                 _meshPipeline, _bufferManager);
 
@@ -3015,6 +3030,13 @@ namespace Njulf.Rendering
             // Process completed frame deletions
             _deleter.ProcessCompletedFrame(_sync.GetInFlightFence(_currentFrame));
 
+            // Scene transitions can change the render-target profile during Update. Apply those
+            // changes only at this fence-complete frame boundary, before acquiring an image or
+            // recording the next primary command buffer. Recreating targets from DrawScene used
+            // to invalidate resources and command-buffer state belonging to the frame that was
+            // already in progress.
+            EnsureRenderTargetProfile();
+
             // The staging ring slot is safe to reuse after the frame fence has completed.
             _stagingRing.BeginFrame(_currentFrame);
             _uploadBudgetTracker.BeginFrame();
@@ -3365,6 +3387,87 @@ namespace Njulf.Rendering
             vk.CmdEndRendering(_currentCommandBuffer);
         }
 
+        /// <summary>
+        /// Starts the optional reflection pipeline family without making the
+        /// next scene commit wait on cold driver compilation. Until it is
+        /// ready, frame preparation keeps the established probe/environment
+        /// fallback active.
+        /// </summary>
+        public void BeginHybridReflectionPipelinePreparation()
+        {
+            _lifetime.ThrowIfDisposalStarted();
+            HybridReflectionVulkanRuntime runtime =
+                _hybridReflectionRuntime ?? throw new InvalidOperationException(
+                    "Hybrid reflection runtime is not initialized.");
+            _ = runtime.BeginInitializeAsync(
+                PrepareHybridReflectionReceiverPipelines);
+        }
+
+        /// <summary>
+        /// Reserves the hybrid-reflection render-target and forward-pipeline
+        /// attachment profile before renderer initialization. Scene hosts that
+        /// can activate reflections later use this to keep the attachment ABI
+        /// stable across scene switches.
+        /// </summary>
+        public void ReserveHybridReflectionTargetProfile()
+        {
+            _lifetime.ThrowIfDisposalStarted();
+            if (_renderTargets != null)
+            {
+                throw new InvalidOperationException(
+                    "The hybrid reflection target profile must be reserved before renderer initialization.");
+            }
+
+            _hybridReflectionTargetProvisioned = true;
+        }
+
+        public Task PrepareEnvironmentResourcesAsync(
+            EnvironmentSettings settings,
+            CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfDisposalStarted();
+            ArgumentNullException.ThrowIfNull(settings);
+            return _environmentManager?.PrepareResourcesAsync(
+                       settings,
+                       cancellationToken) ??
+                   Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Claims the optional reflection family without starting driver work.
+        /// The scene-transition host releases the claim after the target's
+        /// first present, preventing compiler contention on the critical path.
+        /// </summary>
+        public void DeferHybridReflectionPipelinePreparation()
+        {
+            _lifetime.ThrowIfDisposalStarted();
+            HybridReflectionVulkanRuntime runtime =
+                _hybridReflectionRuntime ?? throw new InvalidOperationException(
+                    "Hybrid reflection runtime is not initialized.");
+            runtime.DeferInitialize();
+        }
+
+        private bool PrepareHybridReflectionReceiverPipelines()
+        {
+            // Screen-pipeline publication stays false while these variants are
+            // created, so Forward+ continues selecting its ordinary opaque
+            // family and cannot race a partially populated pipeline bank.
+            for (int nearField = 0; nearField <= 1; nearField++)
+            {
+                for (int caustic = 0; caustic <= 1; caustic++)
+                {
+                    if (!_meshPipeline.TryPrepareHybridReflectionPipelines(
+                            nearField != 0,
+                            caustic != 0))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
         public void PrepareScene(Scene scene, ICamera camera)
         {
             _lifetime.ThrowIfDisposalStarted();
@@ -3423,7 +3526,12 @@ namespace Njulf.Rendering
                     (ReflectionMode.StaticProbesAndSsr or
                      ReflectionMode.HybridRayQuery);
             if (hybridReflectionsRequired &&
-                _hybridReflectionRuntime is { ScreenPipelinesAvailable: false })
+                _hybridReflectionRuntime is
+                {
+                    ScreenPipelinesAvailable: false,
+                    InitializationInProgress: false,
+                    InitializationCompleted: false
+                })
             {
                 _lifetime.RunStartupStep(
                     "Pipeline.Prepare.HybridReflections",
@@ -3546,6 +3654,7 @@ namespace Njulf.Rendering
             _lifetime.ThrowIfDisposalStarted();
             _lifetime.EnsureFrameInProgress(nameof(DrawScene));
             long drawSceneStart = Stopwatch.GetTimestamp();
+            long drawStageStart = drawSceneStart;
 
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -3553,8 +3662,14 @@ namespace Njulf.Rendering
                 throw new ArgumentNullException(nameof(camera));
 
             PrepareScene(scene, camera);
+            long prepareSceneMicroseconds =
+                ElapsedMicroseconds(drawStageStart);
 
+            drawStageStart = Stopwatch.GetTimestamp();
             _materialManager.EnsureTextureFanoutReady();
+            long textureFanoutMicroseconds =
+                ElapsedMicroseconds(drawStageStart);
+            drawStageStart = Stopwatch.GetTimestamp();
 
             bool debugEnabled = Settings.Debug.Enabled;
             RenderFeatureIsolationMode isolationMode = Settings.FeatureIsolation;
@@ -3574,7 +3689,6 @@ namespace Njulf.Rendering
             // atomically when the switch changes at runtime.
             _materialManager.SetTransportV2Enabled(
                 Settings.GlobalIllumination.EffectiveGiMaterialTransportV2);
-            EnsureRenderTargetProfile();
             DebugOverlayMode requestedDebugOverlay = debugEnabled
                 ? Settings.Debug.Mode
                 : DebugOverlayMode.None;
@@ -3682,6 +3796,9 @@ namespace Njulf.Rendering
                 ShouldRenderGeometryDecals(forwardDebugViewMode);
 
             // Build and upload scene data using SceneDataBuilder
+            long preSceneBuildMicroseconds =
+                ElapsedMicroseconds(drawStageStart);
+            long sceneBuildCallStart = Stopwatch.GetTimestamp();
             var sceneData = _sceneDataBuilder.Build(
                 scene,
                 camera,
@@ -3705,6 +3822,9 @@ namespace Njulf.Rendering
                 captureSceneSubmissionValidationLists: Settings.SceneSubmission.ValidationCompareCpuGpuLists,
                 gpuLod1DistanceRatio: Settings.SceneSubmission.GpuLod1DistanceRatio,
                 gpuLod2DistanceRatio: Settings.SceneSubmission.GpuLod2DistanceRatio);
+            long sceneBuildCallMicroseconds =
+                ElapsedMicroseconds(sceneBuildCallStart);
+            drawStageStart = Stopwatch.GetTimestamp();
             sceneData.VolumetricDensityVolumes = scene.VolumetricDensityVolumes
                 .Where(volume => volume.Enabled)
                 .OrderByDescending(volume => volume.Priority)
@@ -4083,9 +4203,22 @@ namespace Njulf.Rendering
                     shadowDiagnosticLightDirection);
             }
 
+            long postSceneBuildMicroseconds =
+                ElapsedMicroseconds(drawStageStart);
+            long sceneSetupMicroseconds = checked(
+                preSceneBuildMicroseconds +
+                sceneBuildCallMicroseconds +
+                postSceneBuildMicroseconds);
+            drawStageStart = Stopwatch.GetTimestamp();
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             PrepareDdgiFoliageProxies(scene, sceneData);
+            long environmentAndFoliageMicroseconds =
+                ElapsedMicroseconds(drawStageStart);
+            long resourceSubstageStart = Stopwatch.GetTimestamp();
             PrepareAccelerationStructures(scene, sceneData);
+            long accelerationPrepareMicroseconds =
+                ElapsedMicroseconds(resourceSubstageStart);
+            resourceSubstageStart = Stopwatch.GetTimestamp();
             ApplyCompletedSceneSubmissionCounters(sceneData, _completedSceneSubmissionCounters);
             ApplyCompletedForwardVisibilityCounters(sceneData, _completedForwardVisibilityCounters);
             ApplyCompletedSceneSubmissionValidation(sceneData, _completedSceneSubmissionValidation);
@@ -4155,11 +4288,17 @@ namespace Njulf.Rendering
                     _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
                 }
             }
+            long preAccelerationRecordMicroseconds =
+                ElapsedMicroseconds(resourceSubstageStart);
+            resourceSubstageStart = Stopwatch.GetTimestamp();
 
             // Skinning output is now complete and visible to AS-build reads.
             // Publish the new TLAS/metadata transaction before DDGI chooses a
             // trace backend or records any ray-query consumer.
             RecordAccelerationStructures(sceneData);
+            long accelerationRecordMicroseconds =
+                ElapsedMicroseconds(resourceSubstageStart);
+            resourceSubstageStart = Stopwatch.GetTimestamp();
             PrepareAreaRayShadows(
                 sceneData,
                 localShadowSelection,
@@ -4175,11 +4314,17 @@ namespace Njulf.Rendering
                 sceneData,
                 lightSnapshot,
                 directionalShadowsEnabled);
+            long shadowAndReflectionPrepareMicroseconds =
+                ElapsedMicroseconds(resourceSubstageStart);
+            resourceSubstageStart = Stopwatch.GetTimestamp();
             PrepareSimpleDdgiFrame(
                 scene,
                 camera,
                 sceneData,
                 lightSnapshot);
+            long simpleDdgiPrepareMicroseconds =
+                ElapsedMicroseconds(resourceSubstageStart);
+            resourceSubstageStart = Stopwatch.GetTimestamp();
             PrepareGiCausticCoordinatorFrame(lightSnapshot);
             PopulateAdvancedGiFrameDiagnostics(sceneData);
             bool ddgiAvailableForLayeredReceivers =
@@ -4204,6 +4349,11 @@ namespace Njulf.Rendering
                 sceneData,
                 _simpleDdgiVolumeManager,
                 debugOverlayOptions);
+            long advancedGiAndDebugMicroseconds =
+                ElapsedMicroseconds(resourceSubstageStart);
+            long resourcePreparationMicroseconds =
+                ElapsedMicroseconds(drawStageStart);
+            drawStageStart = Stopwatch.GetTimestamp();
 
             SetViewportAndScissor(_currentCommandBuffer);
 
@@ -4281,6 +4431,9 @@ namespace Njulf.Rendering
                         ? 1
                         : 0;
             }
+            long graphRecordMicroseconds =
+                ElapsedMicroseconds(drawStageStart);
+            drawStageStart = Stopwatch.GetTimestamp();
 
             RecordReflectionProbeWork(sceneData);
             if (reflectionsAllowed)
@@ -4365,7 +4518,31 @@ namespace Njulf.Rendering
                     DeterministicFixedBudget: fixedSimpleDdgiBudget));
             }
 
+            long postGraphMicroseconds =
+                ElapsedMicroseconds(drawStageStart);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
+            if (sceneData.CpuTotalDrawSceneMicroseconds >= 100_000)
+            {
+                Console.WriteLine(
+                    $"Renderer draw hitch: scene='{scene.Name}', " +
+                    $"total={sceneData.CpuTotalDrawSceneMicroseconds / 1000.0:F3}ms, " +
+                    $"prepareScene={prepareSceneMicroseconds / 1000.0:F3}ms, " +
+                    $"textureFanout={textureFanoutMicroseconds / 1000.0:F3}ms, " +
+                    $"sceneSetup={sceneSetupMicroseconds / 1000.0:F3}ms, " +
+                    $"sceneSetupParts={preSceneBuildMicroseconds / 1000.0:F3}/" +
+                    $"{sceneBuildCallMicroseconds / 1000.0:F3}/" +
+                    $"{postSceneBuildMicroseconds / 1000.0:F3}ms, " +
+                    $"resourcePreparation={resourcePreparationMicroseconds / 1000.0:F3}ms, " +
+                    $"resourceParts={environmentAndFoliageMicroseconds / 1000.0:F3}/" +
+                    $"{accelerationPrepareMicroseconds / 1000.0:F3}/" +
+                    $"{preAccelerationRecordMicroseconds / 1000.0:F3}/" +
+                    $"{accelerationRecordMicroseconds / 1000.0:F3}/" +
+                    $"{shadowAndReflectionPrepareMicroseconds / 1000.0:F3}/" +
+                    $"{simpleDdgiPrepareMicroseconds / 1000.0:F3}/" +
+                    $"{advancedGiAndDebugMicroseconds / 1000.0:F3}ms, " +
+                    $"graphRecord={graphRecordMicroseconds / 1000.0:F3}ms, " +
+                    $"postGraph={postGraphMicroseconds / 1000.0:F3}ms.");
+            }
             UpdateGlobalIlluminationCpuTiming(sceneData);
             _asyncComputeCoordinator.CaptureTiming(
                 _currentFrame,
@@ -9454,7 +9631,11 @@ namespace Njulf.Rendering
                     !directionalRaySceneRequested &&
                     !areaShadowRaySceneRequested &&
                     !reflectionRaySceneRequested &&
-                    !thickTransmissionRaySceneRequested),
+                    !thickTransmissionRaySceneRequested,
+                    // Build a complete ray scene transaction over bounded
+                    // frames. Raster/IBL remains usable while the BLAS cache
+                    // fills; a partial TLAS is never published.
+                    MaximumStaticBlasBuildsPerFrame: 64),
                 new DdgiDynamicRayScenePolicy(
                     directionalRaySceneRequested || areaShadowRaySceneRequested ||
                     reflectionRaySceneRequested ||
@@ -10718,6 +10899,12 @@ namespace Njulf.Rendering
             }
 
             _forwardPlusPass?.PublishNearFieldDirectSourceGeneration(null);
+            // Suppression must also remove the generation from the render
+            // graph before another frame records. Otherwise graph-planned
+            // barriers can acquire a newer GPU reference after the generation
+            // transaction has already captured its retirement fence.
+            _renderTargets?
+                .SuspendNearFieldResidualGenerationPublication();
             if (!publication.DisableFeature)
                 return;
 
@@ -10808,7 +10995,7 @@ namespace Njulf.Rendering
             bool materialTransportProvenanceTargetEnabled =
                 IsMaterialTransportProvenanceTargetEnabled(Settings);
             bool hybridReflectionTargetEnabled =
-                IsHybridReflectionTargetEnabled(Settings);
+                ResolveHybridReflectionTargetProvisioning();
             bool forwardAttachmentProfileChanged =
                 _lastMaterialTransportProvenanceTargetEnabled !=
                 materialTransportProvenanceTargetEnabled ||
@@ -10851,15 +11038,100 @@ namespace Njulf.Rendering
                     ? "Resolution scale setting"
                     : scaleDecision.CommitReason;
 
+            var changedProfileFields = new List<string>(12);
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "aoEnabled",
+                _lastAmbientOcclusionTargetEnabled,
+                aoEnabled);
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "aoScale",
+                _lastAmbientOcclusionResolutionScale,
+                ambientOcclusionResolutionScale);
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "aoMode",
+                _lastAmbientOcclusionMode,
+                effectiveAmbientOcclusionMode);
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "aaMode",
+                _lastAntiAliasingTargetMode,
+                aaMode);
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "motionVectors",
+                _lastMotionVectorTargetEnabled,
+                motionVectorTargetEnabled);
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "transparency",
+                _lastTransparencyTargetMode,
+                Settings.Transparency.Mode);
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "bloomMips",
+                _lastBloomTargetMipCount,
+                bloomMipCount);
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "fog",
+                _lastFogTargetEnabled,
+                fogTargetEnabled);
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "materialProvenance",
+                _lastMaterialTransportProvenanceTargetEnabled,
+                materialTransportProvenanceTargetEnabled);
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "hybridReflections",
+                _lastHybridReflectionTargetEnabled,
+                hybridReflectionTargetEnabled);
+            if (hybridReflectionTargetEnabled)
+            {
+                AddRenderTargetProfileChange(
+                    changedProfileFields,
+                    "reflectionRayFraction",
+                    _lastHybridReflectionRayBudgetFraction,
+                    Settings.Reflections.RayQueryPixelBudgetFraction);
+            }
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "sceneExtent",
+                $"{_lastSceneRenderExtent.Width}x{_lastSceneRenderExtent.Height}",
+                $"{sceneRenderExtent.Width}x{sceneRenderExtent.Height}");
+            AddRenderTargetProfileChange(
+                changedProfileFields,
+                "resolutionScale",
+                _lastEffectiveResolutionScale,
+                effectiveResolutionScale);
+
+            string changedProfileDescription = changedProfileFields.Count == 0
+                ? "none"
+                : string.Join(", ", changedProfileFields);
+            Console.WriteLine(
+                $"Render target profile rebuild started: reason='{recreateReason}', " +
+                $"changes=[{changedProfileDescription}].");
+            long rebuildStart = Stopwatch.GetTimestamp();
+
+            long stageStart = Stopwatch.GetTimestamp();
             RecordDeviceWaitIdle(
                 RuntimeStallReason.ResourceResize,
                 $"Render target profile rebuild: {recreateReason}",
                 _context.WaitIdle);
+            long waitIdleMicroseconds = ElapsedMicroseconds(stageStart);
+            stageStart = Stopwatch.GetTimestamp();
             ApplyGiCausticExtentTransitionAfterDeviceIdle(sceneRenderExtent);
+            long causticMicroseconds = ElapsedMicroseconds(stageStart);
+            stageStart = Stopwatch.GetTimestamp();
             PrepareNearFieldResidualGenerationAfterDeviceIdle(
                 sceneRenderExtent);
+            long nearFieldPrepareMicroseconds = ElapsedMicroseconds(stageStart);
             motionVectorTargetEnabled =
                 ResolveSurfaceHistoryConsumers().RequiresMotionVectors();
+            stageStart = Stopwatch.GetTimestamp();
             _renderTargets.Recreate(
                 sceneRenderExtent,
                 _swapchain.Extent,
@@ -10873,6 +11145,8 @@ namespace Njulf.Rendering
                 materialTransportProvenanceTargetEnabled,
                 hybridReflectionTargetEnabled,
                 effectiveAmbientOcclusionMode);
+            long renderTargetsMicroseconds = ElapsedMicroseconds(stageStart);
+            stageStart = Stopwatch.GetTimestamp();
             if (forwardAttachmentProfileChanged)
             {
                 _meshPipeline?.Recreate(
@@ -10883,19 +11157,29 @@ namespace Njulf.Rendering
                     RenderTargetManager.MotionVectorFormat,
                     _swapchain.DepthFormat);
             }
+            long pipelinesMicroseconds = ElapsedMicroseconds(stageStart);
 
+            stageStart = Stopwatch.GetTimestamp();
             _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
             _hizVisibilityPolicyState.PyramidValid = false;
+            long hizMicroseconds = ElapsedMicroseconds(stageStart);
+            stageStart = Stopwatch.GetTimestamp();
             CompleteNearFieldResidualGenerationAfterTargetRecreate();
+            long nearFieldCompleteMicroseconds =
+                ElapsedMicroseconds(stageStart);
+            stageStart = Stopwatch.GetTimestamp();
             RegisterSceneRenderTextures();
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HiZDepthTexture,
                 _hizDepthPyramid!.FullView,
                 _bindlessHeap.HiZSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            long registrationMicroseconds = ElapsedMicroseconds(stageStart);
+            stageStart = Stopwatch.GetTimestamp();
             _renderGraph.OnSwapchainRecreated();
             _asyncComputeCoordinator.ResetTimingHistory(
                 AsyncComputeTimingResetKind.RenderTargetsOrSwapchain);
+            long graphMicroseconds = ElapsedMicroseconds(stageStart);
             _lastAmbientOcclusionTargetEnabled = aoEnabled;
             _lastAmbientOcclusionResolutionScale = ambientOcclusionResolutionScale;
             _lastAmbientOcclusionMode = effectiveAmbientOcclusionMode;
@@ -10913,6 +11197,28 @@ namespace Njulf.Rendering
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = effectiveResolutionScale;
             _lastRenderTargetRecreateReason = recreateReason;
+            Console.WriteLine(
+                $"Render target profile rebuild completed: " +
+                $"total={ElapsedMicroseconds(rebuildStart) / 1000.0:F3}ms, " +
+                $"waitIdle={waitIdleMicroseconds / 1000.0:F3}ms, " +
+                $"caustic={causticMicroseconds / 1000.0:F3}ms, " +
+                $"nearFieldPrepare={nearFieldPrepareMicroseconds / 1000.0:F3}ms, " +
+                $"targets={renderTargetsMicroseconds / 1000.0:F3}ms, " +
+                $"pipelines={pipelinesMicroseconds / 1000.0:F3}ms, " +
+                $"hiz={hizMicroseconds / 1000.0:F3}ms, " +
+                $"nearFieldComplete={nearFieldCompleteMicroseconds / 1000.0:F3}ms, " +
+                $"registration={registrationMicroseconds / 1000.0:F3}ms, " +
+                $"graph={graphMicroseconds / 1000.0:F3}ms.");
+        }
+
+        private static void AddRenderTargetProfileChange<T>(
+            List<string> changes,
+            string name,
+            T previous,
+            T current)
+        {
+            if (!EqualityComparer<T>.Default.Equals(previous, current))
+                changes.Add($"{name}:{previous}->{current}");
         }
 
         private void InsertInterFrameSharedResourceDependency(CommandBuffer commandBuffer)
@@ -11073,6 +11379,8 @@ namespace Njulf.Rendering
 
             _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
             float sceneResolutionScale = ResolveSceneResolutionScale();
+            bool hybridReflectionTargetEnabled =
+                ResolveHybridReflectionTargetProvisioning();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
             sceneRenderExtent = PreserveExtentBoundCausticSceneExtent(
                 sceneRenderExtent);
@@ -11092,7 +11400,7 @@ namespace Njulf.Rendering
                 IsFogTargetEnabled(Settings),
                 IsWeightedOitTargetEnabled(Settings),
                 IsMaterialTransportProvenanceTargetEnabled(Settings),
-                IsHybridReflectionTargetEnabled(Settings),
+                hybridReflectionTargetEnabled,
                 ResolveEffectiveAmbientOcclusionMode());
             CompleteNearFieldResidualGenerationAfterTargetRecreate();
             _bindlessHeap.RegisterTexture(
@@ -11118,7 +11426,7 @@ namespace Njulf.Rendering
             _lastMaterialTransportProvenanceTargetEnabled =
                 IsMaterialTransportProvenanceTargetEnabled(Settings);
             _lastHybridReflectionTargetEnabled =
-                IsHybridReflectionTargetEnabled(Settings);
+                hybridReflectionTargetEnabled;
             _lastHybridReflectionRayBudgetFraction =
                 Settings.Reflections.RayQueryPixelBudgetFraction;
             _lastSceneRenderExtent = sceneRenderExtent;
@@ -11286,6 +11594,18 @@ namespace Njulf.Rendering
             return settings.Reflections.Enabled && settings.Reflections.Mode is
                 ReflectionMode.StaticProbesAndSsr or
                 ReflectionMode.HybridRayQuery;
+        }
+
+        private bool ResolveHybridReflectionTargetProvisioning()
+        {
+            // The forward attachment ABI is intentionally monotonic. Tearing
+            // it down on a scene switch would destroy and synchronously
+            // rebuild the complete mesh-pipeline bank, and can contend with
+            // optional background pipeline compilation. Keeping the superset
+            // profile resident makes later scene switches allocation-only.
+            _hybridReflectionTargetProvisioned |=
+                IsHybridReflectionTargetEnabled(Settings);
+            return _hybridReflectionTargetProvisioned;
         }
 
         private SurfaceHistoryConsumer ResolveSurfaceHistoryConsumers() =>

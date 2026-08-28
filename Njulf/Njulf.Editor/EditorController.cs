@@ -17,7 +17,7 @@ namespace Njulf.Editor;
 /// </summary>
 public sealed class EditorController
 {
-    private readonly Scene _scene;
+    private Scene _scene;
     private readonly IContentManager _content;
     private readonly LightManager _lightManager;
     private readonly MaterialManager _materialManager;
@@ -94,6 +94,27 @@ public sealed class EditorController
     public event Action<EditorSelection>? SelectionChanged;
 
     public void Toggle() => SetEnabled(!Enabled);
+
+    /// <summary>
+    /// Rebinds editor commands after an application-level transactional scene
+    /// handoff. Selection cannot cross scene ownership boundaries.
+    /// </summary>
+    public void SetScene(Scene scene)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        if (ReferenceEquals(_scene, scene))
+            return;
+
+        _scene = scene;
+        Selection = EditorSelection.None;
+        IsDirty = false;
+        SelectionChanged?.Invoke(Selection);
+        ModelLightRuntimeController.Attach(
+            _scene,
+            _content,
+            _lightStore,
+            _loadModel);
+    }
 
     public void SetEnabled(bool enabled)
     {

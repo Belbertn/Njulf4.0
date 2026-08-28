@@ -100,7 +100,8 @@ internal readonly record struct SampleHealthReportEvaluation(
         bool stateMachineOwnedSmoke = options.Mode is
             SampleSmokeMode.QualitySwitch or
             SampleSmokeMode.DdgiResidencySwitch or
-            SampleSmokeMode.TextureHotReload;
+            SampleSmokeMode.TextureHotReload or
+            SampleSmokeMode.SceneTransition;
         if (!standaloneBaselineCapture &&
             !durationOwnedLongRun &&
             !stateMachineOwnedSmoke &&
@@ -150,6 +151,12 @@ internal readonly record struct SampleHealthReportEvaluation(
                     renderedFrameCount),
             SampleSmokeMode.TextureHotReload =>
                 RequireExactOperationCount(operations, "texture-hot-reload", 1, renderedFrameCount),
+            SampleSmokeMode.SceneTransition =>
+                RequireExactOperationCount(
+                    operations,
+                    "scene-transition",
+                    1,
+                    renderedFrameCount),
             SampleSmokeMode.All =>
                 RequireOperations(
                     operations,

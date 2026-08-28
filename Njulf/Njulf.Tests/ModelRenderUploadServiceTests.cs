@@ -2,6 +2,7 @@ using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Geometry;
 using Njulf.Core.Math;
+using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
@@ -1190,6 +1191,185 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void CooperativeCookedUpload_PollsMeshFenceBeforePublishingHandles()
+        {
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                DeferMeshUploadCompletion = true
+            };
+            using var service = new ModelRenderUploadService(backend);
+            IContentUploadWork<Model> work =
+                service.PrepareCookedModelUpload(
+                    CreateTwoSubmeshOpacityMicromapModel());
+            var budget = new ContentUploadSliceBudget(
+                TimeSpan.FromMilliseconds(10),
+                4L * 1024L * 1024L);
+
+            ContentUploadStepResult waiting = AdvanceUploadUntil(
+                work,
+                budget,
+                () => backend.MeshUploadBeginCalls == 1);
+            ContentUploadStepResult stillWaiting =
+                work.ExecuteStep(budget);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(waiting.Status, Is.EqualTo(
+                    ContentUploadStepStatus.Yielded));
+                Assert.That(
+                    waiting.Detail,
+                    Does.Contain("waiting for GPU completion"));
+                Assert.That(stillWaiting.Status, Is.EqualTo(
+                    ContentUploadStepStatus.Yielded));
+                Assert.That(backend.MeshUploadBeginCalls, Is.EqualTo(1));
+                Assert.That(backend.NoOutstandingMeshReferences, Is.True);
+            });
+
+            backend.AllowDeferredMeshUploadCompletion = true;
+            ContentUploadStepResult completed = AdvanceUploadUntil(
+                work,
+                budget,
+                static () => false,
+                stopAtTerminal: true);
+            Model model = work.GetResult();
+            Assert.Multiple(() =>
+            {
+                Assert.That(completed.Status, Is.EqualTo(
+                    ContentUploadStepStatus.Completed));
+                Assert.That(model.RenderObjects, Has.Count.EqualTo(2));
+                Assert.That(backend.NoOutstandingMeshReferences, Is.False);
+            });
+
+            model.Dispose();
+            Assert.That(backend.NoOutstandingMeshReferences, Is.True);
+        }
+
+        [Test]
+        public void CooperativeCookedUpload_CancellationDrainsMeshFenceWithoutPublishingHandles()
+        {
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                DeferMeshUploadCompletion = true
+            };
+            using var service = new ModelRenderUploadService(backend);
+            using var cancellation = new CancellationTokenSource();
+            IContentUploadWork<Model> work =
+                service.PrepareCookedModelUpload(
+                    CreateTwoSubmeshOpacityMicromapModel(),
+                    cancellationToken: cancellation.Token);
+            var budget = new ContentUploadSliceBudget(
+                TimeSpan.FromMilliseconds(10),
+                4L * 1024L * 1024L);
+
+            _ = AdvanceUploadUntil(
+                work,
+                budget,
+                () => backend.MeshUploadBeginCalls == 1);
+            cancellation.Cancel();
+            ContentUploadStepResult draining =
+                work.ExecuteStep(budget);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(draining.Status, Is.EqualTo(
+                    ContentUploadStepStatus.Yielded));
+                Assert.That(
+                    draining.Detail,
+                    Does.Contain("draining submitted mesh upload"));
+                Assert.That(backend.NoOutstandingMeshReferences, Is.True);
+            });
+
+            backend.AllowDeferredMeshUploadCompletion = true;
+            ContentUploadStepResult cancelled = AdvanceUploadUntil(
+                work,
+                budget,
+                static () => false,
+                stopAtTerminal: true);
+            Assert.Multiple(() =>
+            {
+                Assert.That(cancelled.Status, Is.EqualTo(
+                    ContentUploadStepStatus.Cancelled));
+                Assert.That(
+                    backend.DeferredMeshUploadCancellationCalls,
+                    Is.EqualTo(1));
+                Assert.That(backend.NoOutstandingMeshReferences, Is.True);
+                Assert.That(backend.NoOutstandingMaterialReferences, Is.True);
+            });
+        }
+
+        [Test]
+        public void CooperativeSourceUpload_UsesTheSlicedMeshFencePath()
+        {
+            var backend = new RecordingModelRenderUploadBackend
+            {
+                DeferMeshUploadCompletion = true
+            };
+            using var service = new ModelRenderUploadService(backend);
+            IContentUploadWork<Model> work =
+                service.PrepareModelUpload(CreateRollbackTestModel());
+            var budget = new ContentUploadSliceBudget(
+                TimeSpan.FromMilliseconds(10),
+                4L * 1024L * 1024L);
+
+            ContentUploadStepResult waiting = AdvanceUploadUntil(
+                work,
+                budget,
+                () => backend.MeshUploadBeginCalls == 1);
+            Assert.Multiple(() =>
+            {
+                Assert.That(waiting.Status,
+                    Is.EqualTo(ContentUploadStepStatus.Yielded));
+                Assert.That(waiting.Detail,
+                    Does.Contain("waiting for GPU completion"));
+                Assert.That(backend.NoOutstandingMeshReferences, Is.True);
+            });
+
+            backend.AllowDeferredMeshUploadCompletion = true;
+            ContentUploadStepResult completed = AdvanceUploadUntil(
+                work,
+                budget,
+                static () => false,
+                stopAtTerminal: true);
+            Model model = work.GetResult();
+            Assert.Multiple(() =>
+            {
+                Assert.That(completed.Status,
+                    Is.EqualTo(ContentUploadStepStatus.Completed));
+                Assert.That(model.RenderObjects, Has.Count.EqualTo(1));
+                Assert.That(service.LastUploadDiagnostics.RegisteredMeshCount,
+                    Is.EqualTo(1));
+            });
+
+            model.Dispose();
+            Assert.That(backend.NoOutstandingMeshReferences, Is.True);
+        }
+
+        private static ContentUploadStepResult AdvanceUploadUntil(
+            IContentUploadWork<Model> work,
+            ContentUploadSliceBudget budget,
+            Func<bool> condition,
+            bool stopAtTerminal = false)
+        {
+            var timeout = System.Diagnostics.Stopwatch.StartNew();
+            ContentUploadStepResult result = default;
+            while (!condition())
+            {
+                result = work.ExecuteStep(budget);
+                if (stopAtTerminal && result.IsTerminal)
+                    return result;
+                if (timeout.Elapsed > TimeSpan.FromSeconds(5))
+                {
+                    Assert.Fail(
+                        "Timed out advancing cooperative cooked upload. " +
+                        result.Detail);
+                }
+                Thread.Yield();
+            }
+
+            return result;
+        }
+
         private static ModelMesh CreateRollbackTestModel()
         {
             var model = new ModelMesh
@@ -1591,6 +1771,10 @@ namespace Njulf.Tests
 
             public bool FailMeshRegistration { get; init; }
 
+            public bool DeferMeshUploadCompletion { get; init; }
+
+            public bool AllowDeferredMeshUploadCompletion { get; set; }
+
             public bool FailPrimitiveMaterialRegistration { get; init; }
 
             public string? RollbackFailureResource { get; init; }
@@ -1612,6 +1796,14 @@ namespace Njulf.Tests
             public List<string> RollbackCalls { get; } = new();
 
             public int PrimitiveMaterialRegistrationCalls { get; private set; }
+
+            public int MeshUploadBeginCalls { get; private set; }
+
+            public int DeferredMeshUploadCancellationCalls
+            {
+                get;
+                private set;
+            }
 
             public bool EveryAcquiredTextureWasReleasedExactlyOnce =>
                 AcquiredTextures.Count > 0 &&
@@ -1834,14 +2026,29 @@ namespace Njulf.Tests
                 if (FailMeshRegistration)
                     throw new InvalidOperationException("Injected mesh registration failure.");
 
-                var handles = new MeshHandle[meshes.Count];
-                for (int i = 0; i < handles.Length; i++)
-                {
-                    handles[i] =
-                        new MeshHandle(_nextMeshIndex++, 1);
-                    _meshReferences.Add(handles[i], 1);
-                }
+                MeshHandle[] handles = AllocateMeshHandles(meshes.Count);
+                PublishMeshHandles(handles);
                 return handles;
+            }
+
+            public IModelMeshUpload BeginMeshUpload(
+                IReadOnlyList<MeshManager.MeshRegistrationData> meshes)
+            {
+                MeshUploadBeginCalls++;
+                if (!DeferMeshUploadCompletion)
+                {
+                    return new CompletedModelMeshUpload(
+                        RegisterMeshes(meshes));
+                }
+                if (FailMeshRegistration)
+                {
+                    throw new InvalidOperationException(
+                        "Injected mesh registration failure.");
+                }
+
+                return new DeferredRecordingMeshUpload(
+                    this,
+                    AllocateMeshHandles(meshes.Count));
             }
 
             public void RetainMesh(MeshHandle handle)
@@ -1885,6 +2092,82 @@ namespace Njulf.Tests
                 IncrementTextureReference(handle);
                 _pendingTextureOwnership.Add(handle);
                 return handle;
+            }
+
+            private MeshHandle[] AllocateMeshHandles(int count)
+            {
+                var handles = new MeshHandle[count];
+                for (int i = 0; i < handles.Length; i++)
+                {
+                    handles[i] =
+                        new MeshHandle(_nextMeshIndex++, 1);
+                }
+                return handles;
+            }
+
+            private void PublishMeshHandles(
+                IReadOnlyList<MeshHandle> handles)
+            {
+                foreach (MeshHandle handle in handles)
+                    _meshReferences.Add(handle, 1);
+            }
+
+            private sealed class DeferredRecordingMeshUpload :
+                IModelMeshUpload
+            {
+                private readonly RecordingModelRenderUploadBackend
+                    _owner;
+                private bool _terminal;
+
+                public DeferredRecordingMeshUpload(
+                    RecordingModelRenderUploadBackend owner,
+                    MeshHandle[] handles)
+                {
+                    _owner = owner;
+                    Handles = handles;
+                }
+
+                public IReadOnlyList<MeshHandle> Handles { get; }
+
+                public bool TryCompleteGpuWork()
+                {
+                    if (_terminal)
+                        return true;
+                    if (!_owner.AllowDeferredMeshUploadCompletion)
+                        return false;
+
+                    _owner.PublishMeshHandles(Handles);
+                    _terminal = true;
+                    return true;
+                }
+
+                public void CompleteGpuWork()
+                {
+                    if (_terminal)
+                        return;
+                    _owner.PublishMeshHandles(Handles);
+                    _terminal = true;
+                }
+
+                public bool TryCancelGpuWork()
+                {
+                    if (_terminal)
+                        return true;
+                    if (!_owner.AllowDeferredMeshUploadCompletion)
+                        return false;
+
+                    _owner.DeferredMeshUploadCancellationCalls++;
+                    _terminal = true;
+                    return true;
+                }
+
+                public void Dispose()
+                {
+                    if (_terminal)
+                        return;
+                    _owner.DeferredMeshUploadCancellationCalls++;
+                    _terminal = true;
+                }
             }
 
             private MaterialHandle RegisterMaterial(MaterialDefinition definition)

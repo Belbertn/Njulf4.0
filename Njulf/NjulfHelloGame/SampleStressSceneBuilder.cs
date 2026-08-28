@@ -12,6 +12,16 @@ using CoreVector4 = Njulf.Core.Math.Vector4;
 
 namespace NjulfHelloGame;
 
+internal sealed class SampleStressSceneResourceCache
+{
+    internal MeshHandle QuadMesh { get; set; } = MeshHandle.Invalid;
+    internal MeshHandle GroundPlaneMesh { get; set; } = MeshHandle.Invalid;
+    internal MeshHandle ValidationBoxMesh { get; set; } = MeshHandle.Invalid;
+    internal MeshHandle TreeTrunkMesh { get; set; } = MeshHandle.Invalid;
+    internal MeshHandle TreeCanopyMesh { get; set; } = MeshHandle.Invalid;
+    internal MeshHandle AuthoredGrassClumpMesh { get; set; } = MeshHandle.Invalid;
+}
+
 internal sealed class SampleStressSceneBuilder
 {
     private const float ValidationRoomWallThickness = 0.22f;
@@ -25,6 +35,7 @@ internal sealed class SampleStressSceneBuilder
     private readonly MaterialManager _materialManager;
     private readonly LightManager _lightManager;
     private readonly SampleLightingMode _normalLightingMode;
+    private readonly SampleStressSceneResourceCache _resourceCache;
     private readonly List<RenderObject> _objects = new();
     private readonly List<StaticInstanceBatch> _staticBatches = new();
     private readonly List<FoliagePatch> _foliagePatches = new();
@@ -33,25 +44,20 @@ internal sealed class SampleStressSceneBuilder
     private readonly List<IUpdateable> _updateables = new();
     private readonly List<RenderObject> _hiddenRenderObjects = new();
     private readonly FoliageManager _foliageManager = new();
-    private MeshHandle _quadMesh = MeshHandle.Invalid;
-    private MeshHandle _groundPlaneMesh = MeshHandle.Invalid;
-    private MeshHandle _validationBoxMesh = MeshHandle.Invalid;
-    private MeshHandle _treeTrunkMesh = MeshHandle.Invalid;
-    private MeshHandle _treeCanopyMesh = MeshHandle.Invalid;
-    private MeshHandle _authoredGrassClumpMesh = MeshHandle.Invalid;
-
     public SampleStressSceneBuilder(
         Scene scene,
         MeshManager meshManager,
         MaterialManager materialManager,
         LightManager lightManager,
-        SampleLightingMode normalLightingMode)
+        SampleLightingMode normalLightingMode,
+        SampleStressSceneResourceCache? resourceCache = null)
     {
         _scene = scene ?? throw new ArgumentNullException(nameof(scene));
         _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
         _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
         _lightManager = lightManager ?? throw new ArgumentNullException(nameof(lightManager));
         _normalLightingMode = normalLightingMode;
+        _resourceCache = resourceCache ?? new SampleStressSceneResourceCache();
     }
 
     public SamplePerformanceScenarioSummary Apply(SamplePerformanceScenario scenario)
@@ -1592,10 +1598,10 @@ internal sealed class SampleStressSceneBuilder
 
     private MeshHandle GetQuadMesh()
     {
-        if (_quadMesh.IsValid)
-            return _quadMesh;
+        if (_resourceCache.QuadMesh.IsValid)
+            return _resourceCache.QuadMesh;
 
-        _quadMesh = _meshManager.RegisterMesh(
+        _resourceCache.QuadMesh = _meshManager.RegisterMesh(
             [
                 CreateVertex(-0.5f, -0.5f, 0f, 0f),
                 CreateVertex(0.5f, -0.5f, 1f, 0f),
@@ -1603,16 +1609,16 @@ internal sealed class SampleStressSceneBuilder
                 CreateVertex(-0.5f, 0.5f, 0f, 1f)
             ],
             [0u, 1u, 2u, 0u, 2u, 3u]);
-        return _quadMesh;
+        return _resourceCache.QuadMesh;
     }
 
     private MeshHandle GetGroundPlaneMesh()
     {
-        if (_groundPlaneMesh.IsValid)
-            return _groundPlaneMesh;
+        if (_resourceCache.GroundPlaneMesh.IsValid)
+            return _resourceCache.GroundPlaneMesh;
 
         const float halfSize = 15f;
-        _groundPlaneMesh = _meshManager.RegisterMesh(
+        _resourceCache.GroundPlaneMesh = _meshManager.RegisterMesh(
             [
                 CreateGroundVertex(-halfSize, -halfSize, 0f, 0f),
                 CreateGroundVertex(halfSize, -halfSize, 1f, 0f),
@@ -1620,13 +1626,13 @@ internal sealed class SampleStressSceneBuilder
                 CreateGroundVertex(-halfSize, halfSize, 0f, 1f)
             ],
             [0u, 2u, 1u, 0u, 3u, 2u]);
-        return _groundPlaneMesh;
+        return _resourceCache.GroundPlaneMesh;
     }
 
     private MeshHandle GetValidationBoxMesh()
     {
-        if (_validationBoxMesh.IsValid)
-            return _validationBoxMesh;
+        if (_resourceCache.ValidationBoxMesh.IsValid)
+            return _resourceCache.ValidationBoxMesh;
 
         var vertices = new List<GPUVertex>(24);
         var indices = new List<uint>(36);
@@ -1680,8 +1686,9 @@ internal sealed class SampleStressSceneBuilder
             -CoreVector3.UnitY,
             reverseWinding: false);
 
-        _validationBoxMesh = _meshManager.RegisterMesh(vertices.ToArray(), indices.ToArray());
-        return _validationBoxMesh;
+        _resourceCache.ValidationBoxMesh =
+            _meshManager.RegisterMesh(vertices.ToArray(), indices.ToArray());
+        return _resourceCache.ValidationBoxMesh;
 
         void AddFace(
             CoreVector3 bottomLeft,
@@ -1721,10 +1728,10 @@ internal sealed class SampleStressSceneBuilder
 
     private MeshHandle GetTreeTrunkMesh()
     {
-        if (_treeTrunkMesh.IsValid)
-            return _treeTrunkMesh;
+        if (_resourceCache.TreeTrunkMesh.IsValid)
+            return _resourceCache.TreeTrunkMesh;
 
-        _treeTrunkMesh = _meshManager.RegisterMesh(
+        _resourceCache.TreeTrunkMesh = _meshManager.RegisterMesh(
             [
                 CreateTreeVertex(-0.5f, -0.5f, -0.5f, CoreVector3.UnitZ),
                 CreateTreeVertex(0.5f, -0.5f, -0.5f, CoreVector3.UnitZ),
@@ -1743,15 +1750,15 @@ internal sealed class SampleStressSceneBuilder
                 2u, 3u, 7u, 2u, 7u, 6u,
                 3u, 0u, 4u, 3u, 4u, 7u
             ]);
-        return _treeTrunkMesh;
+        return _resourceCache.TreeTrunkMesh;
     }
 
     private MeshHandle GetTreeCanopyMesh()
     {
-        if (_treeCanopyMesh.IsValid)
-            return _treeCanopyMesh;
+        if (_resourceCache.TreeCanopyMesh.IsValid)
+            return _resourceCache.TreeCanopyMesh;
 
-        _treeCanopyMesh = _meshManager.RegisterMesh(
+        _resourceCache.TreeCanopyMesh = _meshManager.RegisterMesh(
             [
                 CreateTreeVertex(0f, 1.0f, 0f, CoreVector3.UnitY),
                 CreateTreeVertex(-1.0f, 0.15f, -1.0f, new CoreVector3(-0.5f, 0.7f, -0.5f).Normalized()),
@@ -1770,13 +1777,13 @@ internal sealed class SampleStressSceneBuilder
                 5u, 4u, 3u,
                 5u, 1u, 4u
             ]);
-        return _treeCanopyMesh;
+        return _resourceCache.TreeCanopyMesh;
     }
 
     private MeshHandle GetAuthoredGrassClumpMesh()
     {
-        if (_authoredGrassClumpMesh.IsValid)
-            return _authoredGrassClumpMesh;
+        if (_resourceCache.AuthoredGrassClumpMesh.IsValid)
+            return _resourceCache.AuthoredGrassClumpMesh;
 
         var vertices = new List<GPUVertex>(24);
         var indices = new List<uint>(24);
@@ -1801,8 +1808,9 @@ internal sealed class SampleStressSceneBuilder
             indices.Add(baseVertex + 2u);
         }
 
-        _authoredGrassClumpMesh = _meshManager.RegisterMesh(vertices.ToArray(), indices.ToArray());
-        return _authoredGrassClumpMesh;
+        _resourceCache.AuthoredGrassClumpMesh =
+            _meshManager.RegisterMesh(vertices.ToArray(), indices.ToArray());
+        return _resourceCache.AuthoredGrassClumpMesh;
     }
 
     private static MaterialDefinition CreateMaterial(int seed, float alpha)

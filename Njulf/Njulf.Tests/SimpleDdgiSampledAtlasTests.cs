@@ -119,6 +119,23 @@ public sealed class SimpleDdgiSampledAtlasTests
         });
     }
 
+    [TestCase(12UL, 10UL, 12UL)]
+    [TestCase(10UL, 10UL, 11UL)]
+    [TestCase(0UL, 10UL, 11UL)]
+    [TestCase(ulong.MaxValue, ulong.MaxValue, ulong.MaxValue)]
+    public void DescriptorReplacement_RetainsOldViewsThroughNextCompletion(
+        ulong lastUseFence,
+        ulong completedFence,
+        ulong expectedRetirementFence)
+    {
+        Assert.That(
+            SimpleDdgiSampledAtlas
+                .ResolveDescriptorReplacementRetirementFence(
+                    lastUseFence,
+                    completedFence),
+            Is.EqualTo(expectedRetirementFence));
+    }
+
     [Test]
     public void StableCapacityCheck_UsesCachedLayerLimitWithoutQueryingVulkan()
     {

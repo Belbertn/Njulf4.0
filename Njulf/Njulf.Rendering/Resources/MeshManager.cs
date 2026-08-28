@@ -78,6 +78,8 @@ namespace Njulf.Rendering.Resources
         private const ulong InitialVertexUvColorBufferSize = 8 * 1024 * 1024;
         private const ulong BufferGrowthFactor = 2;
         private const ulong UploadStagingAlignment = StagingRing.DefaultMinAlignment;
+        private const ulong ReusableUploadStagingGranularity =
+            1UL * 1024UL * 1024UL;
 
         private static readonly ulong VertexPositionStride = (ulong)Marshal.SizeOf<GPUVertexPositionStream>();
         private static readonly ulong VertexNormalTangentStride = (ulong)Marshal.SizeOf<GPUVertexNormalTangentStream>();
@@ -100,6 +102,7 @@ namespace Njulf.Rendering.Resources
         private readonly BufferManager _bufferManager;
         private readonly StagingRing? _stagingRing;
         private readonly FenceBasedDeleter? _deleter;
+        private readonly SynchronizationManager? _synchronizationManager;
         private readonly object _lock = new object();
 
         private BufferHandle _indexBuffer;
@@ -111,6 +114,8 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _vertexPositionBuffer;
         private BufferHandle _vertexNormalTangentBuffer;
         private BufferHandle _vertexUvColorBuffer;
+        private BufferHandle _reusableUploadStagingBuffer;
+        private ulong _reusableUploadStagingBufferSize;
 
         private ulong _vertexPositionBytesUsed;
         private ulong _vertexNormalTangentBytesUsed;
@@ -152,6 +157,7 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _registeredVertexPositionBuffer = BufferHandle.Invalid;
         private BufferHandle _registeredVertexNormalTangentBuffer = BufferHandle.Invalid;
         private BufferHandle _registeredVertexUvColorBuffer = BufferHandle.Invalid;
+        private MeshRegistrationUpload? _activeRegistrationUpload;
         private bool _disposed;
         private bool _disposeCompleted;
         internal Action<MeshManagerDisposalResource>?
@@ -163,6 +169,8 @@ namespace Njulf.Rendering.Resources
 
         public sealed class MeshRegistrationData
         {
+            private MeshTransportGeometry? _preparedTransportGeometry;
+
             public MeshRegistrationData(
                 GPUVertex[] vertices,
                 uint[] indices,
@@ -190,6 +198,7 @@ namespace Njulf.Rendering.Resources
                     indices,
                     SkinningData.Length > 0,
                     causticTopologyEvidence);
+                PrepareRegistrationMetadata();
             }
 
             internal MeshRegistrationData(
@@ -220,6 +229,7 @@ namespace Njulf.Rendering.Resources
                     indices,
                     SkinningData.Length > 0,
                     causticTopologyEvidence);
+                PrepareRegistrationMetadata();
             }
 
             public MeshRegistrationData(
@@ -267,6 +277,8 @@ namespace Njulf.Rendering.Resources
                     indices,
                     SkinningData.Length > 0,
                     causticTopologyEvidence);
+                PrepareRegistrationMetadata();
+                ValidateCookedRegistration();
             }
 
             public MeshRegistrationData(
@@ -318,6 +330,8 @@ namespace Njulf.Rendering.Resources
                     indices,
                     SkinningData.Length > 0,
                     causticTopologyEvidence);
+                PrepareRegistrationMetadata();
+                ValidateCookedRegistration();
             }
 
             internal GPUVertex[] Vertices { get; }
@@ -340,6 +354,216 @@ namespace Njulf.Rendering.Resources
             internal float Lod2SimplificationError { get; }
             internal GiPrimitiveTransportProfile? PrimitiveTransportProfile { get; }
             internal ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence { get; }
+            internal Vector3 BoundingBoxMin { get; private set; }
+            internal Vector3 BoundingBoxMax { get; private set; }
+            internal bool HasVertexColor { get; private set; }
+            internal bool HasUv1 { get; private set; }
+            internal bool HasTangents { get; private set; }
+            internal bool CookedValidationCompleted { get; private set; }
+            internal uint MeshletTriangleSum { get; private set; }
+            internal uint MeshletVertexSum { get; private set; }
+            internal uint SmallMeshletsUnder16Triangles { get; private set; }
+            internal uint SmallMeshletsUnder32Triangles { get; private set; }
+
+            private void PrepareRegistrationMetadata()
+            {
+                if (Positions.Length == 0)
+                    return;
+
+                BoundingBoxMin = Positions[0];
+                BoundingBoxMax = Positions[0];
+                for (int i = 1; i < Positions.Length; i++)
+                {
+                    BoundingBoxMin = Vector3.Min(
+                        BoundingBoxMin,
+                        Positions[i]);
+                    BoundingBoxMax = Vector3.Max(
+                        BoundingBoxMax,
+                        Positions[i]);
+                }
+
+                const float epsilon = 0.0001f;
+                for (int i = 0; i < VertexUvColors.Length; i++)
+                {
+                    GPUVertexUvColorStream uvColor =
+                        VertexUvColors[i];
+                    GPUVertexNormalTangentStream normalTangent =
+                        VertexNormalTangents[i];
+                    HasVertexColor |=
+                        Math.Abs(uvColor.Color.X - 1f) > epsilon ||
+                        Math.Abs(uvColor.Color.Y - 1f) > epsilon ||
+                        Math.Abs(uvColor.Color.Z - 1f) > epsilon ||
+                        Math.Abs(uvColor.Color.W - 1f) > epsilon;
+                    HasUv1 |=
+                        Math.Abs(uvColor.TexCoord2.X) > epsilon ||
+                        Math.Abs(uvColor.TexCoord2.Y) > epsilon;
+                    HasTangents |=
+                        Math.Abs(normalTangent.Tangent.X - 1f) > epsilon ||
+                        Math.Abs(normalTangent.Tangent.Y) > epsilon ||
+                        Math.Abs(normalTangent.Tangent.Z) > epsilon ||
+                        Math.Abs(normalTangent.Tangent.W - 1f) > epsilon;
+                }
+
+                for (int i = 0; i < Meshlets.Length; i++)
+                {
+                    Meshlet meshlet = Meshlets[i];
+                    MeshletTriangleSum = CheckedAdd(
+                        MeshletTriangleSum,
+                        meshlet.LocalTriangleCount);
+                    MeshletVertexSum = CheckedAdd(
+                        MeshletVertexSum,
+                        meshlet.LocalVertexCount);
+                    if (meshlet.LocalTriangleCount < 16)
+                        SmallMeshletsUnder16Triangles++;
+                    if (meshlet.LocalTriangleCount < 32)
+                        SmallMeshletsUnder32Triangles++;
+                }
+            }
+
+            private void ValidateCookedRegistration()
+            {
+                ValidateMeshInput(Positions, Indices);
+                if (SkinningData.Length != 0 &&
+                    SkinningData.Length != Positions.Length)
+                {
+                    throw new ArgumentException(
+                        "Cooked skinning data must match the vertex count.",
+                        nameof(SkinningData));
+                }
+                for (int i = 0; i < Meshlets.Length; i++)
+                {
+                    Meshlet meshlet = Meshlets[i];
+                    if (checked((ulong)meshlet.VertexOffset +
+                                meshlet.VertexCount) >
+                        (ulong)Positions.Length)
+                    {
+                        throw new ArgumentException(
+                            "Cooked meshlet vertex range exceeds its mesh vertex stream.",
+                            nameof(Meshlets));
+                    }
+                    if (checked((ulong)meshlet.IndexOffset +
+                                meshlet.IndexCount) >
+                        (ulong)Indices.Length)
+                    {
+                        throw new ArgumentException(
+                            "Cooked meshlet index range exceeds its mesh index stream.",
+                            nameof(Meshlets));
+                    }
+                    if (checked((ulong)meshlet.LocalVertexOffset +
+                                meshlet.LocalVertexCount) >
+                        (ulong)LocalVertexIndices.Length)
+                    {
+                        throw new ArgumentException(
+                            "Cooked meshlet local-vertex range exceeds its stream.",
+                            nameof(Meshlets));
+                    }
+                    if (checked((ulong)meshlet.LocalTriangleOffset +
+                                (ulong)meshlet.LocalTriangleCount * 3UL) >
+                        (ulong)LocalTriangleIndices.Length)
+                    {
+                        throw new ArgumentException(
+                            "Cooked meshlet local-triangle range exceeds its stream.",
+                            nameof(Meshlets));
+                    }
+                }
+
+                for (int i = 0; i < LocalVertexIndices.Length; i++)
+                {
+                    if (LocalVertexIndices[i] >= Positions.Length)
+                    {
+                        throw new ArgumentException(
+                            "Cooked meshlet local-vertex index exceeds its mesh vertex stream.",
+                            nameof(LocalVertexIndices));
+                    }
+                }
+
+                for (int i = 0; i < LocalTriangleIndices.Length; i++)
+                {
+                    if (LocalTriangleIndices[i] >= MaxVerticesPerMeshlet)
+                    {
+                        throw new ArgumentException(
+                            "Cooked meshlet local-triangle index exceeds the meshlet vertex limit.",
+                            nameof(LocalTriangleIndices));
+                    }
+                }
+
+                CookedValidationCompleted = true;
+            }
+
+            internal void PrepareTransportGeometry()
+            {
+                _ = GetOrCreateTransportGeometry();
+            }
+
+            internal MeshTransportGeometry GetOrCreateTransportGeometry()
+            {
+                if (_preparedTransportGeometry is { } prepared)
+                    return prepared;
+
+                MeshTransportGeometry created = CreateTransportGeometry(
+                    VertexPositions,
+                    VertexUvColors,
+                    Indices,
+                    IsSkinned,
+                    PrimitiveTransportProfile,
+                    CausticTopologyEvidence);
+                _preparedTransportGeometry = created;
+                return created;
+            }
+
+            /// <summary>
+            /// Conservative staging footprint used by <see cref="RegisterMeshes"/>
+            /// for an already-cooked mesh. Cooperative model uploads use this
+            /// to stop a render-thread slice before admitting the next mesh.
+            /// </summary>
+            internal ulong EstimateCookedUploadStagingBytes()
+            {
+                if (!HasPrebuiltMeshlets)
+                {
+                    throw new InvalidOperationException(
+                        "Only cooked, prebuilt mesh streams have a stable upload estimate.");
+                }
+
+                ulong bytes = 0;
+                bytes = AddUploadStagingBytes(
+                    bytes,
+                    CheckedByteSize(
+                        VertexPositions.Length,
+                        VertexPositionStride));
+                bytes = AddUploadStagingBytes(
+                    bytes,
+                    CheckedByteSize(
+                        VertexNormalTangents.Length,
+                        VertexNormalTangentStride));
+                bytes = AddUploadStagingBytes(
+                    bytes,
+                    CheckedByteSize(
+                        VertexUvColors.Length,
+                        VertexUvColorStride));
+                bytes = AddUploadStagingBytes(
+                    bytes,
+                    CheckedByteSize(Indices.Length, IndexStride));
+                bytes = AddUploadStagingBytes(bytes, MeshMetadataStride);
+                bytes = AddUploadStagingBytes(
+                    bytes,
+                    CheckedByteSize(Meshlets.Length, MeshletStride));
+                bytes = AddUploadStagingBytes(
+                    bytes,
+                    CheckedByteSize(
+                        LocalVertexIndices.Length,
+                        IndexStride));
+                bytes = AddUploadStagingBytes(
+                    bytes,
+                    CheckedByteSize(
+                        LocalTriangleIndices.Length,
+                        IndexStride));
+                bytes = AddUploadStagingBytes(
+                    bytes,
+                    CheckedByteSize(
+                        SkinningData.Length,
+                        SkinningDataStride));
+                return AlignUp(bytes, UploadStagingAlignment);
+            }
 
             private static float ValidateSimplificationError(float value) =>
                 float.IsFinite(value) && value >= 0f ? value : -1f;
@@ -400,7 +624,13 @@ namespace Njulf.Rendering.Resources
         }
 
         public MeshManager(VulkanContext context, BufferManager bufferManager)
-            : this(context, bufferManager, stagingRing: null, deleter: null, allowMissingUploadServices: true)
+            : this(
+                context,
+                bufferManager,
+                stagingRing: null,
+                deleter: null,
+                synchronizationManager: null,
+                allowMissingUploadServices: true)
         {
         }
 
@@ -409,7 +639,29 @@ namespace Njulf.Rendering.Resources
             BufferManager bufferManager,
             StagingRing stagingRing,
             FenceBasedDeleter deleter)
-            : this(context, bufferManager, stagingRing, deleter, allowMissingUploadServices: false)
+            : this(
+                context,
+                bufferManager,
+                stagingRing,
+                deleter,
+                synchronizationManager: null,
+                allowMissingUploadServices: false)
+        {
+        }
+
+        public MeshManager(
+            VulkanContext context,
+            BufferManager bufferManager,
+            StagingRing stagingRing,
+            FenceBasedDeleter deleter,
+            SynchronizationManager synchronizationManager)
+            : this(
+                context,
+                bufferManager,
+                stagingRing,
+                deleter,
+                synchronizationManager,
+                allowMissingUploadServices: false)
         {
         }
 
@@ -418,12 +670,14 @@ namespace Njulf.Rendering.Resources
             BufferManager bufferManager,
             StagingRing? stagingRing,
             FenceBasedDeleter? deleter,
+            SynchronizationManager? synchronizationManager,
             bool allowMissingUploadServices)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _stagingRing = stagingRing;
             _deleter = deleter;
+            _synchronizationManager = synchronizationManager;
 
             CreateConsolidatedBuffers();
             System.Diagnostics.Debug.WriteLine("Mesh manager created");
@@ -498,29 +752,53 @@ namespace Njulf.Rendering.Resources
 
         public MeshHandle[] RegisterMeshes(IReadOnlyList<MeshRegistrationData> meshes)
         {
+            using IModelMeshUpload upload =
+                BeginRegistrationUpload(meshes);
+            upload.CompleteGpuWork();
+            return upload.Handles as MeshHandle[] ??
+                   upload.Handles.ToArray();
+        }
+
+        internal IModelMeshUpload BeginRegistrationUpload(
+            IReadOnlyList<MeshRegistrationData> meshes) =>
+            BeginRegistrationUpload(meshes, capacityRegistrations: null);
+
+        internal IModelMeshUpload BeginRegistrationUpload(
+            IReadOnlyList<MeshRegistrationData> meshes,
+            IReadOnlyList<MeshRegistrationData>? capacityRegistrations)
+        {
             ThrowIfDisposed();
             if (meshes == null)
                 throw new ArgumentNullException(nameof(meshes));
             if (meshes.Count == 0)
-                return Array.Empty<MeshHandle>();
+            {
+                return new CompletedModelMeshUpload(
+                    Array.Empty<MeshHandle>());
+            }
 
             for (int i = 0; i < meshes.Count; i++)
             {
                 MeshRegistrationData mesh = meshes[i] ?? throw new ArgumentException("Mesh registration data cannot contain null entries.", nameof(meshes));
-                ValidateMeshInput(mesh.Positions, mesh.Indices);
-                if (mesh.VertexPositions.Length != mesh.Positions.Length ||
-                    mesh.VertexNormalTangents.Length != mesh.Positions.Length ||
-                    mesh.VertexUvColors.Length != mesh.Positions.Length)
-                    throw new ArgumentException("Mesh registration vertex streams must have matching lengths.", nameof(meshes));
-                if (mesh.SkinningData.Length != 0 && mesh.SkinningData.Length != mesh.Positions.Length)
-                    throw new ArgumentException("Skinned mesh registration data must match the vertex count.", nameof(meshes));
+                if (!mesh.CookedValidationCompleted)
+                {
+                    ValidateMeshInput(mesh.Positions, mesh.Indices);
+                    if (mesh.VertexPositions.Length != mesh.Positions.Length ||
+                        mesh.VertexNormalTangents.Length != mesh.Positions.Length ||
+                        mesh.VertexUvColors.Length != mesh.Positions.Length)
+                        throw new ArgumentException("Mesh registration vertex streams must have matching lengths.", nameof(meshes));
+                    if (mesh.SkinningData.Length != 0 && mesh.SkinningData.Length != mesh.Positions.Length)
+                        throw new ArgumentException("Skinned mesh registration data must match the vertex count.", nameof(meshes));
+                }
                 if (mesh.HasPrebuiltMeshlets && mesh.Meshlets.Length == 0)
                     throw new ArgumentException("Cooked mesh registration requires at least one prebuilt meshlet.", nameof(meshes));
             }
 
             lock (_lock)
             {
+                long registrationStarted =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
                 ThrowIfDisposedLocked();
+                ThrowIfRegistrationUploadActiveLocked();
                 long requestedEmissiveBytes = 0;
                 for (int i = 0; i < meshes.Count; i++)
                 {
@@ -541,6 +819,12 @@ namespace Njulf.Rendering.Resources
                 var handles = new MeshHandle[meshes.Count];
                 int[] availableFreeMeshIndices =
                     _meshLifetimes.CaptureAvailableFreeIndices();
+                MeshUploadCapacityTargets? reservedCapacity =
+                    capacityRegistrations == null
+                        ? null
+                        : CalculateRegistrationCapacityTargets(
+                            capacityRegistrations,
+                            availableFreeMeshIndices.Length);
                 ulong finalVertexPositionBytesUsed = _vertexPositionBytesUsed;
                 ulong finalVertexNormalTangentBytesUsed = _vertexNormalTangentBytesUsed;
                 ulong finalVertexUvColorBytesUsed = _vertexUvColorBytesUsed;
@@ -570,8 +854,10 @@ namespace Njulf.Rendering.Resources
 
                     var meshInfo = CreateMeshInfo(
                         meshIndex,
-                        mesh.Positions,
-                        mesh.Indices,
+                        mesh.Positions.Length,
+                        mesh.Indices.Length,
+                        mesh.BoundingBoxMin,
+                        mesh.BoundingBoxMax,
                         finalVertexPositionBytesUsed,
                         finalIndexBytesUsed,
                         finalMeshletBytesUsed,
@@ -581,16 +867,18 @@ namespace Njulf.Rendering.Resources
                         mesh.SkinningData.Length);
                     meshInfo.CausticTopologyEvidence =
                         mesh.CausticTopologyEvidence;
-                    ApplyVertexAttributeFlags(ref meshInfo, mesh.VertexNormalTangents, mesh.VertexUvColors);
-                    List<Meshlet> meshlets = new List<Meshlet>();
-                    List<uint> localVertexIndices = new List<uint>();
-                    List<uint> localTriangleIndices = new List<uint>();
+                    meshInfo.HasVertexColor = mesh.HasVertexColor;
+                    meshInfo.HasUv1 = mesh.HasUv1;
+                    meshInfo.HasTangents = mesh.HasTangents;
+                    Meshlet[] meshlets;
+                    uint[] localVertexIndices;
+                    uint[] localTriangleIndices;
 
                     if (mesh.HasPrebuiltMeshlets)
                     {
-                        meshlets.AddRange(mesh.Meshlets);
-                        localVertexIndices.AddRange(mesh.LocalVertexIndices);
-                        localTriangleIndices.AddRange(mesh.LocalTriangleIndices);
+                        meshlets = (Meshlet[])mesh.Meshlets.Clone();
+                        localVertexIndices = mesh.LocalVertexIndices;
+                        localTriangleIndices = mesh.LocalTriangleIndices;
                         meshInfo.MeshletCount = CheckedCount(mesh.Lod0MeshletCount);
                         meshInfo.MeshletLod1Offset = CheckedAdd(meshInfo.MeshletOffset, meshInfo.MeshletCount);
                         meshInfo.MeshletLod1Count = CheckedCount(mesh.Lod1MeshletCount);
@@ -600,23 +888,75 @@ namespace Njulf.Rendering.Resources
                             mesh.Lod1SimplificationError;
                         meshInfo.MeshletLod2SimplificationError =
                             mesh.Lod2SimplificationError;
-                        meshInfo.MeshletLodGeneratedCount = CheckedCount(meshlets.Count);
-                        ApplyMeshletQualityStats(ref meshInfo, meshlets);
+                        meshInfo.MeshletLodGeneratedCount = CheckedCount(meshlets.Length);
+                        if (mesh.CookedValidationCompleted)
+                        {
+                            meshInfo.MeshletTriangleSum =
+                                mesh.MeshletTriangleSum;
+                            meshInfo.MeshletVertexSum =
+                                mesh.MeshletVertexSum;
+                            meshInfo.SmallMeshletsUnder16Triangles =
+                                mesh.SmallMeshletsUnder16Triangles;
+                            meshInfo.SmallMeshletsUnder32Triangles =
+                                mesh.SmallMeshletsUnder32Triangles;
+                        }
+                        else
+                        {
+                            ApplyMeshletQualityStats(
+                                ref meshInfo,
+                                meshlets);
+                        }
                         ApplyGlobalMeshletOffsets(meshlets, meshInfo);
-                        ValidateMeshletRanges(ref meshInfo, meshlets, localVertexIndices, localTriangleIndices);
+                        if (mesh.CookedValidationCompleted)
+                        {
+                            meshInfo.LocalVertexIndexCount =
+                                CheckedCount(localVertexIndices.Length);
+                            meshInfo.LocalTriangleIndexCount =
+                                CheckedCount(localTriangleIndices.Length);
+                        }
+                        else
+                        {
+                            ValidateMeshletRanges(
+                                ref meshInfo,
+                                meshlets,
+                                localVertexIndices,
+                                localTriangleIndices);
+                        }
                     }
                     else if (mesh.GenerateMeshlets)
                     {
+                        var generatedMeshlets = new List<Meshlet>();
+                        var generatedLocalVertexIndices = new List<uint>();
+                        var generatedLocalTriangleIndices = new List<uint>();
                         BuildMeshletLods(
                             ref meshInfo,
                             mesh.Positions,
                             mesh.Indices,
-                            meshlets,
-                            localVertexIndices,
-                            localTriangleIndices);
-                        ApplyMeshletQualityStats(ref meshInfo, meshlets);
-                        ApplyGlobalMeshletOffsets(meshlets, meshInfo);
-                        ValidateMeshletRanges(ref meshInfo, meshlets, localVertexIndices, localTriangleIndices);
+                            generatedMeshlets,
+                            generatedLocalVertexIndices,
+                            generatedLocalTriangleIndices);
+                        ApplyMeshletQualityStats(
+                            ref meshInfo,
+                            generatedMeshlets);
+                        ApplyGlobalMeshletOffsets(
+                            generatedMeshlets,
+                            meshInfo);
+                        ValidateMeshletRanges(
+                            ref meshInfo,
+                            generatedMeshlets,
+                            generatedLocalVertexIndices,
+                            generatedLocalTriangleIndices);
+                        meshlets = generatedMeshlets.ToArray();
+                        localVertexIndices =
+                            generatedLocalVertexIndices.ToArray();
+                        localTriangleIndices =
+                            generatedLocalTriangleIndices.ToArray();
+                    }
+                    else
+                    {
+                        meshlets = Array.Empty<Meshlet>();
+                        localVertexIndices = Array.Empty<uint>();
+                        localTriangleIndices = Array.Empty<uint>();
                     }
 
                     var meshMetadata = CreateGpuMeshInfo(meshInfo);
@@ -634,9 +974,9 @@ namespace Njulf.Rendering.Resources
                     ulong vertexNormalTangentBytes = CheckedByteSize(vertexNormalTangents.Length, VertexNormalTangentStride);
                     ulong vertexUvColorBytes = CheckedByteSize(vertexUvColors.Length, VertexUvColorStride);
                     ulong indexBytes = CheckedByteSize(mesh.Indices.Length, IndexStride);
-                    ulong meshletBytes = CheckedByteSize(meshlets.Count, MeshletStride);
-                    ulong localVertexIndexBytes = CheckedByteSize(localVertexIndices.Count, IndexStride);
-                    ulong localTriangleIndexBytes = CheckedByteSize(localTriangleIndices.Count, IndexStride);
+                    ulong meshletBytes = CheckedByteSize(meshlets.Length, MeshletStride);
+                    ulong localVertexIndexBytes = CheckedByteSize(localVertexIndices.Length, IndexStride);
+                    ulong localTriangleIndexBytes = CheckedByteSize(localTriangleIndices.Length, IndexStride);
                     ulong skinningDataBytes = CheckedByteSize(mesh.SkinningData.Length, SkinningDataStride);
 
                     lastPendingMeshBytes = checked(
@@ -668,13 +1008,7 @@ namespace Njulf.Rendering.Resources
                     finalSkinningDataBytesUsed = checked(finalSkinningDataBytesUsed + skinningDataBytes);
 
                     MeshTransportGeometry transportGeometry =
-                        CreateTransportGeometry(
-                            vertexPositions,
-                            vertexUvColors,
-                            mesh.Indices,
-                            mesh.SkinningData.Length > 0,
-                            mesh.PrimitiveTransportProfile,
-                            mesh.CausticTopologyEvidence);
+                        mesh.GetOrCreateTransportGeometry();
                     pendingUploads.Add(new PendingMeshUpload(
                         meshIndex,
                         generation,
@@ -691,6 +1025,9 @@ namespace Njulf.Rendering.Resources
                         transportGeometry));
                     handles[uploadIndex] = new MeshHandle(meshIndex, generation);
                 }
+
+                long registrationPrepared =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
 
                 ulong finalRetainedMeshBytes = checked(
                     finalVertexPositionBytesUsed +
@@ -732,7 +1069,27 @@ namespace Njulf.Rendering.Resources
                     Math.Min(availableFreeMeshIndices.Length, meshes.Count));
                 var uploadAttempt = new MeshGpuUploadAttempt(
                     CaptureMeshBufferHandles());
+                var committedCapacity = new MeshUploadCapacityTargets(
+                    finalVertexPositionBytesUsed,
+                    finalVertexNormalTangentBytesUsed,
+                    finalVertexUvColorBytesUsed,
+                    finalIndexBytesUsed,
+                    finalMeshMetadataBytesUsed,
+                    finalMeshletBytesUsed,
+                    finalMeshletVertexIndexBytesUsed,
+                    finalMeshletTriangleIndexBytesUsed,
+                    finalSkinningDataBytesUsed);
+                MeshUploadCapacityTargets uploadCapacity =
+                    reservedCapacity?.AtLeast(committedCapacity) ??
+                    committedCapacity;
+                long transactionPrepared =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
 
+                // Submission is transactional, but publication is deferred
+                // until a later render-thread poll observes the fence. This
+                // keeps the authoritative buffers and descriptor bindings on
+                // the old, renderable state while the candidate buffers are
+                // populated asynchronously on the graphics queue.
                 MeshUploadTransaction.Execute(
                     completeGpuUpload: () =>
                         CompleteMeshGpuUpload(
@@ -741,41 +1098,13 @@ namespace Njulf.Rendering.Resources
                             Math.Max(
                                 uploadStagingBytes,
                                 UploadStagingAlignment),
-                            finalVertexPositionBytesUsed,
-                            finalVertexNormalTangentBytesUsed,
-                            finalVertexUvColorBytesUsed,
-                            finalIndexBytesUsed,
-                            finalMeshMetadataBytesUsed,
-                            finalMeshletBytesUsed,
-                            finalMeshletVertexIndexBytesUsed,
-                            finalMeshletTriangleIndexBytesUsed,
-                            finalSkinningDataBytesUsed),
-                    publishCandidateBindings: () =>
-                        UpdateRegisteredBindlessBuffers(
-                            uploadAttempt.CandidateBuffers),
-                    commitAuthoritativeState: () =>
-                        CommitMeshUploadState(
-                            uploadAttempt.CandidateBuffers,
-                            pendingUploads,
-                            availableFreeMeshIndices,
-                            reservedFreeMeshIndices,
-                            finalVertexPositionBytesUsed,
-                            finalVertexNormalTangentBytesUsed,
-                            finalVertexUvColorBytesUsed,
-                            finalIndexBytesUsed,
-                            finalMeshMetadataBytesUsed,
-                            finalMeshletBytesUsed,
-                            finalMeshletVertexIndexBytesUsed,
-                            finalMeshletTriangleIndexBytesUsed,
-                            finalSkinningDataBytesUsed,
-                            finalEmissiveBytes),
+                            uploadCapacity),
+                    publishCandidateBindings: static () => { },
+                    commitAuthoritativeState: static () => { },
                     cleanupGpuUpload: () =>
                         CleanupMeshGpuUpload(uploadAttempt),
-                    restoreAuthoritativeState: () =>
-                        stateSnapshot.Restore(this),
-                    restoreAuthoritativeBindings: () =>
-                        RestoreRegisteredBindlessBuffers(
-                            registeredBufferSnapshot),
+                    restoreAuthoritativeState: static () => { },
+                    restoreAuthoritativeBindings: static () => { },
                     destroyCandidateResources: () =>
                         DestroyCandidateUploadBuffers(uploadAttempt),
                     quarantineCandidateResources: () =>
@@ -783,19 +1112,238 @@ namespace Njulf.Rendering.Resources
                     restoreReservations: () =>
                         RestoreReservedMeshIndices(
                             reservedFreeMeshIndices));
+                long gpuSubmissionCompleted =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
 
-                FinalizeCommittedMeshUpload(uploadAttempt);
+                double registrationTotalMilliseconds =
+                    System.Diagnostics.Stopwatch
+                        .GetElapsedTime(registrationStarted)
+                        .TotalMilliseconds;
+                if (registrationTotalMilliseconds > 33.0)
+                {
+                    Console.WriteLine(
+                        $"Mesh registration breakdown: " +
+                        $"total={registrationTotalMilliseconds:F3}ms, " +
+                        $"prepare={System.Diagnostics.Stopwatch.GetElapsedTime(registrationStarted, registrationPrepared).TotalMilliseconds:F3}ms, " +
+                        $"transaction={System.Diagnostics.Stopwatch.GetElapsedTime(registrationPrepared, transactionPrepared).TotalMilliseconds:F3}ms, " +
+                        $"gpu={System.Diagnostics.Stopwatch.GetElapsedTime(transactionPrepared, gpuSubmissionCompleted).TotalMilliseconds:F3}ms, " +
+                        $"meshes={meshes.Count}, " +
+                        $"staged={uploadStagingBytes / (1024.0 * 1024.0):F1}MiB.");
+                }
 
-                return handles;
+                var upload = new MeshRegistrationUpload(
+                    this,
+                    handles,
+                    pendingUploads,
+                    stateSnapshot,
+                    registeredBufferSnapshot,
+                    availableFreeMeshIndices,
+                    reservedFreeMeshIndices,
+                    uploadAttempt,
+                    new MeshUploadCommitState(
+                        finalVertexPositionBytesUsed,
+                        finalVertexNormalTangentBytesUsed,
+                        finalVertexUvColorBytesUsed,
+                        finalIndexBytesUsed,
+                        finalMeshMetadataBytesUsed,
+                        finalMeshletBytesUsed,
+                        finalMeshletVertexIndexBytesUsed,
+                        finalMeshletTriangleIndexBytesUsed,
+                        finalSkinningDataBytesUsed,
+                        finalEmissiveBytes));
+                _activeRegistrationUpload = upload;
+                return upload;
             }
+        }
+
+        private bool AdvanceRegistrationUpload(
+            MeshRegistrationUpload upload,
+            bool cancel,
+            bool wait)
+        {
+            lock (_lock)
+            {
+                if (upload.Terminal)
+                    return true;
+                if (!ReferenceEquals(
+                        _activeRegistrationUpload,
+                        upload))
+                {
+                    throw new InvalidOperationException(
+                        "Mesh registration upload ownership changed before completion.");
+                }
+
+                UploadCommandContext commands =
+                    upload.UploadAttempt.Upload ??
+                    throw new InvalidOperationException(
+                        "The active mesh registration has no upload commands.");
+                if (wait)
+                {
+                    CompleteUploadCommands(
+                        commands,
+                        upload.UploadAttempt.UploadFence);
+                }
+                else if (!TryCompleteUploadCommands(
+                             commands,
+                             upload.UploadAttempt.UploadFence))
+                {
+                    return false;
+                }
+
+                upload.UploadAttempt.Upload = null;
+                if (cancel)
+                    CancelCompletedRegistrationUploadLocked(upload);
+                else
+                    PublishCompletedRegistrationUploadLocked(upload);
+                return true;
+            }
+        }
+
+        private void PublishCompletedRegistrationUploadLocked(
+            MeshRegistrationUpload upload)
+        {
+            try
+            {
+                MeshUploadCommitState state = upload.CommitState;
+                MeshUploadTransaction.Execute(
+                    completeGpuUpload: static () => { },
+                    publishCandidateBindings: () =>
+                        UpdateRegisteredBindlessBuffers(
+                            upload.UploadAttempt.CandidateBuffers),
+                    commitAuthoritativeState: () =>
+                        CommitMeshUploadState(
+                            upload.UploadAttempt.CandidateBuffers,
+                            upload.PendingUploads,
+                            upload.AvailableFreeMeshIndices,
+                            upload.ReservedFreeMeshIndices,
+                            state.VertexPositionBytesUsed,
+                            state.VertexNormalTangentBytesUsed,
+                            state.VertexUvColorBytesUsed,
+                            state.IndexBytesUsed,
+                            state.MeshMetadataBytesUsed,
+                            state.MeshletBytesUsed,
+                            state.MeshletVertexIndexBytesUsed,
+                            state.MeshletTriangleIndexBytesUsed,
+                            state.SkinningDataBytesUsed,
+                            state.RuntimeEmissiveTriangleBytes),
+                    cleanupGpuUpload: () =>
+                        CleanupMeshGpuUpload(upload.UploadAttempt),
+                    restoreAuthoritativeState: () =>
+                        upload.StateSnapshot.Restore(this),
+                    restoreAuthoritativeBindings: () =>
+                        RestoreRegisteredBindlessBuffers(
+                            upload.RegisteredBufferSnapshot),
+                    destroyCandidateResources: () =>
+                        DestroyCandidateUploadBuffers(
+                            upload.UploadAttempt),
+                    quarantineCandidateResources: () =>
+                        QuarantineCandidateUploadBuffers(
+                            upload.UploadAttempt),
+                    restoreReservations: () =>
+                        RestoreReservedMeshIndices(
+                            upload.ReservedFreeMeshIndices));
+
+                upload.MarkCommitted();
+                FinalizeCommittedMeshUpload(upload.UploadAttempt);
+            }
+            finally
+            {
+                EndRegistrationUploadLocked(upload);
+            }
+        }
+
+        private void CancelCompletedRegistrationUploadLocked(
+            MeshRegistrationUpload upload)
+        {
+            List<Exception>? failures = null;
+            bool candidatesCanBeDestroyed = true;
+            try
+            {
+                CleanupMeshGpuUpload(upload.UploadAttempt);
+            }
+            catch (Exception cleanupFailure)
+            {
+                candidatesCanBeDestroyed = false;
+                (failures ??= []).Add(cleanupFailure);
+            }
+
+            if (candidatesCanBeDestroyed)
+            {
+                try
+                {
+                    DestroyCandidateUploadBuffers(
+                        upload.UploadAttempt);
+                }
+                catch (Exception cleanupFailure)
+                {
+                    candidatesCanBeDestroyed = false;
+                    (failures ??= []).Add(cleanupFailure);
+                }
+            }
+
+            if (!candidatesCanBeDestroyed)
+            {
+                try
+                {
+                    QuarantineCandidateUploadBuffers(
+                        upload.UploadAttempt);
+                }
+                catch (Exception cleanupFailure)
+                {
+                    (failures ??= []).Add(cleanupFailure);
+                }
+            }
+
+            try
+            {
+                RestoreReservedMeshIndices(
+                    upload.ReservedFreeMeshIndices);
+            }
+            catch (Exception cleanupFailure)
+            {
+                (failures ??= []).Add(cleanupFailure);
+            }
+            finally
+            {
+                EndRegistrationUploadLocked(upload);
+            }
+
+            if (failures is { Count: > 0 })
+            {
+                throw new AggregateException(
+                    "Failed to cancel an in-flight mesh registration upload.",
+                    failures);
+            }
+        }
+
+        private void EndRegistrationUploadLocked(
+            MeshRegistrationUpload upload)
+        {
+            upload.MarkTerminal();
+            if (ReferenceEquals(_activeRegistrationUpload, upload))
+                _activeRegistrationUpload = null;
         }
 
         private MeshInfo CreateMeshInfo(int meshIndex, Vector3[] vertices, uint[] indices)
         {
+            Vector3 boundingBoxMin = vertices[0];
+            Vector3 boundingBoxMax = vertices[0];
+            for (int i = 1; i < vertices.Length; i++)
+            {
+                boundingBoxMin = Vector3.Min(
+                    boundingBoxMin,
+                    vertices[i]);
+                boundingBoxMax = Vector3.Max(
+                    boundingBoxMax,
+                    vertices[i]);
+            }
+
             return CreateMeshInfo(
                 meshIndex,
-                vertices,
-                indices,
+                vertices.Length,
+                indices.Length,
+                boundingBoxMin,
+                boundingBoxMax,
                 _vertexPositionBytesUsed,
                 _indexBytesUsed,
                 _meshletBytesUsed,
@@ -807,8 +1355,10 @@ namespace Njulf.Rendering.Resources
 
         private static MeshInfo CreateMeshInfo(
             int meshIndex,
-            Vector3[] vertices,
-            uint[] indices,
+            int vertexCount,
+            int indexCount,
+            Vector3 boundingBoxMin,
+            Vector3 boundingBoxMax,
             ulong vertexPositionBytesUsed,
             ulong indexBytesUsed,
             ulong meshletBytesUsed,
@@ -830,9 +1380,9 @@ namespace Njulf.Rendering.Resources
             var meshInfo = new MeshInfo
             {
                 VertexOffset = CheckedElementOffset(vertexPositionBytesUsed, VertexPositionStride),
-                VertexCount = CheckedCount(vertices.Length),
+                VertexCount = CheckedCount(vertexCount),
                 IndexOffset = CheckedElementOffset(indexBytesUsed, IndexStride),
-                IndexCount = CheckedCount(indices.Length),
+                IndexCount = CheckedCount(indexCount),
                 MeshMetadataOffset = CheckedCount(meshIndex),
                 MeshletOffset = CheckedElementOffset(meshletBytesUsed, MeshletStride),
                 LocalVertexIndexOffset = CheckedElementOffset(meshletVertexIndexBytesUsed, IndexStride),
@@ -842,13 +1392,8 @@ namespace Njulf.Rendering.Resources
                 IsSkinned = skinningDataCount > 0
             };
 
-            meshInfo.BoundingBoxMin = vertices[0];
-            meshInfo.BoundingBoxMax = vertices[0];
-            for (int i = 1; i < vertices.Length; i++)
-            {
-                meshInfo.BoundingBoxMin = Vector3.Min(meshInfo.BoundingBoxMin, vertices[i]);
-                meshInfo.BoundingBoxMax = Vector3.Max(meshInfo.BoundingBoxMax, vertices[i]);
-            }
+            meshInfo.BoundingBoxMin = boundingBoxMin;
+            meshInfo.BoundingBoxMax = boundingBoxMax;
 
             return meshInfo;
         }
@@ -1188,7 +1733,9 @@ namespace Njulf.Rendering.Resources
             return positions;
         }
 
-        private static void ApplyGlobalMeshletOffsets(List<Meshlet> meshlets, MeshInfo meshInfo)
+        private static void ApplyGlobalMeshletOffsets(
+            IList<Meshlet> meshlets,
+            MeshInfo meshInfo)
         {
             for (int i = 0; i < meshlets.Count; i++)
             {
@@ -1203,9 +1750,9 @@ namespace Njulf.Rendering.Resources
 
         private void ValidateMeshletRanges(
             ref MeshInfo meshInfo,
-            List<Meshlet> meshlets,
-            List<uint> localVertexIndices,
-            List<uint> localTriangleIndices)
+            IReadOnlyList<Meshlet> meshlets,
+            IReadOnlyList<uint> localVertexIndices,
+            IReadOnlyList<uint> localTriangleIndices)
         {
             meshInfo.LocalVertexIndexCount = CheckedCount(localVertexIndices.Count);
             meshInfo.LocalTriangleIndexCount = CheckedCount(localTriangleIndices.Count);
@@ -1256,19 +1803,100 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        private MeshUploadCapacityTargets
+            CalculateRegistrationCapacityTargets(
+                IReadOnlyList<MeshRegistrationData> registrations,
+                int reusableMeshSlotCount)
+        {
+            ArgumentNullException.ThrowIfNull(registrations);
+            if (reusableMeshSlotCount < 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(reusableMeshSlotCount));
+
+            ulong vertexPositionBytes = _vertexPositionBytesUsed;
+            ulong vertexNormalTangentBytes =
+                _vertexNormalTangentBytesUsed;
+            ulong vertexUvColorBytes = _vertexUvColorBytesUsed;
+            ulong indexBytes = _indexBytesUsed;
+            ulong meshletBytes = _meshletBytesUsed;
+            ulong meshletVertexIndexBytes =
+                _meshletVertexIndexBytesUsed;
+            ulong meshletTriangleIndexBytes =
+                _meshletTriangleIndexBytesUsed;
+            ulong skinningDataBytes = _skinningDataBytesUsed;
+            for (int index = 0; index < registrations.Count; index++)
+            {
+                MeshRegistrationData registration =
+                    registrations[index] ?? throw new ArgumentException(
+                        "Capacity registrations cannot contain null entries.",
+                        nameof(registrations));
+                if (!registration.HasPrebuiltMeshlets)
+                {
+                    throw new ArgumentException(
+                        "A mesh upload capacity reservation requires cooked, prebuilt meshlet streams.",
+                        nameof(registrations));
+                }
+
+                vertexPositionBytes = checked(
+                    vertexPositionBytes + CheckedByteSize(
+                        registration.VertexPositions.Length,
+                        VertexPositionStride));
+                vertexNormalTangentBytes = checked(
+                    vertexNormalTangentBytes + CheckedByteSize(
+                        registration.VertexNormalTangents.Length,
+                        VertexNormalTangentStride));
+                vertexUvColorBytes = checked(
+                    vertexUvColorBytes + CheckedByteSize(
+                        registration.VertexUvColors.Length,
+                        VertexUvColorStride));
+                indexBytes = checked(
+                    indexBytes + CheckedByteSize(
+                        registration.Indices.Length,
+                        IndexStride));
+                meshletBytes = checked(
+                    meshletBytes + CheckedByteSize(
+                        registration.Meshlets.Length,
+                        MeshletStride));
+                meshletVertexIndexBytes = checked(
+                    meshletVertexIndexBytes + CheckedByteSize(
+                        registration.LocalVertexIndices.Length,
+                        IndexStride));
+                meshletTriangleIndexBytes = checked(
+                    meshletTriangleIndexBytes + CheckedByteSize(
+                        registration.LocalTriangleIndices.Length,
+                        IndexStride));
+                skinningDataBytes = checked(
+                    skinningDataBytes + CheckedByteSize(
+                        registration.SkinningData.Length,
+                        SkinningDataStride));
+            }
+
+            int appendedMeshSlots = Math.Max(
+                0,
+                registrations.Count - reusableMeshSlotCount);
+            int finalMeshSlotCount = checked(
+                _meshes.Count + appendedMeshSlots);
+            ulong meshMetadataBytes = Math.Max(
+                _meshMetadataBytesUsed,
+                checked((ulong)finalMeshSlotCount *
+                        MeshMetadataStride));
+            return new MeshUploadCapacityTargets(
+                vertexPositionBytes,
+                vertexNormalTangentBytes,
+                vertexUvColorBytes,
+                indexBytes,
+                meshMetadataBytes,
+                meshletBytes,
+                meshletVertexIndexBytes,
+                meshletTriangleIndexBytes,
+                skinningDataBytes);
+        }
+
         private void CompleteMeshGpuUpload(
             MeshGpuUploadAttempt uploadAttempt,
             IReadOnlyList<PendingMeshUpload> pendingUploads,
             ulong uploadStagingBytes,
-            ulong finalVertexPositionBytesUsed,
-            ulong finalVertexNormalTangentBytesUsed,
-            ulong finalVertexUvColorBytesUsed,
-            ulong finalIndexBytesUsed,
-            ulong finalMeshMetadataBytesUsed,
-            ulong finalMeshletBytesUsed,
-            ulong finalMeshletVertexIndexBytesUsed,
-            ulong finalMeshletTriangleIndexBytesUsed,
-            ulong finalSkinningDataBytesUsed)
+            MeshUploadCapacityTargets capacity)
         {
             MeshBufferGrowthRetry.Execute(
                 executeAttempt: growthMode =>
@@ -1276,15 +1904,7 @@ namespace Njulf.Rendering.Resources
                         uploadAttempt,
                         pendingUploads,
                         uploadStagingBytes,
-                        finalVertexPositionBytesUsed,
-                        finalVertexNormalTangentBytesUsed,
-                        finalVertexUvColorBytesUsed,
-                        finalIndexBytesUsed,
-                        finalMeshMetadataBytesUsed,
-                        finalMeshletBytesUsed,
-                        finalMeshletVertexIndexBytesUsed,
-                        finalMeshletTriangleIndexBytesUsed,
-                        finalSkinningDataBytesUsed,
+                        capacity,
                         growthMode),
                 isRetryable: static failure =>
                     failure is MeshBufferGrowthAttemptException,
@@ -1299,29 +1919,23 @@ namespace Njulf.Rendering.Resources
             MeshGpuUploadAttempt uploadAttempt,
             IReadOnlyList<PendingMeshUpload> pendingUploads,
             ulong uploadStagingBytes,
-            ulong finalVertexPositionBytesUsed,
-            ulong finalVertexNormalTangentBytesUsed,
-            ulong finalVertexUvColorBytesUsed,
-            ulong finalIndexBytesUsed,
-            ulong finalMeshMetadataBytesUsed,
-            ulong finalMeshletBytesUsed,
-            ulong finalMeshletVertexIndexBytesUsed,
-            ulong finalMeshletTriangleIndexBytesUsed,
-            ulong finalSkinningDataBytesUsed,
+            MeshUploadCapacityTargets capacity,
             MeshBufferGrowthMode growthMode)
         {
+            long uploadStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
             MeshBufferGrowthPlan growthPlan =
                 CreateMeshBufferGrowthPlan(
                     uploadAttempt.OriginalBuffers,
-                    finalVertexPositionBytesUsed,
-                    finalVertexNormalTangentBytesUsed,
-                    finalVertexUvColorBytesUsed,
-                    finalIndexBytesUsed,
-                    finalMeshMetadataBytesUsed,
-                    finalMeshletBytesUsed,
-                    finalMeshletVertexIndexBytesUsed,
-                    finalMeshletTriangleIndexBytesUsed,
-                    finalSkinningDataBytesUsed,
+                    capacity.VertexPositionBytes,
+                    capacity.VertexNormalTangentBytes,
+                    capacity.VertexUvColorBytes,
+                    capacity.IndexBytes,
+                    capacity.MeshMetadataBytes,
+                    capacity.MeshletBytes,
+                    capacity.MeshletVertexIndexBytes,
+                    capacity.MeshletTriangleIndexBytes,
+                    capacity.SkinningDataBytes,
                     growthMode);
 
             try
@@ -1329,9 +1943,13 @@ namespace Njulf.Rendering.Resources
                 AllocateMeshBufferGrowthPlan(
                     growthPlan,
                     uploadAttempt);
+                long buffersAllocated =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
 
                 UploadCommandContext upload =
                     BeginUploadCommands(uploadStagingBytes);
+                long commandsStarted =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
                 uploadAttempt.Upload = upload;
                 MeshBufferHandles buffers =
                     uploadAttempt.CandidateBuffers;
@@ -1340,83 +1958,98 @@ namespace Njulf.Rendering.Resources
                     buffers,
                     upload);
 
-                var meshMetadata = new GPUMeshInfo[1];
-                foreach (PendingMeshUpload pending in pendingUploads)
-                {
-                    UploadSpan(
-                        pending.VertexPositions,
-                        buffers.VertexPosition,
-                        pending.MeshInfo.VertexOffset *
-                        VertexPositionStride,
-                        upload);
-                    UploadSpan(
-                        pending.VertexNormalTangents,
-                        buffers.VertexNormalTangent,
-                        pending.MeshInfo.VertexOffset *
-                        VertexNormalTangentStride,
-                        upload);
-                    UploadSpan(
-                        pending.VertexUvColors,
-                        buffers.VertexUvColor,
-                        pending.MeshInfo.VertexOffset *
-                        VertexUvColorStride,
-                        upload);
-                    UploadSpan(
-                        pending.Indices,
-                        buffers.Index,
-                        pending.MeshInfo.IndexOffset * IndexStride,
-                        upload);
-                    meshMetadata[0] = pending.MeshMetadata;
-                    UploadSpan(
-                        meshMetadata,
-                        buffers.MeshMetadata,
-                        pending.MeshInfo.MeshMetadataOffset *
-                        MeshMetadataStride,
-                        upload);
+                // Cooked batches append each stream contiguously. Pack the
+                // small per-mesh arrays into one staging range per stream and
+                // issue one vkCmdCopyBuffer call instead of thousands of tiny
+                // driver calls. Mesh metadata can reuse free slot indices, so
+                // it uses one multi-region command.
+                UploadConcatenatedArrays(
+                    pendingUploads,
+                    static pending => pending.VertexPositions,
+                    static pending => pending.MeshInfo.VertexOffset *
+                                      VertexPositionStride,
+                    buffers.VertexPosition,
+                    upload);
+                UploadConcatenatedArrays(
+                    pendingUploads,
+                    static pending => pending.VertexNormalTangents,
+                    static pending => pending.MeshInfo.VertexOffset *
+                                      VertexNormalTangentStride,
+                    buffers.VertexNormalTangent,
+                    upload);
+                UploadConcatenatedArrays(
+                    pendingUploads,
+                    static pending => pending.VertexUvColors,
+                    static pending => pending.MeshInfo.VertexOffset *
+                                      VertexUvColorStride,
+                    buffers.VertexUvColor,
+                    upload);
+                UploadConcatenatedArrays(
+                    pendingUploads,
+                    static pending => pending.Indices,
+                    static pending => pending.MeshInfo.IndexOffset *
+                                      IndexStride,
+                    buffers.Index,
+                    upload);
+                UploadMeshMetadata(
+                    pendingUploads,
+                    buffers.MeshMetadata,
+                    upload);
+                UploadConcatenatedArrays(
+                    pendingUploads,
+                    static pending => pending.Meshlets,
+                    static pending => pending.MeshInfo.MeshletOffset *
+                                      MeshletStride,
+                    buffers.Meshlet,
+                    upload);
+                UploadConcatenatedArrays(
+                    pendingUploads,
+                    static pending => pending.LocalVertexIndices,
+                    static pending => pending.MeshInfo.LocalVertexIndexOffset *
+                                      IndexStride,
+                    buffers.MeshletVertexIndex,
+                    upload);
+                UploadConcatenatedArrays(
+                    pendingUploads,
+                    static pending => pending.LocalTriangleIndices,
+                    static pending => pending.MeshInfo.LocalTriangleIndexOffset *
+                                      IndexStride,
+                    buffers.MeshletTriangleIndex,
+                    upload);
+                UploadConcatenatedArrays(
+                    pendingUploads,
+                    static pending => pending.SkinningData,
+                    static pending => pending.MeshInfo.SkinningDataOffset *
+                                      SkinningDataStride,
+                    buffers.SkinningData,
+                    upload);
+                long copiesRecorded =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
 
-                    if (pending.Meshlets.Count > 0)
-                    {
-                        UploadSpan(
-                            CollectionsMarshal.AsSpan(
-                                pending.Meshlets),
-                            buffers.Meshlet,
-                            pending.MeshInfo.MeshletOffset *
-                            MeshletStride,
-                            upload);
-                    }
-                    if (pending.LocalVertexIndices.Count > 0)
-                    {
-                        UploadSpan(
-                            CollectionsMarshal.AsSpan(
-                                pending.LocalVertexIndices),
-                            buffers.MeshletVertexIndex,
-                            pending.MeshInfo.LocalVertexIndexOffset *
-                            IndexStride,
-                            upload);
-                    }
-                    if (pending.LocalTriangleIndices.Count > 0)
-                    {
-                        UploadSpan(
-                            CollectionsMarshal.AsSpan(
-                                pending.LocalTriangleIndices),
-                            buffers.MeshletTriangleIndex,
-                            pending.MeshInfo.LocalTriangleIndexOffset *
-                            IndexStride,
-                            upload);
-                    }
-                    if (pending.SkinningData.Length > 0)
-                    {
-                        UploadSpan(
-                            pending.SkinningData,
-                            buffers.SkinningData,
-                            pending.MeshInfo.SkinningDataOffset *
-                            SkinningDataStride,
-                            upload);
-                    }
-                }
-
+                FlushUploadStaging(upload);
                 RecordUploadShaderReadBarriers(upload);
-                uploadAttempt.UploadFence = EndUploadCommands(upload);
+                long stagingFlushed =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
+                uploadAttempt.UploadFence =
+                    SubmitUploadCommands(upload);
+                long submitted =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
+                double totalMilliseconds =
+                    System.Diagnostics.Stopwatch
+                        .GetElapsedTime(uploadStarted, submitted)
+                        .TotalMilliseconds;
+                if (totalMilliseconds > 33.0)
+                {
+                    Console.WriteLine(
+                        $"Mesh GPU submission breakdown: " +
+                        $"total={totalMilliseconds:F3}ms, " +
+                        $"allocate={System.Diagnostics.Stopwatch.GetElapsedTime(uploadStarted, buffersAllocated).TotalMilliseconds:F3}ms, " +
+                        $"commands={System.Diagnostics.Stopwatch.GetElapsedTime(buffersAllocated, commandsStarted).TotalMilliseconds:F3}ms, " +
+                        $"copies={System.Diagnostics.Stopwatch.GetElapsedTime(commandsStarted, copiesRecorded).TotalMilliseconds:F3}ms, " +
+                        $"flush={System.Diagnostics.Stopwatch.GetElapsedTime(copiesRecorded, stagingFlushed).TotalMilliseconds:F3}ms, " +
+                        $"submit={System.Diagnostics.Stopwatch.GetElapsedTime(stagingFlushed, submitted).TotalMilliseconds:F3}ms, " +
+                        $"staged={uploadStagingBytes / (1024.0 * 1024.0):F1}MiB.");
+                }
             }
             catch (BufferAllocationException failure) when (
                 failure.Result == Result.ErrorOutOfDeviceMemory)
@@ -1957,8 +2590,6 @@ namespace Njulf.Rendering.Resources
                     dataSize);
             }
 
-            _bufferManager.FlushBuffer(stagingHandle, stagingOffset, dataSize);
-
             var copy = new BufferCopy
             {
                 SrcOffset = stagingOffset,
@@ -1973,6 +2604,191 @@ namespace Njulf.Rendering.Resources
                 1,
                 &copy);
             upload.TrackWrittenRange(destination, destinationOffset, dataSize);
+        }
+
+        private void UploadConcatenatedArrays<T>(
+            IReadOnlyList<PendingMeshUpload> pendingUploads,
+            Func<PendingMeshUpload, T[]> select,
+            Func<PendingMeshUpload, ulong> selectDestinationOffset,
+            BufferHandle destination,
+            UploadCommandContext upload)
+            where T : unmanaged
+        {
+            UploadConcatenated(
+                pendingUploads,
+                pending => select(pending).AsSpan(),
+                selectDestinationOffset,
+                destination,
+                upload);
+        }
+
+        private void UploadConcatenatedLists<T>(
+            IReadOnlyList<PendingMeshUpload> pendingUploads,
+            Func<PendingMeshUpload, List<T>> select,
+            Func<PendingMeshUpload, ulong> selectDestinationOffset,
+            BufferHandle destination,
+            UploadCommandContext upload)
+            where T : unmanaged
+        {
+            UploadConcatenated(
+                pendingUploads,
+                pending => CollectionsMarshal.AsSpan(select(pending)),
+                selectDestinationOffset,
+                destination,
+                upload);
+        }
+
+        private delegate ReadOnlySpan<T> PendingSpanSelector<T>(
+            PendingMeshUpload pending)
+            where T : unmanaged;
+
+        private void UploadConcatenated<T>(
+            IReadOnlyList<PendingMeshUpload> pendingUploads,
+            PendingSpanSelector<T> select,
+            Func<PendingMeshUpload, ulong> selectDestinationOffset,
+            BufferHandle destination,
+            UploadCommandContext upload)
+            where T : unmanaged
+        {
+            ulong totalSize = 0;
+            ulong destinationOffset = 0;
+            bool hasData = false;
+            for (int i = 0; i < pendingUploads.Count; i++)
+            {
+                PendingMeshUpload pending = pendingUploads[i];
+                ReadOnlySpan<T> data = select(pending);
+                if (data.IsEmpty)
+                    continue;
+
+                ulong size = checked((ulong)data.Length * (ulong)sizeof(T));
+                ulong currentDestination =
+                    selectDestinationOffset(pending);
+                if (!hasData)
+                {
+                    destinationOffset = currentDestination;
+                    hasData = true;
+                }
+                else if (currentDestination !=
+                         checked(destinationOffset + totalSize))
+                {
+                    throw new InvalidOperationException(
+                        "A cooked mesh stream upload was not contiguous.");
+                }
+
+                totalSize = checked(totalSize + size);
+            }
+
+            if (!hasData)
+                return;
+
+            (BufferHandle stagingHandle, ulong stagingOffset) =
+                AllocateUploadStaging(upload, totalSize);
+            void* mappedData =
+                _bufferManager.GetMappedPointer(stagingHandle);
+            ulong written = 0;
+            for (int i = 0; i < pendingUploads.Count; i++)
+            {
+                ReadOnlySpan<T> data = select(pendingUploads[i]);
+                if (data.IsEmpty)
+                    continue;
+
+                ulong size = checked((ulong)data.Length * (ulong)sizeof(T));
+                fixed (T* source = data)
+                {
+                    global::System.Buffer.MemoryCopy(
+                        source,
+                        (byte*)mappedData + stagingOffset + written,
+                        totalSize - written,
+                        size);
+                }
+                written = checked(written + size);
+            }
+
+            var copy = new BufferCopy
+            {
+                SrcOffset = stagingOffset,
+                DstOffset = destinationOffset,
+                Size = totalSize
+            };
+            _context.Api.CmdCopyBuffer(
+                upload.CommandBuffer,
+                _bufferManager.GetBuffer(stagingHandle),
+                _bufferManager.GetBuffer(destination),
+                1,
+                &copy);
+            upload.TrackWrittenRange(
+                destination,
+                destinationOffset,
+                totalSize);
+        }
+
+        private void UploadMeshMetadata(
+            IReadOnlyList<PendingMeshUpload> pendingUploads,
+            BufferHandle destination,
+            UploadCommandContext upload)
+        {
+            ulong totalSize = checked(
+                (ulong)pendingUploads.Count * MeshMetadataStride);
+            if (totalSize == 0)
+                return;
+
+            (BufferHandle stagingHandle, ulong stagingOffset) =
+                AllocateUploadStaging(upload, totalSize);
+            void* mappedData =
+                _bufferManager.GetMappedPointer(stagingHandle);
+            var regions = new BufferCopy[pendingUploads.Count];
+            for (int i = 0; i < pendingUploads.Count; i++)
+            {
+                PendingMeshUpload pending = pendingUploads[i];
+                ulong sourceOffset = checked(
+                    stagingOffset + (ulong)i * MeshMetadataStride);
+                *(GPUMeshInfo*)((byte*)mappedData + sourceOffset) =
+                    pending.MeshMetadata;
+                ulong destinationOffset = checked(
+                    pending.MeshInfo.MeshMetadataOffset *
+                    MeshMetadataStride);
+                regions[i] = new BufferCopy
+                {
+                    SrcOffset = sourceOffset,
+                    DstOffset = destinationOffset,
+                    Size = MeshMetadataStride
+                };
+                upload.TrackWrittenRange(
+                    destination,
+                    destinationOffset,
+                    MeshMetadataStride);
+            }
+
+            fixed (BufferCopy* copies = regions)
+            {
+                _context.Api.CmdCopyBuffer(
+                    upload.CommandBuffer,
+                    _bufferManager.GetBuffer(stagingHandle),
+                    _bufferManager.GetBuffer(destination),
+                    checked((uint)regions.Length),
+                    copies);
+            }
+        }
+
+        private void FlushUploadStaging(UploadCommandContext upload)
+        {
+            if (upload.StagingOffset == 0)
+                return;
+            if (!upload.StagingBuffer.IsValid)
+            {
+                throw new InvalidOperationException(
+                    "Mesh upload staging storage is unavailable.");
+            }
+
+            // Every UploadSpan writes into one persistently mapped allocation.
+            // Flushing each individual stream turns a large cooked model into
+            // thousands of allocator/driver calls. The written prefix is
+            // contiguous (with alignment padding), so one flush before queue
+            // submission provides the same visibility guarantee.
+            _bufferManager.FlushBuffer(
+                upload.StagingBuffer,
+                0,
+                upload.StagingOffset);
         }
 
         private (BufferHandle Buffer, ulong Offset) AllocateUploadStaging(UploadCommandContext upload, ulong size)
@@ -2092,8 +2908,14 @@ namespace Njulf.Rendering.Resources
 
             try
             {
-                BufferHandle stagingBuffer = _bufferManager.CreateStagingBuffer(stagingBytes);
-                return new UploadCommandContext(commandPool, commandBuffer, stagingBuffer, stagingBytes);
+                BufferHandle stagingBuffer =
+                    GetOrCreateReusableUploadStaging(stagingBytes);
+                return new UploadCommandContext(
+                    commandPool,
+                    commandBuffer,
+                    stagingBuffer,
+                    _reusableUploadStagingBufferSize,
+                    ownsStagingBuffer: false);
             }
             catch
             {
@@ -2104,6 +2926,13 @@ namespace Njulf.Rendering.Resources
         }
 
         private Fence EndUploadCommands(UploadCommandContext upload)
+        {
+            Fence fence = SubmitUploadCommands(upload);
+            CompleteUploadCommands(upload, fence);
+            return fence;
+        }
+
+        private Fence SubmitUploadCommands(UploadCommandContext upload)
         {
             Result result = _context.Api.EndCommandBuffer(upload.CommandBuffer);
             if (result != Result.Success)
@@ -2133,22 +2962,69 @@ namespace Njulf.Rendering.Resources
                 throw new VulkanException("Failed to submit mesh upload commands", result);
             }
 
-            result = _context.Api.WaitForFences(_context.Device, 1, &fence, true, ulong.MaxValue);
-            if (result != Result.Success)
-            {
-                _context.Api.DestroyFence(_context.Device, fence, null);
-                throw new VulkanException("Failed to wait for mesh upload fence", result);
-            }
-
-            CommandBuffer commandBufferToFree = upload.CommandBuffer;
-            _context.Api.FreeCommandBuffers(_context.Device, upload.CommandPool, 1, &commandBufferToFree);
-            _context.Api.DestroyCommandPool(_context.Device, upload.CommandPool, null);
-            DestroyUploadStaging(upload);
-            upload.MarkCompleted();
+            upload.MarkSubmitted();
             return fence;
         }
 
-        private void CleanupUploadCommands(UploadCommandContext upload)
+        private bool TryCompleteUploadCommands(
+            UploadCommandContext upload,
+            Fence fence)
+        {
+            if (upload.Completed)
+                return true;
+            if (!upload.Submitted || fence.Handle == 0)
+            {
+                throw new InvalidOperationException(
+                    "Mesh upload commands have not been submitted.");
+            }
+
+            Result result = _context.Api.GetFenceStatus(
+                _context.Device,
+                fence);
+            if (result == Result.NotReady)
+                return false;
+            if (result != Result.Success)
+            {
+                throw new VulkanException(
+                    "Failed to query mesh upload fence",
+                    result);
+            }
+
+            ReleaseCompletedUploadCommands(upload);
+            return true;
+        }
+
+        private void CompleteUploadCommands(
+            UploadCommandContext upload,
+            Fence fence)
+        {
+            if (upload.Completed)
+                return;
+            if (!upload.Submitted || fence.Handle == 0)
+            {
+                throw new InvalidOperationException(
+                    "Mesh upload commands have not been submitted.");
+            }
+
+            Fence fenceToWait = fence;
+            Result result = _context.Api.WaitForFences(
+                _context.Device,
+                1,
+                &fenceToWait,
+                true,
+                ulong.MaxValue);
+            if (result != Result.Success)
+            {
+                throw new VulkanException(
+                    "Failed to wait for mesh upload fence",
+                    result);
+            }
+
+            ReleaseCompletedUploadCommands(upload);
+        }
+
+        private void ReleaseCompletedUploadCommands(
+            UploadCommandContext upload)
         {
             if (upload.Completed)
                 return;
@@ -2156,10 +3032,46 @@ namespace Njulf.Rendering.Resources
             if (upload.CommandBuffer.Handle != 0)
             {
                 CommandBuffer commandBufferToFree = upload.CommandBuffer;
-                _context.Api.FreeCommandBuffers(_context.Device, upload.CommandPool, 1, &commandBufferToFree);
+                _context.Api.FreeCommandBuffers(
+                    _context.Device,
+                    upload.CommandPool,
+                    1,
+                    &commandBufferToFree);
+                upload.CommandBuffer = default;
             }
             if (upload.CommandPool.Handle != 0)
+            {
+                _context.Api.DestroyCommandPool(
+                    _context.Device,
+                    upload.CommandPool,
+                    null);
+                upload.CommandPool = default;
+            }
+            DestroyUploadStaging(upload);
+            upload.MarkCompleted();
+        }
+
+        private void CleanupUploadCommands(UploadCommandContext upload)
+        {
+            if (upload.Completed)
+                return;
+            if (upload.Submitted)
+            {
+                throw new InvalidOperationException(
+                    "Submitted mesh upload commands must complete before their command and staging resources can be released.");
+            }
+
+            if (upload.CommandBuffer.Handle != 0)
+            {
+                CommandBuffer commandBufferToFree = upload.CommandBuffer;
+                _context.Api.FreeCommandBuffers(_context.Device, upload.CommandPool, 1, &commandBufferToFree);
+                upload.CommandBuffer = default;
+            }
+            if (upload.CommandPool.Handle != 0)
+            {
                 _context.Api.DestroyCommandPool(_context.Device, upload.CommandPool, null);
+                upload.CommandPool = default;
+            }
             DestroyUploadStaging(upload);
             upload.MarkCompleted();
         }
@@ -2168,11 +3080,47 @@ namespace Njulf.Rendering.Resources
         {
             if (upload.StagingBuffer.IsValid)
             {
-                _bufferManager.DestroyBuffer(upload.StagingBuffer);
+                if (upload.OwnsStagingBuffer)
+                    _bufferManager.DestroyBuffer(upload.StagingBuffer);
                 upload.StagingBuffer = default;
                 upload.StagingBufferSize = 0;
                 upload.StagingOffset = 0;
             }
+        }
+
+        private BufferHandle GetOrCreateReusableUploadStaging(
+            ulong requiredBytes)
+        {
+            if (requiredBytes == 0)
+                throw new ArgumentOutOfRangeException(nameof(requiredBytes));
+            if (_reusableUploadStagingBuffer.IsValid &&
+                _reusableUploadStagingBufferSize >= requiredBytes)
+            {
+                return _reusableUploadStagingBuffer;
+            }
+
+            ulong targetBytes = AlignUp(
+                requiredBytes,
+                ReusableUploadStagingGranularity);
+            BufferHandle replacement =
+                _bufferManager.CreateStagingBuffer(targetBytes);
+            BufferHandle previous = _reusableUploadStagingBuffer;
+            _reusableUploadStagingBuffer = replacement;
+            _reusableUploadStagingBufferSize = targetBytes;
+            if (previous.IsValid)
+            {
+                try
+                {
+                    _bufferManager.DestroyBuffer(previous);
+                }
+                catch (Exception retirementFailure)
+                {
+                    QuarantineRetiredBuffer(previous);
+                    RecordPostCommitCleanupFailure(retirementFailure);
+                }
+            }
+
+            return replacement;
         }
 
         private void FinalizeCommittedMeshUpload(
@@ -2235,12 +3183,33 @@ namespace Njulf.Rendering.Resources
                 return;
             }
 
+            Fence retirementFence = uploadFence;
+            bool usesRendererFrameFence = false;
+            if (_synchronizationManager != null)
+            {
+                // Cooperative uploads are submitted during Update. A render
+                // submitted later in that same host frame can still consume
+                // the old update-after-bind descriptor after the upload fence
+                // has signalled. Retire against the most recently submitted
+                // renderer frame instead; same-queue ordering then covers all
+                // old-descriptor consumers without blocking publication.
+                int currentFrame =
+                    _synchronizationManager.GetCurrentFrameIndex();
+                int previousFrame =
+                    (currentFrame + RenderingConstants.FramesInFlight - 1) %
+                    RenderingConstants.FramesInFlight;
+                retirementFence =
+                    _synchronizationManager.GetInFlightFence(
+                        previousFrame);
+                usesRendererFrameFence = true;
+            }
+
             foreach (BufferHandle buffer in retiredBuffers)
             {
                 try
                 {
                     _deleter.QueueBufferDeletion(
-                        uploadFence,
+                        retirementFence,
                         buffer,
                         _bufferManager);
                 }
@@ -2252,9 +3221,12 @@ namespace Njulf.Rendering.Resources
                 }
             }
 
+            if (usesRendererFrameFence)
+                return;
+
             try
             {
-                _deleter.ProcessCompletedFrame(uploadFence);
+                _deleter.ProcessCompletedFrame(retirementFence);
             }
             catch (Exception retirementFailure)
             {
@@ -2608,7 +3580,7 @@ namespace Njulf.Rendering.Resources
                     finalMeshSlotCount,
                     checked(pending.MeshIndex + 1));
 
-                if (pending.Meshlets.Count == 0)
+                if (pending.Meshlets.Length == 0)
                     continue;
 
                 ulong meshletStart = pending.MeshInfo.MeshletOffset;
@@ -3260,6 +4232,7 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 ThrowIfDisposedLocked();
+                ThrowIfRegistrationUploadActiveLocked();
                 MeshBufferHandles originalBuffers =
                     CaptureMeshBufferHandles();
                 ulong beforeBytes =
@@ -3441,6 +4414,7 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 ThrowIfDisposedLocked();
+                ThrowIfRegistrationUploadActiveLocked();
                 _registeredBindlessHeap = bindlessHeap;
 
                 RegisterStorageBuffer(bindlessHeap, BindlessIndex.SceneMeshMetadataBuffer, _meshMetadataBuffer);
@@ -3511,6 +4485,7 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 ThrowIfDisposedLocked();
+                ThrowIfRegistrationUploadActiveLocked();
                 _meshLifetimes.Retain(handle);
             }
         }
@@ -3520,6 +4495,7 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 ThrowIfDisposedLocked();
+                ThrowIfRegistrationUploadActiveLocked();
                 int referenceCount =
                     _meshLifetimes.GetReferenceCount(handle);
                 if (referenceCount > 1)
@@ -3980,6 +4956,14 @@ namespace Njulf.Rendering.Resources
             if (_disposeCompleted)
                 return;
 
+            MeshRegistrationUpload? activeUpload;
+            lock (_lock)
+                activeUpload = _activeRegistrationUpload;
+            // Shutdown is exceptional and may block, but command/staging and
+            // candidate-buffer ownership must be drained before any backing
+            // mesh buffer is destroyed.
+            activeUpload?.Dispose();
+
             List<Exception>? failures = null;
             lock (_lock)
             {
@@ -4054,6 +5038,12 @@ namespace Njulf.Rendering.Resources
                     ref _skinningDataBuffer,
                     MeshManagerDisposalResource.SkinningDataBuffer,
                     ref failures);
+                TryDestroyBuffer(
+                    ref _reusableUploadStagingBuffer,
+                    MeshManagerDisposalResource.UploadStagingBuffer,
+                    ref failures);
+                if (!_reusableUploadStagingBuffer.IsValid)
+                    _reusableUploadStagingBufferSize = 0;
 
                 DurableResourceDestruction.TryDestroyAll(
                     _quarantinedUploadBuffers,
@@ -4088,6 +5078,7 @@ namespace Njulf.Rendering.Resources
                     !_meshletVertexIndexBuffer.IsValid &&
                     !_meshletTriangleIndexBuffer.IsValid &&
                     !_skinningDataBuffer.IsValid &&
+                    !_reusableUploadStagingBuffer.IsValid &&
                     _quarantinedUploadBuffers.Count == 0 &&
                     _quarantinedUploadFences.Count == 0;
             }
@@ -4136,6 +5127,15 @@ namespace Njulf.Rendering.Resources
 
         private void ThrowIfDisposedLocked() =>
             ObjectDisposedException.ThrowIf(_disposed, this);
+
+        private void ThrowIfRegistrationUploadActiveLocked()
+        {
+            if (_activeRegistrationUpload != null)
+            {
+                throw new InvalidOperationException(
+                    "Mesh resources cannot be mutated while a registration upload is awaiting GPU completion.");
+            }
+        }
 
         private readonly record struct MeshBufferHandles(
             BufferHandle VertexPosition,
@@ -4202,6 +5202,135 @@ namespace Njulf.Rendering.Resources
                 owner.MeshBufferCompactionCount = CompactionCount;
                 owner.MeshBufferCompactedBytesSaved =
                     CompactedBytesSaved;
+            }
+        }
+
+        private readonly record struct MeshUploadCommitState(
+            ulong VertexPositionBytesUsed,
+            ulong VertexNormalTangentBytesUsed,
+            ulong VertexUvColorBytesUsed,
+            ulong IndexBytesUsed,
+            ulong MeshMetadataBytesUsed,
+            ulong MeshletBytesUsed,
+            ulong MeshletVertexIndexBytesUsed,
+            ulong MeshletTriangleIndexBytesUsed,
+            ulong SkinningDataBytesUsed,
+            long RuntimeEmissiveTriangleBytes);
+
+        private readonly record struct MeshUploadCapacityTargets(
+            ulong VertexPositionBytes,
+            ulong VertexNormalTangentBytes,
+            ulong VertexUvColorBytes,
+            ulong IndexBytes,
+            ulong MeshMetadataBytes,
+            ulong MeshletBytes,
+            ulong MeshletVertexIndexBytes,
+            ulong MeshletTriangleIndexBytes,
+            ulong SkinningDataBytes)
+        {
+            public MeshUploadCapacityTargets AtLeast(
+                in MeshUploadCapacityTargets required) =>
+                new(
+                    Math.Max(VertexPositionBytes,
+                        required.VertexPositionBytes),
+                    Math.Max(VertexNormalTangentBytes,
+                        required.VertexNormalTangentBytes),
+                    Math.Max(VertexUvColorBytes,
+                        required.VertexUvColorBytes),
+                    Math.Max(IndexBytes, required.IndexBytes),
+                    Math.Max(MeshMetadataBytes,
+                        required.MeshMetadataBytes),
+                    Math.Max(MeshletBytes, required.MeshletBytes),
+                    Math.Max(MeshletVertexIndexBytes,
+                        required.MeshletVertexIndexBytes),
+                    Math.Max(MeshletTriangleIndexBytes,
+                        required.MeshletTriangleIndexBytes),
+                    Math.Max(SkinningDataBytes,
+                        required.SkinningDataBytes));
+        }
+
+        private sealed class MeshRegistrationUpload : IModelMeshUpload
+        {
+            private readonly MeshManager _owner;
+
+            public MeshRegistrationUpload(
+                MeshManager owner,
+                MeshHandle[] handles,
+                IReadOnlyList<PendingMeshUpload> pendingUploads,
+                MeshUploadStateSnapshot stateSnapshot,
+                RegisteredMeshBufferHandles registeredBufferSnapshot,
+                int[] availableFreeMeshIndices,
+                List<int> reservedFreeMeshIndices,
+                MeshGpuUploadAttempt uploadAttempt,
+                MeshUploadCommitState commitState)
+            {
+                _owner = owner;
+                Handles = handles;
+                PendingUploads = pendingUploads;
+                StateSnapshot = stateSnapshot;
+                RegisteredBufferSnapshot =
+                    registeredBufferSnapshot;
+                AvailableFreeMeshIndices =
+                    availableFreeMeshIndices;
+                ReservedFreeMeshIndices =
+                    reservedFreeMeshIndices;
+                UploadAttempt = uploadAttempt;
+                CommitState = commitState;
+            }
+
+            public IReadOnlyList<MeshHandle> Handles { get; }
+            public IReadOnlyList<PendingMeshUpload> PendingUploads
+            {
+                get;
+            }
+            public MeshUploadStateSnapshot StateSnapshot { get; }
+            public RegisteredMeshBufferHandles RegisteredBufferSnapshot
+            {
+                get;
+            }
+            public int[] AvailableFreeMeshIndices { get; }
+            public List<int> ReservedFreeMeshIndices { get; }
+            public MeshGpuUploadAttempt UploadAttempt { get; }
+            public MeshUploadCommitState CommitState { get; }
+            public bool Committed { get; private set; }
+            public bool Terminal { get; private set; }
+
+            public bool TryCompleteGpuWork() =>
+                _owner.AdvanceRegistrationUpload(
+                    this,
+                    cancel: false,
+                    wait: false);
+
+            public void CompleteGpuWork()
+            {
+                _owner.AdvanceRegistrationUpload(
+                    this,
+                    cancel: false,
+                    wait: true);
+            }
+
+            public bool TryCancelGpuWork() =>
+                _owner.AdvanceRegistrationUpload(
+                    this,
+                    cancel: true,
+                    wait: false);
+
+            public void Dispose()
+            {
+                _owner.AdvanceRegistrationUpload(
+                    this,
+                    cancel: true,
+                    wait: true);
+            }
+
+            public void MarkCommitted()
+            {
+                Committed = true;
+            }
+
+            public void MarkTerminal()
+            {
+                Terminal = true;
             }
         }
 
@@ -4420,12 +5549,14 @@ namespace Njulf.Rendering.Resources
                 CommandPool commandPool,
                 CommandBuffer commandBuffer,
                 BufferHandle stagingBuffer,
-                ulong stagingBufferSize)
+                ulong stagingBufferSize,
+                bool ownsStagingBuffer = true)
             {
                 CommandPool = commandPool;
                 CommandBuffer = commandBuffer;
                 StagingBuffer = stagingBuffer;
                 StagingBufferSize = stagingBufferSize;
+                OwnsStagingBuffer = ownsStagingBuffer;
                 WrittenRanges = new List<BufferWriteRange>();
             }
 
@@ -4434,7 +5565,9 @@ namespace Njulf.Rendering.Resources
             public BufferHandle StagingBuffer;
             public ulong StagingBufferSize;
             public ulong StagingOffset;
+            public bool OwnsStagingBuffer { get; }
             public List<BufferWriteRange> WrittenRanges { get; }
+            public bool Submitted { get; private set; }
             public bool Completed { get; private set; }
 
             public void TrackWrittenRange(BufferHandle buffer, ulong offset, ulong size)
@@ -4454,6 +5587,16 @@ namespace Njulf.Rendering.Resources
                 }
 
                 WrittenRanges.Add(new BufferWriteRange(buffer, offset, size));
+            }
+
+            public void MarkSubmitted()
+            {
+                if (Completed)
+                {
+                    throw new InvalidOperationException(
+                        "A completed mesh upload cannot be submitted.");
+                }
+                Submitted = true;
             }
 
             public void MarkCompleted()
@@ -4489,9 +5632,9 @@ namespace Njulf.Rendering.Resources
                 uint[] indices,
                 MeshInfo meshInfo,
                 GPUMeshInfo meshMetadata,
-                List<Meshlet> meshlets,
-                List<uint> localVertexIndices,
-                List<uint> localTriangleIndices,
+                Meshlet[] meshlets,
+                uint[] localVertexIndices,
+                uint[] localTriangleIndices,
                 GPUVertexSkinningData[] skinningData,
                 MeshTransportGeometry transportGeometry)
             {
@@ -4518,9 +5661,9 @@ namespace Njulf.Rendering.Resources
             public uint[] Indices { get; }
             public MeshInfo MeshInfo { get; }
             public GPUMeshInfo MeshMetadata { get; }
-            public List<Meshlet> Meshlets { get; }
-            public List<uint> LocalVertexIndices { get; }
-            public List<uint> LocalTriangleIndices { get; }
+            public Meshlet[] Meshlets { get; }
+            public uint[] LocalVertexIndices { get; }
+            public uint[] LocalTriangleIndices { get; }
             public GPUVertexSkinningData[] SkinningData { get; }
             public MeshTransportGeometry TransportGeometry { get; }
         }
@@ -4537,6 +5680,7 @@ namespace Njulf.Rendering.Resources
         MeshletVertexIndexBuffer,
         MeshletTriangleIndexBuffer,
         SkinningDataBuffer,
+        UploadStagingBuffer,
         QuarantinedUploadBuffer,
         QuarantinedUploadFence
     }

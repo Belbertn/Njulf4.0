@@ -59,70 +59,8 @@ namespace Njulf.Core.Scene
 
             try
             {
-                foreach (RenderObject renderObject in _renderObjects)
-                {
-                    RenderObject clone;
-                    if (renderObject is SkinnedRenderObject skinned)
-                    {
-                        var animator = skinned.Animator != null
-                            ? new Animator(
-                                skinned.Animator.Skeleton,
-                                skinned.Animator.Skins,
-                                skinned.Animator.Clips)
-                            : null;
-
-                        clone = new SkinnedRenderObject(
-                            skinned.Mesh!,
-                            skinned.Material!)
-                        {
-                            SkinIndex = skinned.SkinIndex,
-                            Animator = animator,
-                            SkinningBindTransform =
-                                skinned.SkinningBindTransform,
-                            AnimatedBoundingBox =
-                                skinned.AnimatedBoundingBox,
-                            LocalMeshBounds =
-                                skinned.LocalMeshBounds,
-                            AssetReference =
-                                skinned.AssetReference,
-                            PersistInSceneDocument =
-                                skinned.PersistInSceneDocument,
-                            SkinnedVertexOffset =
-                                skinned.SkinnedVertexOffset,
-                            SkinningEnabled =
-                                skinned.SkinningEnabled,
-                            Name = skinned.Name,
-                            WorldMatrix = skinned.WorldMatrix,
-                            Visible = skinned.Visible,
-                            IsStatic = skinned.IsStatic,
-                            Enabled = skinned.Enabled,
-                            UpdateOrder = skinned.UpdateOrder
-                        };
-                    }
-                    else
-                    {
-                        clone = new RenderObject
-                        {
-                            Mesh = renderObject.Mesh,
-                            Material = renderObject.Material,
-                            LocalMeshBounds =
-                                renderObject.LocalMeshBounds,
-                            AssetReference =
-                                renderObject.AssetReference,
-                            PersistInSceneDocument =
-                                renderObject.PersistInSceneDocument,
-                            Name = renderObject.Name,
-                            WorldMatrix = renderObject.WorldMatrix,
-                            Visible = renderObject.Visible,
-                            IsStatic = renderObject.IsStatic,
-                            Enabled = renderObject.Enabled,
-                            UpdateOrder = renderObject.UpdateOrder
-                        };
-                    }
-
-                    instance.Add(clone);
-                    renderObject.CopyResourceLifetimeTo(clone);
-                }
+                for (int i = 0; i < _renderObjects.Count; i++)
+                    instance.Add(CreateRenderObjectInstance(i));
 
                 return instance;
             }
@@ -142,6 +80,101 @@ namespace Njulf.Core.Scene
 
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Creates one independently owned render-object instance. This is
+        /// useful when a large cached model must be attached incrementally
+        /// without cloning and retaining every object in one frame.
+        /// </summary>
+        public RenderObject CreateRenderObjectInstance(int renderObjectIndex)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if ((uint)renderObjectIndex >= (uint)_renderObjects.Count)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(renderObjectIndex));
+            }
+
+            RenderObject source = _renderObjects[renderObjectIndex];
+            RenderObject clone = CloneRenderObject(source);
+            try
+            {
+                source.CopyResourceLifetimeTo(clone);
+                return clone;
+            }
+            catch (Exception cloneFailure)
+            {
+                try
+                {
+                    clone.Dispose();
+                }
+                catch (Exception rollbackFailure)
+                {
+                    throw new AggregateException(
+                        "Render-object instance creation and resource " +
+                        "rollback both failed.",
+                        cloneFailure,
+                        rollbackFailure);
+                }
+
+                throw;
+            }
+        }
+
+        private static RenderObject CloneRenderObject(
+            RenderObject renderObject)
+        {
+            if (renderObject is SkinnedRenderObject skinned)
+            {
+                var animator = skinned.Animator != null
+                    ? new Animator(
+                        skinned.Animator.Skeleton,
+                        skinned.Animator.Skins,
+                        skinned.Animator.Clips)
+                    : null;
+
+                return new SkinnedRenderObject(
+                    skinned.Mesh!,
+                    skinned.Material!)
+                {
+                    SkinIndex = skinned.SkinIndex,
+                    Animator = animator,
+                    SkinningBindTransform =
+                        skinned.SkinningBindTransform,
+                    AnimatedBoundingBox =
+                        skinned.AnimatedBoundingBox,
+                    LocalMeshBounds = skinned.LocalMeshBounds,
+                    AssetReference = skinned.AssetReference,
+                    PersistInSceneDocument =
+                        skinned.PersistInSceneDocument,
+                    SkinnedVertexOffset =
+                        skinned.SkinnedVertexOffset,
+                    SkinningEnabled = skinned.SkinningEnabled,
+                    Name = skinned.Name,
+                    WorldMatrix = skinned.WorldMatrix,
+                    Visible = skinned.Visible,
+                    IsStatic = skinned.IsStatic,
+                    Enabled = skinned.Enabled,
+                    UpdateOrder = skinned.UpdateOrder
+                };
+            }
+
+            return new RenderObject
+            {
+                Mesh = renderObject.Mesh,
+                Material = renderObject.Material,
+                LocalMeshBounds = renderObject.LocalMeshBounds,
+                AssetReference = renderObject.AssetReference,
+                PersistInSceneDocument =
+                    renderObject.PersistInSceneDocument,
+                Name = renderObject.Name,
+                WorldMatrix = renderObject.WorldMatrix,
+                Visible = renderObject.Visible,
+                IsStatic = renderObject.IsStatic,
+                Enabled = renderObject.Enabled,
+                UpdateOrder = renderObject.UpdateOrder
+            };
         }
 
         public void Add(RenderObject renderObject)

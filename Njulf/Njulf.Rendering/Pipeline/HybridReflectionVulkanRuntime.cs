@@ -54,6 +54,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         new bool[RenderingConstants.FramesInFlight];
     private readonly HybridReflectionCounterSnapshot[] _completedCounters =
         new HybridReflectionCounterSnapshot[RenderingConstants.FramesInFlight];
+    private readonly object _initializationGate = new();
 
     private nint _entryPointName;
     private DescriptorSetLayout _localSetLayout;
@@ -73,7 +74,17 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     private uint _allocatedHeight;
     private uint _allocatedTaskCapacity;
     private ulong _descriptorSignature;
-    private bool _initialized;
+    // 0 = not started, 1 = running, 2 = completed (successfully or degraded).
+    // A transition may compile these pipelines away from the render host; the
+    // explicit state keeps frame preparation from observing partially-created
+    // Vulkan objects or joining the expensive driver call.
+    private int _initializationState;
+    private TaskCompletionSource<bool>? _initializationCompletion;
+    private Func<bool>? _publicationPreparation;
+    private bool _backgroundInitializationStarted;
+    private int _screenPipelinesAvailable;
+    private int _rayPipelineAvailable;
+    private bool _disposeRequested;
     private bool _disposed;
     private bool _historyValid;
     private HybridReflectionHistoryRevision _previousRevision;
@@ -111,8 +122,26 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         Array.Fill(_indirectBuffers, BufferHandle.Invalid);
     }
 
-    public bool ScreenPipelinesAvailable { get; private set; }
-    public bool RayPipelineAvailable { get; private set; }
+    public bool ScreenPipelinesAvailable
+    {
+        get => Volatile.Read(ref _screenPipelinesAvailable) != 0;
+        private set => Volatile.Write(
+            ref _screenPipelinesAvailable,
+            value ? 1 : 0);
+    }
+
+    public bool RayPipelineAvailable
+    {
+        get => Volatile.Read(ref _rayPipelineAvailable) != 0;
+        private set => Volatile.Write(
+            ref _rayPipelineAvailable,
+            value ? 1 : 0);
+    }
+
+    public bool InitializationInProgress =>
+        Volatile.Read(ref _initializationState) == 1;
+    public bool InitializationCompleted =>
+        Volatile.Read(ref _initializationState) == 2;
     public string FailureDetail { get; private set; } =
         "hybrid reflection runtime has not been initialized";
     public uint RayTaskCapacity => _allocatedTaskCapacity;
@@ -164,10 +193,79 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
 
     public void Initialize()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_initialized)
-            return;
-        _initialized = true;
+        lock (_initializationGate)
+        {
+            ThrowIfDisposingLocked();
+            if (_initializationState != 0)
+                return;
+            ClaimInitializationLocked();
+        }
+
+        InitializeClaimed();
+    }
+
+    /// <summary>
+    /// Reserves initialization without starting driver work. Scene commit uses
+    /// this to guarantee that its first present stays on the reflection
+    /// fallback; background compilation begins after that present.
+    /// </summary>
+    public void DeferInitialize()
+    {
+        lock (_initializationGate)
+        {
+            ThrowIfDisposingLocked();
+            if (_initializationState == 0)
+                ClaimInitializationLocked();
+        }
+    }
+
+    /// <summary>
+    /// Claims initialization before queueing driver work so the render host
+    /// can use the existing reflection fallback instead of racing into the
+    /// same cold pipeline compilation.
+    /// </summary>
+    public Task BeginInitializeAsync(
+        Func<bool>? publicationPreparation = null)
+    {
+        lock (_initializationGate)
+        {
+            ThrowIfDisposingLocked();
+            if (_initializationState == 2)
+                return Task.CompletedTask;
+            if (_initializationState == 0)
+                ClaimInitializationLocked();
+            Task completion = _initializationCompletion!.Task;
+            if (_backgroundInitializationStarted)
+                return completion;
+
+            _publicationPreparation = publicationPreparation;
+            _backgroundInitializationStarted = true;
+            try
+            {
+                _ = Task.Run(InitializeClaimed);
+            }
+            catch
+            {
+                _backgroundInitializationStarted = false;
+                _publicationPreparation = null;
+                _initializationState = 0;
+                _initializationCompletion = null;
+                throw;
+            }
+
+            return completion;
+        }
+    }
+
+    private void ClaimInitializationLocked()
+    {
+        _initializationState = 1;
+        _initializationCompletion = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private void InitializeClaimed()
+    {
         try
         {
             ValidatePushConstants();
@@ -189,10 +287,16 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 "hybrid_reflection_composite.comp.spv");
             _opaqueSceneColorSnapshotPipeline = CreatePipeline(
                 "opaque_scene_color_snapshot.comp.spv");
-            ScreenPipelinesAvailable = true;
             FailureDetail = string.Empty;
             TryCreateRayPipeline();
             EnsureResources();
+            if (_publicationPreparation != null &&
+                !_publicationPreparation())
+            {
+                throw new InvalidOperationException(
+                    "hybrid reflection receiver pipelines could not be prepared");
+            }
+            ScreenPipelinesAvailable = true;
         }
         catch (Exception exception)
         {
@@ -200,7 +304,25 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             RayPipelineAvailable = false;
             FailureDetail = "hybrid reflection initialization failed: " +
                 exception.Message;
-            CleanupNative();
+            try
+            {
+                CleanupNative();
+            }
+            catch (Exception cleanupFailure)
+            {
+                FailureDetail += "; cleanup failed: " +
+                    cleanupFailure.Message;
+            }
+        }
+        finally
+        {
+            TaskCompletionSource<bool>? completion;
+            lock (_initializationGate)
+            {
+                Volatile.Write(ref _initializationState, 2);
+                completion = _initializationCompletion;
+            }
+            completion?.TrySetResult(true);
         }
     }
 
@@ -216,9 +338,10 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             return false;
         }
 
-        if (!_initialized)
+        if (Volatile.Read(ref _initializationState) == 0)
             Initialize();
-        if (!ScreenPipelinesAvailable)
+        if (Volatile.Read(ref _initializationState) != 2 ||
+            !ScreenPipelinesAvailable)
         {
             InvalidateHistory();
             sceneData.HybridReflectionPassEnabled = false;
@@ -650,7 +773,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
 
     public void OnTargetsRecreated()
     {
-        if (!_initialized || !ScreenPipelinesAvailable)
+        if (Volatile.Read(ref _initializationState) != 2 ||
+            !ScreenPipelinesAvailable)
             return;
         try
         {
@@ -1597,11 +1721,51 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         pipeline = default;
     }
 
+    private void ThrowIfDisposingLocked()
+    {
+        if (_disposed || _disposeRequested)
+        {
+            throw new ObjectDisposedException(
+                nameof(HybridReflectionVulkanRuntime));
+        }
+    }
+
     public void Dispose()
     {
-        if (_disposed)
-            return;
-        _disposed = true;
+        Task? initialization = null;
+        lock (_initializationGate)
+        {
+            if (_disposed || _disposeRequested)
+                return;
+            _disposeRequested = true;
+            if (_initializationState == 1)
+            {
+                if (_backgroundInitializationStarted)
+                {
+                    initialization = _initializationCompletion?.Task;
+                }
+                else
+                {
+                    // A deferred scene was never presented. Complete the
+                    // unstarted claim so shutdown cannot wait on work that was
+                    // intentionally never queued.
+                    _initializationState = 2;
+                    _initializationCompletion?.TrySetResult(true);
+                }
+            }
+        }
+
+        // Native pipeline creation must finish before the device-owned cache,
+        // layouts, and buffers are destroyed. This wait is shutdown-only; the
+        // render host never waits for background transition preparation.
+        initialization?.GetAwaiter().GetResult();
+
+        lock (_initializationGate)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+        }
         ScreenPipelinesAvailable = false;
         RayPipelineAvailable = false;
         CleanupNative();

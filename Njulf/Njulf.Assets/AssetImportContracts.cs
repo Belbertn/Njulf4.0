@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
 
 namespace Njulf.Assets;
@@ -168,7 +169,41 @@ public sealed class ModelTextureSource
     public TextureContainerKind ContainerKind { get; init; } = TextureContainerKind.StandardImage;
     public int EncodedByteLength { get; init; }
 
+    /// <summary>
+    /// Optional immutable snapshot prepared by a background content worker.
+    /// Renderer upload may consume these exact authenticated bytes without
+    /// reopening and hashing the source file on the render thread.
+    /// </summary>
+    public PreparedTextureSourceSnapshot? PreparedSnapshot { get; init; }
+
     public bool IsMemorySource => Bytes is { Length: > 0 };
+}
+
+public sealed class PreparedTextureSourceSnapshot
+{
+    public PreparedTextureSourceSnapshot(
+        byte[] encodedBytes,
+        ulong contentHash,
+        AuthenticatedCookedTexture? cookedAuthentication = null)
+    {
+        EncodedBytes = encodedBytes ??
+            throw new ArgumentNullException(nameof(encodedBytes));
+        if (encodedBytes.Length == 0)
+        {
+            throw new ArgumentException(
+                "A prepared texture snapshot cannot be empty.",
+                nameof(encodedBytes));
+        }
+
+        ContentHash = contentHash;
+        CookedAuthentication = cookedAuthentication;
+    }
+
+    public byte[] EncodedBytes { get; }
+
+    public ulong ContentHash { get; }
+
+    public AuthenticatedCookedTexture? CookedAuthentication { get; }
 }
 
 public sealed class ModelTextureSlot

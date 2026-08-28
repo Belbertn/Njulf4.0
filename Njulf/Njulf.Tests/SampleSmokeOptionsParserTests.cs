@@ -1604,6 +1604,7 @@ public sealed class SampleSmokeOptionsParserTests
     [TestCase("quality-switch", SampleSmokeMode.QualitySwitch, 7)]
     [TestCase("ddgi-residency-switch", SampleSmokeMode.DdgiResidencySwitch, 12)]
     [TestCase("texture-hot-reload", SampleSmokeMode.TextureHotReload, 4)]
+    [TestCase("scene-transition", SampleSmokeMode.SceneTransition, 3)]
     [TestCase("resize", SampleSmokeMode.Resize, 5)]
     [TestCase("minimize", SampleSmokeMode.Minimize, 4)]
     [TestCase("all", SampleSmokeMode.All, 8)]
@@ -1621,6 +1622,26 @@ public sealed class SampleSmokeOptionsParserTests
         {
             Assert.That(options.Mode, Is.EqualTo(expected));
             Assert.That(options.FrameCount, Is.EqualTo(expectedFrames));
+        });
+    }
+
+    [Test]
+    public void SceneTransitionSmokeAcceptsExactSponzaToBistroStart()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--smoke-mode", "scene-transition",
+            "--scene", "sponza"
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Mode,
+                Is.EqualTo(SampleSmokeMode.SceneTransition));
+            Assert.That(options.SceneKind,
+                Is.EqualTo(SampleSceneKind.SponzaPlaza));
+            Assert.That(options.ValidationMode,
+                Is.Not.EqualTo(RendererValidationMode.Off));
         });
     }
 

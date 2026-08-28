@@ -908,6 +908,21 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        /// <summary>
+        /// Removes the active C5 image bank from command-buffer-visible graph
+        /// bindings without releasing its ownership. Fence-backed retirement
+        /// can then keep the allocation alive while guaranteeing that later
+        /// frames acquire no new references to it.
+        /// </summary>
+        internal void SuspendNearFieldResidualGenerationPublication()
+        {
+            if (_nearFieldResidualGeneration is null)
+                return;
+
+            PublishEmptyNearFieldResidualGraphBindings();
+            ClearPublishedNearFieldResidualTargetReferences();
+        }
+
         private SimpleDdgiNearFieldResidualRenderTargetGeneration
             CapturePublishedNearFieldResidualGeneration(
                 in SimpleDdgiNearFieldResidualLayout layout) => new(
@@ -933,8 +948,12 @@ namespace Njulf.Rendering.Resources
 
         private void ClearPublishedNearFieldResidualGeneration()
         {
-            PublishEmptyNearFieldResidualGraphBindings();
+            SuspendNearFieldResidualGenerationPublication();
             _nearFieldResidualGeneration = null;
+        }
+
+        private void ClearPublishedNearFieldResidualTargetReferences()
+        {
             NearFieldDirectSource = null;
             NearFieldReceiverPayload = null;
             NearFieldTraceRasterDepth = null;

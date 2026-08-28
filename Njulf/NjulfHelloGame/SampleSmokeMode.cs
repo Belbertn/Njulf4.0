@@ -8,6 +8,7 @@ public enum SampleSmokeMode
     Fullscreen,
     Minimize,
     SceneReload,
+    SceneTransition,
     MissingAssets,
     LongRun,
     QualitySwitch,

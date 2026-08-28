@@ -14,6 +14,15 @@ namespace Njulf.Core.Interfaces
     }
 
     /// <summary>
+    /// Optional renderer lifecycle state used by the host to avoid ending a
+    /// frame that the renderer already abandoned after a submission fault.
+    /// </summary>
+    public interface IRendererFrameState
+    {
+        bool IsFrameInProgress { get; }
+    }
+
+    /// <summary>
     /// Optional renderer capability for compiling the pipelines required by a
     /// fully loaded scene before its first frame is recorded.
     /// </summary>

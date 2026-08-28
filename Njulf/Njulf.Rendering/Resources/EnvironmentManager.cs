@@ -22,6 +22,9 @@ namespace Njulf.Rendering.Resources
         private readonly BufferManager _bufferManager;
         private readonly TextureManager _textureManager;
         private readonly RenderSettings _settings;
+        private readonly object _preparedPayloadLock = new();
+        private readonly Dictionary<ResourceSignature, Task<EnvironmentPayload>>
+            _preparedHdrPayloads = [];
 
         private BufferHandle _environmentBuffer;
         private BufferHandle _prefilterEnvironmentBuffer;
@@ -641,6 +644,44 @@ namespace Njulf.Rendering.Resources
                 RegisterReflectionProbeFallback(bindlessHeap);
         }
 
+        /// <summary>
+        /// Performs HDR decode, cubemap projection, irradiance integration,
+        /// specular prefiltering, and runtime-format conversion on a worker
+        /// before a scene publishes the matching settings. Vulkan allocation
+        /// and descriptor publication remain on the render thread.
+        /// </summary>
+        public Task PrepareResourcesAsync(
+            EnvironmentSettings settings,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(settings);
+            ResourceSignature signature = CreateResourceSignature(settings);
+            if (signature.SourceKind !=
+                EnvironmentSourceKind.HdrEquirectangular)
+            {
+                return Task.CompletedTask;
+            }
+
+            Task<EnvironmentPayload> preparation;
+            lock (_preparedPayloadLock)
+            {
+                if (!_preparedHdrPayloads.TryGetValue(
+                        signature,
+                        out preparation!))
+                {
+                    preparation = Task.Run(
+                        () => LoadOrCreateFormattedHdrEnvironmentPayload(
+                            signature));
+                    _preparedHdrPayloads.Add(signature, preparation);
+                    TrimPreparedHdrPayloadCache(signature);
+                }
+            }
+
+            return cancellationToken.CanBeCanceled
+                ? preparation.WaitAsync(cancellationToken)
+                : preparation;
+        }
+
         public void Register(BindlessHeap bindlessHeap)
         {
             if (bindlessHeap == null)
@@ -975,9 +1016,8 @@ namespace Njulf.Rendering.Resources
             {
                 try
                 {
-                    payload = CreateHdrEnvironmentPayload(
-                        signature,
-                        CalculateMipLevels(prefilteredSize, prefilteredSize));
+                    payload = GetOrCreateFormattedHdrEnvironmentPayload(
+                        signature);
                 }
                 catch (Exception ex) when (ex is IOException or
                     InvalidDataException or
@@ -1021,7 +1061,6 @@ namespace Njulf.Rendering.Resources
                 _prefilteredMipCount = CalculateMipLevels(
                     prefilteredSize,
                     prefilteredSize);
-                payload = payload.ConvertToFormat(environmentFormat);
                 CreateBakedEnvironmentTextures(
                     signature,
                     environmentFormat,
@@ -1181,6 +1220,176 @@ namespace Njulf.Rendering.Resources
                     prefilteredMipCount));
         }
 
+        private EnvironmentPayload CreateFormattedHdrEnvironmentPayload(
+            ResourceSignature signature) =>
+            CreateHdrEnvironmentPayload(
+                    signature,
+                    CalculateMipLevels(
+                        signature.PrefilteredSize,
+                        signature.PrefilteredSize))
+                .ConvertToFormat(
+                    ResolveEnvironmentFormat(signature.TexturePrecision));
+
+        private EnvironmentPayload GetOrCreateFormattedHdrEnvironmentPayload(
+            ResourceSignature signature)
+        {
+            Task<EnvironmentPayload>? preparation;
+            lock (_preparedPayloadLock)
+            {
+                _preparedHdrPayloads.TryGetValue(
+                    signature,
+                    out preparation);
+            }
+
+            if (preparation == null)
+            {
+                return LoadOrCreateFormattedHdrEnvironmentPayload(signature);
+            }
+
+            try
+            {
+                EnvironmentPayload payload =
+                    preparation.GetAwaiter().GetResult();
+                Console.WriteLine(
+                    $"Environment preparation cache hit: " +
+                    $"source='{Path.GetFileName(signature.ResolvedSourcePath)}', " +
+                    $"bytes={payload.TotalBytes}.");
+                return payload;
+            }
+            catch
+            {
+                lock (_preparedPayloadLock)
+                {
+                    if (_preparedHdrPayloads.TryGetValue(
+                            signature,
+                            out Task<EnvironmentPayload>? current) &&
+                        ReferenceEquals(current, preparation))
+                    {
+                        _preparedHdrPayloads.Remove(signature);
+                    }
+                }
+
+                throw;
+            }
+        }
+
+        private EnvironmentPayload
+            LoadOrCreateFormattedHdrEnvironmentPayload(
+                ResourceSignature signature)
+        {
+            long started = Stopwatch.GetTimestamp();
+            uint prefilteredMipCount = CalculateMipLevels(
+                signature.PrefilteredSize,
+                signature.PrefilteredSize);
+            Format format = ResolveEnvironmentFormat(
+                signature.TexturePrecision);
+            EnvironmentPayloadCacheIdentity cacheIdentity =
+                EnvironmentPayloadCache.CreateIdentity(
+                    signature.ResolvedSourcePath,
+                    signature.EnvironmentSize,
+                    signature.IrradianceSize,
+                    signature.PrefilteredSize,
+                    prefilteredMipCount,
+                    checked((uint)GetBytesPerPixel(format)));
+            string cachePath = Path.Combine(
+                ResolveEnvironmentCacheDirectory(),
+                EnvironmentPayloadCache.GetCacheFileName(cacheIdentity));
+
+            EnvironmentPayloadCacheReadResult cacheRead =
+                EnvironmentPayloadCache.TryReadAsync(
+                        cachePath,
+                        cacheIdentity)
+                    .GetAwaiter()
+                    .GetResult();
+            if (cacheRead.Hit)
+            {
+                EnvironmentPayload cached = new(
+                    cacheRead.Payload.EnvironmentCubemap,
+                    cacheRead.Payload.IrradianceCubemap,
+                    cacheRead.Payload.PrefilteredCubemap);
+                Console.WriteLine(
+                    $"Environment persistent cache hit: " +
+                    $"source='{Path.GetFileName(signature.ResolvedSourcePath)}', " +
+                    $"elapsed={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3}ms, " +
+                    $"bytes={cached.TotalBytes}.");
+                return cached;
+            }
+
+            EnvironmentPayload payload =
+                CreateFormattedHdrEnvironmentPayload(signature);
+            double preparationMilliseconds =
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            try
+            {
+                EnvironmentPayloadCache.WriteAsync(
+                        cachePath,
+                        cacheIdentity,
+                        new EnvironmentPayloadCacheData(
+                            payload.EnvironmentCubemap,
+                            payload.IrradianceCubemap,
+                            payload.PrefilteredCubemap))
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            catch (Exception exception) when (exception is IOException or
+                UnauthorizedAccessException or
+                InvalidDataException or
+                ArgumentException)
+            {
+                // A cache write is an optimization only. The freshly generated
+                // payload remains authoritative for this process.
+                Console.WriteLine(
+                    $"Environment persistent cache write skipped: " +
+                    $"source='{Path.GetFileName(signature.ResolvedSourcePath)}', " +
+                    $"reason='{exception.Message}'.");
+            }
+
+            Console.WriteLine(
+                $"Environment preparation profile: " +
+                $"source='{Path.GetFileName(signature.ResolvedSourcePath)}', " +
+                $"elapsed={preparationMilliseconds:F3}ms, " +
+                $"totalWithCacheWrite=" +
+                $"{Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3}ms, " +
+                $"bytes={payload.TotalBytes}, cacheMiss='{cacheRead.Reason}'.");
+            return payload;
+        }
+
+        private static string ResolveEnvironmentCacheDirectory()
+        {
+            string? configured = System.Environment.GetEnvironmentVariable(
+                "NJULF_ENVIRONMENT_CACHE_DIR");
+            if (!string.IsNullOrWhiteSpace(configured))
+                return Path.GetFullPath(configured);
+
+            string localApplicationData = System.Environment.GetFolderPath(
+                System.Environment.SpecialFolder.LocalApplicationData);
+            if (string.IsNullOrWhiteSpace(localApplicationData))
+                localApplicationData = AppContext.BaseDirectory;
+            return Path.Combine(
+                localApplicationData,
+                "Njulf",
+                "Cache",
+                "EnvironmentMaps");
+        }
+
+        private void TrimPreparedHdrPayloadCache(
+            ResourceSignature retainedSignature)
+        {
+            const int maximumPreparedEnvironments = 2;
+            if (_preparedHdrPayloads.Count <= maximumPreparedEnvironments)
+                return;
+
+            ResourceSignature? candidate = _preparedHdrPayloads
+                .Where(pair =>
+                    !pair.Key.Equals(retainedSignature) &&
+                    pair.Value.IsCompleted)
+                .Select(static pair =>
+                    (ResourceSignature?)pair.Key)
+                .FirstOrDefault();
+            if (candidate.HasValue)
+                _preparedHdrPayloads.Remove(candidate.Value);
+        }
+
         private void CreateBakedEnvironmentTextures(
             ResourceSignature signature,
             Format environmentFormat,
@@ -1248,23 +1457,28 @@ namespace Njulf.Rendering.Resources
             return MemoryMarshal.AsBytes(values.AsSpan()).ToArray();
         }
 
-        private ResourceSignature CreateResourceSignature()
+        private ResourceSignature CreateResourceSignature() =>
+            CreateResourceSignature(_settings.Environment);
+
+        private static ResourceSignature CreateResourceSignature(
+            EnvironmentSettings settings)
         {
-            if (_settings.Environment.SourceKind == EnvironmentSourceKind.Cubemap)
+            if (settings.SourceKind == EnvironmentSourceKind.Cubemap)
             {
                 throw new NotSupportedException(
                     "EnvironmentSourceKind.Cubemap is not implemented. Use an HDR " +
                     "equirectangular source or the procedural atmosphere.");
             }
-            string sourcePath = ResolveEnvironmentSourcePath(_settings.Environment.SourcePath) ?? string.Empty;
+            string sourcePath = ResolveEnvironmentSourcePath(
+                settings.SourcePath) ?? string.Empty;
             return new ResourceSignature(
-                _settings.Environment.SourceKind,
+                settings.SourceKind,
                 sourcePath,
-                _settings.Environment.EnvironmentSize,
-                _settings.Environment.IrradianceSize,
-                _settings.Environment.PrefilteredSize,
-                _settings.Environment.BrdfLutSize,
-                _settings.Environment.TexturePrecision);
+                settings.EnvironmentSize,
+                settings.IrradianceSize,
+                settings.PrefilteredSize,
+                settings.BrdfLutSize,
+                settings.TexturePrecision);
         }
 
         private static string? ResolveEnvironmentSourcePath(string? sourcePath)
@@ -1431,6 +1645,8 @@ namespace Njulf.Rendering.Resources
                 return;
 
             _disposed = true;
+            lock (_preparedPayloadLock)
+                _preparedHdrPayloads.Clear();
             DestroyEnvironmentTextures();
             if (_environmentBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_environmentBuffer);
@@ -1445,6 +1661,11 @@ namespace Njulf.Rendering.Resources
             byte[] IrradianceCubemap,
             byte[] PrefilteredCubemap)
         {
+            public long TotalBytes => checked(
+                EnvironmentCubemap.LongLength +
+                IrradianceCubemap.LongLength +
+                PrefilteredCubemap.LongLength);
+
             public EnvironmentPayload ConvertToFormat(Format format)
             {
                 return new EnvironmentPayload(

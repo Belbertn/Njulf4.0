@@ -21,6 +21,17 @@ internal interface IModelRenderUploadBackend
 
     void InitializeDefaultTextures();
 
+    IModelTextureUploadBatch BeginTextureUploadBatch(
+        ulong maximumStagingBytes = 8UL * 1024UL * 1024UL) =>
+        NoopModelTextureUploadBatch.Instance;
+
+    ModelTextureSource PrepareTextureSource(
+        ModelTextureSource source,
+        TextureSamplerDescription samplerDescription,
+        bool srgb,
+        TextureSemantic semantic,
+        RuntimeTextureMipPolicy mipPolicy) => source;
+
     TextureHandle LoadTexture(
         ModelTextureSource source,
         TextureSamplerDescription samplerDescription,
@@ -66,6 +77,15 @@ internal interface IModelRenderUploadBackend
 
     MeshHandle[] RegisterMeshes(IReadOnlyList<MeshManager.MeshRegistrationData> meshes);
 
+    IModelMeshUpload BeginMeshUpload(
+        IReadOnlyList<MeshManager.MeshRegistrationData> meshes) =>
+        new CompletedModelMeshUpload(RegisterMeshes(meshes));
+
+    IModelMeshUpload BeginMeshUploadWithCapacity(
+        IReadOnlyList<MeshManager.MeshRegistrationData> meshes,
+        IReadOnlyList<MeshManager.MeshRegistrationData> capacityRegistrations) =>
+        BeginMeshUpload(meshes);
+
     void RetainMesh(MeshHandle handle);
 
     void ReleaseMesh(MeshHandle handle);
@@ -97,6 +117,23 @@ internal sealed class ModelRenderUploadBackend : IModelRenderUploadBackend
     {
         _textureManager.InitializeDefaultTextures();
     }
+
+    public IModelTextureUploadBatch BeginTextureUploadBatch(
+        ulong maximumStagingBytes = 8UL * 1024UL * 1024UL) =>
+        _textureManager.BeginUploadBatch(maximumStagingBytes);
+
+    public ModelTextureSource PrepareTextureSource(
+        ModelTextureSource source,
+        TextureSamplerDescription samplerDescription,
+        bool srgb,
+        TextureSemantic semantic,
+        RuntimeTextureMipPolicy mipPolicy) =>
+        _textureManager.PrepareTextureSource(
+            source,
+            samplerDescription,
+            srgb,
+            semantic,
+            mipPolicy);
 
     public TextureHandle LoadTexture(
         ModelTextureSource source,
@@ -200,6 +237,17 @@ internal sealed class ModelRenderUploadBackend : IModelRenderUploadBackend
         return _meshManager.RegisterMeshes(meshes);
     }
 
+    public IModelMeshUpload BeginMeshUpload(
+        IReadOnlyList<MeshManager.MeshRegistrationData> meshes) =>
+        _meshManager.BeginRegistrationUpload(meshes);
+
+    public IModelMeshUpload BeginMeshUploadWithCapacity(
+        IReadOnlyList<MeshManager.MeshRegistrationData> meshes,
+        IReadOnlyList<MeshManager.MeshRegistrationData> capacityRegistrations) =>
+        _meshManager.BeginRegistrationUpload(
+            meshes,
+            capacityRegistrations);
+
     public void RetainMesh(MeshHandle handle)
     {
         _meshManager.RetainMesh(handle);
@@ -208,5 +256,70 @@ internal sealed class ModelRenderUploadBackend : IModelRenderUploadBackend
     public void ReleaseMesh(MeshHandle handle)
     {
         _meshManager.ReleaseMesh(handle);
+    }
+}
+
+internal interface IModelTextureUploadBatch : IDisposable
+{
+    void Complete();
+
+    /// <summary>
+    /// Returns true once every submitted texture copy has completed and its
+    /// retained staging resources have been released. Must be called from the
+    /// render/device-owning thread.
+    /// </summary>
+    bool TryCompleteGpuWork();
+}
+
+internal interface IModelMeshUpload : IDisposable
+{
+    IReadOnlyList<MeshHandle> Handles { get; }
+
+    bool TryCompleteGpuWork();
+
+    void CompleteGpuWork();
+
+    bool TryCancelGpuWork();
+}
+
+internal sealed class CompletedModelMeshUpload : IModelMeshUpload
+{
+    public CompletedModelMeshUpload(IReadOnlyList<MeshHandle> handles)
+    {
+        Handles = handles ?? throw new ArgumentNullException(nameof(handles));
+    }
+
+    public IReadOnlyList<MeshHandle> Handles { get; }
+
+    public bool TryCompleteGpuWork() => true;
+
+    public void CompleteGpuWork()
+    {
+    }
+
+    public bool TryCancelGpuWork() => true;
+
+    public void Dispose()
+    {
+    }
+}
+
+internal sealed class NoopModelTextureUploadBatch :
+    IModelTextureUploadBatch
+{
+    public static NoopModelTextureUploadBatch Instance { get; } = new();
+
+    private NoopModelTextureUploadBatch()
+    {
+    }
+
+    public void Complete()
+    {
+    }
+
+    public bool TryCompleteGpuWork() => true;
+
+    public void Dispose()
+    {
     }
 }

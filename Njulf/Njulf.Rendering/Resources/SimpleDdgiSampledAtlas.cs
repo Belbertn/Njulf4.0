@@ -119,6 +119,9 @@ namespace Njulf.Rendering.Resources
             bool forceRecreate = false)
         {
             ThrowIfDisposed();
+            // Fence completion protects submitted readers, but descriptor
+            // replacement is published by the owner only after this call.
+            _ = priorGenerationComplete;
             if (requiredProbeCount <= 0)
             {
                 Release(lastUseFrameFenceValue, completedFrameFenceValue);
@@ -167,21 +170,16 @@ namespace Njulf.Rendering.Resources
 
             bool hadPriorAllocation = IsReady;
             if (hadPriorAllocation &&
-                !priorGenerationComplete &&
                 _retiredAllocations.Count >= MaxRetiredAllocationGenerations)
             {
                 LastFailureReason = "sampled-atlas-retirement-capacity-exhausted";
                 return false;
             }
 
-            // When the exact last-use fence is complete the old images can be
-            // reclaimed before allocation, preserving the hard capacity budget.
-            // Otherwise allocate first and keep the old generation alive under
-            // its completion token so a failed optional allocation leaves the
-            // prior sampled mirror usable.
-            if (hadPriorAllocation && priorGenerationComplete)
-                DestroyImageResources();
-
+            // Allocate the replacement before detaching the old generation.
+            // Even after submitted readers complete, both the bindless and GPU
+            // publication descriptor sets still name the old views until the
+            // owner republishes the new generation after this method returns.
             var groups = new AtlasGroup[requiredGroups];
             try
             {
@@ -205,11 +203,12 @@ namespace Njulf.Rendering.Resources
                 throw;
             }
 
-            if (hadPriorAllocation && !priorGenerationComplete)
+            if (hadPriorAllocation)
             {
                 if (!RetireCurrentAllocation(
                         lastUseFrameFenceValue,
-                        completedFrameFenceValue))
+                        completedFrameFenceValue,
+                        deferDestructionUntilDescriptorReplacement: true))
                 {
                     DestroyGroups(groups);
                     LastFailureReason = "sampled-atlas-retirement-admission-failed";
@@ -506,13 +505,15 @@ namespace Njulf.Rendering.Resources
 
         private bool RetireCurrentAllocation(
             ulong lastUseFrameFenceValue,
-            ulong completedFrameFenceValue)
+            ulong completedFrameFenceValue,
+            bool deferDestructionUntilDescriptorReplacement = false)
         {
             if (!IsReady)
                 return true;
 
-            if (lastUseFrameFenceValue == 0UL ||
-                completedFrameFenceValue >= lastUseFrameFenceValue)
+            if (!deferDestructionUntilDescriptorReplacement &&
+                (lastUseFrameFenceValue == 0UL ||
+                 completedFrameFenceValue >= lastUseFrameFenceValue))
             {
                 DestroyImageResources();
                 return true;
@@ -529,12 +530,31 @@ namespace Njulf.Rendering.Resources
             _requiresFullSync = false;
             EstimatedImageBytes = 0UL;
             AllocatedImageBytes = 0UL;
+            ulong retirementFenceValue = lastUseFrameFenceValue;
+            if (deferDestructionUntilDescriptorReplacement)
+            {
+                retirementFenceValue =
+                    ResolveDescriptorReplacementRetirementFence(
+                        retirementFenceValue,
+                        completedFrameFenceValue);
+            }
             _retiredAllocations.Add(new RetiredAtlasAllocation(
                 groups,
                 bytes,
-                GpuCompletionToken.ForFrameFence(lastUseFrameFenceValue)));
+                GpuCompletionToken.ForFrameFence(retirementFenceValue)));
             RetiredImageBytes = checked(RetiredImageBytes + bytes);
             return true;
+        }
+
+        internal static ulong ResolveDescriptorReplacementRetirementFence(
+            ulong lastUseFrameFenceValue,
+            ulong completedFrameFenceValue)
+        {
+            if (lastUseFrameFenceValue > completedFrameFenceValue)
+                return lastUseFrameFenceValue;
+            return completedFrameFenceValue == ulong.MaxValue
+                ? ulong.MaxValue
+                : completedFrameFenceValue + 1UL;
         }
 
         private void DestroyRetiredAllocationsAfterDeviceIdle()

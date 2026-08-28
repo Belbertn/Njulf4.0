@@ -932,6 +932,38 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
+    [TestCase(0UL, 0UL, false)]
+    [TestCase(0UL, 17UL, false)]
+    [TestCase(18UL, 17UL, true)]
+    [TestCase(18UL, 18UL, false)]
+    [TestCase(18UL, 19UL, false)]
+    [TestCase(ulong.MaxValue, ulong.MaxValue - 1UL, true)]
+    [TestCase(ulong.MaxValue, ulong.MaxValue, false)]
+    public void CapacityBootstrap_SuspendsLiveWorkUntilItsExactFenceCompletes(
+        ulong resumeFrameFenceValue,
+        ulong completedFrameFenceValue,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.IsCapacityBootstrapPending(
+                resumeFrameFenceValue,
+                completedFrameFenceValue),
+            Is.EqualTo(expected));
+    }
+
+    [TestCase(0UL, 1UL)]
+    [TestCase(17UL, 18UL)]
+    [TestCase(ulong.MaxValue, ulong.MaxValue)]
+    public void CapacityBootstrap_UsesThePendingSubmissionFence(
+        ulong lastSubmittedFrameFenceValue,
+        ulong expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolvePendingFrameFenceValue(
+                lastSubmittedFrameFenceValue),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(0, 4_096, 4_096, 20_000UL, 3_000UL, 276)]
     [TestCase(1_024, 1_024, 4_096, 6_000UL, 3_000UL, 230)]
     [TestCase(256, 256, 4_096, 1_000UL, 3_000UL, 288)]

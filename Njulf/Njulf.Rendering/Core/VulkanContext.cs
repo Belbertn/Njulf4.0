@@ -1937,6 +1937,23 @@ namespace Njulf.Rendering.Core
             public CommandPool CommandPool;
         }
 
+        /// <summary>
+        /// Owns a submitted one-shot command buffer until its fence signals.
+        /// The owner must complete it from the device-owning thread before
+        /// releasing any resources referenced by the command buffer.
+        /// </summary>
+        public struct SingleTimeCommandSubmission
+        {
+            public CommandBuffer CommandBuffer;
+            public CommandPool CommandPool;
+            public Fence Fence;
+
+            public readonly bool IsValid =>
+                CommandBuffer.Handle != 0 &&
+                CommandPool.Handle != 0 &&
+                Fence.Handle != 0;
+        }
+
         public SingleTimeCommandContext BeginSingleTimeCommands()
         {
             var allocInfo = new CommandBufferAllocateInfo
@@ -1970,9 +1987,25 @@ namespace Njulf.Rendering.Core
 
         public void EndSingleTimeCommands(SingleTimeCommandContext ctx)
         {
+            SingleTimeCommandSubmission submission =
+                SubmitSingleTimeCommands(ctx);
+            WaitForSingleTimeCommands(ref submission);
+        }
+
+        /// <summary>
+        /// Ends and submits a one-shot command buffer without waiting for the
+        /// GPU. The returned submission retains the command buffer and fence
+        /// so callers can poll completion over later render frames.
+        /// </summary>
+        public SingleTimeCommandSubmission SubmitSingleTimeCommands(
+            SingleTimeCommandContext ctx)
+        {
             Result result = _vk.EndCommandBuffer(ctx.CommandBuffer);
             if (result != Result.Success)
+            {
+                AbortSingleTimeCommands(ctx);
                 throw new VulkanException("Failed to end single-time command buffer", result);
+            }
 
             var submitInfo = new SubmitInfo
             {
@@ -1988,7 +2021,10 @@ namespace Njulf.Rendering.Core
 
             result = _vk.CreateFence(_device, &fenceInfo, null, out Fence fence);
             if (result != Result.Success)
+            {
+                AbortSingleTimeCommands(ctx);
                 throw new VulkanException("Failed to create single-time command fence", result);
+            }
 
             result = _vk.QueueSubmit(_graphicsQueue, 1, &submitInfo, fence);
             if (result != Result.Success)
@@ -1997,16 +2033,100 @@ namespace Njulf.Rendering.Core
                 throw new VulkanException("Failed to submit single-time commands", result);
             }
 
-            result = _vk.WaitForFences(_device, 1, &fence, true, ulong.MaxValue);
+            return new SingleTimeCommandSubmission
+            {
+                CommandBuffer = ctx.CommandBuffer,
+                CommandPool = ctx.CommandPool,
+                Fence = fence
+            };
+        }
+
+        /// <summary>
+        /// Polls a submitted one-shot command without blocking. A successful
+        /// poll releases its command buffer and fence exactly once.
+        /// </summary>
+        public bool TryCompleteSingleTimeCommands(
+            ref SingleTimeCommandSubmission submission)
+        {
+            if (!submission.IsValid)
+                return true;
+
+            Result result = _vk.GetFenceStatus(_device, submission.Fence);
+            if (result == Result.NotReady)
+                return false;
             if (result != Result.Success)
             {
-                _vk.DestroyFence(_device, fence, null);
-                throw new VulkanException("Failed to wait for single-time command fence", result);
+                throw new VulkanException(
+                    "Failed to query single-time command fence",
+                    result);
             }
 
-            _vk.DestroyFence(_device, fence, null);
+            ReleaseSingleTimeCommandSubmission(ref submission);
+            return true;
+        }
 
-            _vk.FreeCommandBuffers(_device, ctx.CommandPool, 1, &ctx.CommandBuffer);
+        /// <summary>
+        /// Blocks until a submitted one-shot command completes, then releases
+        /// its command buffer and fence. This preserves the legacy synchronous
+        /// path for callers that do not participate in cooperative polling.
+        /// </summary>
+        public void WaitForSingleTimeCommands(
+            ref SingleTimeCommandSubmission submission)
+        {
+            if (!submission.IsValid)
+                return;
+
+            Fence fence = submission.Fence;
+            Result result = _vk.WaitForFences(
+                _device,
+                1,
+                &fence,
+                true,
+                ulong.MaxValue);
+            if (result != Result.Success)
+            {
+                throw new VulkanException(
+                    "Failed to wait for single-time command fence",
+                    result);
+            }
+
+            ReleaseSingleTimeCommandSubmission(ref submission);
+        }
+
+        private void ReleaseSingleTimeCommandSubmission(
+            ref SingleTimeCommandSubmission submission)
+        {
+            CommandBuffer commandBuffer = submission.CommandBuffer;
+            CommandPool commandPool = submission.CommandPool;
+            Fence fence = submission.Fence;
+
+            _vk.FreeCommandBuffers(
+                _device,
+                commandPool,
+                1,
+                &commandBuffer);
+            _vk.DestroyFence(_device, fence, null);
+            submission = default;
+        }
+
+        /// <summary>
+        /// Releases a single-time command buffer that was never submitted.
+        /// This is used by transactional upload batches when model creation is
+        /// cancelled or fails while commands are still only being recorded.
+        /// </summary>
+        public void AbortSingleTimeCommands(SingleTimeCommandContext ctx)
+        {
+            if (ctx.CommandBuffer.Handle == 0 ||
+                ctx.CommandPool.Handle == 0)
+            {
+                return;
+            }
+
+            _vk.FreeCommandBuffers(
+                _device,
+                ctx.CommandPool,
+                1,
+                &ctx.CommandBuffer);
         }
 
         public void Dispose()

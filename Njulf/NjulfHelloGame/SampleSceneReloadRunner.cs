@@ -1,5 +1,3 @@
-using System;
-
 namespace NjulfHelloGame;
 
 internal sealed class SampleSceneReloadRunner
@@ -13,8 +11,6 @@ internal sealed class SampleSceneReloadRunner
 
     public void Reload()
     {
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
         _reload();
     }
 }

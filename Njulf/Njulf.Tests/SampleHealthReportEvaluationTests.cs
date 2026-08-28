@@ -171,6 +171,7 @@ public sealed class SampleHealthReportEvaluationTests
     [TestCase("quality-switch", "quality-switch")]
     [TestCase("ddgi-residency-switch", "ddgi-residency-switch")]
     [TestCase("texture-hot-reload", "texture-hot-reload")]
+    [TestCase("scene-transition", "scene-transition")]
     public void FindIncompleteSmokeOperation_RejectsMissingRollbackRunnerResult(
         string mode,
         string expectedOperation)

@@ -112,6 +112,12 @@ internal sealed class SimpleDdgiFrameCoordinator
 
         if (!simpleDdgiActive)
             return PrepareDisabledFrame(request);
+        if (gi.EffectiveUseRayQueryBackend &&
+            request.Capabilities.RayQuerySupported &&
+            !request.Capabilities.AccelerationStructureActive)
+        {
+            return PreparePendingRaySceneFrame(request);
+        }
 
         DdgiInvalidationFrame invalidationFrame =
             _invalidation.CollectFrame(
@@ -331,6 +337,40 @@ internal sealed class SimpleDdgiFrameCoordinator
             RayUpdateActive: false,
             default,
             emissive,
+            default,
+            FullPageManagementRequired: false,
+            SimpleDdgiUploadMicroseconds: 0,
+            SimpleDdgiUploadTiming: default,
+            _guidingConfiguration,
+            _guidingConfigurationReason,
+            ResolveReflectionRecaptureIntent(
+                simpleDdgiActive: false,
+                request.Capabilities.ReflectionConsumersAvailable));
+    }
+
+    private SimpleDdgiCoreFrameResult PreparePendingRaySceneFrame(
+        in SimpleDdgiCoreFrameRequest request)
+    {
+        // Static BLAS construction is deliberately progressive. Until its
+        // complete TLAS transaction can be published, raster rendering uses
+        // IBL and the renderer keeps the previous DDGI allocation dormant.
+        // Reconfiguring or clearing it here would add descriptor waits to every
+        // warm-up frame and could expose a partially represented ray scene.
+        _frameEvidence.ResetDisabled();
+        _volumeManager.SetReceiverFeedbackSchedulingBinding(
+            SimpleDdgiReceiverFeedbackGpuSchedulingBinding.Disabled(
+                "receiver-feedback-ray-scene-pending"),
+            request.Identity.FrameSerial);
+        _guidingConfiguration =
+            SimpleDdgiGuidingFrameConfiguration.Disabled;
+        _guidingConfigurationReason =
+            "directional-guiding-ray-scene-pending";
+
+        return new SimpleDdgiCoreFrameResult(
+            Active: false,
+            RayUpdateActive: false,
+            default,
+            default,
             default,
             FullPageManagementRequired: false,
             SimpleDdgiUploadMicroseconds: 0,

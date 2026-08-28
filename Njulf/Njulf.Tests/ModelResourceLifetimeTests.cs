@@ -41,6 +41,43 @@ public sealed class ModelResourceLifetimeTests
     }
 
     [Test]
+    public void SingleRenderObjectInstance_RetainsOnlyRequestedObject()
+    {
+        var tracker = new ResourceTracker();
+        var template = new Model();
+        template.Add(CreateOwnedObject(
+            tracker,
+            "mesh-a",
+            "material-a"));
+        template.Add(CreateOwnedObject(
+            tracker,
+            "mesh-b",
+            "material-b"));
+
+        RenderObject instance =
+            template.CreateRenderObjectInstance(1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tracker.Count("mesh-a"), Is.EqualTo(1));
+            Assert.That(tracker.Count("material-a"), Is.EqualTo(1));
+            Assert.That(tracker.Count("mesh-b"), Is.EqualTo(2));
+            Assert.That(tracker.Count("material-b"), Is.EqualTo(2));
+        });
+
+        instance.Dispose();
+        template.Dispose();
+        Assert.Multiple(() =>
+        {
+            Assert.That(tracker.Count("mesh-a"), Is.Zero);
+            Assert.That(tracker.Count("material-a"), Is.Zero);
+            Assert.That(tracker.Count("mesh-b"), Is.Zero);
+            Assert.That(tracker.Count("material-b"), Is.Zero);
+            Assert.That(tracker.MinimumCount, Is.Zero);
+        });
+    }
+
+    [Test]
     public void CopyOnWriteTransfer_IsolatedFromTemplateAndSibling()
     {
         var tracker = new ResourceTracker();

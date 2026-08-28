@@ -46,6 +46,8 @@ namespace Njulf.Rendering.Pipeline
 
         private readonly MeshPipeline _meshPipeline;
         private readonly BufferManager _bufferManager;
+        private readonly FenceBasedDeleter _deleter;
+        private readonly SynchronizationManager _synchronization;
         private readonly RuntimeBuffer[] _compactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
         private readonly RuntimeBuffer[] _simpleCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
         private readonly RuntimeBuffer[] _simpleNormalCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
@@ -90,11 +92,16 @@ namespace Njulf.Rendering.Pipeline
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             MeshPipeline meshPipeline,
-            BufferManager bufferManager)
+            BufferManager bufferManager,
+            FenceBasedDeleter deleter,
+            SynchronizationManager synchronization)
             : base("SceneOpaqueCompactionPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
+            _synchronization = synchronization ??
+                throw new ArgumentNullException(nameof(synchronization));
         }
 
         public void SetDirectionalStaticShadowRefreshQuery(Func<SceneRenderingData, uint> refreshMask)
@@ -490,6 +497,11 @@ namespace Njulf.Rendering.Pipeline
                 $"SceneSubmission.OpaqueIndirectDispatch.Frame{frameIndex}",
                 BufferUsageFlags.IndirectBufferBit);
             uint requiredLodHistory = checked((uint)Math.Max(1, objectCount));
+            int latestSubmittedFrame =
+                (frameIndex + RenderingConstants.FramesInFlight - 1) %
+                RenderingConstants.FramesInFlight;
+            Fence lodHistoryRetirementFence =
+                _synchronization.GetInFlightFence(latestSubmittedFrame);
             for (int historyFrame = 0;
                  historyFrame < _lodHistoryBuffers.Length;
                  historyFrame++)
@@ -498,7 +510,8 @@ namespace Njulf.Rendering.Pipeline
                     ref _lodHistoryBuffers[historyFrame],
                     requiredLodHistory,
                     sizeof(uint),
-                    $"SceneSubmission.GpuLodHistory.Frame{historyFrame}");
+                    $"SceneSubmission.GpuLodHistory.Frame{historyFrame}",
+                    retirementFence: lodHistoryRetirementFence);
             }
             UpdateRegisteredBindlessBuffers(frameIndex);
         }
@@ -566,7 +579,8 @@ namespace Njulf.Rendering.Pipeline
             uint requiredElements,
             ulong stride,
             string debugName,
-            BufferUsageFlags extraUsage = 0)
+            BufferUsageFlags extraUsage = 0,
+            Fence retirementFence = default)
         {
             uint required = Math.Max(1u, requiredElements);
             if (buffer.Handle.IsValid && required <= buffer.ElementCapacity)
@@ -576,7 +590,7 @@ namespace Njulf.Rendering.Pipeline
             while (newCapacity < required)
                 newCapacity = checked(newCapacity * 2u);
 
-            DestroyIfValid(buffer.Handle);
+            BufferHandle previous = buffer.Handle;
             ulong byteSize = checked(newCapacity * stride);
             BufferHandle handle = _bufferManager.CreateDeviceBuffer(
                 byteSize,
@@ -584,7 +598,32 @@ namespace Njulf.Rendering.Pipeline
                 requireDeviceAddress: false,
                 MemoryBudgetCategory.ObjectAndInstanceBuffers,
                 $"{debugName} ({newCapacity} elements)");
-            _context.SetDebugName(_bufferManager.GetBuffer(handle).Handle, ObjectType.Buffer, debugName);
+            try
+            {
+                _context.SetDebugName(
+                    _bufferManager.GetBuffer(handle).Handle,
+                    ObjectType.Buffer,
+                    debugName);
+                if (previous.IsValid)
+                {
+                    if (retirementFence.Handle != 0)
+                    {
+                        _deleter.QueueBufferDeletion(
+                            retirementFence,
+                            previous,
+                            _bufferManager);
+                    }
+                    else
+                    {
+                        _bufferManager.DestroyBuffer(previous);
+                    }
+                }
+            }
+            catch
+            {
+                _bufferManager.DestroyBuffer(handle);
+                throw;
+            }
             buffer = new RuntimeBuffer(handle, newCapacity, byteSize);
         }
 

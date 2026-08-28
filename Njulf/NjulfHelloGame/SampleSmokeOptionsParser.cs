@@ -1995,6 +1995,23 @@ public static class SampleSmokeOptionsParser
             throw new ArgumentException(
                 "Long-run report, sampling, and duration options require --smoke-mode long-run.");
         }
+        if (mode == SampleSmokeMode.SceneTransition)
+        {
+            if (sceneKind is not (
+                SampleSceneKind.GlobalIlluminationTest or
+                SampleSceneKind.SponzaPlaza))
+            {
+                throw new ArgumentException(
+                    "The scene-transition smoke must start in the Cornell/GI or Sponza scene.");
+            }
+            if (!validationSpecified)
+                validationMode = RendererValidationMode.Standard;
+            if (validationMode == RendererValidationMode.Off)
+            {
+                throw new ArgumentException(
+                    "The scene-transition smoke requires Vulkan validation.");
+            }
+        }
         if (longRunMaxRetainedSamples is < 2 or
             > SampleLongRunMonitor.MaximumRetainedSampleCapacity)
         {
@@ -2442,6 +2459,8 @@ public static class SampleSmokeOptionsParser
             "fullscreen" => SampleSmokeMode.Fullscreen,
             "minimize" => SampleSmokeMode.Minimize,
             "scene-reload" or "scene_reload" or "scenereload" => SampleSmokeMode.SceneReload,
+            "scene-transition" or "scene_transition" or
+                "scenetransition" => SampleSmokeMode.SceneTransition,
             "missing-assets" or "missing_assets" or "missingassets" => SampleSmokeMode.MissingAssets,
             "long-run" or "long_run" or "longrun" => SampleSmokeMode.LongRun,
             "quality-switch" or "quality_switch" or "qualityswitch" => SampleSmokeMode.QualitySwitch,
@@ -2449,7 +2468,7 @@ public static class SampleSmokeOptionsParser
                 "ddgiresidencyswitch" => SampleSmokeMode.DdgiResidencySwitch,
             "texture-hot-reload" or "texture_hot_reload" or "texturehotreload" => SampleSmokeMode.TextureHotReload,
             "all" => SampleSmokeMode.All,
-            _ => throw new ArgumentException($"Invalid smoke mode '{value}'. Valid values: none, startup, resize, fullscreen, minimize, scene-reload, missing-assets, long-run, quality-switch, ddgi-residency-switch, texture-hot-reload, all.")
+            _ => throw new ArgumentException($"Invalid smoke mode '{value}'. Valid values: none, startup, resize, fullscreen, minimize, scene-reload, scene-transition, missing-assets, long-run, quality-switch, ddgi-residency-switch, texture-hot-reload, all.")
         };
     }
 

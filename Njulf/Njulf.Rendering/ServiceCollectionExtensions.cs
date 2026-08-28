@@ -375,6 +375,11 @@ namespace Microsoft.Extensions.DependencyInjection
             services.TryAddSingleton<MeshManager>();
             services.TryAddSingleton<MaterialManager>();
             services.TryAddSingleton<OpacityMicromapRuntimeRegistrationStore>();
+            services.TryAddSingleton<RenderThreadContentUploadDispatcher>();
+            services.TryAddSingleton<IContentUploadDispatcher>(provider =>
+                provider.GetRequiredService<RenderThreadContentUploadDispatcher>());
+            services.TryAddSingleton<IContentUploadPump>(provider =>
+                provider.GetRequiredService<RenderThreadContentUploadDispatcher>());
             services.TryAddSingleton<IModelRenderUploadService, ModelRenderUploadService>();
             services.TryAddSingleton<LightManager>();
             services.TryAddSingleton<SceneDataBuilder>();

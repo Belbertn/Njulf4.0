@@ -15,6 +15,30 @@ namespace NjulfHelloGame;
 
 internal sealed class SampleSceneLoader
 {
+    internal sealed class PreparedAssetAttachment
+    {
+        internal PreparedAssetAttachment(
+            SampleAssetReference asset,
+            Model modelAsset,
+            bool foliage,
+            CoreMatrix4x4 modelWorld)
+        {
+            Asset = asset;
+            ModelAsset = modelAsset;
+            Foliage = foliage;
+            ModelWorld = modelWorld;
+        }
+
+        internal SampleAssetReference Asset { get; }
+        internal Model ModelAsset { get; }
+        internal bool Foliage { get; }
+        internal CoreMatrix4x4 ModelWorld { get; }
+        internal int NextObjectIndex { get; set; }
+        internal long LastCloneMicroseconds { get; set; }
+        internal long LastSceneAttachmentMicroseconds { get; set; }
+        public bool Completed =>
+            NextObjectIndex >= ModelAsset.RenderObjects.Count;
+    }
     private readonly IContentManager _content;
     private readonly MaterialManager _materialManager;
     private readonly MeshManager _meshManager;
@@ -25,6 +49,8 @@ internal sealed class SampleSceneLoader
     private readonly List<RenderObject> _modelObjects = new();
     private readonly List<RenderObject> _stressObjects = new();
     private readonly List<StaticInstanceBatch> _stressBatches = new();
+    private readonly HashSet<string> _attachedAssetIdentities =
+        new(StringComparer.OrdinalIgnoreCase);
     private BoundingBox? _loadedModelBounds;
     private ModelLightRuntimeController? _modelLightController;
 
@@ -72,7 +98,15 @@ internal sealed class SampleSceneLoader
     public bool LoadedFromDocument { get; private set; }
     public string ScenePath { get; } = Path.Combine(AppContext.BaseDirectory, "Scenes", "SampleScene.njscene.json");
 
-    public Model Load(Scene scene)
+    public Model Load(Scene scene) =>
+        Load(scene, includeDeferredAssets: true);
+
+    public Model LoadFirstView(Scene scene) =>
+        Load(scene, includeDeferredAssets: false);
+
+    private Model Load(
+        Scene scene,
+        bool includeDeferredAssets)
     {
         if (scene == null)
             throw new ArgumentNullException(nameof(scene));
@@ -106,13 +140,21 @@ internal sealed class SampleSceneLoader
         }
 
         Model model = LoadModelInstance(_manifest.ModelPath);
-        var addendumModels = new List<Model>(_manifest.AddendumModelPaths.Count);
+        SampleAssetReference[] addendumAssets = _manifest.AddendumModelAssets
+            .Where(asset => includeDeferredAssets ||
+                asset.LoadTier == SampleAssetLoadTier.Critical)
+            .ToArray();
+        var addendumModels = new List<Model>(addendumAssets.Length);
 
-        foreach (string addendumModelPath in _manifest.AddendumModelPaths)
-            addendumModels.Add(LoadModelInstance(addendumModelPath));
-        var foliageModels = new List<Model>(_manifest.FoliageModelPaths.Count);
-        foreach (string foliageModelPath in _manifest.FoliageModelPaths)
-            foliageModels.Add(LoadModelInstance(foliageModelPath));
+        foreach (SampleAssetReference addendum in addendumAssets)
+            addendumModels.Add(LoadModelInstance(addendum.Path));
+        SampleAssetReference[] foliageAssets = _manifest.FoliageModelAssets
+            .Where(asset => includeDeferredAssets ||
+                asset.LoadTier == SampleAssetLoadTier.Critical)
+            .ToArray();
+        var foliageModels = new List<Model>(foliageAssets.Length);
+        foreach (SampleAssetReference foliage in foliageAssets)
+            foliageModels.Add(LoadModelInstance(foliage.Path));
 
         scene.Name = "Njulf Hello Scene";
         scene.AmbientLight = _manifest.AmbientLight;
@@ -122,10 +164,28 @@ internal sealed class SampleSceneLoader
         CoreMatrix4x4 modelWorld = _manifest.CreateModelWorld(rotation: 0f);
 
         AddModelToScene(scene, model, _manifest.ModelPath, modelWorld);
+        _attachedAssetIdentities.Add(
+            _manifest.ModelAsset.CreateContentIdentity());
         for (int i = 0; i < addendumModels.Count; i++)
-            AddModelToScene(scene, addendumModels[i], _manifest.AddendumModelPaths[i], modelWorld);
+        {
+            AddModelToScene(
+                scene,
+                addendumModels[i],
+                addendumAssets[i].Path,
+                modelWorld);
+            _attachedAssetIdentities.Add(
+                addendumAssets[i].CreateContentIdentity());
+        }
         for (int i = 0; i < foliageModels.Count; i++)
-            AddModelAsFoliage(scene, foliageModels[i], _manifest.FoliageModelPaths[i], modelWorld);
+        {
+            AddModelAsFoliage(
+                scene,
+                foliageModels[i],
+                foliageAssets[i].Path,
+                modelWorld);
+            _attachedAssetIdentities.Add(
+                foliageAssets[i].CreateContentIdentity());
+        }
         AddStressSceneIfRequested(scene);
 
         if (_manifest.EnableImportedModelLights)
@@ -138,6 +198,144 @@ internal sealed class SampleSceneLoader
         }
 
         return model;
+    }
+
+    public int AttachPreparedAssets(
+        Scene scene,
+        IEnumerable<SampleAssetReference> assets)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        ArgumentNullException.ThrowIfNull(assets);
+        CoreMatrix4x4 modelWorld =
+            _manifest.CreateModelWorld(rotation: 0f);
+        int attached = 0;
+        foreach (SampleAssetReference asset in assets)
+        {
+            string identity = asset.CreateContentIdentity();
+            if (_attachedAssetIdentities.Contains(identity))
+                continue;
+
+            Model model = LoadModelInstance(asset.Path);
+            bool foliage = _manifest.FoliageModelAssets.Any(candidate =>
+                string.Equals(
+                    candidate.CreateContentIdentity(),
+                    identity,
+                    StringComparison.OrdinalIgnoreCase));
+            if (foliage)
+                AddModelAsFoliage(scene, model, asset.Path, modelWorld);
+            else
+                AddModelToScene(scene, model, asset.Path, modelWorld);
+            _attachedAssetIdentities.Add(identity);
+            attached++;
+        }
+
+        return attached;
+    }
+
+    public PreparedAssetAttachment BeginPreparedAssetAttachment(
+        SampleAssetReference asset)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        string identity = asset.CreateContentIdentity();
+        if (_attachedAssetIdentities.Contains(identity))
+        {
+            throw new InvalidOperationException(
+                $"Sample asset '{asset.Path}' is already attached.");
+        }
+
+        bool foliage = _manifest.FoliageModelAssets.Any(candidate =>
+            string.Equals(
+                candidate.CreateContentIdentity(),
+                identity,
+                StringComparison.OrdinalIgnoreCase));
+        return new PreparedAssetAttachment(
+            asset,
+            LoadModelAsset(asset.Path),
+            foliage,
+            _manifest.CreateModelWorld(rotation: 0f));
+    }
+
+    public int AdvancePreparedAssetAttachment(
+        Scene scene,
+        PreparedAssetAttachment attachment,
+        int maximumRenderObjects,
+        TimeSpan maximumCpuTime = default)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        ArgumentNullException.ThrowIfNull(attachment);
+        if (maximumRenderObjects <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumRenderObjects));
+        if (maximumCpuTime < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(maximumCpuTime));
+
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        long cloneMicroseconds = 0;
+        long sceneAttachmentMicroseconds = 0;
+        int attached = 0;
+        while (!attachment.Completed &&
+               attached < maximumRenderObjects)
+        {
+            int objectIndex = attachment.NextObjectIndex;
+            long cloneStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            RenderObject renderObject = attachment.ModelAsset
+                .CreateRenderObjectInstance(objectIndex);
+            cloneMicroseconds += checked((long)Math.Round(
+                System.Diagnostics.Stopwatch.GetElapsedTime(cloneStarted)
+                    .TotalMicroseconds));
+            long sceneAttachmentStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                if (attachment.Foliage)
+                {
+                    AddFoliageRenderObject(
+                        scene,
+                        renderObject,
+                        attachment.Asset.Path,
+                        attachment.ModelWorld,
+                        objectIndex);
+                }
+                else
+                {
+                    AddModelRenderObject(
+                        scene,
+                        renderObject,
+                        attachment.Asset.Path,
+                        attachment.ModelWorld,
+                        objectIndex);
+                }
+            }
+            catch
+            {
+                renderObject.Dispose();
+                throw;
+            }
+            sceneAttachmentMicroseconds += checked((long)Math.Round(
+                System.Diagnostics.Stopwatch.GetElapsedTime(
+                        sceneAttachmentStarted)
+                    .TotalMicroseconds));
+
+            attachment.NextObjectIndex++;
+            attached++;
+            if (maximumCpuTime > TimeSpan.Zero &&
+                System.Diagnostics.Stopwatch.GetElapsedTime(started) >=
+                maximumCpuTime)
+            {
+                break;
+            }
+        }
+        attachment.LastCloneMicroseconds = cloneMicroseconds;
+        attachment.LastSceneAttachmentMicroseconds =
+            sceneAttachmentMicroseconds;
+
+        if (attachment.Completed)
+        {
+            _attachedAssetIdentities.Add(
+                attachment.Asset.CreateContentIdentity());
+        }
+
+        return attached;
     }
 
     internal static void ApplySponzaFixtureMode(
@@ -313,15 +511,7 @@ internal sealed class SampleSceneLoader
                 $"Model '{modelPath}' is not declared by the sample asset manifest.");
         }
 
-        return new ContentLoadOptions
-        {
-            ImporterOptions = new ImporterOptions
-            {
-                Backend = asset.ExpectedBackend,
-                AssimpMaterialTextureConvention = asset.AssimpMaterialTextureConvention,
-                ImportLights = true
-            }
-        };
+        return asset.CreateLoadOptions();
     }
 
     private IEnumerable<SampleAssetReference> EnumerateManifestAssets()
@@ -336,29 +526,63 @@ internal sealed class SampleSceneLoader
     private void AddModelToScene(Scene scene, Model model, string modelPath, CoreMatrix4x4 modelWorld)
     {
         for (int i = 0; i < model.RenderObjects.Count; i++)
+            AddModelRenderObject(
+                scene,
+                model.RenderObjects[i],
+                modelPath,
+                modelWorld,
+                i);
+    }
+
+    private void AddModelRenderObject(
+        Scene scene,
+        RenderObject renderObject,
+        string modelPath,
+        CoreMatrix4x4 modelWorld,
+        int objectIndex)
+    {
+        renderObject.AssetReference = new SceneAssetReference
         {
-            RenderObject renderObject = model.RenderObjects[i];
-            renderObject.AssetReference = new SceneAssetReference { Path = modelPath, SubObject = i.ToString(System.Globalization.CultureInfo.InvariantCulture) };
-            renderObject.WorldMatrix = modelWorld;
-            renderObject.Visible = true;
-            renderObject.IsStatic = renderObject is not SkinnedRenderObject;
-            scene.Add(renderObject);
-            _modelObjects.Add(renderObject);
-            IncludeRenderObjectBounds(renderObject);
-        }
+            Path = modelPath,
+            SubObject = objectIndex.ToString(
+                System.Globalization.CultureInfo.InvariantCulture)
+        };
+        renderObject.WorldMatrix = modelWorld;
+        renderObject.Visible = true;
+        renderObject.IsStatic = renderObject is not SkinnedRenderObject;
+        scene.Add(renderObject);
+        _modelObjects.Add(renderObject);
+        IncludeRenderObjectBounds(renderObject);
     }
 
     private void AddModelAsFoliage(Scene scene, Model model, string modelPath, CoreMatrix4x4 modelWorld)
     {
         uint seed = 0x17A1_0000u;
         for (int objectIndex = 0; objectIndex < model.RenderObjects.Count; objectIndex++)
-        {
-            RenderObject renderObject = model.RenderObjects[objectIndex];
+            AddFoliageRenderObject(
+                scene,
+                model.RenderObjects[objectIndex],
+                modelPath,
+                modelWorld,
+                objectIndex,
+                seed++);
+    }
+
+    private void AddFoliageRenderObject(
+        Scene scene,
+        RenderObject renderObject,
+        string modelPath,
+        CoreMatrix4x4 modelWorld,
+        int objectIndex,
+        uint? explicitSeed = null)
+    {
+            uint seed = explicitSeed ??
+                checked(0x17A1_0000u + (uint)objectIndex);
             var assetReference = new SceneAssetReference { Path = modelPath, SubObject = objectIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) };
             if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
-                continue;
+                return;
             if (renderObject.Material is not MaterialHandle materialHandle || !materialHandle.IsValid)
-                continue;
+                return;
 
             if (IsRigidFoliageGeometry(renderObject.Name))
             {
@@ -369,7 +593,7 @@ internal sealed class SampleSceneLoader
                 scene.Add(renderObject);
                 _modelObjects.Add(renderObject);
                 IncludeRenderObjectBounds(renderObject);
-                continue;
+                return;
             }
 
             MeshInfo meshInfo = _meshManager.GetMeshInfo(meshHandle);
@@ -403,13 +627,12 @@ internal sealed class SampleSceneLoader
             {
                 Name = $"FoliagePatch.{renderObject.Name}",
                 Density = 48f,
-                Seed = seed++,
+                Seed = seed,
                 InstancePosition = ExtractTranslation(modelWorld),
                 InstanceScale = ExtractUniformScale(modelWorld),
                 Visible = renderObject.Visible
             });
             IncludeBounds(bounds);
-        }
     }
 
     private void IncludeRenderObjectBounds(RenderObject renderObject)
@@ -538,5 +761,6 @@ internal sealed class SampleSceneLoader
         _modelObjects.Clear();
         _stressObjects.Clear();
         _stressBatches.Clear();
+        _attachedAssetIdentities.Clear();
     }
 }

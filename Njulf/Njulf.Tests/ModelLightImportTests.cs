@@ -310,6 +310,52 @@ public sealed class ModelLightImportTests
     }
 
     [Test]
+    public void RuntimeController_CoalescesStructuralModelAdditions()
+    {
+        using Model model = CreateRuntimeModel(lightCount: 1);
+        var content = new ModelContentManager(model);
+        var store = new MutableMemoryLightStore();
+        using var scene = new Scene();
+        int loadCount = 0;
+        ModelLightRuntimeController controller =
+            ModelLightRuntimeController.Attach(
+                scene,
+                content,
+                store,
+                _ =>
+                {
+                    loadCount++;
+                    return model;
+                });
+
+        for (int index = 0; index < 256; index++)
+        {
+            AddPlacement(
+                scene,
+                Guid.NewGuid(),
+                index.ToString(),
+                Vector3.Zero);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loadCount, Is.Zero);
+            Assert.That(controller.ModelPlacementCount, Is.Zero);
+        });
+
+        ((IUpdateable)controller).Update(0f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loadCount, Is.EqualTo(1));
+            Assert.That(controller.ModelPlacementCount, Is.EqualTo(1));
+            Assert.That(
+                controller.ImportedLightDefinitionCount,
+                Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void RuntimeController_UsesTheConfiguredModelLoader()
     {
         using Model lightModel = CreateRuntimeModel(lightCount: 1);

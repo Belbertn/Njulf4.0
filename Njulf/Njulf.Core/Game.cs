@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.DependencyInjection;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
@@ -140,6 +141,24 @@ namespace Njulf.Core
         {
         }
 
+        /// <summary>Called after a frame has been submitted and presented.</summary>
+        protected virtual void OnFramePresented()
+        {
+        }
+
+        /// <summary>
+        /// Atomically replaces the scene observed by subsequent update and
+        /// render callbacks. The caller retains ownership of the previous
+        /// scene and decides when it is safe to dispose it.
+        /// </summary>
+        protected Scene.Scene ExchangeScene(Scene.Scene nextScene)
+        {
+            ArgumentNullException.ThrowIfNull(nextScene);
+            Scene.Scene previous = _scene;
+            _scene = nextScene;
+            return previous;
+        }
+
         protected virtual void Unload()
         {
             _renderer?.Dispose();
@@ -270,52 +289,101 @@ namespace Njulf.Core
                 return;
 
             IRenderer renderer = _renderer;
+            long frameStarted = Stopwatch.GetTimestamp();
             if (renderer.BeginFrame() != true)
                 return;
+            long beginFrameMicroseconds = GetElapsedMicroseconds(frameStarted);
 
             _isRenderingFrame = true;
             try
             {
+                long drawStarted = Stopwatch.GetTimestamp();
+                try
+                {
+                    if (!_firstFrameLogged)
+                        RunStartupStep("FirstFrame.Begin", () => { });
+                    Draw();
+                }
+                catch (Exception drawFailure)
+                {
+                    // Vulkan submission/recording faults abandon their frame
+                    // before rethrowing. Do not replace that useful exception
+                    // with the secondary "EndFrame without BeginFrame" error.
+                    // Renderers that still own a frame retain the historical
+                    // EndFrame cleanup attempt, but its failure is attached to
+                    // the original exception instead of masking it.
+                    if (renderer is not IRendererFrameState
+                        {
+                            IsFrameInProgress: false
+                        })
+                    {
+                        try
+                        {
+                            renderer.EndFrame();
+                        }
+                        catch (Exception cleanupFailure)
+                        {
+                            drawFailure.Data[
+                                "Njulf.RenderFrameCleanupFailure"] =
+                                cleanupFailure;
+                        }
+                    }
+
+                    ExceptionDispatchInfo.Capture(drawFailure).Throw();
+                }
+                long drawMicroseconds = GetElapsedMicroseconds(drawStarted);
+
+                long endFrameStarted = Stopwatch.GetTimestamp();
+                renderer.EndFrame();
+                long endFrameMicroseconds =
+                    GetElapsedMicroseconds(endFrameStarted);
+                OnFramePresented();
+                long frameMicroseconds =
+                    GetElapsedMicroseconds(frameStarted);
+                if (_firstFrameLogged && frameMicroseconds > 100_000)
+                {
+                    Console.WriteLine(
+                        $"Render frame hitch: total={frameMicroseconds / 1000.0:F3}ms, " +
+                        $"begin={beginFrameMicroseconds / 1000.0:F3}ms, " +
+                        $"draw={drawMicroseconds / 1000.0:F3}ms, " +
+                        $"end={endFrameMicroseconds / 1000.0:F3}ms, " +
+                        $"presentedCallback={(frameMicroseconds - beginFrameMicroseconds - drawMicroseconds - endFrameMicroseconds) / 1000.0:F3}ms.");
+                }
                 if (!_firstFrameLogged)
-                    RunStartupStep("FirstFrame.Begin", () => { });
-                Draw();
+                {
+                    long firstPresentElapsedMicroseconds = checked((long)System.Math.Round(
+                        (Stopwatch.GetTimestamp() - _runStartedTimestamp) *
+                        1_000_000.0 / Stopwatch.Frequency));
+                    RunStartupStep("FirstFrame.End", () => { });
+                    _firstFrameLogged = true;
+                    if (renderer is IStartupLatencyReporter latencyReporter)
+                    {
+                        RunStartupStep(
+                            "StartupLatency.Evaluate",
+                            () => latencyReporter.ReportFirstPresent(
+                                firstPresentElapsedMicroseconds));
+                    }
+                }
             }
             finally
             {
-                try
-                {
-                    renderer.EndFrame();
-                    if (!_firstFrameLogged)
-                    {
-                        long firstPresentElapsedMicroseconds = checked((long)System.Math.Round(
-                            (Stopwatch.GetTimestamp() - _runStartedTimestamp) *
-                            1_000_000.0 / Stopwatch.Frequency));
-                        RunStartupStep("FirstFrame.End", () => { });
-                        _firstFrameLogged = true;
-                        if (renderer is IStartupLatencyReporter latencyReporter)
-                        {
-                            RunStartupStep(
-                                "StartupLatency.Evaluate",
-                                () => latencyReporter.ReportFirstPresent(
-                                    firstPresentElapsedMicroseconds));
-                        }
-                    }
-                }
-                finally
-                {
-                    // EndFrame can surface queue, present, or deferred validation
-                    // failures. Always restore the lifecycle guard before the
-                    // exception unwinds into the window backend.
-                    _isRenderingFrame = false;
+                // Draw, EndFrame, present, and deferred validation can all
+                // fail. Always restore the lifecycle guard before the
+                // exception unwinds into the window backend.
+                _isRenderingFrame = false;
 
-                    if (_exitRequestedAfterFrame)
-                    {
-                        _exitRequestedAfterFrame = false;
-                        _window?.Close();
-                    }
+                if (_exitRequestedAfterFrame)
+                {
+                    _exitRequestedAfterFrame = false;
+                    _window?.Close();
                 }
             }
         }
+
+        private static long GetElapsedMicroseconds(long startedTimestamp) =>
+            checked((long)System.Math.Round(
+                Stopwatch.GetElapsedTime(startedTimestamp)
+                    .TotalMicroseconds));
 
         private void OnWindowFramebufferResize(Vector2D<int> size)
         {

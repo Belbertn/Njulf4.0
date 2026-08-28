@@ -468,12 +468,36 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(disabled.Enabled, Is.False);
             Assert.That(disabled.EffectiveMemoryBudgetBytes, Is.EqualTo(ulong.MaxValue));
             Assert.That(disabled.AllowStaticMemoryCulling, Is.False);
+            Assert.That(
+                disabled.EffectiveMaximumStaticBlasBuildsPerFrame,
+                Is.EqualTo(int.MaxValue));
             Assert.That(bounded.Enabled, Is.True);
             Assert.That(bounded.EffectiveMemoryBudgetBytes, Is.EqualTo(16UL));
             Assert.That(bounded.MaximumStaticInstances, Is.EqualTo(256));
             Assert.That(bounded.EvictionGraceFrames, Is.EqualTo(3));
             Assert.That(bounded.AllowStaticMemoryCulling, Is.True);
+            Assert.That(
+                bounded.EffectiveMaximumStaticBlasBuildsPerFrame,
+                Is.EqualTo(int.MaxValue));
         });
+    }
+
+    [Test]
+    public void ResidencyPolicy_ClampsProgressiveStaticBlasBudgetToForwardProgress()
+    {
+        var policy = new AccelerationStructureResidencyPolicy(
+            Enabled: true,
+            CameraPosition: Vector3.Zero,
+            MemoryBudgetBytes: 1024,
+            StaticResidentDistance: float.MaxValue,
+            MaximumStaticInstances: int.MaxValue,
+            EvictionGraceFrames: 3,
+            AllowStaticMemoryCulling: false,
+            MaximumStaticBlasBuildsPerFrame: 0);
+
+        Assert.That(
+            policy.EffectiveMaximumStaticBlasBuildsPerFrame,
+            Is.EqualTo(1));
     }
 
     [Test]
@@ -828,6 +852,26 @@ public sealed unsafe class AccelerationStructureManagerTests
                     9UL * mib,
                     32UL * mib),
                 Is.False);
+        });
+    }
+
+    [Test]
+    public void BlasAddressReplacement_InvalidatesEveryTlasFrameSlot()
+    {
+        ulong[] signatures = [11UL, 22UL, 33UL];
+        bool[] hasSignatures = [true, true, true];
+        int[] instanceCounts = [4, 5, 6];
+
+        AccelerationStructureManager.InvalidateTopLevelFrameSignatures(
+            signatures,
+            hasSignatures,
+            instanceCounts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(signatures, Is.All.Zero);
+            Assert.That(hasSignatures, Is.All.False);
+            Assert.That(instanceCounts, Is.All.Zero);
         });
     }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
@@ -10,6 +11,8 @@ using Njulf.Core.Geometry;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using CoreBoundingBox = Njulf.Core.Math.BoundingBox;
+using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector2 = Njulf.Core.Math.Vector2;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 using CoreVector4 = Njulf.Core.Math.Vector4;
@@ -18,6 +21,8 @@ namespace Njulf.Rendering.Resources
 {
     public sealed class ModelRenderUploadService :
         IModelRenderUploadService,
+        ICooperativeModelRenderUploadService,
+        ICooperativeSourceModelRenderUploadService,
         IDisposable
     {
         private readonly IModelRenderUploadBackend _backend;
@@ -37,6 +42,7 @@ namespace Njulf.Rendering.Resources
             _pendingModelUploadRollback;
         private bool _uploadInProgress;
         private int _uploadThreadId;
+        private CooperativeModelUploadWork? _cooperativeUploadOwner;
         private bool _disposeStarted;
         private bool _disposeCompleted;
         private ModelRenderUploadDiagnostics _lastUploadDiagnostics =
@@ -139,7 +145,8 @@ namespace Njulf.Rendering.Resources
                 try
                 {
                     PrepareForUploadLocked();
-                    return UploadModelCore(modelMesh);
+                    return UploadWithTextureBatch(
+                        () => UploadModelCore(modelMesh));
                 }
                 finally
                 {
@@ -403,7 +410,8 @@ namespace Njulf.Rendering.Resources
                 try
                 {
                     PrepareForUploadLocked();
-                    return UploadCookedModelCore(cooked);
+                    return UploadWithTextureBatch(
+                        () => UploadCookedModelCore(cooked));
                 }
                 finally
                 {
@@ -616,8 +624,37 @@ namespace Njulf.Rendering.Resources
             if (baseMaterials.Count == 0)
                 throw new InvalidDataException("Cooked model has no runtime material handles.");
 
-            var profilesBySubMesh = new Dictionary<int, GiPrimitiveTransportProfile>();
-            foreach (GiPrimitiveTransportProfile profile in materialTable.PrimitiveTransportProfiles)
+            Dictionary<int, GiPrimitiveTransportProfile> profilesBySubMesh =
+                BuildCookedProfilesBySubMesh(materialTable, subMeshes);
+
+            var resolved = new MaterialHandle[subMeshes.Count];
+            primitiveProfiles = new GiPrimitiveTransportProfile?[subMeshes.Count];
+            var diagnostics = new List<string>();
+            for (int subMeshIndex = 0; subMeshIndex < subMeshes.Count; subMeshIndex++)
+            {
+                resolved[subMeshIndex] = ResolveCookedPrimitiveMaterial(
+                    subMeshIndex,
+                    subMeshes[subMeshIndex],
+                    baseMaterials,
+                    profilesBySubMesh,
+                    rollback,
+                    diagnostics,
+                    out primitiveProfiles[subMeshIndex]);
+            }
+
+            authenticationDiagnostics = diagnostics;
+            return resolved;
+        }
+
+        private static Dictionary<int, GiPrimitiveTransportProfile>
+            BuildCookedProfilesBySubMesh(
+                CookedMaterialTable materialTable,
+                IReadOnlyList<CookedSubMeshRecord> subMeshes)
+        {
+            var profilesBySubMesh =
+                new Dictionary<int, GiPrimitiveTransportProfile>();
+            foreach (GiPrimitiveTransportProfile profile in
+                     materialTable.PrimitiveTransportProfiles)
             {
                 if ((uint)profile.SubMeshIndex >= (uint)subMeshes.Count)
                 {
@@ -625,76 +662,83 @@ namespace Njulf.Rendering.Resources
                         $"Primitive transport profile references submesh {profile.SubMeshIndex}, " +
                         $"but the cooked mesh has {subMeshes.Count} submeshes.");
                 }
-                if (!profilesBySubMesh.TryAdd(profile.SubMeshIndex, profile))
+                if (!profilesBySubMesh.TryAdd(
+                        profile.SubMeshIndex,
+                        profile))
                 {
                     throw new InvalidDataException(
                         $"Cooked material data contains duplicate primitive transport profiles for submesh {profile.SubMeshIndex}.");
                 }
             }
 
-            var resolved = new MaterialHandle[subMeshes.Count];
-            primitiveProfiles = new GiPrimitiveTransportProfile?[subMeshes.Count];
-            var diagnostics = new List<string>();
-            for (int subMeshIndex = 0; subMeshIndex < subMeshes.Count; subMeshIndex++)
+            return profilesBySubMesh;
+        }
+
+        private MaterialHandle ResolveCookedPrimitiveMaterial(
+            int subMeshIndex,
+            CookedSubMeshRecord subMesh,
+            IReadOnlyList<MaterialHandle> baseMaterials,
+            IReadOnlyDictionary<int, GiPrimitiveTransportProfile>
+                profilesBySubMesh,
+            ModelUploadRollbackLedger rollback,
+            ICollection<string> diagnostics,
+            out GiPrimitiveTransportProfile? primitiveProfile)
+        {
+            if ((uint)subMesh.MaterialSlot >= (uint)baseMaterials.Count)
             {
-                CookedSubMeshRecord subMesh = subMeshes[subMeshIndex];
-                if ((uint)subMesh.MaterialSlot >= (uint)baseMaterials.Count)
-                {
-                    throw new InvalidDataException(
-                        $"Cooked submesh {subMeshIndex} references material slot {subMesh.MaterialSlot}, " +
-                        $"but only {baseMaterials.Count} materials exist.");
-                }
+                throw new InvalidDataException(
+                    $"Cooked submesh {subMeshIndex} references material slot {subMesh.MaterialSlot}, " +
+                    $"but only {baseMaterials.Count} materials exist.");
+            }
 
-                MaterialHandle baseHandle = baseMaterials[subMesh.MaterialSlot];
-                if (!profilesBySubMesh.TryGetValue(
-                        subMeshIndex,
-                        out GiPrimitiveTransportProfile? cookedProfile) ||
-                    cookedProfile is null)
-                {
-                    resolved[subMeshIndex] =
-                        RetainPrimitiveBaseMaterial(
-                            baseHandle,
-                            rollback);
-                    UploadPublicationFaultInjector?.Invoke(
-                        ModelUploadPublicationStage
-                            .AfterPrimitiveMaterialRegistration);
-                    continue;
-                }
-                if (cookedProfile.MaterialSlot != subMesh.MaterialSlot)
-                {
-                    throw new InvalidDataException(
-                        $"Primitive transport profile {subMeshIndex} is paired with material slot " +
-                        $"{cookedProfile.MaterialSlot}, expected {subMesh.MaterialSlot}.");
-                }
-                if (!TryAuthenticatePrimitiveTextureHashes(
-                        baseHandle,
-                        cookedProfile,
-                        out string? authenticationFailure))
-                {
-                    cookedProfile =
-                        RuntimePrimitiveTransportProfileBuilder.InvalidateProfile(
-                            cookedProfile,
-                            $"Cooked primitive profile was invalidated after authenticated texture upload: " +
-                            authenticationFailure);
-                    if (diagnostics.Count < 16)
-                    {
-                        diagnostics.Add(
-                            $"Submesh {subMeshIndex} ('{subMesh.Name}'): " +
-                            authenticationFailure);
-                    }
-                }
-
-                primitiveProfiles[subMeshIndex] = cookedProfile;
-                resolved[subMeshIndex] = RegisterPrimitiveProfileMaterial(
+            MaterialHandle baseHandle = baseMaterials[subMesh.MaterialSlot];
+            if (!profilesBySubMesh.TryGetValue(
+                    subMeshIndex,
+                    out GiPrimitiveTransportProfile? cookedProfile) ||
+                cookedProfile is null)
+            {
+                primitiveProfile = null;
+                MaterialHandle retained = RetainPrimitiveBaseMaterial(
                     baseHandle,
-                    cookedProfile,
                     rollback);
                 UploadPublicationFaultInjector?.Invoke(
                     ModelUploadPublicationStage
                         .AfterPrimitiveMaterialRegistration);
+                return retained;
+            }
+            if (cookedProfile.MaterialSlot != subMesh.MaterialSlot)
+            {
+                throw new InvalidDataException(
+                    $"Primitive transport profile {subMeshIndex} is paired with material slot " +
+                    $"{cookedProfile.MaterialSlot}, expected {subMesh.MaterialSlot}.");
+            }
+            if (!TryAuthenticatePrimitiveTextureHashes(
+                    baseHandle,
+                    cookedProfile,
+                    out string? authenticationFailure))
+            {
+                cookedProfile =
+                    RuntimePrimitiveTransportProfileBuilder.InvalidateProfile(
+                        cookedProfile,
+                        "Cooked primitive profile was invalidated after " +
+                        "authenticated texture upload: " +
+                        authenticationFailure);
+                if (diagnostics.Count < 16)
+                {
+                    diagnostics.Add(
+                        $"Submesh {subMeshIndex} ('{subMesh.Name}'): " +
+                        authenticationFailure);
+                }
             }
 
-            authenticationDiagnostics = diagnostics;
+            primitiveProfile = cookedProfile;
+            MaterialHandle resolved = RegisterPrimitiveProfileMaterial(
+                baseHandle,
+                cookedProfile,
+                rollback);
+            UploadPublicationFaultInjector?.Invoke(
+                ModelUploadPublicationStage
+                    .AfterPrimitiveMaterialRegistration);
             return resolved;
         }
 
@@ -1056,6 +1100,395 @@ namespace Njulf.Rendering.Resources
             return combined;
         }
 
+        private Model UploadWithTextureBatch(Func<Model> upload)
+        {
+            ArgumentNullException.ThrowIfNull(upload);
+            using IModelTextureUploadBatch batch =
+                _backend.BeginTextureUploadBatch();
+            Model? model = null;
+            try
+            {
+                model = upload();
+                batch.Complete();
+                return model;
+            }
+            catch (Exception uploadFailure)
+            {
+                if (model == null)
+                    throw;
+
+                try
+                {
+                    model.Dispose();
+                }
+                catch (Exception cleanupFailure)
+                {
+                    throw new AggregateException(
+                        "A model upload batch failed after publication and model cleanup was incomplete.",
+                        uploadFailure,
+                        cleanupFailure);
+                }
+
+                throw;
+            }
+        }
+
+        public IContentUploadWork<Model> PrepareCookedModelUpload(
+            CookedModelAsset cooked,
+            Action<ModelUploadWorkProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(cooked);
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportUploadWorkProgress(
+                progress,
+                ContentLoadStage.Preparing,
+                0,
+                Math.Max(1, cooked.BytesRead),
+                "converting cooked mesh streams off the render thread");
+
+            long preparationStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            PreparedModelCpuData prepared =
+                PrepareCookedModelCpuData(
+                    cooked,
+                    progress,
+                    cancellationToken);
+            Console.WriteLine(
+                $"Cooked model preparation profile: " +
+                $"model='{prepared.Model.Name}', " +
+                $"meshes={prepared.Meshes.Length}, " +
+                $"elapsed={System.Diagnostics.Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds:F3}ms.");
+            return new CooperativeModelUploadWork(
+                this,
+                cooked,
+                prepared,
+                progress,
+                cancellationToken);
+        }
+
+        public IContentUploadWork<Model> PrepareModelUpload(
+            ModelMesh modelMesh,
+            Action<ModelUploadWorkProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(modelMesh);
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportUploadWorkProgress(
+                progress,
+                ContentLoadStage.Preparing,
+                0,
+                1,
+                "converting imported mesh streams off the render thread");
+
+            long preparationStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            PreparedModelCpuData prepared = PrepareSourceModelCpuData(
+                modelMesh,
+                progress,
+                cancellationToken);
+            Console.WriteLine(
+                $"Source model preparation profile: " +
+                $"model='{prepared.Model.Name}', " +
+                $"meshes={prepared.Meshes.Length}, " +
+                $"elapsed={System.Diagnostics.Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds:F3}ms.");
+            return new CooperativeModelUploadWork(
+                this,
+                cooked: null,
+                prepared,
+                progress,
+                cancellationToken);
+        }
+
+        private static PreparedModelCpuData PrepareCookedModelCpuData(
+            CookedModelAsset cooked,
+            Action<ModelUploadWorkProgress>? progress,
+            CancellationToken cancellationToken)
+        {
+            CookedMeshPayload payload = cooked.Mesh;
+            if (payload.SubMeshes.Count == 0)
+            {
+                throw new CookedAssetFormatException(
+                    cooked.PackagePath,
+                    "mesh payload contains no submeshes");
+            }
+
+            _ = BuildCookedProfilesBySubMesh(
+                cooked.Materials,
+                payload.SubMeshes);
+            var model = new Model
+            {
+                Name = string.IsNullOrWhiteSpace(cooked.Manifest.Name)
+                    ? "Model"
+                    : cooked.Manifest.Name,
+                BoundingBox = cooked.Manifest.BoundingBox,
+                BoundingSphere = cooked.Manifest.BoundingSphere
+            };
+            model.AddSkeletons(cooked.Animation.Skeletons);
+            model.AddSkins(cooked.Animation.Skins);
+            model.AddAnimationClips(cooked.Animation.AnimationClips);
+            model.AddLights(cooked.Manifest.Lights);
+
+            var meshes = new PreparedModelMeshData[
+                payload.SubMeshes.Count];
+            var subMeshes = new PreparedModelSubMeshData[
+                payload.SubMeshes.Count];
+            long totalBytes = Math.Max(1, cooked.BytesRead);
+            for (int i = 0; i < payload.SubMeshes.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                CookedSubMeshRecord subMesh = payload.SubMeshes[i];
+                GPUVertexPositionStream[] vertexPositions =
+                    BuildCookedPositionStream(payload, subMesh);
+                GPUVertexNormalTangentStream[] vertexNormalTangents =
+                    BuildCookedNormalTangentStream(payload, subMesh);
+                GPUVertexUvColorStream[] vertexUvColors =
+                    BuildCookedUvColorStream(payload, subMesh);
+                uint[] indices = payload.Indices.AsSpan(
+                    subMesh.IndexOffset,
+                    subMesh.IndexCount).ToArray();
+                Meshlet[] meshlets = BuildCookedMeshletRanges(
+                    payload,
+                    subMesh,
+                    out int lod0Count,
+                    out int lod1Count,
+                    out int lod2Count);
+                uint[] meshletVertices = payload.MeshletVertices.AsSpan(
+                    subMesh.MeshletVertexOffset,
+                    subMesh.MeshletVertexCount).ToArray();
+                uint[] meshletTriangles = payload.MeshletTriangles.AsSpan(
+                    subMesh.MeshletTriangleOffset,
+                    subMesh.MeshletTriangleCount).ToArray();
+                GPUVertexSkinningData[] skinning =
+                    BuildCookedSkinning(payload, subMesh);
+                meshes[i] = new PreparedModelMeshData(
+                    SourceVertices: null,
+                    vertexPositions,
+                    vertexNormalTangents,
+                    vertexUvColors,
+                    indices,
+                    meshlets,
+                    meshletVertices,
+                    meshletTriangles,
+                    lod0Count,
+                    lod1Count,
+                    lod2Count,
+                    skinning,
+                    subMesh.CausticTopologyEvidence,
+                    ResolveLodSimplificationError(subMesh, 1),
+                    ResolveLodSimplificationError(subMesh, 2));
+                subMeshes[i] = new PreparedModelSubMeshData(
+                    subMesh.Name,
+                    subMesh.MaterialSlot,
+                    subMesh.SkinIndex,
+                    subMesh.SkinningBindTransform,
+                    subMesh.BoundingBox);
+
+                if ((i & 63) == 63 ||
+                    i + 1 == payload.SubMeshes.Count)
+                {
+                    long completed = checked((long)Math.Round(
+                        totalBytes * 0.30 *
+                        (i + 1) /
+                        payload.SubMeshes.Count));
+                    ReportUploadWorkProgress(
+                        progress,
+                        ContentLoadStage.Preparing,
+                        completed,
+                        totalBytes,
+                        $"converted {i + 1}/{payload.SubMeshes.Count} cooked meshes");
+                }
+            }
+
+            IReadOnlyList<ModelMaterial> importedMaterials =
+                cooked.Materials.Materials.Count > 0
+                    ? cooked.Materials.Materials
+                    : new[] { ModelMaterial.Default };
+            return new PreparedModelCpuData(
+                model,
+                meshes,
+                subMeshes,
+                importedMaterials,
+                cooked.Materials.Pipelines,
+                RuntimeProfiles: null,
+                RuntimeProfileDiagnostics: null,
+                totalBytes,
+                SourceKind: "cooked");
+        }
+
+        private PreparedModelCpuData PrepareSourceModelCpuData(
+            ModelMesh modelMesh,
+            Action<ModelUploadWorkProgress>? progress,
+            CancellationToken cancellationToken)
+        {
+            ValidateModelMesh(modelMesh);
+            var model = new Model
+            {
+                Name = string.IsNullOrWhiteSpace(modelMesh.Name)
+                    ? "Model"
+                    : modelMesh.Name,
+                BoundingBox = modelMesh.BoundingBox,
+                BoundingSphere = modelMesh.BoundingSphere
+            };
+            model.AddSkeletons(modelMesh.Skeletons);
+            model.AddSkins(modelMesh.Skins);
+            model.AddAnimationClips(modelMesh.AnimationClips);
+            model.AddLights(modelMesh.Lights);
+
+            IReadOnlyList<ModelMaterial> importedMaterials =
+                modelMesh.Materials.Count > 0
+                    ? modelMesh.Materials
+                    : new[] { ModelMaterial.Default };
+            IReadOnlyList<ModelSubMesh> sourceSubMeshes =
+                modelMesh.SubMeshes.Count > 0
+                    ? modelMesh.SubMeshes
+                    : new[]
+                    {
+                        new ModelSubMesh
+                        {
+                            Name = string.IsNullOrWhiteSpace(modelMesh.Name)
+                                ? "Mesh"
+                                : modelMesh.Name,
+                            MaterialIndex = 0,
+                            Vertices = modelMesh.Vertices,
+                            Normals = modelMesh.Normals,
+                            Tangents = modelMesh.Tangents,
+                            Bitangents = modelMesh.Bitangents,
+                            TexCoords = modelMesh.TexCoords,
+                            TexCoords1 = modelMesh.TexCoords1,
+                            VertexColors = modelMesh.VertexColors,
+                            JointIndices0 = modelMesh.JointIndices0,
+                            JointWeights0 = modelMesh.JointWeights0,
+                            Indices = modelMesh.Indices,
+                            BoundingBox = modelMesh.BoundingBox,
+                            BoundingSphere = modelMesh.BoundingSphere
+                        }
+                    };
+
+            foreach (ModelSubMesh subMesh in sourceSubMeshes)
+                ValidateSubMesh(subMesh, nameof(modelMesh));
+            RuntimePrimitiveTransportProfileBuildResult profileBuild =
+                _runtimePrimitiveProfiles.Build(
+                    sourceSubMeshes,
+                    importedMaterials);
+            var meshes = new PreparedModelMeshData[sourceSubMeshes.Count];
+            var subMeshes = new PreparedModelSubMeshData[
+                sourceSubMeshes.Count];
+            var meshletLodBuilder = new RendererMeshletLodBuilder();
+            long totalBytes = 0;
+            foreach (ModelSubMesh subMesh in sourceSubMeshes)
+            {
+                totalBytes = checked(
+                    totalBytes +
+                    (long)subMesh.Vertices.Length * 64L +
+                    (long)subMesh.Indices.Length * 28L +
+                    (long)subMesh.JointIndices0.Length * 32L);
+            }
+            totalBytes = Math.Max(1, totalBytes);
+            for (int i = 0; i < sourceSubMeshes.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ModelSubMesh subMesh = sourceSubMeshes[i];
+                GPUVertex[] vertices = BuildGpuVertices(subMesh);
+                GPUVertexSkinningData[] skinning =
+                    BuildGpuSkinningData(subMesh, model);
+                RendererMeshletLodBuild meshletLods =
+                    meshletLodBuilder.Build(
+                        subMesh.Vertices,
+                        subMesh.Indices,
+                        subMesh.Name);
+                int materialIndex = ResolveSubMeshMaterialIndex(
+                    subMesh,
+                    importedMaterials.Count);
+                ModelGiCausticHeroTopologyEvidence causticEvidence =
+                    default;
+                ModelMaterial sourceMaterial = importedMaterials[
+                    materialIndex];
+                if (sourceMaterial.GiCausticParticipation !=
+                    ModelGiCausticParticipationMode.None)
+                {
+                    _ = ModelGiCausticHeroTopologyAnalyzer.TryAnalyze(
+                        subMesh.Vertices,
+                        subMesh.Indices,
+                        isSkinned: subMesh.SkinIndex >= 0,
+                        out causticEvidence,
+                        out _);
+                }
+
+                meshes[i] = new PreparedModelMeshData(
+                    vertices,
+                    Array.Empty<GPUVertexPositionStream>(),
+                    Array.Empty<GPUVertexNormalTangentStream>(),
+                    Array.Empty<GPUVertexUvColorStream>(),
+                    subMesh.Indices,
+                    meshletLods.Meshlets,
+                    meshletLods.MeshletVertices,
+                    meshletLods.MeshletTriangles,
+                    Lod0Count: meshletLods.Ranges[0].MeshletCount,
+                    Lod1Count: meshletLods.Ranges[1].MeshletCount,
+                    Lod2Count: meshletLods.Ranges[2].MeshletCount,
+                    skinning,
+                    causticEvidence,
+                    Lod1SimplificationError:
+                        meshletLods.SimplificationErrors[1],
+                    Lod2SimplificationError:
+                        meshletLods.SimplificationErrors[2]);
+                subMeshes[i] = new PreparedModelSubMeshData(
+                    subMesh.Name,
+                    materialIndex,
+                    subMesh.SkinIndex,
+                    subMesh.SkinningBindTransform,
+                    subMesh.BoundingBox);
+                if ((i & 63) == 63 || i + 1 == sourceSubMeshes.Count)
+                {
+                    long completed = checked((long)Math.Round(
+                        totalBytes * 0.30 *
+                        (i + 1) /
+                        sourceSubMeshes.Count));
+                    ReportUploadWorkProgress(
+                        progress,
+                        ContentLoadStage.Preparing,
+                        completed,
+                        totalBytes,
+                        $"converted {i + 1}/{sourceSubMeshes.Count} imported meshes");
+                }
+            }
+
+            return new PreparedModelCpuData(
+                model,
+                meshes,
+                subMeshes,
+                importedMaterials,
+                Array.Empty<CookedMaterialPipeline>(),
+                profileBuild.Profiles,
+                profileBuild.Diagnostics,
+                totalBytes,
+                SourceKind: "source");
+        }
+
+        private static void ReportUploadWorkProgress(
+            Action<ModelUploadWorkProgress>? progress,
+            ContentLoadStage stage,
+            long completedBytes,
+            long totalBytes,
+            string detail)
+        {
+            if (progress == null)
+                return;
+            try
+            {
+                progress(new ModelUploadWorkProgress(
+                    stage,
+                    Math.Clamp(completedBytes, 0, totalBytes),
+                    Math.Max(1, totalBytes),
+                    detail));
+            }
+            catch
+            {
+                // Progress is diagnostic and cannot change resource ownership.
+            }
+        }
+
         private static float ResolveLodSimplificationError(
             CookedSubMeshRecord subMesh,
             int lodLevel)
@@ -1338,46 +1771,20 @@ namespace Njulf.Rendering.Resources
             {
                 for (int i = 0; i < importedMaterials.Count; i++)
                 {
-                    ModelMaterial material = importedMaterials[i];
-                    if (material.AlphaMode == ModelAlphaMode.Blend)
-                        blendMaterialCount++;
-
-                    MaterialTextureBindings textureBindings = ResolveMaterialTextureBindings(
-                        material,
+                    CookedMaterialPipeline? cookedPipeline =
+                        cookedPipelines is { Count: > 0 }
+                            ? cookedPipelines[i]
+                            : null;
+                    materials[i] = RegisterImportedMaterial(
+                        importedMaterials[i],
+                        cookedPipeline,
+                        ownership,
+                        dynamicTextureIndices,
                         ref defaultWhiteSubstitutions,
                         ref defaultNormalSubstitutions,
                         ref defaultBlackSubstitutions,
-                        ownership.PendingTextures);
-
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.AlbedoTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.NormalTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.MetallicRoughnessTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.OcclusionTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.EmissiveTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ClearcoatTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ClearcoatRoughnessTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ClearcoatNormalTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SheenColorTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SheenRoughnessTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.AnisotropyTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.TransmissionTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ThicknessTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SubsurfaceTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SpecularTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SpecularColorTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.IridescenceTextureIndex);
-                    AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.IridescenceThicknessTextureIndex);
-
-                    CookedMaterialPipeline? cookedPipeline =
-                        cookedPipelines is { Count: > 0 } ? cookedPipelines[i] : null;
-                    MaterialDefinition definition = BuildMaterialDefinition(
-                        material,
-                        textureBindings,
-                        cookedPipeline);
-                    materials[i] = _backend.RegisterMaterialDefinition(definition);
-                    // RegisterMaterialDefinition transfers every pending texture
-                    // occurrence to this logical material reference on success.
-                    ownership.CommitPendingTexturesTo(materials[i]);
+                        ref blendMaterialCount,
+                        preparedSources: null);
                 }
 
                 return new MaterialUploadResult(
@@ -1402,6 +1809,103 @@ namespace Njulf.Rendering.Resources
                 }
 
                 throw;
+            }
+        }
+
+        private MaterialHandle RegisterImportedMaterial(
+            ModelMaterial material,
+            CookedMaterialPipeline? cookedPipeline,
+            ModelUploadOwnershipLedger ownership,
+            HashSet<int> dynamicTextureIndices,
+            ref int defaultWhiteSubstitutions,
+            ref int defaultNormalSubstitutions,
+            ref int defaultBlackSubstitutions,
+            ref int blendMaterialCount,
+            IReadOnlyList<ModelTextureSource?>? preparedSources,
+            TextureHandle[]? preloadedTextureReferences = null)
+        {
+            if (material.AlphaMode == ModelAlphaMode.Blend)
+                blendMaterialCount++;
+
+            MaterialTextureBindings textureBindings =
+                ResolveMaterialTextureBindings(
+                    material,
+                    ref defaultWhiteSubstitutions,
+                    ref defaultNormalSubstitutions,
+                    ref defaultBlackSubstitutions,
+                    ownership.PendingTextures,
+                    preparedSources);
+
+            ReleasePreloadedTextureReferences(
+                ownership,
+                preloadedTextureReferences);
+
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.AlbedoTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.NormalTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.MetallicRoughnessTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.OcclusionTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.EmissiveTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ClearcoatTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ClearcoatRoughnessTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ClearcoatNormalTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SheenColorTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SheenRoughnessTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.AnisotropyTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.TransmissionTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ThicknessTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SubsurfaceTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SpecularTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SpecularColorTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.IridescenceTextureIndex);
+            AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.IridescenceThicknessTextureIndex);
+
+            MaterialDefinition definition = BuildMaterialDefinition(
+                material,
+                textureBindings,
+                cookedPipeline);
+            MaterialHandle handle =
+                _backend.RegisterMaterialDefinition(definition);
+            // RegisterMaterialDefinition transfers every pending texture
+            // occurrence to this logical material reference on success.
+            ownership.CommitPendingTexturesTo(handle);
+            return handle;
+        }
+
+        private void ReleasePreloadedTextureReferences(
+            ModelUploadOwnershipLedger ownership,
+            TextureHandle[]? preloadedTextureReferences)
+        {
+            if (preloadedTextureReferences == null)
+                return;
+
+            for (int i = 0; i < preloadedTextureReferences.Length; i++)
+            {
+                TextureHandle handle = preloadedTextureReferences[i];
+                if (!handle.IsValid)
+                    continue;
+
+                // The final binding resolution retained the same cached
+                // texture occurrence. Remove and release the temporary
+                // preload occurrence before the material takes ownership of
+                // the final occurrences. Failed releases are put back into
+                // the durable rollback ledger.
+                if (!ownership.PendingTextures.Remove(handle))
+                {
+                    throw new InvalidOperationException(
+                        "A preloaded material texture was not owned by the " +
+                        "upload rollback ledger.");
+                }
+
+                try
+                {
+                    _backend.ReleaseTexture(handle);
+                    preloadedTextureReferences[i] = TextureHandle.Invalid;
+                }
+                catch
+                {
+                    ownership.PendingTextures.Add(handle);
+                    throw;
+                }
             }
         }
 
@@ -1576,13 +2080,250 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        private PreparedMaterialTextureSources PrepareMaterialTextureSources(
+            ModelMaterial material,
+            ConcurrentDictionary<
+                PreparedTextureSourceCacheKey,
+                Lazy<ModelTextureSource>> preparedSourceCache,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(material);
+            ArgumentNullException.ThrowIfNull(preparedSourceCache);
+            var prepared = new List<PreparedMaterialTextureSlot>(18);
+            long encodedBytes = 0;
+
+            void Add(
+                ModelTextureSlot? slot,
+                string? legacyPath,
+                PreparedTextureFallback fallback,
+                bool generateMipmaps,
+                bool srgb,
+                TextureSemantic semantic,
+                RuntimeTextureMipPolicy mipPolicy = default)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ModelTextureSource? source = slot?.Source;
+                if (source == null &&
+                    !string.IsNullOrWhiteSpace(legacyPath))
+                {
+                    string fullPath = Path.GetFullPath(legacyPath);
+                    source = new ModelTextureSource
+                    {
+                        DebugName = Path.GetFileName(fullPath),
+                        FilePath = fullPath,
+                        CacheIdentity = fullPath
+                    };
+                }
+
+                if (source == null)
+                {
+                    prepared.Add(new PreparedMaterialTextureSlot(
+                        Source: null,
+                        slot?.Sampler ?? TextureSamplerDescription.Default,
+                        generateMipmaps,
+                        slot?.ColorSpace == TextureColorSpace.Srgb ||
+                            slot == null && srgb,
+                        semantic,
+                        mipPolicy,
+                        fallback));
+                    return;
+                }
+
+                bool effectiveSrgb =
+                    slot?.ColorSpace == TextureColorSpace.Srgb ||
+                    slot == null && srgb;
+                ModelTextureSource snapshot = PrepareTextureSourceCached(
+                    source,
+                    slot?.Sampler ?? TextureSamplerDescription.Default,
+                    effectiveSrgb,
+                    semantic,
+                    mipPolicy,
+                    preparedSourceCache,
+                    cancellationToken);
+                prepared.Add(new PreparedMaterialTextureSlot(
+                    snapshot,
+                    slot?.Sampler ?? TextureSamplerDescription.Default,
+                    generateMipmaps,
+                    effectiveSrgb,
+                    semantic,
+                    mipPolicy,
+                    fallback));
+                encodedBytes = checked(
+                    encodedBytes +
+                    (snapshot.PreparedSnapshot?.EncodedBytes.LongLength ??
+                     snapshot.EncodedByteLength));
+            }
+
+            Add(
+                material.BaseColorTexture,
+                material.AlbedoTexturePath,
+                PreparedTextureFallback.White,
+                ShouldGenerateAlbedoMipmaps(material),
+                srgb: true,
+                TextureSemantic.Color,
+                ResolveAlbedoRuntimeMipPolicy(material));
+            Add(
+                material.NormalTexture,
+                material.NormalTexturePath,
+                PreparedTextureFallback.Normal,
+                generateMipmaps: true,
+                srgb: false,
+                TextureSemantic.Normal);
+            Add(
+                material.MetallicRoughnessTexture,
+                material.MetallicRoughnessTexturePath,
+                PreparedTextureFallback.Black,
+                generateMipmaps: true,
+                srgb: false,
+                TextureSemantic.Data);
+            Add(
+                material.OcclusionTexture,
+                material.OcclusionTexturePath,
+                PreparedTextureFallback.White,
+                generateMipmaps: true,
+                srgb: false,
+                TextureSemantic.Scalar);
+            Add(
+                material.EmissiveTexture,
+                material.EmissiveTexturePath,
+                PreparedTextureFallback.White,
+                generateMipmaps: true,
+                srgb: true,
+                TextureSemantic.Color);
+
+            if (((MaterialFeatureFlags)material.FeatureFlags)
+                .RequiresExtensionData())
+            {
+                Add(material.ClearcoatTexture, material.ClearcoatTexturePath, PreparedTextureFallback.White, true, false, TextureSemantic.Scalar);
+                Add(material.ClearcoatRoughnessTexture, material.ClearcoatRoughnessTexturePath, PreparedTextureFallback.White, true, false, TextureSemantic.Scalar);
+                Add(material.ClearcoatNormalTexture, material.ClearcoatNormalTexturePath, PreparedTextureFallback.Normal, true, false, TextureSemantic.Normal);
+                Add(material.SheenColorTexture, material.SheenColorTexturePath, PreparedTextureFallback.White, true, true, TextureSemantic.Color);
+                Add(material.SheenRoughnessTexture, material.SheenRoughnessTexturePath, PreparedTextureFallback.White, true, false, TextureSemantic.Scalar);
+                Add(material.AnisotropyTexture, material.AnisotropyTexturePath, PreparedTextureFallback.White, true, false, TextureSemantic.Data);
+                Add(material.TransmissionTexture, material.TransmissionTexturePath, PreparedTextureFallback.White, true, false, TextureSemantic.Scalar);
+                Add(material.ThicknessTexture, material.ThicknessTexturePath, PreparedTextureFallback.White, true, false, TextureSemantic.Scalar);
+                Add(material.SubsurfaceTexture, material.SubsurfaceTexturePath, PreparedTextureFallback.White, true, true, TextureSemantic.Color);
+                Add(material.SpecularTexture, material.SpecularTexturePath, PreparedTextureFallback.White, true, false, TextureSemantic.Scalar);
+                Add(material.SpecularColorTexture, material.SpecularColorTexturePath, PreparedTextureFallback.White, true, true, TextureSemantic.Color);
+                Add(material.IridescenceTexture, material.IridescenceTexturePath, PreparedTextureFallback.White, true, false, TextureSemantic.Scalar);
+                Add(material.IridescenceThicknessTexture, material.IridescenceThicknessTexturePath, PreparedTextureFallback.White, true, false, TextureSemantic.Scalar);
+            }
+
+            return new PreparedMaterialTextureSources(
+                prepared,
+                encodedBytes);
+        }
+
+        private ModelTextureSource PrepareTextureSourceCached(
+            ModelTextureSource source,
+            TextureSamplerDescription sampler,
+            bool srgb,
+            TextureSemantic semantic,
+            RuntimeTextureMipPolicy mipPolicy,
+            ConcurrentDictionary<
+                PreparedTextureSourceCacheKey,
+                Lazy<ModelTextureSource>> cache,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string? identity = !string.IsNullOrWhiteSpace(
+                    source.CacheIdentity)
+                ? source.CacheIdentity
+                : !string.IsNullOrWhiteSpace(source.FilePath)
+                    ? Path.GetFullPath(source.FilePath)
+                    : null;
+            if (identity == null)
+            {
+                return _backend.PrepareTextureSource(
+                    source,
+                    sampler,
+                    srgb,
+                    semantic,
+                    mipPolicy);
+            }
+
+            var key = new PreparedTextureSourceCacheKey(
+                identity,
+                source.SourceKind,
+                source.ContainerKind,
+                sampler,
+                srgb,
+                semantic,
+                mipPolicy);
+            var candidate = new Lazy<ModelTextureSource>(
+                () => _backend.PrepareTextureSource(
+                    source,
+                    sampler,
+                    srgb,
+                    semantic,
+                    mipPolicy),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            Lazy<ModelTextureSource> preparation =
+                cache.GetOrAdd(key, candidate);
+            try
+            {
+                return preparation.Value;
+            }
+            catch
+            {
+                if (cache.TryGetValue(key, out Lazy<ModelTextureSource>? current) &&
+                    ReferenceEquals(current, preparation))
+                {
+                    cache.TryRemove(key, out _);
+                }
+                throw;
+            }
+        }
+
+        private TextureHandle PreloadPreparedMaterialTexture(
+            PreparedMaterialTextureSlot slot,
+            out bool ownsReference)
+        {
+            ArgumentNullException.ThrowIfNull(slot);
+            if (slot.Source == null)
+            {
+                ownsReference = false;
+                return TextureHandle.Invalid;
+            }
+
+            TextureHandle loaded = _backend.LoadTexture(
+                slot.Source,
+                slot.Sampler,
+                slot.GenerateMipmaps,
+                slot.Srgb,
+                requireWithinMemoryBudget: false,
+                slot.Semantic,
+                slot.MipPolicy);
+            if (loaded.IsValid)
+            {
+                ownsReference = true;
+                return loaded;
+            }
+
+            ownsReference = false;
+            return slot.Fallback switch
+            {
+                PreparedTextureFallback.White =>
+                    _backend.DefaultWhiteTexture,
+                PreparedTextureFallback.Normal =>
+                    _backend.DefaultNormalTexture,
+                PreparedTextureFallback.Black =>
+                    _backend.DefaultBlackTexture,
+                _ => throw new InvalidOperationException(
+                    $"Unsupported prepared texture fallback " +
+                    $"'{slot.Fallback}'.")
+            };
+        }
+
         private MaterialTextureBindings ResolveMaterialTextureBindings(
             ModelMaterial material,
             ref int defaultWhiteSubstitutions,
             ref int defaultNormalSubstitutions,
             ref int defaultBlackSubstitutions,
-            ICollection<TextureHandle> pendingTextureOwnership)
+            ICollection<TextureHandle> pendingTextureOwnership,
+            IReadOnlyList<ModelTextureSource?>? preparedSources = null)
         {
+            int preparedSourceIndex = 0;
             TextureHandle ResolveTextureHandle(
                 ModelTextureSlot? textureSlot,
                 string? texturePath,
@@ -1593,6 +2334,10 @@ namespace Njulf.Rendering.Resources
                 TextureSemantic semantic,
                 RuntimeTextureMipPolicy mipPolicy = default)
             {
+                ModelTextureSource? preparedSource =
+                    preparedSources == null
+                        ? null
+                        : preparedSources[preparedSourceIndex++];
                 TextureHandle handle = this.ResolveTextureHandle(
                     textureSlot,
                     texturePath,
@@ -1601,7 +2346,8 @@ namespace Njulf.Rendering.Resources
                     generateMipmaps,
                     srgb,
                     semantic,
-                    mipPolicy);
+                    mipPolicy,
+                    preparedSource);
                 pendingTextureOwnership.Add(handle);
                 return handle;
             }
@@ -1805,7 +2551,7 @@ namespace Njulf.Rendering.Resources
                     occlusionTexture
                 };
 
-            return new MaterialTextureBindings(
+            MaterialTextureBindings result = new(
                 new MaterialTextureIndices(
                     _backend.GetBindlessTextureIndex(albedoTexture),
                     _backend.GetBindlessTextureIndex(normalTexture),
@@ -1827,6 +2573,15 @@ namespace Njulf.Rendering.Resources
                     _backend.GetBindlessTextureIndex(iridescenceTexture),
                     _backend.GetBindlessTextureIndex(iridescenceThicknessTexture)),
                 textureHandles);
+            if (preparedSources != null &&
+                preparedSourceIndex != preparedSources.Count)
+            {
+                throw new InvalidOperationException(
+                    $"Prepared material texture count {preparedSources.Count} " +
+                    $"does not match the {preparedSourceIndex} resolved slots.");
+            }
+
+            return result;
         }
 
         private MaterialDefinition BuildMaterialDefinition(
@@ -2528,10 +3283,30 @@ namespace Njulf.Rendering.Resources
             bool generateMipmaps,
             bool srgb,
             TextureSemantic semantic,
-            RuntimeTextureMipPolicy mipPolicy = default)
+            RuntimeTextureMipPolicy mipPolicy = default,
+            ModelTextureSource? preparedSource = null)
         {
             if (!fallback.IsValid)
                 throw new InvalidOperationException("Default textures must be initialized before material upload.");
+
+            if (preparedSource != null)
+            {
+                bool preparedSrgb = textureSlot?.ColorSpace ==
+                    TextureColorSpace.Srgb ||
+                    textureSlot == null && srgb;
+                TextureHandle preparedTexture = _backend.LoadTexture(
+                    preparedSource,
+                    textureSlot?.Sampler ??
+                        TextureSamplerDescription.Default,
+                    generateMipmaps,
+                    preparedSrgb,
+                    requireWithinMemoryBudget: false,
+                    semantic,
+                    mipPolicy);
+                return preparedTexture.IsValid
+                    ? preparedTexture
+                    : fallback;
+            }
 
             if (textureSlot?.Source != null)
             {
@@ -2991,6 +3766,1480 @@ namespace Njulf.Rendering.Resources
         private static CoreVector3 ToCoreVector(Vector3 value)
         {
             return new CoreVector3(value.X, value.Y, value.Z);
+        }
+
+        private sealed class CooperativeModelUploadWork :
+            IContentUploadWork<Model>
+        {
+            private const int PrimitiveMaterialBatchSize = 64;
+            private const int RenderObjectBatchSize = 128;
+            private const int TextureSlotBatchSize = 18;
+            private const int MaximumPendingTextureUploadBatches = 16;
+            private const int MaterialPreparationLookahead = 16;
+            private const long FirstMeshSubmissionBytes =
+                16L * 1024L * 1024L;
+
+            private readonly ModelRenderUploadService _owner;
+            private readonly CookedModelAsset? _cooked;
+            private readonly PreparedModelCpuData _cpu;
+            private readonly Action<ModelUploadWorkProgress>? _progress;
+            private readonly CancellationToken _externalCancellation;
+            private readonly CancellationTokenSource _preparationCancellation;
+            private readonly IReadOnlyList<ModelMaterial> _importedMaterials;
+            private readonly IReadOnlyList<CookedMaterialPipeline> _pipelines;
+            private readonly Dictionary<int, GiPrimitiveTransportProfile>
+                _profilesBySubMesh;
+            private readonly MaterialHandle[] _materials;
+            private readonly MaterialHandle[] _subMeshMaterials;
+            private readonly GiPrimitiveTransportProfile?[]
+                _primitiveProfiles;
+            private readonly List<string> _profileDiagnostics = [];
+            private readonly HashSet<int> _dynamicTextureIndices = [];
+
+            private CookedModelUploadPhase _phase =
+                CookedModelUploadPhase.WaitingForOwnership;
+            private ModelUploadOwnershipLedger? _materialOwnership;
+            private ModelUploadRollbackLedger? _rollback;
+            private readonly Task<PreparedMaterialTextureSources>?[]
+                _materialPreparations;
+            private readonly ConcurrentDictionary<
+                PreparedTextureSourceCacheKey,
+                Lazy<ModelTextureSource>> _preparedTextureSourceCache = [];
+            private PreparedMaterialTextureSources?
+                _preparedMaterialTextures;
+            private TextureHandle[]? _materialPreloadReferences;
+            private readonly Queue<IModelTextureUploadBatch>
+                _pendingTextureUploadBatches = [];
+            private IModelMeshUpload? _pendingMeshUpload;
+            private Task<MeshManager.MeshRegistrationData[]>?
+                _registrationPreparation;
+            private MeshManager.MeshRegistrationData[]? _registrations;
+            private MeshHandle[]? _meshes;
+            private Model? _result;
+            private int _materialIndex;
+            private int _materialTextureIndex;
+            private int _primitiveIndex;
+            private int _meshRegistrationIndex;
+            private int _pendingMeshFirst;
+            private int _pendingMeshCount;
+            private ulong _pendingMeshStagedBytes;
+            private int _renderObjectIndex;
+            private int _defaultWhiteSubstitutions;
+            private int _defaultNormalSubstitutions;
+            private int _defaultBlackSubstitutions;
+            private int _blendMaterialCount;
+            private int _opacityMicromapRuntimeRegistrationCount;
+            private string _opacityMicromapRuntimeDetail;
+            private bool _baseMaterialsTransferredToRollback;
+            private bool _materialRegistrationsComplete;
+            private bool _ownsUploadSlot;
+            private bool _cancellationRequested;
+            private readonly long _uploadStartedTimestamp =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            private long _phaseStartedTimestamp;
+
+            public CooperativeModelUploadWork(
+                ModelRenderUploadService owner,
+                CookedModelAsset? cooked,
+                PreparedModelCpuData cpu,
+                Action<ModelUploadWorkProgress>? progress,
+                CancellationToken externalCancellation)
+            {
+                _owner = owner;
+                _cooked = cooked;
+                _cpu = cpu;
+                _progress = progress;
+                _externalCancellation = externalCancellation;
+                _preparationCancellation =
+                    CancellationTokenSource.CreateLinkedTokenSource(
+                        externalCancellation);
+                _importedMaterials = cpu.Materials;
+                _pipelines = cpu.Pipelines;
+                if (_pipelines.Count > 0 &&
+                    _pipelines.Count != _importedMaterials.Count)
+                {
+                    throw new InvalidDataException(
+                        $"Cooked material pipeline count {_pipelines.Count} " +
+                        $"does not match material count {_importedMaterials.Count}.");
+                }
+
+                _profilesBySubMesh = cooked is null
+                    ? new Dictionary<int, GiPrimitiveTransportProfile>()
+                    : BuildCookedProfilesBySubMesh(
+                        cooked.Materials,
+                        cooked.Mesh.SubMeshes);
+                _materials = new MaterialHandle[_importedMaterials.Count];
+                _materialPreparations =
+                    new Task<PreparedMaterialTextureSources>?[
+                        _importedMaterials.Count];
+                _subMeshMaterials = new MaterialHandle[
+                    cpu.SubMeshes.Length];
+                _primitiveProfiles = new GiPrimitiveTransportProfile?[
+                    cpu.SubMeshes.Length];
+                _opacityMicromapRuntimeDetail =
+                    cooked?.OpacityMicromapLoadStatus.Detail ??
+                    "opacity-micromap-source-model";
+                if (cpu.RuntimeProfileDiagnostics is { } diagnostics)
+                {
+                    _profileDiagnostics.AddRange(
+                        diagnostics.Messages.Take(16));
+                }
+                _phaseStartedTimestamp = _uploadStartedTimestamp;
+            }
+
+            public ContentUploadStepResult ExecuteStep(
+                in ContentUploadSliceBudget budget)
+            {
+                if (_phase == CookedModelUploadPhase.Completed)
+                {
+                    return ContentUploadStepResult.Complete(
+                        _cpu.TotalBytes,
+                        _cpu.TotalBytes,
+                        "model upload already completed");
+                }
+                if (_phase == CookedModelUploadPhase.Cancelled)
+                {
+                    return ContentUploadStepResult.Cancelled(
+                        detail: "model upload cancelled");
+                }
+
+                if (_externalCancellation.IsCancellationRequested)
+                    RequestCancellation();
+
+                lock (_owner._lifecycleLock)
+                {
+                    if (_cancellationRequested)
+                        return CancelLocked();
+
+                    if (!_ownsUploadSlot && !TryAcquireUploadSlotLocked())
+                    {
+                        return Yield(
+                            ContentLoadStage.WaitingForUpload,
+                            0.30,
+                            "waiting for the active model upload transaction");
+                    }
+
+                    try
+                    {
+                        return _phase switch
+                        {
+                            CookedModelUploadPhase.Materials =>
+                                ExecuteMaterialStepLocked(budget),
+                            CookedModelUploadPhase.PrimitiveMaterials =>
+                                ExecutePrimitiveMaterialStepLocked(budget),
+                            CookedModelUploadPhase.PreparingRegistrations =>
+                                ExecuteRegistrationPreparationStepLocked(),
+                            CookedModelUploadPhase.RegisteringMeshes =>
+                                ExecuteMeshRegistrationStepLocked(budget),
+                            CookedModelUploadPhase.AttachingRenderObjects =>
+                                ExecuteRenderObjectStepLocked(budget),
+                            CookedModelUploadPhase.Finalizing =>
+                                FinalizeLocked(),
+                            _ => throw new InvalidOperationException(
+                                $"Unsupported cooked upload phase '{_phase}'.")
+                        };
+                    }
+                    catch (Exception uploadFailure)
+                    {
+                        throw RollbackFailureLocked(uploadFailure);
+                    }
+                }
+            }
+
+            public Model GetResult()
+            {
+                if (_phase != CookedModelUploadPhase.Completed ||
+                    _result == null)
+                {
+                    throw new InvalidOperationException(
+                        "The cooperative model upload has not completed.");
+                }
+
+                return _result;
+            }
+
+            public void RequestCancellation()
+            {
+                _cancellationRequested = true;
+                try
+                {
+                    _preparationCancellation.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // A terminal work item has already released preparation.
+                }
+            }
+
+            private bool TryAcquireUploadSlotLocked()
+            {
+                _owner.EnsureLifecycleLockHeld();
+                if (_owner._cooperativeUploadOwner != null &&
+                    !ReferenceEquals(
+                        _owner._cooperativeUploadOwner,
+                        this))
+                {
+                    return false;
+                }
+                if (_owner._uploadInProgress &&
+                    !ReferenceEquals(
+                        _owner._cooperativeUploadOwner,
+                        this))
+                {
+                    return false;
+                }
+
+                _owner.BeginUploadLocked();
+                try
+                {
+                    _owner.PrepareForUploadLocked();
+                    _owner._cooperativeUploadOwner = this;
+                    _ownsUploadSlot = true;
+                    _materialOwnership = new ModelUploadOwnershipLedger(
+                        _importedMaterials.Count,
+                        // One retained occurrence per preloaded slot plus one
+                        // final occurrence while the material is assembled.
+                        pendingTextureCapacity: 36,
+                        _owner._backend.ReleaseMaterial,
+                        _owner._backend.ReleaseTexture);
+                    _rollback = new ModelUploadRollbackLedger(
+                        _cpu.Model,
+                        checked(
+                            _importedMaterials.Count +
+                            _cpu.SubMeshes.Length),
+                        _cpu.SubMeshes.Length,
+                        _owner._releaseMeshHandle,
+                        _owner._backend.ReleaseMaterial,
+                        _owner._backend.ReleaseTexture);
+                    _owner._backend.InitializeDefaultTextures();
+                    _phase = CookedModelUploadPhase.Materials;
+                    BeginProfiledPhase(CookedModelUploadPhase.Materials);
+                    FillMaterialPreparationWindow();
+                    return true;
+                }
+                catch
+                {
+                    _owner._cooperativeUploadOwner = null;
+                    _ownsUploadSlot = false;
+                    _owner.EndUploadLocked();
+                    throw;
+                }
+            }
+
+            private ContentUploadStepResult ExecuteMaterialStepLocked(
+                in ContentUploadSliceBudget budget)
+            {
+                bool textureGpuWorkComplete =
+                    TryDrainCompletedTextureUploadsLocked();
+                if (_materialRegistrationsComplete)
+                {
+                    if (!textureGpuWorkComplete)
+                    {
+                        return Yield(
+                            ContentLoadStage.AwaitingGpu,
+                            0.65,
+                            $"all materials registered; waiting for " +
+                            $"{_pendingTextureUploadBatches.Count} queued " +
+                            "texture upload batches");
+                    }
+
+                    return CompleteMaterialRegistrationPhaseLocked();
+                }
+                if (!textureGpuWorkComplete &&
+                    _pendingTextureUploadBatches.Count >=
+                    MaximumPendingTextureUploadBatches)
+                {
+                    return Yield(
+                        ContentLoadStage.AwaitingGpu,
+                        MaterialProgress(0.0),
+                        $"texture upload window full " +
+                        $"({_pendingTextureUploadBatches.Count}/" +
+                        $"{MaximumPendingTextureUploadBatches}); " +
+                        "waiting for the oldest GPU batch");
+                }
+
+                if (_preparedMaterialTextures == null &&
+                    _materialPreparations[_materialIndex] == null)
+                {
+                    FillMaterialPreparationWindow();
+                }
+                if (_preparedMaterialTextures == null)
+                {
+                    Task<PreparedMaterialTextureSources> preparation =
+                        _materialPreparations[_materialIndex] ??
+                        throw new InvalidOperationException(
+                            "Material preparation was not scheduled.");
+                    if (!preparation.IsCompleted)
+                    {
+                        return Yield(
+                            ContentLoadStage.Preparing,
+                            MaterialProgress(0.0),
+                            $"reading and authenticating material {_materialIndex + 1}/" +
+                            _importedMaterials.Count);
+                    }
+
+                    _preparedMaterialTextures =
+                        preparation.GetAwaiter().GetResult();
+                    _materialPreparations[_materialIndex] = null;
+                    _materialTextureIndex = 0;
+                    _materialPreloadReferences = new TextureHandle[
+                        _preparedMaterialTextures.Slots.Count];
+                }
+
+                PreparedMaterialTextureSources prepared =
+                    _preparedMaterialTextures;
+
+                ulong maximumSubmissionBytes = checked((ulong)Math.Max(
+                    1,
+                    budget.MaximumSubmissionBytes));
+                if (_materialTextureIndex < prepared.Slots.Count)
+                {
+                    long started =
+                        System.Diagnostics.Stopwatch.GetTimestamp();
+                    int firstTexture = _materialTextureIndex;
+                    IModelTextureUploadBatch? uploadBatch =
+                        _owner._backend.BeginTextureUploadBatch(
+                            maximumSubmissionBytes);
+                    try
+                    {
+                        while (_materialTextureIndex < prepared.Slots.Count &&
+                               _materialTextureIndex - firstTexture <
+                               TextureSlotBatchSize)
+                        {
+                            PreparedMaterialTextureSlot slot =
+                                prepared.Slots[_materialTextureIndex];
+
+                            TextureHandle handle =
+                                _owner.PreloadPreparedMaterialTexture(
+                                    slot,
+                                    out bool ownsReference);
+                            if (ownsReference)
+                            {
+                                (_materialOwnership ??
+                                 throw new InvalidOperationException(
+                                     "Material upload ownership is unavailable."))
+                                    .PendingTextures.Add(handle);
+                                _materialPreloadReferences![
+                                    _materialTextureIndex] = handle;
+                            }
+
+                            _materialTextureIndex++;
+                            if (budget.RemainingCpuTime > TimeSpan.Zero &&
+                                System.Diagnostics.Stopwatch.GetElapsedTime(
+                                    started) >= TimeSpan.FromTicks(Math.Max(
+                                    1,
+                                    budget.RemainingCpuTime.Ticks / 2)))
+                            {
+                                break;
+                            }
+                        }
+
+                        uploadBatch.Complete();
+                        if (uploadBatch.TryCompleteGpuWork())
+                        {
+                            uploadBatch.Dispose();
+                        }
+                        else
+                        {
+                            _pendingTextureUploadBatches.Enqueue(
+                                uploadBatch);
+                        }
+                        uploadBatch = null;
+                    }
+                    finally
+                    {
+                        uploadBatch?.Dispose();
+                    }
+
+                    if (_materialTextureIndex < prepared.Slots.Count)
+                    {
+                        double textureFraction = prepared.Slots.Count == 0
+                            ? 1.0
+                            : _materialTextureIndex /
+                              (double)prepared.Slots.Count;
+                        return Yield(
+                            ContentLoadStage.Uploading,
+                            MaterialProgress(textureFraction),
+                            $"prepared {_materialTextureIndex}/" +
+                            $"{prepared.Slots.Count} texture slots for material " +
+                            $"{_materialIndex + 1}/{_importedMaterials.Count}");
+                    }
+                }
+
+                CookedMaterialPipeline? pipeline = _pipelines.Count > 0
+                    ? _pipelines[_materialIndex]
+                    : null;
+                _materials[_materialIndex] =
+                    _owner.RegisterImportedMaterial(
+                        _importedMaterials[_materialIndex],
+                        pipeline,
+                        _materialOwnership ??
+                            throw new InvalidOperationException(
+                                "Material upload ownership is unavailable."),
+                        _dynamicTextureIndices,
+                        ref _defaultWhiteSubstitutions,
+                        ref _defaultNormalSubstitutions,
+                        ref _defaultBlackSubstitutions,
+                        ref _blendMaterialCount,
+                        prepared.Sources,
+                        _materialPreloadReferences);
+
+                _materialIndex++;
+                _preparedMaterialTextures = null;
+                _materialPreloadReferences = null;
+                _materialTextureIndex = 0;
+                ContentUploadStepResult progress = Yield(
+                    ContentLoadStage.Uploading,
+                    MaterialProgress(0.0),
+                    $"uploaded {_materialIndex}/{_importedMaterials.Count} materials " +
+                    $"({prepared.EncodedBytes / (1024.0 * 1024.0):F1} MiB authenticated)");
+                if (_materialIndex < _importedMaterials.Count)
+                {
+                    FillMaterialPreparationWindow();
+                    return progress;
+                }
+
+                _materialRegistrationsComplete = true;
+                if (_pendingTextureUploadBatches.Count > 0)
+                {
+                    return Yield(
+                        ContentLoadStage.AwaitingGpu,
+                        0.65,
+                        $"all materials registered; draining " +
+                        $"{_pendingTextureUploadBatches.Count} queued " +
+                        "texture upload batches");
+                }
+
+                return CompleteMaterialRegistrationPhaseLocked();
+            }
+
+            private bool TryDrainCompletedTextureUploadsLocked()
+            {
+                while (_pendingTextureUploadBatches.Count > 0)
+                {
+                    IModelTextureUploadBatch pending =
+                        _pendingTextureUploadBatches.Peek();
+                    if (!pending.TryCompleteGpuWork())
+                        return false;
+                    pending.Dispose();
+                    _pendingTextureUploadBatches.Dequeue();
+                }
+
+                return true;
+            }
+
+            private ContentUploadStepResult
+                CompleteMaterialRegistrationPhaseLocked()
+            {
+                ModelUploadRollbackLedger rollback = _rollback ??
+                    throw new InvalidOperationException(
+                        "Model upload rollback ownership is unavailable.");
+                rollback.TrackBaseMaterials(_materials);
+                _baseMaterialsTransferredToRollback = true;
+                _materialOwnership = null;
+                _owner.UploadPublicationFaultInjector?.Invoke(
+                    ModelUploadPublicationStage.AfterMaterialRegistration);
+                _phase = CookedModelUploadPhase.PrimitiveMaterials;
+                BeginProfiledPhase(CookedModelUploadPhase.PrimitiveMaterials);
+                return Yield(
+                    ContentLoadStage.Uploading,
+                    0.65,
+                    $"uploaded {_materialIndex}/" +
+                    $"{_importedMaterials.Count} materials; " +
+                    "all texture GPU work complete");
+            }
+
+            private ContentUploadStepResult
+                ExecutePrimitiveMaterialStepLocked(
+                    in ContentUploadSliceBudget budget)
+            {
+                long started = System.Diagnostics.Stopwatch.GetTimestamp();
+                int first = _primitiveIndex;
+                while (_primitiveIndex < _cpu.SubMeshes.Length &&
+                       _primitiveIndex - first < PrimitiveMaterialBatchSize)
+                {
+                    ModelUploadRollbackLedger rollback = _rollback ??
+                        throw new InvalidOperationException(
+                            "Model upload rollback ownership is unavailable.");
+                    if (_cooked is not null)
+                    {
+                        CookedSubMeshRecord cookedSubMesh =
+                            _cooked.Mesh.SubMeshes[_primitiveIndex];
+                        _subMeshMaterials[_primitiveIndex] =
+                            _owner.ResolveCookedPrimitiveMaterial(
+                                _primitiveIndex,
+                                cookedSubMesh,
+                                _materials,
+                                _profilesBySubMesh,
+                                rollback,
+                                _profileDiagnostics,
+                                out _primitiveProfiles[_primitiveIndex]);
+                    }
+                    else
+                    {
+                        PreparedModelSubMeshData subMesh =
+                            _cpu.SubMeshes[_primitiveIndex];
+                        GiPrimitiveTransportProfile[] profiles =
+                            _cpu.RuntimeProfiles ??
+                            throw new InvalidOperationException(
+                                "Source model primitive profiles are unavailable.");
+                        GiPrimitiveTransportProfile profile =
+                            profiles[_primitiveIndex];
+                        MaterialHandle baseMaterial =
+                            _materials[subMesh.MaterialIndex];
+                        if (!_owner.TryAuthenticatePrimitiveTextureHashes(
+                                baseMaterial,
+                                profile,
+                                out string? authenticationFailure))
+                        {
+                            profile =
+                                RuntimePrimitiveTransportProfileBuilder
+                                    .InvalidateProfile(
+                                        profile,
+                                        "Runtime primitive profile was invalidated after texture upload: " +
+                                        authenticationFailure);
+                            profiles[_primitiveIndex] = profile;
+                            if (_profileDiagnostics.Count < 16)
+                            {
+                                _profileDiagnostics.Add(
+                                    $"Submesh {_primitiveIndex} ('{subMesh.Name}'): " +
+                                    authenticationFailure);
+                            }
+                        }
+
+                        _primitiveProfiles[_primitiveIndex] = profile;
+                        _subMeshMaterials[_primitiveIndex] =
+                            _owner.RegisterPrimitiveProfileMaterial(
+                                baseMaterial,
+                                profile,
+                                rollback);
+                        _owner.UploadPublicationFaultInjector?.Invoke(
+                            ModelUploadPublicationStage
+                                .AfterPrimitiveMaterialRegistration);
+                    }
+                    _primitiveIndex++;
+
+                    if (budget.RemainingCpuTime > TimeSpan.Zero &&
+                        System.Diagnostics.Stopwatch.GetElapsedTime(started) >=
+                        TimeSpan.FromTicks(Math.Max(
+                            1,
+                            budget.RemainingCpuTime.Ticks / 2)))
+                    {
+                        break;
+                    }
+                }
+
+                double fraction = _cpu.SubMeshes.Length == 0
+                    ? 1.0
+                    : _primitiveIndex /
+                      (double)_cpu.SubMeshes.Length;
+                ContentUploadStepResult result = Yield(
+                    ContentLoadStage.Uploading,
+                    0.65 + fraction * 0.10,
+                    $"resolved {_primitiveIndex}/{_cpu.SubMeshes.Length} " +
+                    "primitive material bindings");
+                if (_primitiveIndex < _cpu.SubMeshes.Length)
+                    return result;
+
+                _registrationPreparation = Task.Run(
+                    BuildRegistrations,
+                    _preparationCancellation.Token);
+                _phase = CookedModelUploadPhase.PreparingRegistrations;
+                BeginProfiledPhase(CookedModelUploadPhase.PreparingRegistrations);
+                return result;
+            }
+
+            private ContentUploadStepResult
+                ExecuteRegistrationPreparationStepLocked()
+            {
+                Task<MeshManager.MeshRegistrationData[]> task =
+                    _registrationPreparation ??
+                    throw new InvalidOperationException(
+                        "Mesh registration preparation was not started.");
+                if (!task.IsCompleted)
+                {
+                    return Yield(
+                        ContentLoadStage.Preparing,
+                        0.78,
+                        "finalizing persistent mesh upload streams in the background");
+                }
+
+                _registrations = task.GetAwaiter().GetResult();
+                _registrationPreparation = null;
+                _phase = CookedModelUploadPhase.RegisteringMeshes;
+                BeginProfiledPhase(CookedModelUploadPhase.RegisteringMeshes);
+                return Yield(
+                    ContentLoadStage.WaitingForUpload,
+                    0.82,
+                    $"{_registrations.Length} mesh streams ready for GPU submission");
+            }
+
+            private ContentUploadStepResult ExecuteMeshRegistrationStepLocked(
+                in ContentUploadSliceBudget budget)
+            {
+                MeshManager.MeshRegistrationData[] registrations =
+                    _registrations ?? throw new InvalidOperationException(
+                        "Prepared mesh registrations are unavailable.");
+                _meshes ??= new MeshHandle[registrations.Length];
+
+                if (_pendingMeshUpload == null)
+                {
+                    long submissionStarted =
+                        System.Diagnostics.Stopwatch.GetTimestamp();
+                    int first = _meshRegistrationIndex;
+                    long maximumSubmissionBytes = first == 0
+                        ? Math.Min(
+                            budget.MaximumSubmissionBytes,
+                            FirstMeshSubmissionBytes)
+                        : budget.MaximumSubmissionBytes;
+                    int count = SelectMeshRegistrationBatch(
+                        registrations,
+                        first,
+                        maximumSubmissionBytes,
+                        out ulong stagedBytes);
+                    if (count <= 0)
+                    {
+                        throw new InvalidOperationException(
+                            "A non-empty cooked mesh upload produced an empty registration batch.");
+                    }
+                    Report(
+                        ContentLoadStage.Uploading,
+                        0.82 + 0.08 * first / registrations.Length,
+                        $"submitting meshes {first + 1}-{first + count}/" +
+                        $"{registrations.Length} " +
+                        $"({stagedBytes / (1024.0 * 1024.0):F1} MiB staged)");
+                    var registrationBatch = new ArraySegment<
+                        MeshManager.MeshRegistrationData>(
+                        registrations,
+                        first,
+                        count);
+                    IModelMeshUpload upload = first == 0
+                        ? _owner._backend.BeginMeshUploadWithCapacity(
+                            registrationBatch,
+                            registrations)
+                        : _owner._backend.BeginMeshUpload(
+                            registrationBatch);
+                    ReportMeshUploadHostHitch(
+                        "submission",
+                        submissionStarted,
+                        first,
+                        count,
+                        stagedBytes);
+                    if (upload.Handles.Count != count)
+                    {
+                        upload.Dispose();
+                        throw new InvalidOperationException(
+                            $"The mesh backend returned {upload.Handles.Count} handles " +
+                            $"for a {count}-mesh registration batch.");
+                    }
+
+                    _pendingMeshUpload = upload;
+                    _pendingMeshFirst = first;
+                    _pendingMeshCount = count;
+                    _pendingMeshStagedBytes = stagedBytes;
+                }
+
+                IModelMeshUpload pending = _pendingMeshUpload;
+                long completionStarted =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
+                if (!pending.TryCompleteGpuWork())
+                {
+                    ReportMeshUploadHostHitch(
+                        "fence-poll",
+                        completionStarted,
+                        _pendingMeshFirst,
+                        _pendingMeshCount,
+                        _pendingMeshStagedBytes);
+                    return Yield(
+                        ContentLoadStage.AwaitingGpu,
+                        0.82 + 0.08 * _meshRegistrationIndex /
+                        registrations.Length,
+                        $"waiting for GPU completion of meshes " +
+                        $"{_pendingMeshFirst + 1}-" +
+                        $"{_pendingMeshFirst + _pendingMeshCount}/" +
+                        $"{registrations.Length} " +
+                        $"({_pendingMeshStagedBytes / (1024.0 * 1024.0):F1} MiB staged)");
+                }
+                ReportMeshUploadHostHitch(
+                    "fence-publication",
+                    completionStarted,
+                    _pendingMeshFirst,
+                    _pendingMeshCount,
+                    _pendingMeshStagedBytes);
+
+                for (int i = 0; i < _pendingMeshCount; i++)
+                {
+                    _meshes[_pendingMeshFirst + i] =
+                        pending.Handles[i];
+                }
+                (_rollback ?? throw new InvalidOperationException(
+                    "Model upload rollback ownership is unavailable."))
+                    .TrackMeshes(pending.Handles);
+                _meshRegistrationIndex = checked(
+                    _pendingMeshFirst + _pendingMeshCount);
+                pending.Dispose();
+                _pendingMeshUpload = null;
+                _pendingMeshFirst = 0;
+                _pendingMeshCount = 0;
+                _pendingMeshStagedBytes = 0;
+                if (_meshRegistrationIndex < registrations.Length)
+                {
+                    double fraction = _meshRegistrationIndex /
+                        (double)registrations.Length;
+                    return Yield(
+                        ContentLoadStage.AwaitingGpu,
+                        0.82 + fraction * 0.08,
+                        $"uploaded {_meshRegistrationIndex}/" +
+                        $"{registrations.Length} persistent mesh streams");
+                }
+
+                if (_cooked is not null)
+                {
+                    _opacityMicromapRuntimeRegistrationCount =
+                        _owner.RegisterCookedOpacityMicromaps(
+                            _cooked,
+                            registrations,
+                            _meshes,
+                            _subMeshMaterials,
+                            out _opacityMicromapRuntimeDetail);
+                }
+                _owner.UploadPublicationFaultInjector?.Invoke(
+                    ModelUploadPublicationStage.AfterMeshRegistration);
+                _phase = CookedModelUploadPhase.AttachingRenderObjects;
+                BeginProfiledPhase(CookedModelUploadPhase.AttachingRenderObjects);
+                return Yield(
+                    ContentLoadStage.AwaitingGpu,
+                    0.90,
+                    "mesh upload submitted; publishing render objects");
+            }
+
+            private static void ReportMeshUploadHostHitch(
+                string operation,
+                long started,
+                int first,
+                int count,
+                ulong stagedBytes)
+            {
+                double elapsedMilliseconds =
+                    System.Diagnostics.Stopwatch
+                        .GetElapsedTime(started)
+                        .TotalMilliseconds;
+                if (elapsedMilliseconds <= 33.0)
+                    return;
+
+                Console.WriteLine(
+                    $"Mesh upload host hitch: operation={operation}, " +
+                    $"elapsed={elapsedMilliseconds:F3}ms, " +
+                    $"meshes={first + 1}-{first + count}, " +
+                    $"staged={stagedBytes / (1024.0 * 1024.0):F1}MiB.");
+            }
+
+            private static int SelectMeshRegistrationBatch(
+                IReadOnlyList<MeshManager.MeshRegistrationData> registrations,
+                int first,
+                long maximumSubmissionBytes,
+                out ulong stagedBytes)
+            {
+                if ((uint)first >= (uint)registrations.Count)
+                    throw new ArgumentOutOfRangeException(nameof(first));
+
+                ulong maximum = checked((ulong)Math.Max(
+                    1,
+                    maximumSubmissionBytes));
+                stagedBytes = 0;
+                int count = 0;
+                while (first + count < registrations.Count)
+                {
+                    ulong next = registrations[first + count]
+                        .EstimateCookedUploadStagingBytes();
+                    if (count > 0 &&
+                        (stagedBytes >= maximum ||
+                         next > maximum - stagedBytes))
+                    {
+                        break;
+                    }
+
+                    stagedBytes = checked(stagedBytes + next);
+                    count++;
+                }
+
+                return count;
+            }
+
+            private ContentUploadStepResult ExecuteRenderObjectStepLocked(
+                in ContentUploadSliceBudget budget)
+            {
+                MeshHandle[] meshes = _meshes ??
+                    throw new InvalidOperationException(
+                        "Uploaded mesh handles are unavailable.");
+                long started = System.Diagnostics.Stopwatch.GetTimestamp();
+                int first = _renderObjectIndex;
+                while (_renderObjectIndex < meshes.Length &&
+                       _renderObjectIndex - first < RenderObjectBatchSize)
+                {
+                    PreparedModelSubMeshData subMesh =
+                        _cpu.SubMeshes[_renderObjectIndex];
+                    RenderObject renderObject =
+                        subMesh.SkinIndex >= 0 &&
+                        subMesh.SkinIndex < _cpu.Model.Skins.Count
+                            ? new SkinnedRenderObject(
+                                meshes[_renderObjectIndex],
+                                _subMeshMaterials[_renderObjectIndex])
+                            {
+                                SkinIndex = subMesh.SkinIndex,
+                                Animator = CreateAnimator(
+                                    _cpu.Model,
+                                    subMesh.SkinIndex),
+                                SkinningBindTransform =
+                                    subMesh.SkinningBindTransform
+                            }
+                            : new RenderObject(
+                                meshes[_renderObjectIndex],
+                                _subMeshMaterials[_renderObjectIndex]);
+                    renderObject.Name = string.IsNullOrWhiteSpace(subMesh.Name)
+                        ? _cpu.Model.Name
+                        : subMesh.Name;
+                    renderObject.LocalMeshBounds = subMesh.BoundingBox;
+                    _cpu.Model.Add(renderObject);
+                    _owner.AttachRenderObjectResourceLifetime(renderObject);
+                    (_rollback ?? throw new InvalidOperationException(
+                        "Model upload rollback ownership is unavailable."))
+                        .MarkRenderObjectAttached();
+                    _owner.UploadPublicationFaultInjector?.Invoke(
+                        ModelUploadPublicationStage
+                            .AfterRenderObjectAttachment);
+                    _renderObjectIndex++;
+
+                    if (budget.RemainingCpuTime > TimeSpan.Zero &&
+                        System.Diagnostics.Stopwatch.GetElapsedTime(started) >=
+                        TimeSpan.FromTicks(Math.Max(
+                            1,
+                            budget.RemainingCpuTime.Ticks / 2)))
+                    {
+                        break;
+                    }
+                }
+
+                double fraction = meshes.Length == 0
+                    ? 1.0
+                    : _renderObjectIndex / (double)meshes.Length;
+                ContentUploadStepResult result = Yield(
+                    ContentLoadStage.Uploading,
+                    0.90 + fraction * 0.08,
+                    $"attached {_renderObjectIndex}/{meshes.Length} render objects");
+                if (_renderObjectIndex == meshes.Length)
+                {
+                    _phase = CookedModelUploadPhase.Finalizing;
+                    BeginProfiledPhase(CookedModelUploadPhase.Finalizing);
+                }
+                return result;
+            }
+
+            private ContentUploadStepResult FinalizeLocked()
+            {
+                int opacityMicromapPayloadAcceptedCount =
+                    _cooked?.OpacityMicromapLoadStatus.Accepted == true &&
+                    _cooked.OpacityMicromapPayload is not null
+                        ? 1
+                        : 0;
+                RuntimePrimitiveTransportProfileBuildDiagnostics?
+                    sourceDiagnostics = _cpu.RuntimeProfileDiagnostics;
+                var diagnostics = new ModelRenderUploadDiagnostics(
+                    _cpu.Model.Name,
+                    _cpu.Model.RenderObjects.Count,
+                    _cpu.SubMeshes.Length,
+                    (_rollback ?? throw new InvalidOperationException(
+                        "Model upload rollback ownership is unavailable."))
+                        .TrackedMaterialCount,
+                    _dynamicTextureIndices.Count,
+                    _defaultWhiteSubstitutions,
+                    _defaultNormalSubstitutions,
+                    _defaultBlackSubstitutions,
+                    _blendMaterialCount,
+                    _primitiveProfiles.Count(static profile =>
+                        profile != null &&
+                        profile.IsComplete &&
+                        profile.Quality !=
+                            GiPrimitiveTransportProfileQuality.Invalid),
+                    _primitiveProfiles.Count(static profile =>
+                        profile != null && !profile.IsComplete ||
+                        profile != null &&
+                        profile.Quality ==
+                            GiPrimitiveTransportProfileQuality.Invalid),
+                    sourceDiagnostics?.ProfileCacheHitCount ?? 0,
+                    sourceDiagnostics?.ProfileCacheMissCount ?? 0,
+                    sourceDiagnostics?.TextureAnalysisFailureCount ?? 0,
+                    sourceDiagnostics?.PackageOmittedEmissiveRecordCount ??
+                    _cooked?.Materials.PrimitiveTransportProfiles.Sum(
+                        static profile => Math.Max(
+                            profile.EmissiveCandidateTriangleCount -
+                            profile.EmissiveTriangles.Length,
+                            0)) ?? 0,
+                    string.Join(" | ", _profileDiagnostics),
+                    opacityMicromapPayloadAcceptedCount,
+                    _opacityMicromapRuntimeRegistrationCount,
+                    _opacityMicromapRuntimeDetail);
+                _owner.RegisterModelMaterialLifetime(
+                    _cpu.Model,
+                    _materials);
+                _rollback!.TransferBaseMaterialsToModel();
+                _owner.UploadPublicationFaultInjector?.Invoke(
+                    ModelUploadPublicationStage.AfterBaseMaterialTransfer);
+                _rollback.Commit();
+                _owner.SetLastUploadDiagnostics(diagnostics);
+                _result = _cpu.Model;
+                _phase = CookedModelUploadPhase.Completed;
+                BeginProfiledPhase(CookedModelUploadPhase.Completed);
+                ReleaseUploadSlotLocked();
+                _preparationCancellation.Dispose();
+                Report(
+                    ContentLoadStage.Ready,
+                    1.0,
+                    "model is fully resident");
+                return ContentUploadStepResult.Complete(
+                    _cpu.TotalBytes,
+                    _cpu.TotalBytes,
+                    "model is fully resident");
+            }
+
+            private void BeginProfiledPhase(CookedModelUploadPhase next)
+            {
+                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                Console.WriteLine(
+                    $"Model upload profile: source={_cpu.SourceKind}, " +
+                    $"model='{_cpu.Model.Name}', " +
+                    $"phase={next}, " +
+                    $"previousPhaseElapsed={System.Diagnostics.Stopwatch.GetElapsedTime(_phaseStartedTimestamp, now).TotalMilliseconds:F3}ms, " +
+                    $"total={System.Diagnostics.Stopwatch.GetElapsedTime(_uploadStartedTimestamp, now).TotalMilliseconds:F3}ms.");
+                _phaseStartedTimestamp = now;
+            }
+
+            private MeshManager.MeshRegistrationData[] BuildRegistrations()
+            {
+                var registrations =
+                    new MeshManager.MeshRegistrationData[_cpu.Meshes.Length];
+                int completedCount = 0;
+                var options = new ParallelOptions
+                {
+                    CancellationToken = _preparationCancellation.Token,
+                    MaxDegreeOfParallelism = Math.Clamp(
+                        Environment.ProcessorCount / 2,
+                        1,
+                        4)
+                };
+                Parallel.For(
+                    0,
+                    registrations.Length,
+                    options,
+                    i =>
+                    {
+                        PreparedModelMeshData mesh = _cpu.Meshes[i];
+                        MeshManager.MeshRegistrationData registration =
+                            mesh.SourceVertices is { } sourceVertices
+                                ? new MeshManager.MeshRegistrationData(
+                                    sourceVertices,
+                                    mesh.Indices,
+                                    mesh.Meshlets,
+                                    mesh.MeshletVertices,
+                                    mesh.MeshletTriangles,
+                                    mesh.Lod0Count,
+                                    mesh.Lod1Count,
+                                    mesh.Lod2Count,
+                                    skinningData: mesh.Skinning.Length == 0
+                                        ? null
+                                        : mesh.Skinning,
+                                    primitiveTransportProfile:
+                                        _primitiveProfiles[i],
+                                    causticTopologyEvidence:
+                                        mesh.CausticTopologyEvidence,
+                                    lod1SimplificationError:
+                                        mesh.Lod1SimplificationError,
+                                    lod2SimplificationError:
+                                        mesh.Lod2SimplificationError)
+                                : new MeshManager.MeshRegistrationData(
+                                    mesh.VertexPositions,
+                                    mesh.VertexNormalTangents,
+                                    mesh.VertexUvColors,
+                                    mesh.Indices,
+                                    mesh.Meshlets,
+                                    mesh.MeshletVertices,
+                                    mesh.MeshletTriangles,
+                                    mesh.Lod0Count,
+                                    mesh.Lod1Count,
+                                    mesh.Lod2Count,
+                                    mesh.Skinning.Length == 0
+                                        ? null
+                                        : mesh.Skinning,
+                                    _primitiveProfiles[i],
+                                    mesh.CausticTopologyEvidence,
+                                    mesh.Lod1SimplificationError,
+                                    mesh.Lod2SimplificationError);
+                        registration.PrepareTransportGeometry();
+                        registrations[i] = registration;
+
+                        int completed = Interlocked.Increment(
+                            ref completedCount);
+                        if ((completed & 63) != 0 &&
+                            completed != registrations.Length)
+                        {
+                            return;
+                        }
+
+                        double fraction = registrations.Length == 0
+                            ? 1.0
+                            : completed /
+                              (double)registrations.Length;
+                        Report(
+                            ContentLoadStage.Preparing,
+                            0.75 + fraction * 0.07,
+                            $"finalized {completed}/" +
+                            $"{registrations.Length} mesh streams");
+                    });
+
+                return registrations;
+            }
+
+            private void FillMaterialPreparationWindow()
+            {
+                if (_materialIndex >= _importedMaterials.Count)
+                    return;
+                int end = Math.Min(
+                    _importedMaterials.Count,
+                    checked(_materialIndex + MaterialPreparationLookahead));
+                for (int index = _materialIndex; index < end; index++)
+                {
+                    if (_materialPreparations[index] != null)
+                        continue;
+
+                    ModelMaterial material = _importedMaterials[index];
+                    _materialPreparations[index] = Task.Run(
+                        () => _owner.PrepareMaterialTextureSources(
+                            material,
+                            _preparedTextureSourceCache,
+                            _preparationCancellation.Token),
+                        _preparationCancellation.Token);
+                }
+            }
+
+            private ContentUploadStepResult CancelLocked()
+            {
+                List<Exception>? rollbackFailures = null;
+                if (_pendingMeshUpload != null)
+                {
+                    if (!_pendingMeshUpload.TryCancelGpuWork())
+                    {
+                        int total = _registrations?.Length ??
+                                    _pendingMeshFirst +
+                                    _pendingMeshCount;
+                        return Yield(
+                            ContentLoadStage.AwaitingGpu,
+                            0.82 + 0.08 * _meshRegistrationIndex /
+                            Math.Max(total, 1),
+                            "cancellation requested; draining submitted " +
+                            $"mesh upload {_pendingMeshFirst + 1}-" +
+                            $"{_pendingMeshFirst + _pendingMeshCount}/" +
+                            $"{total}");
+                    }
+
+                    _pendingMeshUpload.Dispose();
+                    _pendingMeshUpload = null;
+                    _pendingMeshFirst = 0;
+                    _pendingMeshCount = 0;
+                    _pendingMeshStagedBytes = 0;
+                }
+
+                if (!TryDrainCompletedTextureUploadsLocked())
+                {
+                    return Yield(
+                        ContentLoadStage.AwaitingGpu,
+                        MaterialProgress(0.0),
+                        "cancellation requested; draining " +
+                        $"{_pendingTextureUploadBatches.Count} submitted " +
+                        "texture upload batches");
+                }
+
+                if (!TryDrainCancelledPreparationLocked(
+                        ref rollbackFailures))
+                {
+                    return Yield(
+                        ContentLoadStage.Preparing,
+                        0.30,
+                        "cancellation requested; draining background model preparation");
+                }
+
+                if (!_baseMaterialsTransferredToRollback &&
+                    _materialOwnership != null)
+                {
+                    Exception? failure =
+                        _materialOwnership.TryRollback();
+                    if (failure != null)
+                    {
+                        _owner.PublishPendingMaterialRollbackLocked(
+                            _materialOwnership);
+                        (rollbackFailures ??= []).Add(failure);
+                    }
+                }
+
+                if (_rollback != null)
+                {
+                    Exception? failure = _rollback.TryRollback();
+                    if (failure != null)
+                    {
+                        _owner.PublishPendingModelUploadRollbackLocked(
+                            _rollback);
+                        (rollbackFailures ??= []).Add(failure);
+                    }
+                }
+
+                _phase = CookedModelUploadPhase.Cancelled;
+                ReleaseUploadSlotLocked();
+                _preparationCancellation.Dispose();
+                if (rollbackFailures is { Count: > 0 })
+                {
+                    throw new AggregateException(
+                        "Cooperative model upload cancellation could not " +
+                        "complete ownership rollback.",
+                        rollbackFailures);
+                }
+
+                Report(
+                    ContentLoadStage.Cancelled,
+                    0,
+                    "model upload cancelled and rolled back");
+                return ContentUploadStepResult.Cancelled(
+                    detail: "model upload cancelled and rolled back");
+            }
+
+            private bool TryDrainCancelledPreparationLocked(
+                ref List<Exception>? failures)
+            {
+                bool materialsDrained = true;
+                for (int i = 0; i < _materialPreparations.Length; i++)
+                {
+                    if (!TryObserveCancelledPreparation(
+                            ref _materialPreparations[i],
+                            ref failures))
+                    {
+                        materialsDrained = false;
+                    }
+                }
+                bool registrationsDrained =
+                    TryObserveCancelledPreparation(
+                        ref _registrationPreparation,
+                        ref failures);
+                return materialsDrained &&
+                       registrationsDrained;
+            }
+
+            private static bool TryObserveCancelledPreparation<T>(
+                ref Task<T>? preparation,
+                ref List<Exception>? failures)
+            {
+                Task<T>? task = preparation;
+                if (task == null)
+                    return true;
+                if (!task.IsCompleted)
+                    return false;
+
+                try
+                {
+                    _ = task.GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cancellation was requested explicitly; observing the
+                    // task is the only remaining ownership obligation.
+                }
+                catch (Exception failure)
+                {
+                    (failures ??= []).Add(failure);
+                }
+
+                preparation = null;
+                return true;
+            }
+
+            private Exception RollbackFailureLocked(
+                Exception uploadFailure)
+            {
+                List<Exception>? rollbackFailures = null;
+                DrainPreparationAfterFailureLocked();
+                if (_pendingMeshUpload != null)
+                {
+                    try
+                    {
+                        // Exceptional cleanup may block so candidate buffers
+                        // and staging allocations cannot outlive submitted
+                        // commands that still reference them.
+                        _pendingMeshUpload.Dispose();
+                        _pendingMeshUpload = null;
+                        _pendingMeshFirst = 0;
+                        _pendingMeshCount = 0;
+                        _pendingMeshStagedBytes = 0;
+                    }
+                    catch (Exception failure)
+                    {
+                        (rollbackFailures ??= []).Add(failure);
+                    }
+                }
+
+                while (_pendingTextureUploadBatches.Count > 0)
+                {
+                    IModelTextureUploadBatch pendingTextureUpload =
+                        _pendingTextureUploadBatches.Dequeue();
+                    try
+                    {
+                        // Failure cleanup is exceptional and may block. It
+                        // must complete submitted copies before image
+                        // ownership rollback can destroy their resources.
+                        pendingTextureUpload.Dispose();
+                    }
+                    catch (Exception failure)
+                    {
+                        (rollbackFailures ??= []).Add(failure);
+                    }
+                }
+
+                if (!_baseMaterialsTransferredToRollback &&
+                    _materialOwnership != null)
+                {
+                    Exception? failure =
+                        _materialOwnership.TryRollback();
+                    if (failure != null)
+                    {
+                        _owner.PublishPendingMaterialRollbackLocked(
+                            _materialOwnership);
+                        (rollbackFailures ??= []).Add(failure);
+                    }
+                }
+
+                if (_rollback != null)
+                {
+                    Exception? failure = _rollback.TryRollback();
+                    if (failure != null)
+                    {
+                        _owner.PublishPendingModelUploadRollbackLocked(
+                            _rollback);
+                        (rollbackFailures ??= []).Add(failure);
+                    }
+                }
+
+                _phase = CookedModelUploadPhase.Cancelled;
+                ReleaseUploadSlotLocked();
+                _preparationCancellation.Dispose();
+                return rollbackFailures is not { Count: > 0 }
+                    ? uploadFailure
+                    : new AggregateException(
+                        "Cooperative model upload failed and ownership " +
+                        "rollback was incomplete.",
+                        new[] { uploadFailure }.Concat(
+                            rollbackFailures));
+            }
+
+            private void DrainPreparationAfterFailureLocked()
+            {
+                try
+                {
+                    _preparationCancellation.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    return;
+                }
+
+                for (int i = 0; i < _materialPreparations.Length; i++)
+                {
+                    ObserveFailedPreparation(
+                        ref _materialPreparations[i]);
+                }
+
+                ObserveFailedPreparation(ref _registrationPreparation);
+            }
+
+            private static void ObserveFailedPreparation<T>(
+                ref Task<T>? preparation)
+            {
+                Task<T>? task = preparation;
+                if (task == null)
+                    return;
+
+                try
+                {
+                    _ = task.GetAwaiter().GetResult();
+                }
+                catch
+                {
+                    // The upload failure that initiated rollback remains the
+                    // canonical error. Speculative preparation only needs to
+                    // be cancelled and observed before its token is disposed.
+                }
+
+                preparation = null;
+            }
+
+            private void ReleaseUploadSlotLocked()
+            {
+                if (!_ownsUploadSlot)
+                    return;
+                if (!ReferenceEquals(
+                        _owner._cooperativeUploadOwner,
+                        this))
+                {
+                    throw new InvalidOperationException(
+                        "Cooperative upload ownership changed before release.");
+                }
+
+                _owner._cooperativeUploadOwner = null;
+                _ownsUploadSlot = false;
+                _owner.EndUploadLocked();
+            }
+
+            private double MaterialProgress(double tail)
+            {
+                double fraction = _importedMaterials.Count == 0
+                    ? 1.0
+                    : (_materialIndex + tail) /
+                      _importedMaterials.Count;
+                return 0.30 + fraction * 0.35;
+            }
+
+            private ContentUploadStepResult Yield(
+                ContentLoadStage stage,
+                double fraction,
+                string detail)
+            {
+                long completed = checked((long)Math.Round(
+                    _cpu.TotalBytes * Math.Clamp(fraction, 0.0, 1.0)));
+                ReportUploadWorkProgress(
+                    _progress,
+                    stage,
+                    completed,
+                    _cpu.TotalBytes,
+                    detail);
+                return ContentUploadStepResult.Yield(
+                    completed,
+                    _cpu.TotalBytes,
+                    detail);
+            }
+
+            private void Report(
+                ContentLoadStage stage,
+                double fraction,
+                string detail)
+            {
+                long completed = checked((long)Math.Round(
+                    _cpu.TotalBytes * Math.Clamp(fraction, 0.0, 1.0)));
+                ReportUploadWorkProgress(
+                    _progress,
+                    stage,
+                    completed,
+                    _cpu.TotalBytes,
+                    detail);
+            }
+        }
+
+        private enum CookedModelUploadPhase
+        {
+            WaitingForOwnership,
+            Materials,
+            PrimitiveMaterials,
+            PreparingRegistrations,
+            RegisteringMeshes,
+            AttachingRenderObjects,
+            Finalizing,
+            Completed,
+            Cancelled
+        }
+
+        private sealed record PreparedModelCpuData(
+            Model Model,
+            PreparedModelMeshData[] Meshes,
+            PreparedModelSubMeshData[] SubMeshes,
+            IReadOnlyList<ModelMaterial> Materials,
+            IReadOnlyList<CookedMaterialPipeline> Pipelines,
+            GiPrimitiveTransportProfile[]? RuntimeProfiles,
+            RuntimePrimitiveTransportProfileBuildDiagnostics?
+                RuntimeProfileDiagnostics,
+            long TotalBytes,
+            string SourceKind);
+
+        private sealed record PreparedModelMeshData(
+            GPUVertex[]? SourceVertices,
+            GPUVertexPositionStream[] VertexPositions,
+            GPUVertexNormalTangentStream[] VertexNormalTangents,
+            GPUVertexUvColorStream[] VertexUvColors,
+            uint[] Indices,
+            Meshlet[] Meshlets,
+            uint[] MeshletVertices,
+            uint[] MeshletTriangles,
+            int Lod0Count,
+            int Lod1Count,
+            int Lod2Count,
+            GPUVertexSkinningData[] Skinning,
+            ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence,
+            float Lod1SimplificationError,
+            float Lod2SimplificationError);
+
+        private sealed record PreparedModelSubMeshData(
+            string Name,
+            int MaterialIndex,
+            int SkinIndex,
+            CoreMatrix4x4 SkinningBindTransform,
+            CoreBoundingBox BoundingBox);
+
+        private readonly record struct PreparedTextureSourceCacheKey(
+            string Identity,
+            TextureSourceKind SourceKind,
+            TextureContainerKind ContainerKind,
+            TextureSamplerDescription Sampler,
+            bool Srgb,
+            TextureSemantic Semantic,
+            RuntimeTextureMipPolicy MipPolicy);
+
+        private sealed class PreparedMaterialTextureSources
+        {
+            public PreparedMaterialTextureSources(
+                IReadOnlyList<PreparedMaterialTextureSlot> slots,
+                long encodedBytes)
+            {
+                Slots = slots ?? throw new ArgumentNullException(
+                    nameof(slots));
+                EncodedBytes = encodedBytes;
+                Sources = slots
+                    .Select(static slot => slot.Source)
+                    .ToArray();
+            }
+
+            public IReadOnlyList<PreparedMaterialTextureSlot> Slots
+            {
+                get;
+            }
+
+            public IReadOnlyList<ModelTextureSource?> Sources { get; }
+
+            public long EncodedBytes { get; }
+        }
+
+        private sealed record PreparedMaterialTextureSlot(
+            ModelTextureSource? Source,
+            TextureSamplerDescription Sampler,
+            bool GenerateMipmaps,
+            bool Srgb,
+            TextureSemantic Semantic,
+            RuntimeTextureMipPolicy MipPolicy,
+            PreparedTextureFallback Fallback)
+        {
+            public long EncodedBytes =>
+                Source?.PreparedSnapshot?.EncodedBytes.LongLength ??
+                Source?.EncodedByteLength ??
+                0;
+        }
+
+        private enum PreparedTextureFallback
+        {
+            White,
+            Normal,
+            Black
         }
 
         private sealed record MaterialUploadResult(

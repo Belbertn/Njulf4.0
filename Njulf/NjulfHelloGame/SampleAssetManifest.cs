@@ -5,11 +5,37 @@ using CoreVector3 = Njulf.Core.Math.Vector3;
 
 namespace NjulfHelloGame;
 
+internal enum SampleAssetLoadTier
+{
+    Critical,
+    Deferred
+}
+
 internal sealed record SampleAssetReference(
     string Path,
     ModelImportBackend ExpectedBackend,
     AssimpMaterialTextureConvention AssimpMaterialTextureConvention =
-        AssimpMaterialTextureConvention.Standard);
+        AssimpMaterialTextureConvention.Standard,
+    SampleAssetLoadTier LoadTier = SampleAssetLoadTier.Critical)
+{
+    public string CreateContentIdentity() =>
+        $"{ExpectedBackend}\u001f" +
+        $"{AssimpMaterialTextureConvention}\u001f{Path}";
+
+    public ContentLoadOptions CreateLoadOptions()
+    {
+        return new ContentLoadOptions
+        {
+            ImporterOptions = new ImporterOptions
+            {
+                Backend = ExpectedBackend,
+                AssimpMaterialTextureConvention =
+                    AssimpMaterialTextureConvention,
+                ImportLights = true
+            }
+        };
+    }
+}
 
 internal sealed record SampleAssetManifest(
     SampleAssetReference ModelAsset,
@@ -24,6 +50,23 @@ internal sealed record SampleAssetManifest(
     public string ModelPath => ModelAsset.Path;
     public IReadOnlyList<string> AddendumModelPaths => AddendumModelAssets.Select(asset => asset.Path).ToArray();
     public IReadOnlyList<string> FoliageModelPaths => FoliageModelAssets.Select(asset => asset.Path).ToArray();
+
+    public IEnumerable<SampleAssetReference> EnumerateAssets()
+    {
+        yield return ModelAsset;
+        foreach (SampleAssetReference asset in AddendumModelAssets)
+            yield return asset;
+        foreach (SampleAssetReference asset in FoliageModelAssets)
+            yield return asset;
+    }
+
+    public IEnumerable<SampleAssetReference> EnumerateAssets(
+        SampleAssetLoadTier tier) =>
+        EnumerateAssets().Where(asset => asset.LoadTier == tier);
+
+    public bool HasDeferredAssets =>
+        EnumerateAssets().Any(static asset =>
+            asset.LoadTier == SampleAssetLoadTier.Deferred);
 
     public static SampleAssetManifest NewSponza { get; } = new(
         new SampleAssetReference("NewSponza_Main_glTF_003.gltf", ModelImportBackend.SharpGltf),
@@ -48,7 +91,8 @@ internal sealed record SampleAssetManifest(
             new SampleAssetReference(
                 "Assets/Bistro_v5_2/BistroInterior.fbx",
                 ModelImportBackend.Assimp,
-                AssimpMaterialTextureConvention.AmazonBistro)
+                AssimpMaterialTextureConvention.AmazonBistro,
+                SampleAssetLoadTier.Deferred)
         },
         Array.Empty<SampleAssetReference>(),
         1.0f,

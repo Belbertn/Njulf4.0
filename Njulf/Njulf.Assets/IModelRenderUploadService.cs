@@ -16,6 +16,39 @@ namespace Njulf.Assets
             throw new NotSupportedException($"{GetType().Name} does not support cooked model uploads.");
     }
 
+    public readonly record struct ModelUploadWorkProgress(
+        ContentLoadStage Stage,
+        long CompletedBytes,
+        long TotalBytes,
+        string Detail);
+
+    /// <summary>
+    /// Optional renderer capability used by asynchronous content loading.
+    /// CPU conversion and source authentication happen while the work is
+    /// created on a background worker; renderer mutation remains sliced by
+    /// <see cref="IContentUploadWork{T}"/> on the render thread.
+    /// </summary>
+    public interface ICooperativeModelRenderUploadService
+    {
+        IContentUploadWork<Model> PrepareCookedModelUpload(
+            CookedModelAsset model,
+            Action<ModelUploadWorkProgress>? progress = null,
+            CancellationToken cancellationToken = default);
+    }
+
+    /// <summary>
+    /// Optional renderer capability for preparing source-imported models away
+    /// from the render thread and publishing their GPU resources in bounded
+    /// upload slices.
+    /// </summary>
+    public interface ICooperativeSourceModelRenderUploadService
+    {
+        IContentUploadWork<Model> PrepareModelUpload(
+            ModelMesh modelMesh,
+            Action<ModelUploadWorkProgress>? progress = null,
+            CancellationToken cancellationToken = default);
+    }
+
     public sealed record ModelRenderUploadDiagnostics(
         string ModelName,
         int RenderObjectCount,

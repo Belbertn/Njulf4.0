@@ -17,6 +17,11 @@ internal static class SampleBistroGlobalIlluminationProfile
     // the 2 GiB/20%-headroom contract at 1080p without runtime resampling.
     internal const uint DefaultImportedTextureDimension = 512u;
 
+    // Cornell and Bistro are the interactive transition pair. Keeping their
+    // AO allocation extent identical prevents a render-target transaction
+    // every time the user crosses between the two scenes.
+    internal const float TransitionAmbientOcclusionResolutionScale = 0.5f;
+
     internal static bool ShouldApplyDefaultImportedTextureBudget(
         string? explicitMaximum,
         string? explicitProfile) =>
@@ -159,7 +164,8 @@ internal static class SampleBistroGlobalIlluminationProfile
         // DDGI visibility owns broad outdoor transport. Half-resolution GTAO
         // retains the small contact band without spending a second full-screen
         // 32-sample solve over Bistro's dense facade geometry.
-        settings.AmbientOcclusion.ResolutionScale = 0.5f;
+        settings.AmbientOcclusion.ResolutionScale =
+            TransitionAmbientOcclusionResolutionScale;
         settings.AmbientOcclusion.SampleCount = 16;
         settings.AmbientOcclusion.Radius = 0.65f;
         settings.AmbientOcclusion.Intensity = 0.70f;

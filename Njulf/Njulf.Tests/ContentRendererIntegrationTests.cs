@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Njulf.Assets;
+using Njulf.Assets.Cooked;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
@@ -53,6 +54,55 @@ namespace Njulf.Tests
                 Assert.That(first.RenderObjects, Has.Count.EqualTo(1));
                 Assert.That(first.RenderObjects[0].Mesh, Is.EqualTo(new MeshHandle(1, 1)));
                 Assert.That(first.RenderObjects[0].Material, Is.EqualTo(new MaterialHandle(1, 1)));
+            });
+        }
+
+        [Test]
+        public async Task LoadAsyncModel_SourceFallbackUsesCooperativeUploadAndRecordsTiming()
+        {
+            string path = WriteTriangleObj();
+            using var dispatcher = new RenderThreadContentUploadDispatcher();
+            var uploader = new FakeCooperativeModelRenderUploadService();
+            using var content = new ContentManager(
+                Path.GetDirectoryName(path),
+                uploader,
+                dispatcher);
+
+            Task<Model> loading = content.LoadAsync<Model>(
+                Path.GetFileName(path));
+            var timeout = System.Diagnostics.Stopwatch.StartNew();
+            while (!loading.IsCompleted)
+            {
+                if (dispatcher.PendingCount > 0)
+                {
+                    dispatcher.ProcessFrame(
+                        TimeSpan.FromMilliseconds(10),
+                        maximumCallbacks: 8,
+                        maximumSubmissionBytes: 4L * 1024L * 1024L);
+                }
+                if (timeout.Elapsed > TimeSpan.FromSeconds(10))
+                    Assert.Fail("Timed out pumping the cooperative source upload.");
+                await Task.Delay(1);
+            }
+
+            Model model = await loading;
+            Model cached = await content.LoadAsync<Model>(
+                Path.GetFileName(path));
+            CookedContentDiagnostics diagnostics = content.CookedDiagnostics;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(cached, Is.SameAs(model));
+                Assert.That(uploader.PrepareCount, Is.EqualTo(1));
+                Assert.That(uploader.LegacyUploadCount, Is.Zero);
+                Assert.That(model.RenderObjects, Has.Count.EqualTo(1));
+                Assert.That(diagnostics.SourceFallbackCount, Is.EqualTo(1));
+                Assert.That(diagnostics.Entries.Single().BytesRead,
+                    Is.GreaterThan(0));
+                Assert.That(diagnostics.Entries.Single().LoadMilliseconds,
+                    Is.GreaterThanOrEqualTo(0));
+                Assert.That(diagnostics.Entries.Single().UploadMilliseconds,
+                    Is.GreaterThanOrEqualTo(0));
             });
         }
 
@@ -688,6 +738,94 @@ namespace Njulf.Tests
                 model.Add(new RenderObject(new MeshHandle(1, 1), new MaterialHandle(1, 1)));
                 LastUploadDiagnostics = new ModelRenderUploadDiagnostics(model.Name, 1, 1, 1, 0, 0, 0, 0, 0);
                 return model;
+            }
+        }
+
+        private sealed class FakeCooperativeModelRenderUploadService :
+            IModelRenderUploadService,
+            ICooperativeSourceModelRenderUploadService
+        {
+            public int PrepareCount { get; private set; }
+            public int LegacyUploadCount { get; private set; }
+            public ModelRenderUploadDiagnostics LastUploadDiagnostics { get; } =
+                new(string.Empty, 0, 0, 0, 0, 0, 0, 0, 0);
+
+            public Model UploadModel(ModelMesh modelMesh)
+            {
+                LegacyUploadCount++;
+                throw new InvalidOperationException(
+                    "The asynchronous source path must use cooperative upload.");
+            }
+
+            public IContentUploadWork<Model> PrepareModelUpload(
+                ModelMesh modelMesh,
+                Action<ModelUploadWorkProgress>? progress = null,
+                CancellationToken cancellationToken = default)
+            {
+                PrepareCount++;
+                return new FakeSourceUploadWork(
+                    modelMesh,
+                    progress,
+                    cancellationToken);
+            }
+        }
+
+        private sealed class FakeSourceUploadWork :
+            IContentUploadWork<Model>
+        {
+            private readonly Model _model;
+            private readonly Action<ModelUploadWorkProgress>? _progress;
+            private readonly CancellationToken _cancellationToken;
+            private int _step;
+
+            public FakeSourceUploadWork(
+                ModelMesh modelMesh,
+                Action<ModelUploadWorkProgress>? progress,
+                CancellationToken cancellationToken)
+            {
+                _progress = progress;
+                _cancellationToken = cancellationToken;
+                _model = new Model
+                {
+                    Name = modelMesh.Name,
+                    BoundingBox = modelMesh.BoundingBox,
+                    BoundingSphere = modelMesh.BoundingSphere
+                };
+                _model.Add(new RenderObject(
+                    new MeshHandle(11, 1),
+                    new MaterialHandle(12, 1)));
+            }
+
+            public ContentUploadStepResult ExecuteStep(
+                in ContentUploadSliceBudget budget)
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                if (_step++ == 0)
+                {
+                    _progress?.Invoke(new ModelUploadWorkProgress(
+                        ContentLoadStage.Uploading,
+                        1,
+                        2,
+                        "source upload slice one"));
+                    return ContentUploadStepResult.Yield(
+                        1,
+                        2,
+                        "source upload slice one");
+                }
+
+                return ContentUploadStepResult.Complete(
+                    2,
+                    2,
+                    "source upload complete");
+            }
+
+            public Model GetResult() => _step > 1
+                ? _model
+                : throw new InvalidOperationException(
+                    "The source upload has not completed.");
+
+            public void RequestCancellation()
+            {
             }
         }
     }

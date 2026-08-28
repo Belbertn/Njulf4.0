@@ -247,6 +247,24 @@ internal static class Program
 
 internal sealed class HelloGame : Game
 {
+    private const string LoadingSceneName =
+        "Njulf Lightweight Loading Scene";
+    private static readonly TimeSpan TransitionUploadCpuBudget =
+        TimeSpan.FromMilliseconds(12);
+    private static readonly TimeSpan DeferredSceneAttachmentCpuBudget =
+        TimeSpan.FromMilliseconds(16);
+    private const int TransitionUploadCallbacksPerFrame = 32;
+    private const int TransitionReleaseRenderObjectsPerFrame = 384;
+    // Mesh submissions are fence-polled rather than waited synchronously. A
+    // larger window avoids dozens of whole-buffer growth/copy submissions for
+    // flattened scenes while the cooperative CPU budget still bounds
+    // recording.
+    private const long TransitionUploadSubmissionBytes =
+        24L * 1024L * 1024L;
+    private const long TransitionPreloadInflightBytes =
+        512L * 1024L * 1024L;
+    private const int SceneRetirementPresentDelay = 3;
+    private const int HybridReflectionPreparationStablePresentDelay = 60;
     private static readonly SampleAssetManifest SponzaAssetManifest = SampleAssetManifest.NewSponza;
     private const SampleLightingMode LightingMode = SampleLightingMode.DirectionalKey;
     private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
@@ -257,7 +275,42 @@ internal sealed class HelloGame : Game
     internal const float BenchmarkSimulationDeltaSeconds = 1.0f / 60.0f;
 
     private SampleInputController? _inputController;
+    private readonly SampleStressSceneResourceCache
+        _sampleStressSceneResources = new();
     private SampleSceneLoader? _sceneLoader;
+    private SampleSceneTransitionCoordinator? _sceneTransition;
+    private SampleSceneResidencyCache? _sceneResidency;
+    private IContentUploadPump? _contentUploadPump;
+    private Scene? _transitionLoadingScene;
+    private Scene? _transitionPreviousScene;
+    private long _loadingTransitionGeneration;
+    private bool _loadingFramePresented;
+    private bool _loadingSceneInstancesReleased;
+    private bool _loadingResidencyAssetsReleased;
+    private long _handledTransitionGeneration;
+    private bool _transitionWasResident;
+    private bool _transitionKeepsPreviousResidency;
+    private readonly object _preparedSceneTransitionGate = new();
+    private PreparedSceneTransition? _preparedSceneTransition;
+    private long _scenePreparationGeneration;
+    private PendingPostPresentSceneCommit?
+        _pendingPostPresentSceneCommit;
+    private long _hybridReflectionPreparationEligiblePresentSerial =
+        long.MaxValue;
+    private bool _hybridReflectionPreparationStarted;
+    private long _transitionRequestTimestamp;
+    private SampleSceneTransitionPhase _lastReportedTransitionPhase =
+        SampleSceneTransitionPhase.Idle;
+    private DeferredSceneStreaming? _deferredSceneStreaming;
+    private PendingDeferredSceneStreaming? _pendingDeferredSceneStreaming;
+    private ContentLoadProgressEvent? _deferredSceneProgress;
+    private long _deferredLastProgressTimestamp;
+    private long _deferredLastCompletedBytes;
+    private int _deferredWatchdogWarned;
+    private BistroTransitionSmokeState? _bistroTransitionSmoke;
+    private readonly Queue<DeferredSceneRetirement>
+        _deferredSceneRetirements = new();
+    private long _presentedFrameSerial;
     private SampleDiagnosticsReporter? _diagnosticsReporter;
     private SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private IReadOnlyList<ParticleEffectInstance>? _sampleVfxEffects;
@@ -311,6 +364,7 @@ internal sealed class HelloGame : Game
     private ImGuiEditorOverlayHost? _editorHost;
     private EditorInputBridge? _editorInput;
     private EditorController? _editorController;
+    private Scene? _pendingEditorScene;
     private EditorImGuiPanels? _editorPanels;
     private bool _editorTogglePressed;
     private bool _editorSavePressed;
@@ -406,8 +460,12 @@ internal sealed class HelloGame : Game
                 _smokeOptions.AdvancedGiRuntimeEvidenceBundlePath;
             options.AdvancedGiStartupProfilePath =
                 _smokeOptions.AdvancedGiStartupProfilePath;
-            if (_sceneKind == SampleSceneKind.Bistro &&
-                SampleBistroGlobalIlluminationProfile
+            // Bistro is reachable through the runtime scene switcher even
+            // when Cornell/GI was the startup scene. Texture admission is a
+            // renderer-creation policy, so waiting until Bistro becomes the
+            // active scene is too late: the transition would otherwise upload
+            // the uncapped cooked mip chains.
+            if (SampleBistroGlobalIlluminationProfile
                     .ShouldApplyDefaultImportedTextureBudget(
                         Environment.GetEnvironmentVariable(
                             "NJULF_MAX_IMPORTED_TEXTURE_SIZE"),
@@ -444,6 +502,16 @@ internal sealed class HelloGame : Game
 
         vulkanRenderer.CaptureSceneKind =
             GetPerformanceCaptureSceneKind(_sceneKind);
+        if (_smokeOptions.Mode is SampleSmokeMode.None or
+            SampleSmokeMode.SceneTransition or
+            SampleSmokeMode.All)
+        {
+            // The interactive Cornell/Bistro pair activates hybrid
+            // reflections in Bistro. Provision its forward-attachment ABI
+            // before targets and pipelines are created so a scene switch does
+            // not rebuild the complete mesh-pipeline bank.
+            vulkanRenderer.ReserveHybridReflectionTargetProfile();
+        }
         if (ShouldAutoEnableGpuTiming())
             vulkanRenderer.Settings.Debug.AllowGpuTiming = true;
 
@@ -504,6 +572,13 @@ internal sealed class HelloGame : Game
         LightManager lightManager = services.GetRequiredService<LightManager>();
         VulkanRenderer renderer = Renderer as VulkanRenderer
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
+        if (_smokeOptions.Mode == SampleSmokeMode.SceneTransition)
+        {
+            // This gate measures content handoff and residency. Claim optional
+            // reflection initialization before the initial scene is prepared so
+            // cold driver compilation cannot overlap either transition leg.
+            renderer.DeferHybridReflectionPipelinePreparation();
+        }
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
             SampleAssetValidationGate.Validate(AppContext.BaseDirectory, SponzaAssetManifest);
         SampleInputController.Configure(input);
@@ -513,6 +588,25 @@ internal sealed class HelloGame : Game
                 static descriptor => descriptor.DisplayName)) + ".");
         PrintRendererDeviceInfo(renderer);
         Model model = LoadSampleScene(meshManager, materialManager, lightManager);
+        ContentManager contentManager =
+            services.GetRequiredService<ContentManager>();
+        _contentUploadPump =
+            services.GetRequiredService<IContentUploadPump>();
+        _sceneResidency = new SampleSceneResidencyCache(contentManager);
+        _sceneResidency.Capture(
+            _sceneKind,
+            GetModelSceneManifest(_sceneKind),
+            EstimateSceneResidencyBytes(_sceneKind));
+        _sceneResidency.MarkActive(_sceneKind);
+        _sceneTransition = new SampleSceneTransitionCoordinator(
+            PrepareSceneTransitionAsync,
+            target => CommitPreparedScene(
+                target,
+                meshManager,
+                materialManager,
+                lightManager,
+                renderer,
+                camera));
         _performanceScenarioRunner = CreatePerformanceScenarioRunner(meshManager, materialManager, lightManager);
         var diagnosticsReporter = new SampleDiagnosticsReporter(
             materialManager,
@@ -533,15 +627,15 @@ internal sealed class HelloGame : Game
         _inputController = new SampleInputController(
             camera,
             input,
-            Exit,
+            HandleExitRequest,
             renderer,
             lightManager,
             ResolveSceneLightingMode(),
             _sampleVfxEffects,
             _performanceScenarioRunner,
-            () => CycleScene(meshManager, materialManager, lightManager, renderer, camera),
-            () => CycleSponzaAndBistro(meshManager, materialManager, lightManager, renderer, camera),
-            sceneKind => LoadSceneKind(sceneKind, meshManager, materialManager, lightManager, renderer, camera),
+            () => CycleScene(renderer),
+            () => CycleSponzaAndBistro(renderer),
+            sceneKind => LoadSceneKind(sceneKind, renderer),
             () => diagnosticsReporter.ToggleDdgiFilter(),
             () => diagnosticsReporter.Filter,
             () => RestoreSceneRenderSettings(renderer),
@@ -611,9 +705,12 @@ internal sealed class HelloGame : Game
             requestAdvancedGiRestart: RequestAdvancedGiRestart,
             requestAdvancedGiFeatureRestart:
                 RequestAdvancedGiFeatureRestart,
-            loadModel: _sceneLoader is null
-                ? null
-                : _sceneLoader.LoadModelForRuntimeMetadata);
+            // Resolve through the loader that owns the *current* scene. A
+            // delegate captured during procedural-scene startup would fall
+            // back to default importer options after a later Bistro handoff,
+            // missing the prepared Amazon-Bistro cache entry and attempting a
+            // second synchronous model load during commit.
+            loadModel: LoadModelForEditorRuntimeMetadata);
         _editorPanels = new EditorImGuiPanels();
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
             _editorController.SetScenePath(Path.Combine(AppContext.BaseDirectory, "Scenes", "SampleScene.njscene.json"));
@@ -716,14 +813,13 @@ internal sealed class HelloGame : Game
 
         _sceneReloadRunner = new SampleSceneReloadRunner(() =>
         {
-            Scene.ClearAndDispose();
-            LoadSampleScene(meshManager, materialManager, lightManager);
-            SampleLighting.ConfigureRenderSettings(renderer.Settings, ResolveSceneLightingMode());
-            ApplySmokeRenderSettings(renderer);
-            ConfigureSceneLighting(lightManager);
-            ConfigureSceneEnvironment(renderer);
-            ConfigureSceneRenderSettings(renderer);
-            _inputController?.SetParticleEffects(_sampleVfxEffects);
+            CommitPreparedScene(
+                _sceneKind,
+                meshManager,
+                materialManager,
+                lightManager,
+                renderer,
+                camera);
             SamplePerformanceScenario reloadScenario = ResolveStartupScenario();
             if (reloadScenario != SamplePerformanceScenario.Normal)
             {
@@ -747,6 +843,18 @@ internal sealed class HelloGame : Game
                     new Silk.NET.Maths.Vector2D<int>(WindowWidth, WindowHeight);
                 return (size.X, size.Y);
             });
+        if (_smokeOptions.Mode == SampleSmokeMode.SceneTransition)
+        {
+            _bistroTransitionSmoke = new BistroTransitionSmokeState
+            {
+                InitialScene = _sceneKind
+            };
+            Console.WriteLine(
+                _sceneKind == SampleSceneKind.SponzaPlaza
+                    ? "Bistro transition smoke armed: exact Sponza -> cold Bistro."
+                    : "Bistro transition smoke armed: Cornell/GI -> cold Bistro " +
+                      "-> Cornell/GI -> resident Bistro.");
+        }
         if (_smokeOptions.Mode == SampleSmokeMode.LongRun)
         {
             var workload = new SampleDeterministicLongRunWorkload(
@@ -868,7 +976,7 @@ internal sealed class HelloGame : Game
                 "timingEligible=false.");
         }
 
-        PrintLoadedSceneSummary(model);
+        PrintLoadedSceneSummary(Scene, model);
     }
 
     private static void PrintRendererDeviceInfo(VulkanRenderer renderer)
@@ -1191,6 +1299,8 @@ internal sealed class HelloGame : Game
         float simulationDeltaTime = ResolveSimulationDeltaTime(
             deltaTime,
             _smokeOptions.UsesDeterministicSimulationClock);
+        AdvanceSceneTransitionHost();
+        AdvanceBistroTransitionSmoke();
         ApplyPendingSmokeResize();
         ObserveSmokeWindowMutation();
         _smokeRunner?.OnUpdate(_drawnFrames);
@@ -1652,6 +1762,62 @@ internal sealed class HelloGame : Game
         _drawnFrames++;
     }
 
+    protected override void OnFramePresented()
+    {
+        _presentedFrameSerial = _presentedFrameSerial == long.MaxValue
+            ? 1
+            : _presentedFrameSerial + 1;
+        RetirePresentedScenes();
+
+        if (_transitionLoadingScene != null &&
+            ReferenceEquals(Scene, _transitionLoadingScene))
+        {
+            _loadingFramePresented = true;
+        }
+
+        SampleSceneTransitionSnapshot snapshot =
+            _sceneTransition?.Snapshot ??
+            SampleSceneTransitionSnapshot.Idle;
+        if (snapshot.Phase != SampleSceneTransitionPhase.Completed ||
+            snapshot.Generation == _handledTransitionGeneration ||
+            ReferenceEquals(Scene, _transitionLoadingScene))
+        {
+            CompletePostPresentSceneCommit();
+            return;
+        }
+
+        _handledTransitionGeneration = snapshot.Generation;
+        long firstPresentMicroseconds = _transitionRequestTimestamp == 0
+            ? snapshot.ElapsedMicroseconds
+            : checked((long)Math.Round(
+                System.Diagnostics.Stopwatch.GetElapsedTime(
+                    _transitionRequestTimestamp).TotalMicroseconds));
+        SampleSceneTransitionLatencyEvaluation latency =
+            SampleSceneTransitionLatencyPolicy.Evaluate(
+                snapshot.Target,
+                _transitionWasResident,
+                firstPresentMicroseconds);
+        ObserveBistroTransitionFirstPresent(
+            snapshot.Target,
+            _transitionWasResident,
+            firstPresentMicroseconds);
+        if (snapshot.Target == SampleSceneKind.Bistro)
+        {
+            ScheduleHybridReflectionPipelinePreparation();
+        }
+        Console.WriteLine(
+            $"Scene transition ready: target={snapshot.Target}, " +
+            $"elapsed={firstPresentMicroseconds / 1_000_000.0:F3}s, " +
+            $"target<={latency.TargetMicroseconds / 1_000_000.0:F3}s, " +
+            $"cache={latency.CacheClass}, " +
+            $"outcome={(latency.MeetsTarget ? "target-met" : "above-target")}, " +
+            $"phase=first-present.");
+        RestoreWindowTitle();
+        _sceneTransition!.ResetToIdle();
+        CompletePostPresentSceneCommit();
+        StartPendingDeferredSceneStreaming();
+    }
+
     private bool CaptureDiagnosticScreenshot(string path)
     {
         if (Window == null)
@@ -1679,6 +1845,16 @@ internal sealed class HelloGame : Game
 
     protected override void Unload()
     {
+        CancelDeferredSceneStreaming();
+        _sceneTransition?.Dispose();
+        _sceneTransition = null;
+        DiscardPreparedSceneTransition();
+        _transitionPreviousScene?.Dispose();
+        _transitionPreviousScene = null;
+        _transitionLoadingScene = null;
+        _loadingSceneInstancesReleased = false;
+        _loadingResidencyAssetsReleased = false;
+        RetirePresentedScenes(forceAll: true);
         _bistroQualityRuntimeController?.Restore();
         _materialGiCaptureRunner?.CancelIfIncomplete(
             _startupFailure ?? "The application closed before the material/GI capture completed.");
@@ -1930,19 +2106,109 @@ internal sealed class HelloGame : Game
         return camera;
     }
 
-    private Model LoadSampleScene(MeshManager meshManager, MaterialManager materialManager, LightManager lightManager)
-    {
-        _sampleVfxEffects = Array.Empty<ParticleEffectInstance>();
+    private sealed record SampleSceneBuild(
+        Model Model,
+        SampleSceneLoader? Loader,
+        IReadOnlyList<ParticleEffectInstance> VfxEffects);
 
-        Model Finish(Model model)
+    private sealed record PreparedSceneTransition(
+        long Generation,
+        SampleSceneKind Kind,
+        Scene Scene,
+        SampleSceneBuild Build,
+        bool FirstViewOnly);
+
+    private sealed record PendingPostPresentSceneCommit(
+        SampleSceneKind Target,
+        SampleAssetManifest? Manifest,
+        bool FirstViewOnly,
+        SampleSceneKind? ProtectedKind);
+
+    private sealed record DeferredSceneRetirement(
+        Scene Scene,
+        long RetireAfterPresent);
+
+    private sealed record PendingDeferredSceneStreaming(
+        long Generation,
+        SampleSceneKind Kind,
+        Scene Scene,
+        SampleSceneLoader Loader,
+        SampleAssetManifest Manifest);
+
+    private sealed class DeferredSceneStreaming
+    {
+        public required long Generation { get; init; }
+        public required SampleSceneKind Kind { get; init; }
+        public required Scene Scene { get; init; }
+        public required SampleSceneLoader Loader { get; init; }
+        public required IReadOnlyList<SampleAssetReference> Assets { get; init; }
+        public required CancellationTokenSource Cancellation { get; init; }
+        public required Task Preparation { get; init; }
+        public required long StartedTimestamp { get; init; }
+        public bool PreparationObserved { get; set; }
+        public int AssetIndex { get; set; }
+        public SampleSceneLoader.PreparedAssetAttachment? Attachment
         {
-            SampleReflectionPolicy.EnsureProbeFree(Scene);
-            return model;
+            get;
+            set;
+        }
+    }
+
+    private sealed class DelegateContentLoadProgressSink :
+        IContentLoadProgressSink
+    {
+        private readonly Action<ContentLoadProgressEvent> _report;
+
+        public DelegateContentLoadProgressSink(
+            Action<ContentLoadProgressEvent> report)
+        {
+            _report = report ??
+                throw new ArgumentNullException(nameof(report));
         }
 
-        if (_sceneKind == SampleSceneKind.MaterialShowcase)
+        public void Report(ContentLoadProgressEvent progress) =>
+            _report(progress);
+    }
+
+    private Model LoadSampleScene(
+        MeshManager meshManager,
+        MaterialManager materialManager,
+        LightManager lightManager)
+    {
+        SampleSceneBuild build = BuildSampleScene(
+            Scene,
+            _sceneKind,
+            meshManager,
+            materialManager,
+            lightManager);
+        PublishSceneBuild(build);
+        return build.Model;
+    }
+
+    private SampleSceneBuild BuildSampleScene(
+        Scene targetScene,
+        SampleSceneKind sceneKind,
+        MeshManager meshManager,
+        MaterialManager materialManager,
+        LightManager lightManager,
+        bool firstViewOnly = false)
+    {
+        ArgumentNullException.ThrowIfNull(targetScene);
+        IReadOnlyList<ParticleEffectInstance> sampleVfxEffects =
+            Array.Empty<ParticleEffectInstance>();
+        SampleSceneLoader? sceneLoader = null;
+
+        SampleSceneBuild Finish(Model model)
         {
-            _sceneLoader = null;
+            SampleReflectionPolicy.EnsureProbeFree(targetScene);
+            return new SampleSceneBuild(
+                model,
+                sceneLoader,
+                sampleVfxEffects);
+        }
+
+        if (sceneKind == SampleSceneKind.MaterialShowcase)
+        {
             if (_smokeOptions.KhronosMaterialGiRenderedGate is { } gateOptions)
             {
                 try
@@ -1954,10 +2220,9 @@ internal sealed class HelloGame : Game
                     _khronosMaterialGiRenderedScene =
                         SampleKhronosMaterialGiRenderedSceneBuilder.Build(
                             gateOptions,
-                            Scene,
+                            targetScene,
                             contentManager,
                             materialManager);
-                    meshManager.CompactStaticBuffers();
                     Console.WriteLine(
                         $"Official Khronos Material/GI scene: " +
                         $"assets={_khronosMaterialGiRenderedScene.Assets.Count}, " +
@@ -1986,11 +2251,10 @@ internal sealed class HelloGame : Game
                         "Material/GI conformance capture requires the renderer TextureManager.");
                 SampleMaterialGiConformanceSceneBuildSummary summary =
                     SampleMaterialGiConformanceScene.Configure(
-                        Scene,
+                        targetScene,
                         meshManager,
                         materialManager,
                         textureManager);
-                meshManager.CompactStaticBuffers();
                 Console.WriteLine(
                     $"Material/GI conformance scene: fixtures={summary.FixtureCount}, " +
                     $"oracleCases={summary.CatalogCaseFixtureCount}, skinned={summary.SkinnedFixtureCount}, " +
@@ -2002,88 +2266,86 @@ internal sealed class HelloGame : Game
                 ?? throw new InvalidOperationException(
                     "The material showcase requires the renderer TextureManager.");
             SampleMaterialShowcaseScene.Configure(
-                Scene,
+                targetScene,
                 meshManager,
                 materialManager,
                 showcaseTextureManager);
-            meshManager.CompactStaticBuffers();
             return Finish(new Model { Name = "Material Showcase" });
         }
 
-        if (_sceneKind == SampleSceneKind.AnalyticalAreaLights)
+        if (sceneKind == SampleSceneKind.AnalyticalAreaLights)
         {
-            _sceneLoader = null;
             SampleAnalyticalAreaLightRoomScene.Configure(
-                Scene,
+                targetScene,
                 meshManager,
                 materialManager);
-            meshManager.CompactStaticBuffers();
             return Finish(new Model { Name = "Analytical Area Light Room" });
         }
 
-        if (_sceneKind == SampleSceneKind.FoliageShowcase)
+        if (sceneKind == SampleSceneKind.FoliageShowcase)
         {
-            _sceneLoader = null;
-            Scene.Name = "Njulf Foliage Showcase";
+            targetScene.Name = "Njulf Foliage Showcase";
             var builder = new SampleStressSceneBuilder(
-                Scene,
+                targetScene,
                 meshManager,
                 materialManager,
                 lightManager,
-                SampleLightingMode.DirectionalKey);
+                SampleLightingMode.DirectionalKey,
+                _sampleStressSceneResources);
             builder.Apply(SamplePerformanceScenario.ForestFoliage);
-            meshManager.CompactStaticBuffers();
             return Finish(new Model { Name = "Foliage Showcase" });
         }
 
-        if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
+        if (sceneKind == SampleSceneKind.GlobalIlluminationTest)
         {
-            _sceneLoader = null;
-            Scene.Name = "Njulf GI Test Scene";
+            targetScene.Name = "Njulf GI Test Scene";
             var builder = new SampleStressSceneBuilder(
-                Scene,
+                targetScene,
                 meshManager,
                 materialManager,
                 lightManager,
-                LightingMode);
+                LightingMode,
+                _sampleStressSceneResources);
             builder.Apply(SamplePerformanceScenario.GiCornellRoom);
-            meshManager.CompactStaticBuffers();
             return Finish(new Model { Name = "GI Test Scene" });
         }
 
-        if (_sceneKind == SampleSceneKind.VfxShowcase)
+        if (sceneKind == SampleSceneKind.VfxShowcase)
         {
-            _sceneLoader = null;
-            _sampleVfxEffects = SampleVfxShowcaseScene.Configure(Scene, meshManager, materialManager);
-            meshManager.CompactStaticBuffers();
+            sampleVfxEffects = SampleVfxShowcaseScene.Configure(
+                targetScene,
+                meshManager,
+                materialManager);
             return Finish(new Model { Name = "VFX Showcase" });
         }
 
-        SampleAssetManifest assetManifest = GetModelSceneManifest(_sceneKind)
+        SampleAssetManifest assetManifest = GetModelSceneManifest(sceneKind)
             ?? throw new InvalidOperationException(
-                $"Scene '{_sceneKind}' does not have a model asset manifest.");
-        _sceneLoader = new SampleSceneLoader(
+                $"Scene '{sceneKind}' does not have a model asset manifest.");
+        sceneLoader = new SampleSceneLoader(
             Content!,
             materialManager,
             meshManager,
             lightManager,
             assetManifest,
-            loadSceneDocument: _sceneKind == SampleSceneKind.SponzaPlaza,
+            loadSceneDocument: sceneKind == SampleSceneKind.SponzaPlaza,
             sponzaFixtureMode: _smokeOptions.SponzaFixtureMode);
-        Model model = _sceneLoader.Load(Scene);
-        if (_sceneKind == SampleSceneKind.SponzaPlaza &&
-            !_sceneLoader.LoadedFromDocument)
+        Model model = firstViewOnly
+            ? sceneLoader.LoadFirstView(targetScene)
+            : sceneLoader.Load(targetScene);
+        if (sceneKind == SampleSceneKind.SponzaPlaza &&
+            !sceneLoader.LoadedFromDocument)
         {
-            SamplePlazaGlobalIllumination.ConfigureSceneLighting(Scene);
+            SamplePlazaGlobalIllumination.ConfigureSceneLighting(targetScene);
         }
-        if (_sceneKind == SampleSceneKind.SponzaPlaza &&
-            !_sceneLoader.LoadedFromDocument &&
+        if (sceneKind == SampleSceneKind.SponzaPlaza &&
+            !sceneLoader.LoadedFromDocument &&
             _smokeOptions.SponzaFixtureMode ==
                 SampleSponzaFixtureMode.AnimationDemo)
         {
-            SampleAnimatedCharacter.Configure(Scene, Content!);
+            SampleAnimatedCharacter.Configure(targetScene, Content!);
         }
-        if (_sceneKind == SampleSceneKind.SponzaPlaza &&
+        if (sceneKind == SampleSceneKind.SponzaPlaza &&
             _smokeOptions.SponzaFixtureMode ==
                 SampleSponzaFixtureMode.C5ResidualValidation)
         {
@@ -2091,13 +2353,19 @@ internal sealed class HelloGame : Game
                 ?? throw new InvalidOperationException(
                     "The Sponza C5 emissive test sphere requires the renderer TextureManager.");
             SampleSponzaNearFieldResidualTestSphere.Configure(
-                Scene,
+                targetScene,
                 meshManager,
                 materialManager,
                 sponzaTextureManager);
         }
-        meshManager.CompactStaticBuffers();
         return Finish(model);
+    }
+
+    private void PublishSceneBuild(SampleSceneBuild build)
+    {
+        ArgumentNullException.ThrowIfNull(build);
+        _sceneLoader = build.Loader;
+        _sampleVfxEffects = build.VfxEffects;
     }
 
     private void ConfigureSceneRenderSettings(VulkanRenderer renderer)
@@ -2124,6 +2392,9 @@ internal sealed class HelloGame : Game
         else if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
         {
             SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.GiCornellRoom);
+            settings.AmbientOcclusion.ResolutionScale =
+                SampleBistroGlobalIlluminationProfile
+                    .TransitionAmbientOcclusionResolutionScale;
             settings.Particles.Enabled = false;
         }
         else if (_sceneKind == SampleSceneKind.VfxShowcase)
@@ -2254,23 +2525,15 @@ internal sealed class HelloGame : Game
             meshManager,
             materialManager,
             lightManager,
-            LightingMode));
+            LightingMode,
+            _sampleStressSceneResources));
     }
 
-    private void CycleScene(
-        MeshManager meshManager,
-        MaterialManager materialManager,
-        LightManager lightManager,
-        VulkanRenderer renderer,
-        FirstPersonCamera camera)
+    private void CycleScene(VulkanRenderer renderer)
     {
         LoadSceneKind(
             GetNextKey3Scene(_sceneKind),
-            meshManager,
-            materialManager,
-            lightManager,
-            renderer,
-            camera);
+            renderer);
     }
 
     internal static SampleSceneKind GetNextKey3Scene(SampleSceneKind current)
@@ -2280,83 +2543,1929 @@ internal sealed class HelloGame : Game
         return sceneKinds[(index + 1) % sceneKinds.Length];
     }
 
-    private void CycleSponzaAndBistro(
-        MeshManager meshManager,
-        MaterialManager materialManager,
-        LightManager lightManager,
-        VulkanRenderer renderer,
-        FirstPersonCamera camera)
+    private void CycleSponzaAndBistro(VulkanRenderer renderer)
     {
         SampleSceneKind nextScene = _sceneKind == SampleSceneKind.SponzaPlaza
             ? SampleSceneKind.Bistro
             : SampleSceneKind.SponzaPlaza;
         LoadSceneKind(
             nextScene,
-            meshManager,
-            materialManager,
-            lightManager,
-            renderer,
-            camera);
+            renderer);
     }
 
     private bool LoadSceneKind(
         SampleSceneKind sceneKind,
-        MeshManager meshManager,
-        MaterialManager materialManager,
-        LightManager lightManager,
-        VulkanRenderer renderer,
-        FirstPersonCamera camera)
+        VulkanRenderer renderer)
     {
-        ClearSceneAndContent();
-        bool requestedSceneLoaded =
-            SampleSceneTransitionRecovery.Execute(
-                loadRequestedScene: () =>
-                    LoadSceneKindCore(
-                        sceneKind,
-                        meshManager,
-                        materialManager,
-                        lightManager,
-                        renderer,
-                        camera),
-                cleanupRequestedScene: ClearSceneAndContent,
-                loadSafeScene: () =>
-                    LoadSceneKindCore(
-                        SampleSceneKind.GlobalIlluminationTest,
-                        meshManager,
-                        materialManager,
-                        lightManager,
-                        renderer,
-                        camera),
-                cleanupFailedSafeScene: ClearSceneAndContent,
-                reportRequestedFailure: failure =>
-                {
-                    Console.Error.WriteLine(
-                        $"Scene '{GetSceneDisplayName(sceneKind)}' exhausted Vulkan device memory. Attempting the safe GI scene.");
-                    Console.Error.WriteLine(failure);
-                });
-
-        if (!requestedSceneLoaded)
-        {
-            Console.Error.WriteLine(
-                $"Recovered from the failed '{GetSceneDisplayName(sceneKind)}' load with '{GetSceneDisplayName(SampleSceneKind.GlobalIlluminationTest)}'.");
-        }
-
-        return requestedSceneLoaded;
+        return RequestSceneTransition(sceneKind, renderer);
     }
 
-    private void LoadSceneKindCore(
-        SampleSceneKind sceneKind,
+    private bool RequestSceneTransition(
+        SampleSceneKind target,
+        VulkanRenderer renderer)
+    {
+        long feedbackStarted =
+            System.Diagnostics.Stopwatch.GetTimestamp();
+        SampleSceneTransitionCoordinator coordinator =
+            _sceneTransition ?? throw new InvalidOperationException(
+                "Scene transition services are not initialized.");
+        SampleSceneResidencyCache residency =
+            _sceneResidency ?? throw new InvalidOperationException(
+                "Scene residency services are not initialized.");
+
+        if (target == _sceneKind &&
+            !coordinator.IsActive &&
+            _transitionLoadingScene == null)
+        {
+            return true;
+        }
+
+        _transitionRequestTimestamp = feedbackStarted;
+        if (target != SampleSceneKind.Bistro &&
+            !_hybridReflectionPreparationStarted)
+        {
+            _hybridReflectionPreparationEligiblePresentSerial =
+                long.MaxValue;
+        }
+
+        if (coordinator.IsActive)
+            coordinator.Cancel();
+        DiscardPreparedSceneTransition();
+        CancelDeferredSceneStreaming();
+        RestoreDeferredPreviousScene();
+
+        bool alreadyLoading = _transitionLoadingScene != null &&
+            ReferenceEquals(Scene, _transitionLoadingScene);
+        bool residentCacheHit = residency.Contains(target);
+        SampleAssetManifest? targetManifest =
+            GetModelSceneManifest(target);
+        bool requiresImportedContent = targetManifest != null;
+        ulong targetBytes = residentCacheHit || !requiresImportedContent
+            ? 0
+            : EstimateTransitionAdmissionBytes(
+                target,
+                targetManifest!);
+        SampleSceneTransitionMemoryDecision memory =
+            EvaluateSceneTransitionMemory(
+                renderer,
+                targetBytes);
+        bool useLoadingScene = alreadyLoading ||
+            !memory.KeepCurrentScene;
+        _transitionKeepsPreviousResidency = !useLoadingScene;
+        residency.MarkPending(target);
+
+        long generation = coordinator.Request(
+            target,
+            waitForLoadingFrame: useLoadingScene && !alreadyLoading);
+        _transitionWasResident = residentCacheHit;
+        if (useLoadingScene && !alreadyLoading)
+        {
+            try
+            {
+                ActivateLoadingScene(generation, target, memory);
+            }
+            catch (Exception activationFailure)
+            {
+                coordinator.Fail(
+                    generation,
+                    activationFailure,
+                    "the lightweight loading scene could not be activated");
+                residency.MarkPending(null);
+                Console.Error.WriteLine(
+                    $"Scene transition to '{target}' was rejected: " +
+                    activationFailure.Message);
+                coordinator.ResetToIdle();
+                RestoreWindowTitle();
+                return false;
+            }
+        }
+        else
+            _loadingTransitionGeneration = generation;
+
+        Console.WriteLine(
+            $"Scene transition requested: generation={generation}, " +
+            $"from={_sceneKind}, to={target}, " +
+            $"mode={(useLoadingScene ? "loading-scene" : "overlap")}, " +
+            $"reason={memory.Reason}.");
+        UpdateSceneTransitionTitle(coordinator.Snapshot);
+        long feedbackMicroseconds = checked((long)Math.Round(
+            System.Diagnostics.Stopwatch.GetElapsedTime(feedbackStarted)
+                .TotalMicroseconds));
+        if (feedbackMicroseconds >
+            SampleSceneTransitionLatencyPolicy
+                .FeedbackTargetMicroseconds)
+        {
+            Console.WriteLine(
+                $"Scene transition feedback hitch: " +
+                $"elapsed={feedbackMicroseconds / 1000.0:F3}ms, " +
+                $"target<={SampleSceneTransitionLatencyPolicy.FeedbackTargetMicroseconds / 1000.0:F3}ms.");
+        }
+        ObserveBistroTransitionHitch(feedbackMicroseconds);
+        return true;
+    }
+
+    private async Task PrepareSceneTransitionAsync(
+        SampleSceneKind target,
+        IContentLoadProgressSink progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+        // The coordinator invokes this callback from the input/update thread.
+        // Yield before starting cache lookup or content-manager work so the
+        // transition request can publish feedback within the host-step budget.
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        long generation = _sceneTransition?.Snapshot.Generation ?? 0L;
+        Volatile.Write(
+            ref _scenePreparationGeneration,
+            generation);
+        Task environmentPreparation =
+            PrepareSceneEnvironmentResourcesAsync(
+                target,
+                cancellationToken);
+        SampleAssetManifest? manifest = GetModelSceneManifest(target);
+        if (manifest == null)
+        {
+            await environmentPreparation.ConfigureAwait(false);
+            progress.Report(new ContentLoadProgressEvent(
+                target.ToString(),
+                ContentLoadPriority.Critical,
+                ContentLoadStage.Ready,
+                Message: "procedural scene requires no content preload"));
+            return;
+        }
+
+        if (_sceneResidency?.Contains(target) == true)
+        {
+            Task scenePreparation =
+                PrepareImportedSceneGraphAsync(
+                    generation,
+                    target,
+                    cancellationToken);
+            await Task.WhenAll(
+                    environmentPreparation,
+                    scenePreparation)
+                .ConfigureAwait(false);
+            progress.Report(new ContentLoadProgressEvent(
+                target.ToString(),
+                ContentLoadPriority.Critical,
+                ContentLoadStage.Ready,
+                checked((long)Math.Min(
+                    long.MaxValue,
+                    _sceneResidency.GetEstimatedBytes(target))),
+                "scene residency cache hit"));
+            return;
+        }
+
+        IAsyncContentManager content = Services?
+            .GetRequiredService<IAsyncContentManager>() ??
+            throw new InvalidOperationException(
+                "Asynchronous content services are unavailable.");
+        SampleAssetReference[] assets = manifest
+            .EnumerateAssets(SampleAssetLoadTier.Critical)
+            .GroupBy(
+                static asset => asset.CreateContentIdentity(),
+                StringComparer.OrdinalIgnoreCase)
+            .Select(static group => group.First())
+            .ToArray();
+        if (assets.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"Scene '{target}' has no critical first-view assets.");
+        }
+        foreach (IGrouping<
+                     (ModelImportBackend Backend,
+                      AssimpMaterialTextureConvention Convention),
+                     SampleAssetReference> group in assets.GroupBy(asset =>
+                     (asset.ExpectedBackend,
+                      asset.AssimpMaterialTextureConvention)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SampleAssetReference[] groupedAssets = group.ToArray();
+            ContentPreloadRequest[] requests = groupedAssets
+                .Select(asset => new ContentPreloadRequest(
+                    asset.Path,
+                    ContentLoadPriority.Critical,
+                    EstimateAssetPreloadBytes(asset.Path)))
+                .ToArray();
+            ContentPreloadResult<Model> result = await content
+                .PreloadAsync<Model>(
+                    requests,
+                    new ContentPreloadOptions
+                    {
+                        MaxConcurrency = 2,
+                        MaxInflightBytes =
+                            TransitionPreloadInflightBytes,
+                        LoadOptions = groupedAssets[0]
+                            .CreateLoadOptions(),
+                        Progress = progress
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            Exception[] failures = result.Items
+                .Where(static item => item.Failure != null)
+                .Select(static item => item.Failure!)
+                .ToArray();
+            if (failures.Length == 1)
+                throw failures[0];
+            if (failures.Length > 1)
+            {
+                throw new AggregateException(
+                    $"Scene '{target}' content preload failed.",
+                    failures);
+            }
+            if (result.CancelledCount != 0)
+                throw new OperationCanceledException(cancellationToken);
+        }
+
+        Task firstViewPreparation = PrepareImportedSceneGraphAsync(
+            generation,
+            target,
+            cancellationToken);
+        await Task.WhenAll(
+                environmentPreparation,
+                firstViewPreparation)
+            .ConfigureAwait(false);
+    }
+
+    private async Task PrepareImportedSceneGraphAsync(
+        long generation,
+        SampleSceneKind target,
+        CancellationToken cancellationToken)
+    {
+        // Bistro's cached model contains thousands of renderer-owned object
+        // templates. Cloning them at publication used to monopolize the host
+        // thread for hundreds of milliseconds even though GPU upload was
+        // already complete. Build an isolated scene on a worker after preload;
+        // only the final pointer exchange remains on the deterministic host.
+        if (target != SampleSceneKind.Bistro)
+            return;
+
+        PreparedSceneTransition prepared = await Task.Run(
+                () => CreatePreparedImportedScene(
+                    generation,
+                    target,
+                    cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(false);
+        PreparedSceneTransition? replaced = null;
+        bool accepted = false;
+        lock (_preparedSceneTransitionGate)
+        {
+            if (!cancellationToken.IsCancellationRequested &&
+                Volatile.Read(ref _scenePreparationGeneration) ==
+                    generation)
+            {
+                replaced = _preparedSceneTransition;
+                _preparedSceneTransition = prepared;
+                accepted = true;
+            }
+        }
+
+        replaced?.Scene.Dispose();
+        if (accepted)
+            return;
+
+        prepared.Scene.Dispose();
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new OperationCanceledException(
+            "Scene preparation was superseded by a newer transition.",
+            cancellationToken);
+    }
+
+    private PreparedSceneTransition CreatePreparedImportedScene(
+        long generation,
+        SampleSceneKind target,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IServiceProvider services = Services ??
+            throw new InvalidOperationException(
+                "Scene preparation services are unavailable.");
+        MeshManager meshManager =
+            services.GetRequiredService<MeshManager>();
+        MaterialManager materialManager =
+            services.GetRequiredService<MaterialManager>();
+        LightManager lightManager =
+            services.GetRequiredService<LightManager>();
+        SampleAssetManifest manifest = GetModelSceneManifest(target) ??
+            throw new InvalidOperationException(
+                $"Scene '{target}' has no imported asset manifest.");
+        bool firstViewOnly = manifest.HasDeferredAssets &&
+            _sceneResidency?.GetState(target) !=
+                SampleSceneResidencyState.FullyResident;
+        var scene = new Scene
+        {
+            Name = GetSceneDisplayName(target)
+        };
+        try
+        {
+            SampleSceneBuild build = BuildSampleScene(
+                scene,
+                target,
+                meshManager,
+                materialManager,
+                lightManager,
+                firstViewOnly);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new PreparedSceneTransition(
+                generation,
+                target,
+                scene,
+                build,
+                firstViewOnly);
+        }
+        catch
+        {
+            scene.Dispose();
+            throw;
+        }
+    }
+
+    private PreparedSceneTransition? TakePreparedSceneTransition(
+        SampleSceneKind target)
+    {
+        long generation = _sceneTransition?.Snapshot.Generation ?? 0L;
+        lock (_preparedSceneTransitionGate)
+        {
+            PreparedSceneTransition? prepared =
+                _preparedSceneTransition;
+            if (prepared == null ||
+                prepared.Generation != generation ||
+                prepared.Kind != target)
+            {
+                return null;
+            }
+
+            _preparedSceneTransition = null;
+            return prepared;
+        }
+    }
+
+    private void DiscardPreparedSceneTransition()
+    {
+        PreparedSceneTransition? prepared;
+        lock (_preparedSceneTransitionGate)
+        {
+            prepared = _preparedSceneTransition;
+            _preparedSceneTransition = null;
+        }
+
+        prepared?.Scene.Dispose();
+    }
+
+    private Task PrepareSceneEnvironmentResourcesAsync(
+        SampleSceneKind target,
+        CancellationToken cancellationToken)
+    {
+        if (target != SampleSceneKind.Bistro ||
+            Renderer is not VulkanRenderer renderer)
+        {
+            return Task.CompletedTask;
+        }
+
+        var targetSettings = new RenderSettings();
+        SampleBistroGlobalIlluminationProfile.Configure(targetSettings);
+        return renderer.PrepareEnvironmentResourcesAsync(
+            targetSettings.Environment,
+            cancellationToken);
+    }
+
+    private void AdvanceSceneTransitionHost()
+    {
+        TryBeginHybridReflectionPipelinePreparation();
+        SampleSceneTransitionCoordinator? coordinator =
+            _sceneTransition;
+        if (coordinator == null)
+            return;
+
+        if (_loadingFramePresented &&
+            coordinator.Snapshot.Phase ==
+                SampleSceneTransitionPhase.WaitingForLoadingFrame &&
+            coordinator.Snapshot.Generation ==
+                _loadingTransitionGeneration)
+        {
+            long releaseStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            string releaseStage = _loadingSceneInstancesReleased
+                ? _loadingResidencyAssetsReleased
+                    ? "loading-content-cache-release"
+                    : "loading-residency-asset-release"
+                : "loading-scene-instance-release";
+            try
+            {
+                ReleasePreviousSceneForLoadingTransition(coordinator);
+            }
+            catch (Exception releaseFailure)
+            {
+                coordinator.Fail(
+                    _loadingTransitionGeneration,
+                    releaseFailure,
+                    "the previous scene could not be released after the loading frame");
+            }
+            ReportTransitionHitch(
+                releaseStage,
+                releaseStarted);
+        }
+
+        if (_contentUploadPump?.PendingCount > 0)
+        {
+            ContentUploadPumpResult upload =
+                _contentUploadPump.ProcessFrame(
+                    TransitionUploadCpuBudget,
+                    maximumCallbacks:
+                        TransitionUploadCallbacksPerFrame,
+                    maximumSubmissionBytes:
+                        TransitionUploadSubmissionBytes);
+            if (upload.ProcessedCount > 0)
+            {
+                coordinator.ObserveHostActivity(
+                    coordinator.Snapshot.Generation);
+            }
+            ObserveBistroTransitionHitch(
+                upload.ElapsedMicroseconds);
+            if (upload.ElapsedMicroseconds >
+                SampleSceneTransitionLatencyPolicy
+                    .HitchTargetMicroseconds)
+            {
+                Console.WriteLine(
+                    $"Scene transition upload hitch: " +
+                    $"elapsed={upload.ElapsedMicroseconds / 1000.0:F3}ms, " +
+                    $"remaining={upload.RemainingCount}.");
+            }
+        }
+
+        long advanceStarted =
+            System.Diagnostics.Stopwatch.GetTimestamp();
+        SampleSceneTransitionPhase phaseBeforeAdvance =
+            coordinator.Snapshot.Phase;
+        coordinator.Advance();
+        AdvanceDeferredSceneStreaming();
+        SampleSceneTransitionPhase phaseAfterAdvance =
+            coordinator.Snapshot.Phase;
+        bool committedDuringAdvance =
+            phaseAfterAdvance is (
+                SampleSceneTransitionPhase.Completed or
+                SampleSceneTransitionPhase.Failed) &&
+            phaseBeforeAdvance is (
+                SampleSceneTransitionPhase.Decoding or
+                SampleSceneTransitionPhase.WaitingForUpload);
+        ReportTransitionHitch(
+            committedDuringAdvance
+                ? "scene-commit"
+                : "transition-advance",
+            advanceStarted);
+        SampleSceneTransitionSnapshot snapshot = coordinator.Snapshot;
+        if (snapshot.Phase != _lastReportedTransitionPhase)
+        {
+            _lastReportedTransitionPhase = snapshot.Phase;
+            if (snapshot.Phase != SampleSceneTransitionPhase.Idle)
+            {
+                Console.WriteLine(
+                    $"Scene transition: generation={snapshot.Generation}, " +
+                    $"target={snapshot.Target}, phase={snapshot.Phase}, " +
+                    $"progress={snapshot.Progress:P0}, " +
+                    $"detail={snapshot.Detail}.");
+            }
+        }
+        UpdateSceneTransitionTitle(snapshot);
+
+        if (snapshot.Generation == 0 ||
+            snapshot.Generation == _handledTransitionGeneration ||
+            snapshot.Phase is not (
+                SampleSceneTransitionPhase.Cancelled or
+                SampleSceneTransitionPhase.Failed))
+        {
+            return;
+        }
+
+        _handledTransitionGeneration = snapshot.Generation;
+        _sceneResidency?.MarkPending(null);
+        DiscardPreparedSceneTransition();
+        if (snapshot.Phase == SampleSceneTransitionPhase.Failed)
+        {
+            Console.Error.WriteLine(
+                $"Scene transition to '{snapshot.Target}' failed: " +
+                $"{snapshot.Failure?.GetType().Name}: " +
+                $"{snapshot.Detail}");
+            FailBistroTransitionSmoke(
+                $"Transition to '{snapshot.Target}' failed: " +
+                snapshot.Detail);
+        }
+
+        if (_transitionPreviousScene != null)
+        {
+            RestoreDeferredPreviousScene();
+        }
+        else if (_transitionLoadingScene != null &&
+                 ReferenceEquals(Scene, _transitionLoadingScene))
+        {
+            RecoverSafeSceneAfterTransitionFailure();
+        }
+
+        RestoreWindowTitle();
+        coordinator.ResetToIdle();
+    }
+
+    private void CommitPreparedScene(
+        SampleSceneKind target,
         MeshManager meshManager,
         MaterialManager materialManager,
         LightManager lightManager,
         VulkanRenderer renderer,
         FirstPersonCamera camera)
     {
-        _sceneKind = sceneKind;
-        UpdateVfxVolumetricDemoOverrideOwnership(renderer.Settings);
-        renderer.CaptureSceneKind = GetPerformanceCaptureSceneKind(_sceneKind);
+        long commitProfileStarted =
+            System.Diagnostics.Stopwatch.GetTimestamp();
+        long commitPhaseStarted = commitProfileStarted;
+        long snapshotMicroseconds;
+        long buildMicroseconds = 0;
+        long publicationMicroseconds = 0;
+        long applyStateMicroseconds = 0;
+        long rendererPreparationMicroseconds = 0;
+        long exchangeMicroseconds = 0;
+        long retirementMicroseconds;
+        long residencyMicroseconds;
+        PreparedSceneTransition? prepared =
+            TakePreparedSceneTransition(target);
+        Scene targetScene = prepared?.Scene ?? new Scene
+        {
+            Name = GetSceneDisplayName(target)
+        };
+        Scene activeScene = Scene;
+        SampleSceneKind previousKind = _sceneKind;
+        SampleSceneLoader? previousLoader = _sceneLoader;
+        IReadOnlyList<ParticleEffectInstance>? previousVfx =
+            _sampleVfxEffects;
+        SamplePerformanceScenarioRunner? previousScenario =
+            _performanceScenarioRunner;
+        LightRecord[] previousLights = lightManager.GetLightRecords()
+            .ToArray();
+        CoreVector3 previousCameraPosition = camera.Position;
+        float previousCameraYaw = camera.Yaw;
+        float previousCameraPitch = camera.Pitch;
+        float previousCameraFov = camera.FieldOfView;
+        float previousCameraNear = camera.NearPlane;
+        float previousCameraFar = camera.FarPlane;
+        bool exchanged = false;
+        SampleAssetManifest? targetManifest =
+            GetModelSceneManifest(target);
+        bool firstViewOnly = prepared?.FirstViewOnly ??
+            (targetManifest?.HasDeferredAssets == true &&
+             _sceneResidency?.GetState(target) !=
+                 SampleSceneResidencyState.FullyResident);
+        SampleSceneBuild? committedBuild = null;
+        snapshotMicroseconds = ElapsedMicroseconds(
+            commitPhaseStarted);
 
-        Model model = LoadSampleScene(meshManager, materialManager, lightManager);
+        try
+        {
+            commitPhaseStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            lightManager.ClearLights();
+            SampleSceneBuild build = prepared?.Build ??
+                BuildSampleScene(
+                    targetScene,
+                    target,
+                    meshManager,
+                    materialManager,
+                    lightManager,
+                    firstViewOnly);
+            committedBuild = build;
+            buildMicroseconds = ElapsedMicroseconds(
+                commitPhaseStarted);
+
+            commitPhaseStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            _sceneKind = target;
+            PublishSceneBuild(build);
+            renderer.CaptureSceneKind =
+                GetPerformanceCaptureSceneKind(target);
+            if (target == SampleSceneKind.Bistro)
+            {
+                // Reserve the optional reflection family before Bistro's
+                // settings become active. Driver work remains dormant until
+                // this exterior has presented once.
+                renderer.DeferHybridReflectionPipelinePreparation();
+            }
+            publicationMicroseconds = ElapsedMicroseconds(
+                commitPhaseStarted);
+            commitPhaseStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            ApplyLoadedSceneState(
+                targetScene,
+                meshManager,
+                materialManager,
+                lightManager,
+                renderer,
+                camera,
+                build.Model);
+            applyStateMicroseconds = ElapsedMicroseconds(
+                commitPhaseStarted);
+            commitPhaseStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            renderer.PrepareScene(targetScene, camera);
+            rendererPreparationMicroseconds = ElapsedMicroseconds(
+                commitPhaseStarted);
+            commitPhaseStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            Scene previous = ExchangeScene(targetScene);
+            if (!ReferenceEquals(previous, activeScene))
+            {
+                throw new InvalidOperationException(
+                    "The active scene changed while a prepared scene was being committed.");
+            }
+            exchanged = true;
+            exchangeMicroseconds = ElapsedMicroseconds(
+                commitPhaseStarted);
+#if NJULF_EDITOR
+            _pendingEditorScene = targetScene;
+#endif
+        }
+        catch
+        {
+            if (exchanged)
+            {
+                Scene failedScene = ExchangeScene(activeScene);
+                if (!ReferenceEquals(failedScene, targetScene))
+                {
+                    throw new InvalidOperationException(
+                        "Scene rollback observed an unexpected active scene.");
+                }
+            }
+
+            _sceneKind = previousKind;
+            _sceneLoader = previousLoader;
+            _sampleVfxEffects = previousVfx;
+            _performanceScenarioRunner = previousScenario;
+            renderer.CaptureSceneKind =
+                GetPerformanceCaptureSceneKind(previousKind);
+            UpdateVfxVolumetricDemoOverrideOwnership(
+                renderer.Settings);
+            SampleLighting.ConfigureRenderSettings(
+                renderer.Settings,
+                ResolveSceneLightingMode());
+            ConfigureSceneEnvironment(renderer);
+            ConfigureSceneRenderSettings(renderer);
+            ApplySmokeRenderSettings(renderer);
+            RestoreLights(lightManager, previousLights);
+            camera.Position = previousCameraPosition;
+            camera.Yaw = previousCameraYaw;
+            camera.Pitch = previousCameraPitch;
+            camera.FieldOfView = previousCameraFov;
+            camera.NearPlane = previousCameraNear;
+            camera.FarPlane = previousCameraFar;
+            camera.Update();
+            _inputController?.SetParticleEffects(previousVfx);
+            _inputController?.SetLightingMode(
+                ResolveSceneLightingMode());
+            _inputController?.SetPerformanceScenarioRunner(
+                previousScenario);
+#if NJULF_EDITOR
+            _pendingEditorScene = null;
+            _editorController?.SetScene(activeScene);
+#endif
+            targetScene.Dispose();
+            throw;
+        }
+
+        commitPhaseStarted =
+            System.Diagnostics.Stopwatch.GetTimestamp();
+        if (ReferenceEquals(activeScene, _transitionLoadingScene))
+        {
+            _transitionLoadingScene = null;
+            _loadingFramePresented = false;
+            _loadingSceneInstancesReleased = false;
+            _loadingResidencyAssetsReleased = false;
+        }
+        _transitionPreviousScene = null;
+        QueueSceneRetirement(activeScene);
+        retirementMicroseconds = ElapsedMicroseconds(
+            commitPhaseStarted);
+
+        commitPhaseStarted =
+            System.Diagnostics.Stopwatch.GetTimestamp();
+        _pendingPostPresentSceneCommit =
+            new PendingPostPresentSceneCommit(
+                target,
+                targetManifest,
+                firstViewOnly,
+                _transitionKeepsPreviousResidency
+                    ? previousKind
+                    : null);
+        residencyMicroseconds = ElapsedMicroseconds(
+            commitPhaseStarted);
+
+        if (firstViewOnly &&
+            targetManifest != null &&
+            committedBuild?.Loader != null)
+        {
+            QueueDeferredSceneStreaming(
+                _sceneTransition?.Snapshot.Generation ?? 0,
+                target,
+                targetScene,
+                committedBuild.Loader,
+                targetManifest);
+        }
+
+        long totalMicroseconds = ElapsedMicroseconds(
+            commitProfileStarted);
+        if (totalMicroseconds >
+            SampleSceneTransitionLatencyPolicy.HitchTargetMicroseconds)
+        {
+            Console.WriteLine(
+                $"Scene commit profile: target={target}, " +
+                $"prepared={(prepared != null ? 1 : 0)}, " +
+                $"total={totalMicroseconds / 1000.0:F3}ms, " +
+                $"snapshot={snapshotMicroseconds / 1000.0:F3}ms, " +
+                $"build={buildMicroseconds / 1000.0:F3}ms, " +
+                $"publish={publicationMicroseconds / 1000.0:F3}ms, " +
+                $"state={applyStateMicroseconds / 1000.0:F3}ms, " +
+                $"renderer={rendererPreparationMicroseconds / 1000.0:F3}ms, " +
+                $"exchange={exchangeMicroseconds / 1000.0:F3}ms, " +
+                $"retire={retirementMicroseconds / 1000.0:F3}ms, " +
+                $"residency={residencyMicroseconds / 1000.0:F3}ms.");
+        }
+    }
+
+    private void CompletePostPresentSceneCommit()
+    {
+        PendingPostPresentSceneCommit? pending =
+            _pendingPostPresentSceneCommit;
+        _pendingPostPresentSceneCommit = null;
+        if (pending != null && Renderer is VulkanRenderer renderer)
+        {
+            try
+            {
+                if (pending.Manifest != null && pending.FirstViewOnly)
+                {
+                    SampleAssetReference[] criticalAssets = pending.Manifest
+                        .EnumerateAssets(SampleAssetLoadTier.Critical)
+                        .ToArray();
+                    _sceneResidency?.Capture(
+                        pending.Target,
+                        criticalAssets,
+                        EstimateAssetTierResidencyBytes(
+                            pending.Target,
+                            pending.Manifest,
+                            SampleAssetLoadTier.Critical),
+                        SampleSceneResidencyState.FirstViewReady);
+                }
+                else
+                {
+                    _sceneResidency?.Capture(
+                        pending.Target,
+                        pending.Manifest,
+                        EstimateSceneResidencyBytes(pending.Target));
+                }
+
+                _sceneResidency?.MarkActive(pending.Target);
+                SampleSceneTransitionMemoryDecision memory =
+                    EvaluateSceneTransitionMemory(renderer, 0);
+                IReadOnlyList<SampleSceneKind> evicted =
+                    _sceneResidency?.Trim(
+                        memory.EffectiveBudgetBytes,
+                        ResolveCurrentGpuUsage(renderer),
+                        pending.ProtectedKind) ??
+                    Array.Empty<SampleSceneKind>();
+                if (evicted.Count > 0)
+                {
+                    Console.WriteLine(
+                        "Scene residency evicted: " +
+                        string.Join(", ", evicted));
+                }
+            }
+            catch (Exception residencyFailure)
+            {
+                _runtimeSmokeFailure ??=
+                    "Scene residency maintenance failed after publication: " +
+                    residencyFailure.Message;
+                Console.Error.WriteLine(_runtimeSmokeFailure);
+            }
+        }
+
+#if NJULF_EDITOR
+        Scene? editorScene = _pendingEditorScene;
+        _pendingEditorScene = null;
+        if (editorScene != null && ReferenceEquals(editorScene, Scene))
+            _editorController?.SetScene(editorScene);
+#endif
+    }
+
+    private void QueueDeferredSceneStreaming(
+        long generation,
+        SampleSceneKind kind,
+        Scene scene,
+        SampleSceneLoader loader,
+        SampleAssetManifest manifest)
+    {
+        CancelDeferredSceneStreaming();
+        _pendingDeferredSceneStreaming = new PendingDeferredSceneStreaming(
+            generation,
+            kind,
+            scene,
+            loader,
+            manifest);
+        Console.WriteLine(
+            $"Scene first view queued: target={kind}; deferred content " +
+            "will start after the first present.");
+    }
+
+    private void StartPendingDeferredSceneStreaming()
+    {
+        PendingDeferredSceneStreaming? pending =
+            _pendingDeferredSceneStreaming;
+        if (pending == null)
+            return;
+        _pendingDeferredSceneStreaming = null;
+        if (!ReferenceEquals(pending.Scene, Scene) ||
+            pending.Kind != _sceneKind)
+        {
+            return;
+        }
+
+        StartDeferredSceneStreaming(
+            pending.Generation,
+            pending.Kind,
+            pending.Scene,
+            pending.Loader,
+            pending.Manifest);
+    }
+
+    private void StartDeferredSceneStreaming(
+        long generation,
+        SampleSceneKind kind,
+        Scene scene,
+        SampleSceneLoader loader,
+        SampleAssetManifest manifest)
+    {
+        SampleAssetReference[] assets = manifest
+            .EnumerateAssets(SampleAssetLoadTier.Deferred)
+            .GroupBy(
+                static asset => asset.CreateContentIdentity(),
+                StringComparer.OrdinalIgnoreCase)
+            .Select(static group => group.First())
+            .ToArray();
+        if (assets.Length == 0)
+            return;
+
+        CancelDeferredSceneStreaming();
+        var cancellation = new CancellationTokenSource();
+        var progress = new DelegateContentLoadProgressSink(
+            ReportDeferredSceneProgress);
+        Task preparation = PreloadDeferredSceneAssetsAsync(
+            assets,
+            progress,
+            cancellation.Token);
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        _deferredLastProgressTimestamp = started;
+        _deferredLastCompletedBytes = 0;
+        _deferredWatchdogWarned = 0;
+        _deferredSceneProgress = null;
+        _deferredSceneStreaming = new DeferredSceneStreaming
+        {
+            Generation = generation,
+            Kind = kind,
+            Scene = scene,
+            Loader = loader,
+            Assets = assets,
+            Cancellation = cancellation,
+            Preparation = preparation,
+            StartedTimestamp = started
+        };
+        Console.WriteLine(
+            $"Scene first view ready: target={kind}, " +
+            $"deferredAssets={assets.Length}; streaming full residency.");
+    }
+
+    private async Task PreloadDeferredSceneAssetsAsync(
+        IReadOnlyList<SampleAssetReference> assets,
+        IContentLoadProgressSink progress,
+        CancellationToken cancellationToken)
+    {
+        IAsyncContentManager content = Services?
+            .GetRequiredService<IAsyncContentManager>() ??
+            throw new InvalidOperationException(
+                "Asynchronous content services are unavailable.");
+        foreach (IGrouping<
+                     (ModelImportBackend Backend,
+                      AssimpMaterialTextureConvention Convention),
+                     SampleAssetReference> group in assets.GroupBy(asset =>
+                     (asset.ExpectedBackend,
+                      asset.AssimpMaterialTextureConvention)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SampleAssetReference[] groupedAssets = group.ToArray();
+            ContentPreloadResult<Model> result = await content
+                .PreloadAsync<Model>(
+                    groupedAssets.Select(asset =>
+                        new ContentPreloadRequest(
+                            asset.Path,
+                            ContentLoadPriority.Normal,
+                            EstimateAssetPreloadBytes(asset.Path))),
+                    new ContentPreloadOptions
+                    {
+                        MaxConcurrency = 1,
+                        MaxInflightBytes =
+                            TransitionPreloadInflightBytes,
+                        LoadOptions = groupedAssets[0]
+                            .CreateLoadOptions(),
+                        Progress = progress
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            Exception[] failures = result.Items
+                .Where(static item => item.Failure != null)
+                .Select(static item => item.Failure!)
+                .ToArray();
+            if (failures.Length == 1)
+                throw failures[0];
+            if (failures.Length > 1)
+            {
+                throw new AggregateException(
+                    "Deferred scene content preload failed.",
+                    failures);
+            }
+            if (result.CancelledCount != 0)
+                throw new OperationCanceledException(cancellationToken);
+        }
+    }
+
+    private void ReportDeferredSceneProgress(
+        ContentLoadProgressEvent progress)
+    {
+        ContentLoadProgressEvent? previous =
+            Volatile.Read(ref _deferredSceneProgress);
+        Volatile.Write(ref _deferredSceneProgress, progress);
+        long completed = Math.Max(0, progress.CompletedBytes);
+        if (completed > Interlocked.Read(
+                ref _deferredLastCompletedBytes) ||
+            previous?.Stage != progress.Stage)
+        {
+            Interlocked.Exchange(
+                ref _deferredLastCompletedBytes,
+                completed);
+            Interlocked.Exchange(
+                ref _deferredLastProgressTimestamp,
+                System.Diagnostics.Stopwatch.GetTimestamp());
+        }
+    }
+
+    private void AdvanceDeferredSceneStreaming()
+    {
+        DeferredSceneStreaming? streaming =
+            _deferredSceneStreaming;
+        if (streaming == null)
+            return;
+        if (!ReferenceEquals(streaming.Scene, Scene) ||
+            streaming.Kind != _sceneKind)
+        {
+            CancelDeferredSceneStreaming();
+            return;
+        }
+
+        if (!streaming.Preparation.IsCompleted)
+        {
+            TimeSpan stalled =
+                System.Diagnostics.Stopwatch.GetElapsedTime(
+                    Interlocked.Read(
+                        ref _deferredLastProgressTimestamp));
+            if (stalled >= TimeSpan.FromSeconds(2) &&
+                Interlocked.CompareExchange(
+                    ref _deferredWatchdogWarned,
+                    1,
+                    0) == 0)
+            {
+                Console.WriteLine(
+                    $"Deferred scene upload watchdog: target={streaming.Kind}, " +
+                    $"no progress for {stalled.TotalSeconds:F1}s.");
+            }
+            if (stalled >= TimeSpan.FromSeconds(30) &&
+                !streaming.Cancellation.IsCancellationRequested)
+            {
+                Console.Error.WriteLine(
+                    $"Deferred scene upload degraded: target={streaming.Kind}, " +
+                    "no progress for 30s; keeping the usable first view.");
+                streaming.Cancellation.Cancel();
+            }
+
+            UpdateDeferredSceneTitle(streaming);
+            return;
+        }
+
+        if (!streaming.PreparationObserved)
+        {
+            try
+            {
+                streaming.Preparation.GetAwaiter().GetResult();
+                streaming.PreparationObserved = true;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine(
+                    $"Deferred scene streaming cancelled: " +
+                    $"target={streaming.Kind}; first view remains usable.");
+                FinishDeferredSceneStreaming(streaming);
+                return;
+            }
+            catch (Exception failure)
+            {
+                Console.Error.WriteLine(
+                    $"Deferred scene streaming degraded: target={streaming.Kind}, " +
+                    $"{failure.GetType().Name}: {failure.Message}. " +
+                    "The first view remains active.");
+                FinishDeferredSceneStreaming(streaming);
+                return;
+            }
+        }
+
+        if (streaming.AssetIndex < streaming.Assets.Count)
+        {
+            long attachmentStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            bool beganAttachment = streaming.Attachment == null;
+            streaming.Attachment ??=
+                streaming.Loader.BeginPreparedAssetAttachment(
+                    streaming.Assets[streaming.AssetIndex]);
+            SampleSceneLoader.PreparedAssetAttachment attachment =
+                streaming.Attachment;
+            long attachmentBeginMicroseconds = checked((long)Math.Round(
+                System.Diagnostics.Stopwatch.GetElapsedTime(
+                        attachmentStarted)
+                    .TotalMicroseconds));
+            int attached = streaming.Loader.AdvancePreparedAssetAttachment(
+                streaming.Scene,
+                attachment,
+                maximumRenderObjects: 512,
+                maximumCpuTime: DeferredSceneAttachmentCpuBudget);
+            if (attachment.Completed)
+            {
+                streaming.AssetIndex++;
+                streaming.Attachment = null;
+            }
+            long titleStarted =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            UpdateDeferredSceneTitle(streaming);
+            long titleMicroseconds = checked((long)Math.Round(
+                System.Diagnostics.Stopwatch.GetElapsedTime(titleStarted)
+                    .TotalMicroseconds));
+            long totalMicroseconds = checked((long)Math.Round(
+                System.Diagnostics.Stopwatch.GetElapsedTime(
+                        attachmentStarted)
+                    .TotalMicroseconds));
+            if (totalMicroseconds >
+                SampleSceneTransitionLatencyPolicy.HitchTargetMicroseconds)
+            {
+                Console.WriteLine(
+                    "Deferred scene attachment hitch: " +
+                    $"total={totalMicroseconds / 1000.0:F3}ms, " +
+                    $"begin={attachmentBeginMicroseconds / 1000.0:F3}ms, " +
+                    $"clone={attachment.LastCloneMicroseconds / 1000.0:F3}ms, " +
+                    $"scene={attachment.LastSceneAttachmentMicroseconds / 1000.0:F3}ms, " +
+                    $"title={titleMicroseconds / 1000.0:F3}ms, " +
+                    $"objects={attached}, first={beganAttachment}.");
+            }
+            return;
+        }
+
+        SampleAssetManifest? manifest =
+            GetModelSceneManifest(streaming.Kind);
+        if (manifest != null)
+        {
+            _sceneResidency?.Capture(
+                streaming.Kind,
+                streaming.Assets,
+                EstimateSceneResidencyBytes(streaming.Kind),
+                SampleSceneResidencyState.FullyResident);
+            _sceneResidency?.MarkActive(streaming.Kind);
+        }
+        double elapsedSeconds =
+            System.Diagnostics.Stopwatch.GetElapsedTime(
+                streaming.StartedTimestamp).TotalSeconds;
+        Console.WriteLine(
+            $"Scene fully resident: target={streaming.Kind}, " +
+            $"elapsed={elapsedSeconds:F3}s, " +
+            $"deferredAssets={streaming.Assets.Count}.");
+        FinishDeferredSceneStreaming(streaming);
+    }
+
+    private void UpdateDeferredSceneTitle(
+        DeferredSceneStreaming streaming)
+    {
+        if (Window == null)
+            return;
+        ContentLoadProgressEvent? progress =
+            Volatile.Read(ref _deferredSceneProgress);
+        double fraction = progress is
+            { TotalBytes: > 0 }
+                ? Math.Clamp(
+                    progress.CompletedBytes /
+                    (double)progress.TotalBytes,
+                    0.0,
+                    1.0)
+                : streaming.PreparationObserved
+                    ? streaming.AssetIndex /
+                      (double)Math.Max(1, streaming.Assets.Count)
+                    : 0.0;
+        string phase = streaming.PreparationObserved
+            ? "Attaching interior"
+            : progress?.Stage.ToString() ?? "Preparing interior";
+        string title = $"{WindowTitle} - {phase} {fraction:P0}";
+        if (!string.Equals(
+                Window.Title,
+                title,
+                StringComparison.Ordinal))
+        {
+            Window.Title = title;
+        }
+    }
+
+    private void FinishDeferredSceneStreaming(
+        DeferredSceneStreaming streaming)
+    {
+        if (!ReferenceEquals(_deferredSceneStreaming, streaming))
+            return;
+        _deferredSceneStreaming = null;
+        _deferredSceneProgress = null;
+        streaming.Cancellation.Dispose();
+        RestoreWindowTitle();
+    }
+
+    private void CancelDeferredSceneStreaming()
+    {
+        _pendingDeferredSceneStreaming = null;
+        DeferredSceneStreaming? streaming =
+            _deferredSceneStreaming;
+        if (streaming == null)
+            return;
+        _deferredSceneStreaming = null;
+        _deferredSceneProgress = null;
+        streaming.Cancellation.Cancel();
+        _ = streaming.Preparation.ContinueWith(
+            static (task, state) =>
+            {
+                _ = task.Exception;
+                ((CancellationTokenSource)state!).Dispose();
+            },
+            streaming.Cancellation,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void AdvanceBistroTransitionSmoke()
+    {
+        BistroTransitionSmokeState? smoke =
+            _bistroTransitionSmoke;
+        if (smoke == null ||
+            smoke.Phase == BistroTransitionSmokePhase.Completed)
+        {
+            return;
+        }
+        if (smoke.Phase !=
+                BistroTransitionSmokePhase.WaitingForInitialFrame &&
+            smoke.InitialScene == SampleSceneKind.SponzaPlaza &&
+            _sceneKind == SampleSceneKind.GlobalIlluminationTest)
+        {
+            smoke.CornellRecoveryObserved = true;
+        }
+
+        VulkanRenderer renderer = Renderer as VulkanRenderer ??
+            throw new InvalidOperationException(
+                "The Bistro transition smoke requires VulkanRenderer.");
+        switch (smoke.Phase)
+        {
+            case BistroTransitionSmokePhase.WaitingForInitialFrame:
+                if (_drawnFrames <= 0)
+                    return;
+                if (_sceneKind is not (
+                    SampleSceneKind.GlobalIlluminationTest or
+                    SampleSceneKind.SponzaPlaza))
+                {
+                    FailBistroTransitionSmoke(
+                        "The smoke did not start in the Cornell/GI or Sponza scene.");
+                    return;
+                }
+
+                smoke.InitialScene = _sceneKind;
+                smoke.ValidationErrorBaseline =
+                    renderer.ValidationMessageSnapshot.ErrorCount;
+                smoke.SourceFallbackBaseline =
+                    (Content as ContentManager)?.CookedDiagnostics
+                        .SourceFallbackCount ?? 0;
+                smoke.ColdStartedTimestamp =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
+                BeginBistroTransitionSmokeTransition(
+                    smoke,
+                    BistroTransitionSmokePhase.ColdBistro,
+                    SampleSceneKind.Bistro);
+                return;
+
+            case BistroTransitionSmokePhase.ColdBistro:
+                if (HasBistroTransitionSmokeTimedOut(
+                        smoke,
+                        TimeSpan.FromSeconds(45)))
+                {
+                    FailBistroTransitionSmoke(
+                        "Cold Bistro did not reach full residency within 45 seconds.");
+                    return;
+                }
+
+                if (smoke.ColdFirstPresentMicroseconds < 0 ||
+                    _sceneKind != SampleSceneKind.Bistro ||
+                    _deferredSceneStreaming != null ||
+                    _sceneResidency?.GetState(
+                        SampleSceneKind.Bistro) !=
+                    SampleSceneResidencyState.FullyResident)
+                {
+                    return;
+                }
+
+                smoke.ColdFullResidencyMicroseconds =
+                    ElapsedMicroseconds(
+                        smoke.ColdStartedTimestamp);
+                if (smoke.InitialScene ==
+                    SampleSceneKind.SponzaPlaza)
+                {
+                    smoke.Phase = BistroTransitionSmokePhase.Settling;
+                    smoke.PhaseStartedTimestamp =
+                        System.Diagnostics.Stopwatch.GetTimestamp();
+                    smoke.SettleAfterPresentSerial =
+                        _presentedFrameSerial > long.MaxValue - 4
+                            ? long.MaxValue
+                            : _presentedFrameSerial + 4;
+                    return;
+                }
+                BeginBistroTransitionSmokeTransition(
+                    smoke,
+                    BistroTransitionSmokePhase.ReturningToGi,
+                    SampleSceneKind.GlobalIlluminationTest);
+                return;
+
+            case BistroTransitionSmokePhase.ReturningToGi:
+                if (HasBistroTransitionSmokeTimedOut(
+                        smoke,
+                        TimeSpan.FromSeconds(10)))
+                {
+                    FailBistroTransitionSmoke(
+                        "The return to Cornell/GI did not present within 10 seconds.");
+                    return;
+                }
+                if (smoke.ReturnFirstPresentMicroseconds < 0)
+                    return;
+
+                smoke.WarmStartedTimestamp =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
+                BeginBistroTransitionSmokeTransition(
+                    smoke,
+                    BistroTransitionSmokePhase.WarmBistro,
+                    SampleSceneKind.Bistro);
+                return;
+
+            case BistroTransitionSmokePhase.WarmBistro:
+                if (HasBistroTransitionSmokeTimedOut(
+                        smoke,
+                        TimeSpan.FromSeconds(10)))
+                {
+                    FailBistroTransitionSmoke(
+                        "Resident Bistro did not present within 10 seconds.");
+                    return;
+                }
+                if (smoke.WarmFirstPresentMicroseconds < 0)
+                    return;
+
+                smoke.Phase = BistroTransitionSmokePhase.Settling;
+                smoke.PhaseStartedTimestamp =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
+                smoke.SettleAfterPresentSerial =
+                    _presentedFrameSerial > long.MaxValue - 4
+                        ? long.MaxValue
+                        : _presentedFrameSerial + 4;
+                return;
+
+            case BistroTransitionSmokePhase.Settling:
+                if (_presentedFrameSerial <
+                    smoke.SettleAfterPresentSerial)
+                {
+                    return;
+                }
+
+                CompleteBistroTransitionSmoke(smoke, renderer);
+                return;
+
+            default:
+                throw new ArgumentOutOfRangeException();
+        }
+    }
+
+    private void BeginBistroTransitionSmokeTransition(
+        BistroTransitionSmokeState smoke,
+        BistroTransitionSmokePhase phase,
+        SampleSceneKind target)
+    {
+        smoke.Phase = phase;
+        smoke.PhaseStartedTimestamp =
+            System.Diagnostics.Stopwatch.GetTimestamp();
+        if (RequestSceneTransition(
+                target,
+                Renderer as VulkanRenderer ??
+                throw new InvalidOperationException(
+                    "The Bistro transition smoke requires VulkanRenderer.")))
+        {
+            return;
+        }
+
+        FailBistroTransitionSmoke(
+            $"The transition request to '{target}' was rejected.");
+    }
+
+    private void ObserveBistroTransitionFirstPresent(
+        SampleSceneKind target,
+        bool residentCacheHit,
+        long elapsedMicroseconds)
+    {
+        BistroTransitionSmokeState? smoke =
+            _bistroTransitionSmoke;
+        if (smoke == null)
+            return;
+
+        switch (smoke.Phase)
+        {
+            case BistroTransitionSmokePhase.ColdBistro
+                when target == SampleSceneKind.Bistro:
+                smoke.ColdFirstPresentMicroseconds =
+                    elapsedMicroseconds;
+                smoke.ColdWasResident = residentCacheHit;
+                break;
+            case BistroTransitionSmokePhase.ReturningToGi
+                when target ==
+                    SampleSceneKind.GlobalIlluminationTest:
+                smoke.ReturnFirstPresentMicroseconds =
+                    elapsedMicroseconds;
+                break;
+            case BistroTransitionSmokePhase.WarmBistro
+                when target == SampleSceneKind.Bistro:
+                smoke.WarmFirstPresentMicroseconds =
+                    elapsedMicroseconds;
+                smoke.WarmWasResident = residentCacheHit;
+                break;
+        }
+    }
+
+    private void ObserveBistroTransitionHitch(
+        long elapsedMicroseconds)
+    {
+        BistroTransitionSmokeState? smoke =
+            _bistroTransitionSmoke;
+        if (smoke == null || elapsedMicroseconds < 0)
+            return;
+        smoke.MaximumHostStepMicroseconds = Math.Max(
+            smoke.MaximumHostStepMicroseconds,
+            elapsedMicroseconds);
+    }
+
+    private void CompleteBistroTransitionSmoke(
+        BistroTransitionSmokeState smoke,
+        VulkanRenderer renderer)
+    {
+        int validationErrors = Math.Max(
+            0,
+            renderer.ValidationMessageSnapshot.ErrorCount -
+            smoke.ValidationErrorBaseline);
+        int sourceFallbacks = Math.Max(
+            0,
+            ((Content as ContentManager)?.CookedDiagnostics
+                .SourceFallbackCount ?? smoke.SourceFallbackBaseline) -
+            smoke.SourceFallbackBaseline);
+        bool exactSponzaPath = smoke.InitialScene ==
+            SampleSceneKind.SponzaPlaza;
+        bool returnAndWarmPassed = exactSponzaPath ||
+            smoke.WarmWasResident &&
+            smoke.ReturnFirstPresentMicroseconds <=
+                SampleSceneTransitionLatencyPolicy
+                    .WarmOrProceduralTargetMicroseconds &&
+            smoke.WarmFirstPresentMicroseconds <=
+                SampleSceneTransitionLatencyPolicy
+                    .WarmOrProceduralTargetMicroseconds;
+        bool passed =
+            !smoke.ColdWasResident &&
+            smoke.ColdFirstPresentMicroseconds <=
+                SampleSceneTransitionLatencyPolicy
+                    .ColdBistroTargetMicroseconds &&
+            smoke.ColdFullResidencyMicroseconds <=
+                SampleSceneTransitionLatencyPolicy
+                    .ColdBistroFullResidencyTargetMicroseconds &&
+            returnAndWarmPassed &&
+            smoke.MaximumHostStepMicroseconds <=
+                SampleSceneTransitionLatencyPolicy
+                    .HitchTargetMicroseconds &&
+            validationErrors == 0 &&
+            sourceFallbacks == 0 &&
+            !smoke.CornellRecoveryObserved;
+        string detail =
+            $"coldFirst={smoke.ColdFirstPresentMicroseconds / 1000.0:F3}ms/" +
+            $"{SampleSceneTransitionLatencyPolicy.ColdBistroTargetMicroseconds / 1000.0:F3}ms, " +
+            $"coldFull={smoke.ColdFullResidencyMicroseconds / 1000.0:F3}ms/" +
+            $"{SampleSceneTransitionLatencyPolicy.ColdBistroFullResidencyTargetMicroseconds / 1000.0:F3}ms, " +
+            $"return={smoke.ReturnFirstPresentMicroseconds / 1000.0:F3}ms, " +
+            $"warm={smoke.WarmFirstPresentMicroseconds / 1000.0:F3}ms/" +
+            $"{SampleSceneTransitionLatencyPolicy.WarmOrProceduralTargetMicroseconds / 1000.0:F3}ms, " +
+            $"maxHostStep={smoke.MaximumHostStepMicroseconds / 1000.0:F3}ms/" +
+            $"{SampleSceneTransitionLatencyPolicy.HitchTargetMicroseconds / 1000.0:F3}ms, " +
+            $"coldCache={smoke.ColdWasResident}, " +
+            $"warmCache={smoke.WarmWasResident}, " +
+            $"workflow={(exactSponzaPath ? "Sponza->Bistro" : "Cornell->Bistro->Cornell->Bistro")}, " +
+            $"sourceFallbacks={sourceFallbacks}, " +
+            $"cornellRecovery={smoke.CornellRecoveryObserved}, " +
+            $"validationErrors={validationErrors}.";
+
+        smoke.Phase = BistroTransitionSmokePhase.Completed;
+        _smokeRunner?.RecordOperation(
+            "scene-transition",
+            passed ? "passed" : "failed",
+            Math.Max(0, _drawnFrames - 1),
+            detail);
+        if (!passed)
+        {
+            _runtimeSmokeFailure ??=
+                "Bistro scene-transition smoke failed: " +
+                detail;
+            Console.Error.WriteLine(_runtimeSmokeFailure);
+        }
+        else
+        {
+            Console.WriteLine(
+                "Bistro scene-transition smoke passed: " +
+                detail);
+        }
+
+        Exit();
+    }
+
+    private void FailBistroTransitionSmoke(string detail)
+    {
+        BistroTransitionSmokeState? smoke =
+            _bistroTransitionSmoke;
+        if (smoke == null ||
+            smoke.Phase == BistroTransitionSmokePhase.Completed)
+        {
+            return;
+        }
+
+        smoke.Phase = BistroTransitionSmokePhase.Completed;
+        _runtimeSmokeFailure ??=
+            "Bistro scene-transition smoke failed: " + detail;
+        _smokeRunner?.RecordOperation(
+            "scene-transition",
+            "failed",
+            Math.Max(0, _drawnFrames - 1),
+            detail);
+        Console.Error.WriteLine(_runtimeSmokeFailure);
+        Exit();
+    }
+
+    private static bool HasBistroTransitionSmokeTimedOut(
+        BistroTransitionSmokeState smoke,
+        TimeSpan timeout) =>
+        System.Diagnostics.Stopwatch.GetElapsedTime(
+            smoke.PhaseStartedTimestamp) >= timeout;
+
+    private static long ElapsedMicroseconds(
+        long startedTimestamp) => checked((long)Math.Round(
+        System.Diagnostics.Stopwatch.GetElapsedTime(
+            startedTimestamp).TotalMicroseconds));
+
+    private void ScheduleHybridReflectionPipelinePreparation()
+    {
+        if (_hybridReflectionPreparationStarted)
+            return;
+        _hybridReflectionPreparationEligiblePresentSerial =
+            _presentedFrameSerial >
+            long.MaxValue - HybridReflectionPreparationStablePresentDelay
+                ? long.MaxValue
+                : _presentedFrameSerial +
+                  HybridReflectionPreparationStablePresentDelay;
+    }
+
+    private void TryBeginHybridReflectionPipelinePreparation()
+    {
+        if (_hybridReflectionPreparationStarted ||
+            _hybridReflectionPreparationEligiblePresentSerial ==
+            long.MaxValue ||
+            _presentedFrameSerial <
+            _hybridReflectionPreparationEligiblePresentSerial ||
+            _sceneKind != SampleSceneKind.Bistro ||
+            _bistroTransitionSmoke is
+                { Phase: not BistroTransitionSmokePhase.Completed } ||
+            _sceneTransition?.IsActive == true ||
+            _deferredSceneStreaming != null ||
+            Renderer is not VulkanRenderer renderer)
+        {
+            return;
+        }
+
+        renderer.BeginHybridReflectionPipelinePreparation();
+        _hybridReflectionPreparationStarted = true;
+        _hybridReflectionPreparationEligiblePresentSerial = long.MaxValue;
+        Console.WriteLine(
+            "Bistro optional reflection pipeline preparation started " +
+            "after the scene became stable.");
+    }
+
+    private void QueueSceneRetirement(Scene scene)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        long retireAfter = _presentedFrameSerial >
+                           long.MaxValue - SceneRetirementPresentDelay
+            ? long.MaxValue
+            : _presentedFrameSerial + SceneRetirementPresentDelay;
+        _deferredSceneRetirements.Enqueue(
+            new DeferredSceneRetirement(scene, retireAfter));
+    }
+
+    private void ReportTransitionHitch(
+        string stage,
+        long startedTimestamp)
+    {
+        long elapsedMicroseconds = checked((long)Math.Round(
+            System.Diagnostics.Stopwatch.GetElapsedTime(startedTimestamp)
+                .TotalMicroseconds));
+        ObserveBistroTransitionHitch(elapsedMicroseconds);
+        if (elapsedMicroseconds <=
+            SampleSceneTransitionLatencyPolicy.HitchTargetMicroseconds)
+        {
+            return;
+        }
+
+        Console.WriteLine(
+            $"Scene transition hitch: stage={stage}, " +
+            $"elapsed={elapsedMicroseconds / 1000.0:F3}ms, " +
+            $"target<={SampleSceneTransitionLatencyPolicy.HitchTargetMicroseconds / 1000.0:F3}ms.");
+    }
+
+    private void RetirePresentedScenes(bool forceAll = false)
+    {
+        while (_deferredSceneRetirements.TryPeek(
+                   out DeferredSceneRetirement? retirement) &&
+               (forceAll ||
+                retirement.RetireAfterPresent <= _presentedFrameSerial))
+        {
+            _deferredSceneRetirements.Dequeue();
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                retirement.Scene.Dispose();
+            }
+            catch (Exception retirementFailure)
+            {
+                _runtimeSmokeFailure ??=
+                    $"Deferred scene retirement failed for " +
+                    $"'{retirement.Scene.Name}': " +
+                    retirementFailure.Message;
+                Console.Error.WriteLine(_runtimeSmokeFailure);
+            }
+
+            long elapsedMicroseconds = checked((long)Math.Round(
+                System.Diagnostics.Stopwatch.GetElapsedTime(started)
+                    .TotalMicroseconds));
+            if (elapsedMicroseconds > 33_000)
+            {
+                Console.WriteLine(
+                    $"Scene retirement hitch: " +
+                    $"scene='{retirement.Scene.Name}', " +
+                    $"elapsed={elapsedMicroseconds / 1000.0:F3}ms.");
+            }
+            ObserveBistroTransitionHitch(elapsedMicroseconds);
+        }
+    }
+
+    private void ActivateLoadingScene(
+        long generation,
+        SampleSceneKind target,
+        in SampleSceneTransitionMemoryDecision memory)
+    {
+        var loading = new Scene
+        {
+            Name = LoadingSceneName,
+            AmbientLight = new Njulf.Core.Math.Color(
+                0.01f,
+                0.015f,
+                0.025f,
+                1f)
+        };
+        Scene previous = ExchangeScene(loading);
+        try
+        {
+            _transitionPreviousScene = previous;
+            _transitionLoadingScene = loading;
+            _loadingTransitionGeneration = generation;
+            _loadingFramePresented = false;
+            _loadingSceneInstancesReleased = false;
+            _loadingResidencyAssetsReleased = false;
+            _inputController?.SetParticleEffects(
+                Array.Empty<ParticleEffectInstance>());
+            _inputController?.SetPerformanceScenarioRunner(null);
+#if NJULF_EDITOR
+            _editorController?.SetScene(loading);
+#endif
+        }
+        catch
+        {
+            Scene rejectedLoading = ExchangeScene(previous);
+            _transitionPreviousScene = null;
+            _transitionLoadingScene = null;
+            _loadingFramePresented = false;
+            _loadingSceneInstancesReleased = false;
+            _loadingResidencyAssetsReleased = false;
+            _inputController?.SetParticleEffects(_sampleVfxEffects);
+            _inputController?.SetPerformanceScenarioRunner(
+                _performanceScenarioRunner);
+            if (ReferenceEquals(rejectedLoading, loading))
+                loading.Dispose();
+            throw;
+        }
+        Console.WriteLine(
+            $"Loading scene activated for '{target}': " +
+            $"required={memory.RequiredBytes / (1024.0 * 1024.0):F1}MiB, " +
+            $"ceiling={memory.AdmissionCeilingBytes / (1024.0 * 1024.0):F1}MiB.");
+    }
+
+    private void ReleasePreviousSceneForLoadingTransition(
+        SampleSceneTransitionCoordinator coordinator)
+    {
+        Scene? previous = _transitionPreviousScene;
+        if (previous == null)
+        {
+            _loadingSceneInstancesReleased = false;
+            _loadingResidencyAssetsReleased = false;
+            coordinator.ReleaseLoadingFrame(
+                _loadingTransitionGeneration);
+            return;
+        }
+
+        // Releasing the scene instances and their cached assets back-to-back can
+        // double the handle-release work in one host frame. The loading scene
+        // is already visible, so retire those ownership layers on consecutive
+        // frames. Scene references must go first so no frame can observe live
+        // instances whose cached GPU assets have already been released.
+        if (!_loadingSceneInstancesReleased)
+        {
+            _sceneLoader = null;
+            _sampleVfxEffects = Array.Empty<ParticleEffectInstance>();
+            _performanceScenarioRunner = null;
+            _inputController?.SetPerformanceScenarioRunner(null);
+            previous.Dispose();
+            Services?.GetRequiredService<LightManager>().ClearLights();
+            _loadingSceneInstancesReleased = true;
+            coordinator.ObserveHostActivity(
+                _loadingTransitionGeneration);
+            return;
+        }
+
+        if (!_loadingResidencyAssetsReleased)
+        {
+            bool released = _sceneResidency?.ReleaseActiveAssetsStep(
+                TransitionReleaseRenderObjectsPerFrame) ?? true;
+            coordinator.ObserveHostActivity(
+                _loadingTransitionGeneration);
+            if (!released)
+                return;
+
+            _loadingResidencyAssetsReleased = true;
+            return;
+        }
+
+        (Content ?? throw new InvalidOperationException(
+            "Content manager is unavailable during a loading-scene handoff."))
+            .Clear();
+        _sceneResidency?.ResetAfterContentClear();
+        _transitionPreviousScene = null;
+        _loadingFramePresented = false;
+        _loadingSceneInstancesReleased = false;
+        _loadingResidencyAssetsReleased = false;
+        coordinator.ReleaseLoadingFrame(
+            _loadingTransitionGeneration);
+    }
+
+    private void RestoreDeferredPreviousScene()
+    {
+        Scene? previous = _transitionPreviousScene;
+        if (previous == null)
+            return;
+
+        Scene loading = ExchangeScene(previous);
+        _transitionPreviousScene = null;
+        _transitionLoadingScene = null;
+        _loadingFramePresented = false;
+        _loadingSceneInstancesReleased = false;
+        _loadingResidencyAssetsReleased = false;
+        loading.Dispose();
+        _inputController?.SetParticleEffects(_sampleVfxEffects);
+        _inputController?.SetPerformanceScenarioRunner(
+            _performanceScenarioRunner);
+#if NJULF_EDITOR
+        _editorController?.SetScene(previous);
+#endif
+    }
+
+    private void RecoverSafeSceneAfterTransitionFailure()
+    {
+        IServiceProvider services = Services ??
+            throw new InvalidOperationException(
+                "Services are unavailable during scene recovery.");
+        try
+        {
+            CommitPreparedScene(
+                SampleSceneKind.GlobalIlluminationTest,
+                services.GetRequiredService<MeshManager>(),
+                services.GetRequiredService<MaterialManager>(),
+                services.GetRequiredService<LightManager>(),
+                services.GetRequiredService<VulkanRenderer>(),
+                Camera as FirstPersonCamera ??
+                    throw new InvalidOperationException(
+                        "Safe scene recovery requires a FirstPersonCamera."));
+            Console.Error.WriteLine(
+                "Recovered with the safe GI scene after a failed low-memory transition.");
+        }
+        catch (Exception recoveryFailure)
+        {
+            _runtimeSmokeFailure ??=
+                "Safe scene recovery failed: " +
+                recoveryFailure.Message;
+            Console.Error.WriteLine(_runtimeSmokeFailure);
+            Exit();
+        }
+    }
+
+    private void HandleExitRequest()
+    {
+        if (_sceneTransition?.IsActive == true)
+        {
+            _sceneTransition.Cancel();
+            return;
+        }
+
+        Exit();
+    }
+
+    private SampleSceneTransitionMemoryDecision
+        EvaluateSceneTransitionMemory(
+            VulkanRenderer renderer,
+            ulong targetIncrementalBytes)
+    {
+        MemoryHeapBudgetSnapshot heap =
+            renderer.CurrentMemoryHeapBudget;
+        ulong budget = heap.IsAvailable &&
+                       heap.PrimaryBudgetBytes > 0
+            ? heap.PrimaryBudgetBytes
+            : renderer.Settings.PerformanceBudgets.Profile
+                .GpuMemoryBudgetBytes;
+        return SampleSceneTransitionMemoryPolicy.Evaluate(
+            ResolveCurrentGpuUsage(renderer),
+            budget,
+            targetIncrementalBytes);
+    }
+
+    private static ulong ResolveCurrentGpuUsage(
+        VulkanRenderer renderer)
+    {
+        MemoryHeapBudgetSnapshot heap =
+            renderer.CurrentMemoryHeapBudget;
+        if (heap.IsAvailable && heap.PrimaryBudgetBytes > 0)
+            return heap.PrimaryUsageBytes;
+        return renderer.LastBudgetSnapshot.Memory
+            .EffectiveMemoryBytes;
+    }
+
+    internal static ulong EstimateSceneResidencyBytes(
+        SampleSceneKind kind) => kind switch
+    {
+        SampleSceneKind.Bistro =>
+            3UL * 1024UL * 1024UL * 1024UL,
+        SampleSceneKind.SponzaPlaza =>
+            1536UL * 1024UL * 1024UL,
+        SampleSceneKind.FoliageShowcase =>
+            768UL * 1024UL * 1024UL,
+        SampleSceneKind.MaterialShowcase =>
+            512UL * 1024UL * 1024UL,
+        SampleSceneKind.VfxShowcase =>
+            256UL * 1024UL * 1024UL,
+        _ => 128UL * 1024UL * 1024UL
+    };
+
+    internal static ulong EstimateTransitionAdmissionBytes(
+        SampleSceneKind kind,
+        SampleAssetManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        return manifest.HasDeferredAssets
+            ? EstimateAssetTierResidencyBytes(
+                kind,
+                manifest,
+                SampleAssetLoadTier.Critical)
+            : EstimateSceneResidencyBytes(kind);
+    }
+
+    private static ulong EstimateAssetTierResidencyBytes(
+        SampleSceneKind kind,
+        SampleAssetManifest manifest,
+        SampleAssetLoadTier tier)
+    {
+        SampleAssetReference[] all = manifest.EnumerateAssets().ToArray();
+        if (all.Length == 0)
+            return 0;
+        ulong totalWeight = 0;
+        ulong tierWeight = 0;
+        foreach (SampleAssetReference asset in all)
+        {
+            ulong weight = checked((ulong)Math.Max(
+                1,
+                EstimateAssetPreloadBytes(asset.Path)));
+            totalWeight = totalWeight > ulong.MaxValue - weight
+                ? ulong.MaxValue
+                : totalWeight + weight;
+            if (asset.LoadTier == tier)
+            {
+                tierWeight = tierWeight > ulong.MaxValue - weight
+                    ? ulong.MaxValue
+                    : tierWeight + weight;
+            }
+        }
+
+        if (tierWeight == 0 || totalWeight == 0)
+            return 0;
+        decimal fraction = tierWeight / (decimal)totalWeight;
+        return Math.Max(
+            1,
+            (ulong)Math.Ceiling(
+                EstimateSceneResidencyBytes(kind) * fraction));
+    }
+
+    private static long EstimateAssetPreloadBytes(string relativePath)
+    {
+        const long unknownBytes = 64L * 1024L * 1024L;
+        try
+        {
+            string path = Path.IsPathRooted(relativePath)
+                ? relativePath
+                : Path.Combine(
+                    AppContext.BaseDirectory,
+                    relativePath);
+            if (!File.Exists(path))
+                return unknownBytes;
+            long sourceBytes = new FileInfo(path).Length;
+            return Math.Clamp(
+                checked(sourceBytes * 4),
+                1L * 1024L * 1024L,
+                TransitionPreloadInflightBytes);
+        }
+        catch (OverflowException)
+        {
+            return TransitionPreloadInflightBytes;
+        }
+    }
+
+    private static void RestoreLights(
+        LightManager lightManager,
+        IReadOnlyList<LightRecord> lights)
+    {
+        lightManager.ClearLights();
+        foreach (LightRecord record in lights)
+        {
+            lightManager.AddLightHandle(
+                record.Light,
+                record.Name,
+                record.Id);
+        }
+    }
+
+    private void UpdateSceneTransitionTitle(
+        SampleSceneTransitionSnapshot snapshot)
+    {
+        if (Window == null || !snapshot.Active)
+            return;
+        Window.Title =
+            $"{WindowTitle} - Loading " +
+            $"{GetSceneDisplayName(snapshot.Target)} " +
+            $"{snapshot.Progress:P0} ({snapshot.Phase})";
+    }
+
+    private void RestoreWindowTitle()
+    {
+        if (Window != null)
+            Window.Title = WindowTitle;
+    }
+
+    private void ApplyLoadedSceneState(
+        Scene targetScene,
+        MeshManager meshManager,
+        MaterialManager materialManager,
+        LightManager lightManager,
+        VulkanRenderer renderer,
+        FirstPersonCamera camera,
+        Model model)
+    {
         _performanceScenarioRunner = CreatePerformanceScenarioRunner(meshManager, materialManager, lightManager);
         SampleLighting.ConfigureRenderSettings(renderer.Settings, ResolveSceneLightingMode());
         ApplySmokeRenderSettings(renderer);
@@ -2368,17 +4477,21 @@ internal sealed class HelloGame : Game
         _inputController?.SetLightingMode(ResolveSceneLightingMode());
         _inputController?.SetPerformanceScenarioRunner(_performanceScenarioRunner);
         ApplyCameraPreset(camera, _sceneKind);
-        PrintLoadedSceneSummary(model);
+        PrintLoadedSceneSummary(targetScene, model);
 
         Console.WriteLine($"Scene: {GetSceneDisplayName(_sceneKind)}");
     }
 
-    private void ClearSceneAndContent()
+    private Model LoadModelForEditorRuntimeMetadata(string modelPath)
     {
-        Scene.ClearAndDispose();
-        (Content ?? throw new InvalidOperationException(
-            "Interactive scene transitions require an initialized content manager."))
-            .Clear();
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelPath);
+        SampleSceneLoader? loader = _sceneLoader;
+        if (loader != null)
+            return loader.LoadModelForRuntimeMetadata(modelPath);
+
+        return Content?.Load<Model>(modelPath) ??
+            throw new InvalidOperationException(
+                $"Content manager returned null for scene model '{modelPath}'.");
     }
 
     private void ConfigureSceneLighting(LightManager lightManager)
@@ -2456,8 +4569,11 @@ internal sealed class HelloGame : Game
         settings.Foliage.GpuDrivenEnabled = true;
     }
 
-    private void PrintLoadedSceneSummary(Model model)
+    private void PrintLoadedSceneSummary(
+        Scene scene,
+        Model model)
     {
+        ArgumentNullException.ThrowIfNull(scene);
         if (_diagnosticsReporter == null)
             return;
 
@@ -2467,7 +4583,9 @@ internal sealed class HelloGame : Game
             return;
         }
 
-        _diagnosticsReporter.PrintProceduralSceneSummary(Scene, GetSceneDisplayName(_sceneKind));
+        _diagnosticsReporter.PrintProceduralSceneSummary(
+            scene,
+            GetSceneDisplayName(_sceneKind));
     }
 
     private static void ApplyCameraPreset(FirstPersonCamera camera, SampleSceneKind sceneKind)
@@ -2771,4 +4889,35 @@ internal sealed class HelloGame : Game
         int Height,
         long StartedTimestamp,
         long FramebufferResizeRevisionAtRequest);
+
+    private enum BistroTransitionSmokePhase
+    {
+        WaitingForInitialFrame,
+        ColdBistro,
+        ReturningToGi,
+        WarmBistro,
+        Settling,
+        Completed
+    }
+
+    private sealed class BistroTransitionSmokeState
+    {
+        public BistroTransitionSmokePhase Phase { get; set; } =
+            BistroTransitionSmokePhase.WaitingForInitialFrame;
+        public long PhaseStartedTimestamp { get; set; }
+        public long ColdStartedTimestamp { get; set; }
+        public long WarmStartedTimestamp { get; set; }
+        public long ColdFirstPresentMicroseconds { get; set; } = -1;
+        public long ColdFullResidencyMicroseconds { get; set; } = -1;
+        public long ReturnFirstPresentMicroseconds { get; set; } = -1;
+        public long WarmFirstPresentMicroseconds { get; set; } = -1;
+        public long MaximumHostStepMicroseconds { get; set; }
+        public long SettleAfterPresentSerial { get; set; }
+        public int ValidationErrorBaseline { get; set; }
+        public int SourceFallbackBaseline { get; set; }
+        public SampleSceneKind InitialScene { get; set; }
+        public bool CornellRecoveryObserved { get; set; }
+        public bool ColdWasResident { get; set; }
+        public bool WarmWasResident { get; set; }
+    }
 }

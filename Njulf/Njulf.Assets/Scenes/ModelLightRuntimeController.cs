@@ -21,6 +21,7 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
     private readonly HashSet<Guid> _activeLightIds = [];
     private bool _disposed;
     private bool _reconciling;
+    private bool _refreshPending;
 
     private ModelLightRuntimeController(
         Scene scene,
@@ -150,6 +151,7 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
             IReadOnlyDictionary<Guid, DesiredPlacement> desired = DiscoverPlacements();
             if (ImportedModelLightsEnabled)
                 ReconcileEnabledPlacements(desired);
+            _refreshPending = false;
             LastError = null;
         }
         catch (Exception failure)
@@ -176,7 +178,23 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
 
     bool IUpdateable.Enabled { get; set; }
     int IUpdateable.UpdateOrder { get; set; }
-    void IUpdateable.Update(float deltaTime) { }
+    void IUpdateable.Update(float deltaTime)
+    {
+        if (_disposed || _reconciling || !_refreshPending)
+            return;
+
+        _refreshPending = false;
+        try
+        {
+            Refresh();
+        }
+        catch
+        {
+            // The scene mutation has already committed. Refresh preserves the
+            // prior active-light set transactionally and records LastError.
+            // A later mutation will schedule another reconciliation attempt.
+        }
+    }
 
     private void OnSceneMutated(SceneMutation mutation)
     {
@@ -188,6 +206,17 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
         if (_disposed || _reconciling || mutation.Producer is not RenderObject ||
             (mutation.Kind & relevant) == 0)
         {
+            return;
+        }
+
+        if (mutation.Kind.HasFlag(SceneMutationKind.Added) ||
+            mutation.Kind.HasFlag(SceneMutationKind.Removed))
+        {
+            // Flattened imported models can publish thousands of sub-objects
+            // in one host update. Coalesce those structural changes so light
+            // discovery scans the scene once on the next update instead of
+            // once per object (which otherwise becomes O(n^2)).
+            _refreshPending = true;
             return;
         }
 

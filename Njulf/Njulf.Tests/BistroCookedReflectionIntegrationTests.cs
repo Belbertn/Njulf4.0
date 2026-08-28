@@ -1,5 +1,6 @@
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
+using NjulfHelloGame;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -7,6 +8,57 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class BistroCookedReflectionIntegrationTests
 {
+    [Test]
+    [Explicit("Requires both local Amazon Bistro source assets and their win-x64 cooks.")]
+    public void BothBistroCooks_ResolveUnderExactRuntimeImportContracts()
+    {
+        string root = FindRepositoryRoot();
+        string contentRoot = Path.Combine(root, "NjulfHelloGame");
+        var resolver = new CookedContentResolver(contentRoot);
+
+        foreach (SampleAssetReference asset in
+                 SampleAssetManifest.Bistro.EnumerateAssets())
+        {
+            string sourcePath = Path.GetFullPath(Path.Combine(
+                contentRoot,
+                asset.Path));
+            if (!File.Exists(sourcePath))
+            {
+                Assert.Ignore(
+                    $"The local Bistro source is required: {sourcePath}");
+            }
+
+            ContentLoadOptions loadOptions = asset.CreateLoadOptions();
+            ulong expectedImportContract = CookedModelImportContract.Compute(
+                sourcePath,
+                loadOptions.ImporterOptions ?? ImporterOptions.Default);
+            CookedResolution resolution = resolver.ResolveModel(
+                asset.Path,
+                sourcePath,
+                strictSourceHash: true,
+                expectedImportContract,
+                captureModelSnapshot: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    resolution.Status,
+                    Is.EqualTo(CookedResolutionStatus.Found),
+                    $"{asset.Path}: {resolution.Reason}");
+                Assert.That(
+                    resolution.Header?.ImportSettingsHash,
+                    Is.EqualTo(expectedImportContract),
+                    asset.Path);
+                Assert.That(
+                    resolution.Header?.FormatMinor,
+                    Is.EqualTo(CookedFormatVersions.Model.Minor),
+                    asset.Path);
+                Assert.That(resolution.ModelSnapshot, Is.Not.Null,
+                    asset.Path);
+            });
+        }
+    }
+
     [Test]
     [Explicit("Requires the local Amazon Bistro source asset and its win-x64 cook.")]
     public void ExteriorCook_PreservesThinGlassAndImportSemantics()

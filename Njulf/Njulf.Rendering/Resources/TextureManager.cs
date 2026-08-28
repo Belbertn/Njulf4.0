@@ -17,9 +17,12 @@ using CoreVector4 = Njulf.Core.Math.Vector4;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class TextureManager : IDisposable, ITextureReferenceManager
+    public sealed unsafe class TextureManager : IDisposable,
+        IBulkTextureReferenceManager
     {
         private const int UnassignedBindlessIndex = -1;
+        internal const ulong DefaultUploadBatchBytes =
+            32UL * 1024UL * 1024UL;
         internal const int MaximumRuntimeEncodedTextureBytes =
             TextureCooker.DefaultMaximumRuntimeTransportEncodedBytes;
         internal const long MaximumRuntimeDecodedTexturePixels =
@@ -46,6 +49,7 @@ namespace Njulf.Rendering.Resources
         private readonly object _lock = new object();
         private readonly object _disposeGate = new();
         private readonly TextureManagerLifecycleState _lifecycle = new();
+        private TextureUploadBatch? _activeUploadBatch;
 
         private TextureHandle _defaultWhiteTexture = TextureHandle.Invalid;
         private TextureHandle _defaultNormalTexture = TextureHandle.Invalid;
@@ -182,6 +186,31 @@ namespace Njulf.Rendering.Resources
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _bindlessHeap = bindlessHeap;
             _deleter = deleter;
+        }
+
+        internal IModelTextureUploadBatch BeginUploadBatch(
+            ulong maximumStagingBytes = DefaultUploadBatchBytes)
+        {
+            ThrowIfDisposed();
+            if (maximumStagingBytes == 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(maximumStagingBytes));
+
+            lock (_lock)
+            {
+                _lifecycle.ThrowIfDisposedUnderGate(_lock);
+                if (_activeUploadBatch != null)
+                {
+                    throw new InvalidOperationException(
+                        "Texture upload batches cannot be nested.");
+                }
+
+                var batch = new TextureUploadBatch(
+                    this,
+                    maximumStagingBytes);
+                _activeUploadBatch = batch;
+                return batch;
+            }
         }
 
         /// <summary>
@@ -1214,7 +1243,10 @@ namespace Njulf.Rendering.Resources
                 if (!File.Exists(fullPath))
                     throw new FileNotFoundException($"Texture file was not found: {fullPath}", fullPath);
             }
-            byte[] imageBytes = ReadTextureSourceBytes(source, out fullPath);
+            PreparedTextureSourceSnapshot? prepared =
+                source.PreparedSnapshot;
+            byte[] imageBytes = prepared?.EncodedBytes ??
+                ReadTextureSourceBytes(source, out fullPath);
 
             if (IsGitLfsPointer(imageBytes))
             {
@@ -1225,7 +1257,8 @@ namespace Njulf.Rendering.Resources
 
             bool isKtx2 = IsKtx2Source(source, fullPath);
             AuthenticatedCookedTexture? authenticatedCookedTexture =
-                isKtx2 && IsCookedSource(source)
+                prepared?.CookedAuthentication ??
+                (isKtx2 && IsCookedSource(source)
                     ? AuthenticateCookedTexture(
                         source,
                         fullPath,
@@ -1234,7 +1267,7 @@ namespace Njulf.Rendering.Resources
                         srgb,
                         semantic,
                         normalizedMipPolicy)
-                    : null;
+                    : null);
             // Cache lookup deliberately follows the byte read. File identity,
             // length, and timestamps are insufficient for editor hot reload:
             // source bytes can change while all three remain stable. Cooked
@@ -1242,6 +1275,7 @@ namespace Njulf.Rendering.Resources
             // reuse that proven fact instead of hashing the same bytes twice.
             ulong sourceContentHash =
                 authenticatedCookedTexture?.Ktx2ContentHash ??
+                prepared?.ContentHash ??
                 CalculateTextureSourceContentHash(imageBytes);
             ulong cacheContentHash =
                 authenticatedCookedTexture?.PublicationContentHash ??
@@ -1451,6 +1485,66 @@ namespace Njulf.Rendering.Resources
             return handle;
         }
 
+        /// <summary>
+        /// Captures and authenticates immutable source bytes away from the
+        /// render thread. The returned source preserves its authored identity
+        /// and path, so normal cache and hot-reload semantics remain intact.
+        /// </summary>
+        internal ModelTextureSource PrepareTextureSource(
+            ModelTextureSource source,
+            TextureSamplerDescription samplerDescription,
+            bool srgb,
+            TextureSemantic semantic,
+            RuntimeTextureMipPolicy mipPolicy)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            if (source.PreparedSnapshot != null)
+                return source;
+
+            RuntimeTextureMipPolicy normalizedMipPolicy =
+                mipPolicy.ValidateAndNormalize();
+            byte[] imageBytes = ReadTextureSourceBytes(
+                source,
+                out string? fullPath);
+            if (IsGitLfsPointer(imageBytes))
+            {
+                throw new InvalidOperationException(
+                    $"Texture source '{ResolveSourceIdentity(source, fullPath)}' " +
+                    "is a Git LFS pointer file, not image data.");
+            }
+
+            bool isKtx2 = IsKtx2Source(source, fullPath);
+            AuthenticatedCookedTexture? authentication =
+                isKtx2 && IsCookedSource(source)
+                    ? AuthenticateCookedTexture(
+                        source,
+                        fullPath,
+                        imageBytes,
+                        samplerDescription,
+                        srgb,
+                        semantic,
+                        normalizedMipPolicy)
+                    : null;
+            ulong contentHash = authentication?.Ktx2ContentHash ??
+                CalculateTextureSourceContentHash(imageBytes);
+
+            return new ModelTextureSource
+            {
+                DebugName = source.DebugName,
+                SourceKind = source.SourceKind,
+                FilePath = source.FilePath,
+                Bytes = source.Bytes,
+                MimeType = source.MimeType,
+                CacheIdentity = source.CacheIdentity,
+                ContainerKind = source.ContainerKind,
+                EncodedByteLength = source.EncodedByteLength,
+                PreparedSnapshot = new PreparedTextureSourceSnapshot(
+                    imageBytes,
+                    contentHash,
+                    authentication)
+            };
+        }
+
         public static TextureAssetMemoryEntry InspectTextureSourceBudget(
             ModelTextureSource source,
             bool generateMipmaps = true,
@@ -1630,6 +1724,8 @@ namespace Njulf.Rendering.Resources
         {
             ArgumentNullException.ThrowIfNull(source);
             fullPath = string.IsNullOrWhiteSpace(source.FilePath) ? null : Path.GetFullPath(source.FilePath);
+            if (source.PreparedSnapshot is { } prepared)
+                return prepared.EncodedBytes;
             if (fullPath != null)
             {
                 if (!File.Exists(fullPath))
@@ -3206,6 +3302,7 @@ namespace Njulf.Rendering.Resources
                     throw new ArgumentException("Texture upload data is smaller than the required image size.", nameof(data));
 
                 BufferHandle stagingHandle = _bufferManager.CreateStagingBuffer(requiredSize);
+                bool retainedByBatch = false;
                 try
                 {
                     void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
@@ -3216,19 +3313,42 @@ namespace Njulf.Rendering.Resources
 
                     _bufferManager.FlushBuffer(stagingHandle, 0, requiredSize);
 
-                    var upload = _context.BeginSingleTimeCommands();
+                    CommandBuffer commandBuffer;
+                    if (_activeUploadBatch != null)
+                    {
+                        commandBuffer = _activeUploadBatch.Admit(
+                            stagingHandle,
+                            requiredSize);
+                        retainedByBatch = true;
+                    }
+                    else
+                    {
+                        VulkanContext.SingleTimeCommandContext upload =
+                            _context.BeginSingleTimeCommands();
+                        commandBuffer = upload.CommandBuffer;
+                        RecordTextureUpload(
+                            commandBuffer,
+                            _bufferManager.GetBuffer(stagingHandle),
+                            textureInfo,
+                            width,
+                            height,
+                            generateMipmaps && textureInfo.MipLevels > 1);
+                        _context.EndSingleTimeCommands(upload);
+                        return;
+                    }
+
                     RecordTextureUpload(
-                        upload.CommandBuffer,
+                        commandBuffer,
                         _bufferManager.GetBuffer(stagingHandle),
                         textureInfo,
                         width,
                         height,
                         generateMipmaps && textureInfo.MipLevels > 1);
-                    _context.EndSingleTimeCommands(upload);
                 }
                 finally
                 {
-                    _bufferManager.DestroyBuffer(stagingHandle);
+                    if (!retainedByBatch)
+                        _bufferManager.DestroyBuffer(stagingHandle);
                 }
             }
         }
@@ -3258,6 +3378,7 @@ namespace Njulf.Rendering.Resources
                     throw new ArgumentException("Texture upload data is smaller than the required image size.", nameof(data));
 
                 BufferHandle stagingHandle = _bufferManager.CreateStagingBuffer(requiredSize);
+                bool retainedByBatch = false;
                 try
                 {
                     void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
@@ -3268,18 +3389,40 @@ namespace Njulf.Rendering.Resources
 
                     _bufferManager.FlushBuffer(stagingHandle, 0, requiredSize);
 
-                    var upload = _context.BeginSingleTimeCommands();
+                    CommandBuffer commandBuffer;
+                    if (_activeUploadBatch != null)
+                    {
+                        commandBuffer = _activeUploadBatch.Admit(
+                            stagingHandle,
+                            requiredSize);
+                        retainedByBatch = true;
+                    }
+                    else
+                    {
+                        VulkanContext.SingleTimeCommandContext upload =
+                            _context.BeginSingleTimeCommands();
+                        commandBuffer = upload.CommandBuffer;
+                        RecordTextureUploadAllMipsAndLayers(
+                            commandBuffer,
+                            _bufferManager.GetBuffer(stagingHandle),
+                            textureInfo,
+                            width,
+                            height);
+                        _context.EndSingleTimeCommands(upload);
+                        return;
+                    }
+
                     RecordTextureUploadAllMipsAndLayers(
-                        upload.CommandBuffer,
+                        commandBuffer,
                         _bufferManager.GetBuffer(stagingHandle),
                         textureInfo,
                         width,
                         height);
-                    _context.EndSingleTimeCommands(upload);
                 }
                 finally
                 {
-                    _bufferManager.DestroyBuffer(stagingHandle);
+                    if (!retainedByBatch)
+                        _bufferManager.DestroyBuffer(stagingHandle);
                 }
             }
         }
@@ -3294,6 +3437,20 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentException("Texture upload data cannot be empty.", nameof(data));
             if (levels.Count == 0)
                 throw new ArgumentException("Texture upload must include at least one mip level.", nameof(levels));
+
+            var packedLevels = new Ktx2MipLevel[levels.Count];
+            ulong requiredSize = 0;
+            for (int i = 0; i < levels.Count; i++)
+            {
+                Ktx2MipLevel level = levels[i];
+                requiredSize = checked((requiredSize + 3UL) & ~3UL);
+                packedLevels[i] = level with
+                {
+                    ByteOffset = checked((long)requiredSize)
+                };
+                requiredSize = checked(
+                    requiredSize + checked((ulong)level.ByteLength));
+            }
 
             lock (_lock)
             {
@@ -3314,29 +3471,375 @@ namespace Njulf.Rendering.Resources
                         throw new ArgumentException($"KTX2 mip level {i} points outside the upload data.", nameof(levels));
                 }
 
-                ulong requiredSize = checked((ulong)data.Length);
                 BufferHandle stagingHandle = _bufferManager.CreateStagingBuffer(requiredSize);
+                bool retainedByBatch = false;
                 try
                 {
                     void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
-                    fixed (byte* source = data)
+                    byte* destination = (byte*)mappedData;
+                    for (int i = 0; i < levels.Count; i++)
                     {
-                        Buffer.MemoryCopy(source, mappedData, requiredSize, requiredSize);
+                        Ktx2MipLevel sourceLevel = levels[i];
+                        Ktx2MipLevel destinationLevel = packedLevels[i];
+                        ReadOnlySpan<byte> sourceBytes = data.Slice(
+                            checked((int)sourceLevel.ByteOffset),
+                            checked((int)sourceLevel.ByteLength));
+                        fixed (byte* source = sourceBytes)
+                        {
+                            Buffer.MemoryCopy(
+                                source,
+                                destination + destinationLevel.ByteOffset,
+                                checked((ulong)destinationLevel.ByteLength),
+                                checked((ulong)destinationLevel.ByteLength));
+                        }
                     }
 
                     _bufferManager.FlushBuffer(stagingHandle, 0, requiredSize);
 
-                    var upload = _context.BeginSingleTimeCommands();
+                    CommandBuffer commandBuffer;
+                    if (_activeUploadBatch != null)
+                    {
+                        commandBuffer = _activeUploadBatch.Admit(
+                            stagingHandle,
+                            requiredSize);
+                        retainedByBatch = true;
+                    }
+                    else
+                    {
+                        VulkanContext.SingleTimeCommandContext upload =
+                            _context.BeginSingleTimeCommands();
+                        commandBuffer = upload.CommandBuffer;
+                        RecordTextureUploadMipLevels(
+                            commandBuffer,
+                            _bufferManager.GetBuffer(stagingHandle),
+                            textureInfo,
+                            packedLevels);
+                        _context.EndSingleTimeCommands(upload);
+                        return;
+                    }
+
                     RecordTextureUploadMipLevels(
-                        upload.CommandBuffer,
+                        commandBuffer,
                         _bufferManager.GetBuffer(stagingHandle),
                         textureInfo,
-                        levels);
-                    _context.EndSingleTimeCommands(upload);
+                        packedLevels);
                 }
                 finally
                 {
-                    _bufferManager.DestroyBuffer(stagingHandle);
+                    if (!retainedByBatch)
+                        _bufferManager.DestroyBuffer(stagingHandle);
+                }
+            }
+        }
+
+        public void RetainTextures(IReadOnlyList<TextureHandle> handles)
+        {
+            ArgumentNullException.ThrowIfNull(handles);
+            ThrowIfDisposed();
+            lock (_lock)
+            {
+                _lifecycle.ThrowIfDisposedUnderGate(_lock);
+
+                // Validate the entire operation, including duplicate
+                // occurrences, before publishing any count change. Material
+                // ownership acquisition therefore remains transactional
+                // without one lock acquisition per texture slot.
+                for (int i = 0; i < handles.Count; i++)
+                {
+                    TextureHandle handle = handles[i];
+                    if (!RequiresLogicalRetainLocked(handle) ||
+                        AppearsEarlier(handles, i, handle))
+                    {
+                        continue;
+                    }
+
+                    TextureInfo textureInfo = GetTextureInfoLocked(handle);
+                    int occurrences = CountOccurrencesFrom(
+                        handles,
+                        i,
+                        handle);
+                    _ = checked(textureInfo.ReferenceCount + occurrences);
+                }
+
+                for (int i = 0; i < handles.Count; i++)
+                {
+                    TextureHandle handle = handles[i];
+                    if (!RequiresLogicalRetainLocked(handle) ||
+                        AppearsEarlier(handles, i, handle))
+                    {
+                        continue;
+                    }
+
+                    TextureInfo textureInfo = GetTextureInfoLocked(handle);
+                    textureInfo.ReferenceCount += CountOccurrencesFrom(
+                        handles,
+                        i,
+                        handle);
+                }
+            }
+        }
+
+        private bool RequiresLogicalRetainLocked(TextureHandle handle) =>
+            handle.IsValid &&
+            handle != _defaultWhiteTexture &&
+            handle != _defaultNormalTexture &&
+            handle != _defaultBlackTexture;
+
+        private static bool AppearsEarlier(
+            IReadOnlyList<TextureHandle> handles,
+            int index,
+            TextureHandle handle)
+        {
+            for (int i = 0; i < index; i++)
+            {
+                if (handles[i] == handle)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static int CountOccurrencesFrom(
+            IReadOnlyList<TextureHandle> handles,
+            int first,
+            TextureHandle handle)
+        {
+            int count = 0;
+            for (int i = first; i < handles.Count; i++)
+            {
+                if (handles[i] == handle)
+                    count++;
+            }
+
+            return count;
+        }
+
+        internal static bool ShouldFlushUploadBatch(
+            ulong stagedBytes,
+            ulong nextBytes,
+            ulong maximumBytes) =>
+            stagedBytes > 0 &&
+            (stagedBytes >= maximumBytes ||
+             nextBytes > maximumBytes - stagedBytes);
+
+        private sealed class TextureUploadBatch :
+            IModelTextureUploadBatch
+        {
+            private sealed class PendingSubmission
+            {
+                public PendingSubmission(
+                    VulkanContext.SingleTimeCommandSubmission submission,
+                    BufferHandle[] stagingBuffers)
+                {
+                    Submission = submission;
+                    StagingBuffers = stagingBuffers;
+                }
+
+                public VulkanContext.SingleTimeCommandSubmission Submission;
+                public BufferHandle[] StagingBuffers { get; }
+                public int NextStagingBuffer { get; set; }
+            }
+
+            private readonly TextureManager _owner;
+            private readonly ulong _maximumStagingBytes;
+            private readonly List<BufferHandle> _stagingBuffers = [];
+            private readonly Queue<PendingSubmission> _pendingSubmissions = [];
+            private VulkanContext.SingleTimeCommandContext _commands;
+            private ulong _stagedBytes;
+            private bool _hasCommands;
+            private bool _completed;
+            private bool _disposed;
+            private bool _submissionFailed;
+
+            public TextureUploadBatch(
+                TextureManager owner,
+                ulong maximumStagingBytes)
+            {
+                _owner = owner;
+                _maximumStagingBytes = maximumStagingBytes;
+            }
+
+            public CommandBuffer Admit(
+                BufferHandle stagingBuffer,
+                ulong stagingBytes)
+            {
+                if (_disposed || _completed)
+                    throw new ObjectDisposedException(nameof(TextureUploadBatch));
+                if (!stagingBuffer.IsValid)
+                    throw new ArgumentException(
+                        "A valid staging buffer is required.",
+                        nameof(stagingBuffer));
+                if (stagingBytes == 0)
+                    throw new ArgumentOutOfRangeException(nameof(stagingBytes));
+
+                if (ShouldFlushUploadBatch(
+                        _stagedBytes,
+                        stagingBytes,
+                        _maximumStagingBytes))
+                {
+                    SubmitCurrent();
+                }
+
+                if (!_hasCommands)
+                {
+                    _commands = _owner._context.BeginSingleTimeCommands();
+                    _hasCommands = true;
+                }
+
+                _stagingBuffers.Add(stagingBuffer);
+                _stagedBytes = checked(_stagedBytes + stagingBytes);
+                return _commands.CommandBuffer;
+            }
+
+            public void Complete()
+            {
+                lock (_owner._lock)
+                {
+                    EnsureActive();
+                    SubmitCurrent();
+                    _completed = true;
+                    _owner._activeUploadBatch = null;
+                }
+            }
+
+            public bool TryCompleteGpuWork()
+            {
+                lock (_owner._lock)
+                {
+                    if (_disposed)
+                        return true;
+                    if (!_completed)
+                    {
+                        throw new InvalidOperationException(
+                            "The texture upload batch has not been submitted.");
+                    }
+
+                    while (_pendingSubmissions.Count > 0)
+                    {
+                        PendingSubmission pending =
+                            _pendingSubmissions.Peek();
+                        if (!_owner._context.TryCompleteSingleTimeCommands(
+                                ref pending.Submission))
+                        {
+                            return false;
+                        }
+
+                        DestroyCompletedStagingBuffers(pending);
+                        _pendingSubmissions.Dequeue();
+                    }
+
+                    return true;
+                }
+            }
+
+            public void Dispose()
+            {
+                lock (_owner._lock)
+                {
+                    if (_disposed)
+                        return;
+
+                    if (!_completed)
+                        AbortCurrent();
+                    WaitForPendingGpuWork();
+                    if (ReferenceEquals(
+                            _owner._activeUploadBatch,
+                            this))
+                    {
+                        _owner._activeUploadBatch = null;
+                    }
+                    _disposed = true;
+                }
+            }
+
+            private void SubmitCurrent()
+            {
+                if (!_hasCommands)
+                    return;
+
+                VulkanContext.SingleTimeCommandContext commands = _commands;
+                BufferHandle[] stagingBuffers = _stagingBuffers.ToArray();
+                _stagingBuffers.Clear();
+                _commands = default;
+                _hasCommands = false;
+                _stagedBytes = 0;
+                try
+                {
+                    VulkanContext.SingleTimeCommandSubmission submission =
+                        _owner._context.SubmitSingleTimeCommands(commands);
+                    _pendingSubmissions.Enqueue(
+                        new PendingSubmission(
+                            submission,
+                            stagingBuffers));
+                }
+                catch
+                {
+                    // Queue submission may already have happened. Retaining
+                    // the staging allocations is safer than freeing memory
+                    // that a failed or still-running queue could reference.
+                    _submissionFailed = true;
+                    _stagingBuffers.AddRange(stagingBuffers);
+                    throw;
+                }
+            }
+
+            private void AbortCurrent()
+            {
+                if (_submissionFailed)
+                    return;
+                if (_hasCommands)
+                    _owner._context.AbortSingleTimeCommands(_commands);
+                DestroyStagingBuffers();
+                _commands = default;
+                _hasCommands = false;
+                _stagedBytes = 0;
+            }
+
+            private void WaitForPendingGpuWork()
+            {
+                if (_submissionFailed)
+                    return;
+
+                while (_pendingSubmissions.Count > 0)
+                {
+                    PendingSubmission pending =
+                        _pendingSubmissions.Peek();
+                    _owner._context.WaitForSingleTimeCommands(
+                        ref pending.Submission);
+                    DestroyCompletedStagingBuffers(pending);
+                    _pendingSubmissions.Dequeue();
+                }
+            }
+
+            private void DestroyCompletedStagingBuffers(
+                PendingSubmission pending)
+            {
+                while (pending.NextStagingBuffer <
+                       pending.StagingBuffers.Length)
+                {
+                    _owner._bufferManager.DestroyBuffer(
+                        pending.StagingBuffers[
+                            pending.NextStagingBuffer]);
+                    pending.NextStagingBuffer++;
+                }
+            }
+
+            private void DestroyStagingBuffers()
+            {
+                foreach (BufferHandle stagingBuffer in _stagingBuffers)
+                    _owner._bufferManager.DestroyBuffer(stagingBuffer);
+                _stagingBuffers.Clear();
+            }
+
+            private void EnsureActive()
+            {
+                if (_disposed || _completed ||
+                    !ReferenceEquals(
+                        _owner._activeUploadBatch,
+                        this))
+                {
+                    throw new InvalidOperationException(
+                        "The texture upload batch is no longer active.");
                 }
             }
         }

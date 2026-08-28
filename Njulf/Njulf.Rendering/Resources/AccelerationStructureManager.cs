@@ -2378,6 +2378,8 @@ namespace Njulf.Rendering.Resources
             int frameIndex)
         {
             _unavailableMeshScratch.Clear();
+            int buildsRemaining =
+                _residencyPolicy.EffectiveMaximumStaticBlasBuildsPerFrame;
             foreach (StaticOpaqueInstance instance in instances)
             {
                 if (instance.UsesDynamicBlas)
@@ -2388,6 +2390,15 @@ namespace Njulf.Rendering.Resources
                 if (_blasCache.TryGetValue(instance.Mesh, out BottomLevelAccelerationStructure? cachedBlas))
                 {
                     cachedBlas.LastUsedFrameSerial = _frameSerial;
+                    continue;
+                }
+
+                if (buildsRemaining <= 0)
+                {
+                    // A partial TLAS would let lighting rays pass through
+                    // rasterized geometry. Keep the ray scene unpublished and
+                    // continue filling the BLAS cache on following frames.
+                    _unavailableMeshScratch.Add(instance.Mesh);
                     continue;
                 }
 
@@ -2404,6 +2415,7 @@ namespace Njulf.Rendering.Resources
                 blas.LastUsedFrameSerial = _frameSerial;
                 _lastBlasBuildMicroseconds += ElapsedMicroseconds(blasStart);
                 _lastBlasBuildCount++;
+                buildsRemaining--;
                 _blasCache.Add(instance.Mesh, blas);
                 AdvanceResourceGeneration();
                 AccelerationStructureBytes = checked(AccelerationStructureBytes + blas.Size);
@@ -3306,11 +3318,11 @@ namespace Njulf.Rendering.Resources
             if (replacedAny)
             {
                 // BLAS device addresses changed. Even if instance transforms are
-                // identical, the TLAS instance array must be uploaded again and
-                // the TLAS rebuilt against the compacted children.
-                _hasTlasInstanceSignature = false;
-                _lastTlasInstanceSignature = 0;
-                _lastTlasInstanceCount = 0;
+                // identical, every frame-slot TLAS must be rebuilt against the
+                // compacted children. Invalidating only the currently selected
+                // slot leaves the other slot eligible for signature reuse after
+                // its child BLAS has reached the retirement fence.
+                InvalidateAllTopLevelInstanceSignatures();
                 RecalculateAccelerationStructureBytes();
             }
 
@@ -3348,6 +3360,38 @@ namespace Njulf.Rendering.Resources
                 _hasTlasInstanceSignature;
             _tlasInstanceCounts[_currentTlasFrameSlot] =
                 _lastTlasInstanceCount;
+        }
+
+        private void InvalidateAllTopLevelInstanceSignatures()
+        {
+            InvalidateTopLevelFrameSignatures(
+                _tlasInstanceSignatures,
+                _tlasHasInstanceSignatures,
+                _tlasInstanceCounts);
+            _lastTlasInstanceSignature = 0UL;
+            _hasTlasInstanceSignature = false;
+            _lastTlasInstanceCount = 0;
+            _hasReusablePreparation = false;
+        }
+
+        internal static void InvalidateTopLevelFrameSignatures(
+            ulong[] signatures,
+            bool[] hasSignatures,
+            int[] instanceCounts)
+        {
+            ArgumentNullException.ThrowIfNull(signatures);
+            ArgumentNullException.ThrowIfNull(hasSignatures);
+            ArgumentNullException.ThrowIfNull(instanceCounts);
+            if (signatures.Length != hasSignatures.Length ||
+                signatures.Length != instanceCounts.Length)
+            {
+                throw new ArgumentException(
+                    "TLAS frame-slot signature arrays must have identical lengths.");
+            }
+
+            Array.Clear(signatures);
+            Array.Clear(hasSignatures);
+            Array.Clear(instanceCounts);
         }
 
         private ulong CalculateTopLevelFrameSlotBytes()
@@ -5201,7 +5245,8 @@ namespace Njulf.Rendering.Resources
         float StaticResidentDistance,
         int MaximumStaticInstances,
         int EvictionGraceFrames,
-        bool AllowStaticMemoryCulling = true)
+        bool AllowStaticMemoryCulling = true,
+        int MaximumStaticBlasBuildsPerFrame = int.MaxValue)
     {
         public static AccelerationStructureResidencyPolicy Disabled => new(
             false,
@@ -5210,7 +5255,8 @@ namespace Njulf.Rendering.Resources
             float.MaxValue,
             int.MaxValue,
             0,
-            false);
+            false,
+            int.MaxValue);
 
         internal ulong EffectiveMemoryBudgetBytes => Enabled
             ? Math.Max(MemoryBudgetBytes, 16UL)
@@ -5223,6 +5269,10 @@ namespace Njulf.Rendering.Resources
         internal ulong EffectiveScratchMemoryBudgetBytes => Enabled
             ? AccelerationStructureManager.CalculateScratchMemoryBudgetBytes(EffectiveMemoryBudgetBytes)
             : ulong.MaxValue;
+
+        internal int EffectiveMaximumStaticBlasBuildsPerFrame => Enabled
+            ? Math.Max(1, MaximumStaticBlasBuildsPerFrame)
+            : int.MaxValue;
     }
 
     internal enum DdgiDynamicBlasContentClass

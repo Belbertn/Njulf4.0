@@ -426,6 +426,7 @@ namespace Njulf.Rendering.Resources
         private ulong _lastSubmittedFrameFenceValue;
         private ulong _completedFrameFenceValue;
         private ulong _resourceLastUseFrameFenceValue;
+        private ulong _capacityBootstrapResumeFrameFenceValue;
         private bool _capacityTransitionDeferred;
         private string _capacityTransitionDeferredReason = string.Empty;
         private readonly List<VolumeCandidate> _volumeCandidates = new(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount + 3);
@@ -1684,7 +1685,12 @@ namespace Njulf.Rendering.Resources
         public ulong GpuSchedulerReentryCount => _gpuSchedulerReentryCount;
         public bool GpuSchedulerFrameExecutionAvailable =>
             _gpuSchedulerFrameExecutionAvailable &&
-            !_warmStartLiveWorkSuspended;
+            !_warmStartLiveWorkSuspended &&
+            !CapacityBootstrapPending;
+        public bool CapacityBootstrapPending =>
+            IsCapacityBootstrapPending(
+                _capacityBootstrapResumeFrameFenceValue,
+                _completedFrameFenceValue);
         public ReadOnlySpan<SimpleDdgiRayDispatchBatch> RayDispatchBatches =>
             new(_rayDispatchBatches, 0, _rayDispatchBatchCount);
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
@@ -5317,7 +5323,8 @@ namespace Njulf.Rendering.Resources
                     (!_gpuSchedulerFallbackLatched &&
                         structuredGatherAvailable &&
                         (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident ||
-                         _gpuResidentProbeStateBootstrapped));
+                         _gpuResidentProbeStateBootstrapped) &&
+                        !CapacityBootstrapPending);
                 _gpuScheduler.CollectRetired(_completedFrameFenceValue);
                 bool enabled = gi.EffectiveUseDdgi;
                 layoutMicroseconds += ElapsedMicroseconds(phaseStart);
@@ -5756,7 +5763,7 @@ namespace Njulf.Rendering.Resources
                 int updateBudget = ResolveFeedbackLimitedUpdateBudget(
                     frameHardBudget,
                     visibleFreshRecoveryBudget);
-                if (_warmStartLiveWorkSuspended)
+                if (_warmStartLiveWorkSuspended || CapacityBootstrapPending)
                     updateBudget = 0;
                 _schedulerEffectiveRequestBudget = updateBudget;
                 ResolveSourceRefreshThroughputTarget(updateBudget);
@@ -14137,7 +14144,8 @@ namespace Njulf.Rendering.Resources
             _gpuSchedulerFrameExecutionAvailable =
                 !_gpuSchedulerFallbackLatched &&
                 structuredGatherAvailable &&
-                _gpuResidentProbeStateBootstrapped;
+                _gpuResidentProbeStateBootstrapped &&
+                !CapacityBootstrapPending;
 
             if (_atlasClearedThisFrame)
             {
@@ -15746,7 +15754,9 @@ namespace Njulf.Rendering.Resources
                     ResolveSampledAtlasAllocationBudget(
                         requiredKey.SampledAtlasBudgetBytes,
                         allocationPlan),
-                forceRecreate: sampledMappingChanged);
+                // Compact-layer mapping is data, not an image allocation ABI.
+                // Stable capacity is repopulated by the full sync below.
+                forceRecreate: false);
             if (sampledMappingChanged)
                 _sampledAtlas?.MarkFullSyncRequired();
             if (RequiresCanonicalAtlasClear(
@@ -15756,7 +15766,7 @@ namespace Njulf.Rendering.Resources
                 // A mode/ABI/codebook transition changes canonical buffer
                 // addressing and is therefore a cold generation. A compact
                 // sampled-mirror mapping transition is isolated to the optional
-                // images recreated above; its forced full sync must not erase
+                // images synchronized above; its forced full sync must not erase
                 // the canonical field or source cache.
                 _atlasClearRequired = true;
                 _atlasFresh = true;
@@ -15767,10 +15777,35 @@ namespace Njulf.Rendering.Resources
             _capacityPlan = allocationPlan;
             _capacityKey = requiredKey;
             _capacityKeyValid = true;
+            if (commandBuffer.Handle != 0)
+            {
+                // Stable DDGI buffers and their update-after-bind descriptors
+                // are shared by every frame slot. Publish the replacement
+                // generation and all of its clears/bootstrap uploads as one
+                // submission, then keep live trace/scheduler work dormant until
+                // that exact submission is fence-complete. This prevents an
+                // async consumer from observing a partly initialized topology
+                // during scene switches while raster/IBL can continue normally.
+                _capacityBootstrapResumeFrameFenceValue =
+                    ResolvePendingFrameFenceValue(
+                        _lastSubmittedFrameFenceValue);
+            }
             if (_context.ValidationSettings.Mode != RendererValidationMode.Off)
                 ValidateCachedCapacityPlan(allocationPlan, readbackRequired);
             return true;
         }
+
+        internal static ulong ResolvePendingFrameFenceValue(
+            ulong lastSubmittedFrameFenceValue) =>
+            lastSubmittedFrameFenceValue == ulong.MaxValue
+                ? ulong.MaxValue
+                : lastSubmittedFrameFenceValue + 1UL;
+
+        internal static bool IsCapacityBootstrapPending(
+            ulong resumeFrameFenceValue,
+            ulong completedFrameFenceValue) =>
+            resumeFrameFenceValue != 0UL &&
+            completedFrameFenceValue < resumeFrameFenceValue;
 
         internal static bool RequiresCanonicalAtlasClear(
             bool storageContractChanged,

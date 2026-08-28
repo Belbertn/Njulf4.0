@@ -117,6 +117,7 @@ public sealed class SampleLifecycleSmokeRunner
             case SampleSmokeMode.QualitySwitch:
             case SampleSmokeMode.DdgiResidencySwitch:
             case SampleSmokeMode.TextureHotReload:
+            case SampleSmokeMode.SceneTransition:
                 // These bounded state machines own completion, timeout, and
                 // exit. Their frame requirements include asynchronous GPU
                 // readback latency and cannot be represented by the generic
