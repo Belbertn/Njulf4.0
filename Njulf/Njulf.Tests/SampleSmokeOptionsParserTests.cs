@@ -1105,6 +1105,40 @@ public sealed class SampleSmokeOptionsParserTests
         });
     }
 
+    [TestCase(
+        "bistro-snapshot-incident",
+        SampleBenchmarkTrajectoryKind.BistroSnapshotIncident,
+        SampleSceneKind.Bistro,
+        SampleBistroQualityCaptureVariant.Presentation)]
+    [TestCase(
+        "sponza-snapshot-incident",
+        SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident,
+        SampleSceneKind.SponzaPlaza,
+        SampleBistroQualityCaptureVariant.SunScaleStep)]
+    public void BenchmarkSnapshotIncidentTrajectories_OwnTheirReportedSceneAndCamera(
+        string trajectory,
+        SampleBenchmarkTrajectoryKind expectedTrajectory,
+        SampleSceneKind expectedScene,
+        SampleBistroQualityCaptureVariant expectedBistroVariant)
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--benchmark",
+            "--benchmark-trajectory", trajectory
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Benchmark.Trajectory,
+                Is.EqualTo(expectedTrajectory));
+            Assert.That(options.SceneKind, Is.EqualTo(expectedScene));
+            Assert.That(options.Benchmark.TrajectoryBistroVariant,
+                Is.EqualTo(expectedBistroVariant));
+            Assert.That(options.Benchmark.TrajectoryFingerprint,
+                Does.StartWith("sha256:"));
+        });
+    }
+
     [Test]
     public void ParsesStressBenchmarkBudgetForExternallyGatedRuns()
     {

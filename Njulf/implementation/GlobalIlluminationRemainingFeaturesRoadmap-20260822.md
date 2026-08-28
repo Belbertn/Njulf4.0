@@ -1,6 +1,6 @@
 # Global Illumination Remaining Features Roadmap
 
-Last updated: 2026-08-27
+Last updated: 2026-08-28
 
 ## Current state
 
@@ -24,17 +24,19 @@ normal-cone culling. Their preset activation is:
 | Preset | AO | Bent-normal diffuse | DDGI receiver | C5 local scheduler |
 | --- | --- | --- | --- | --- |
 | Low | Disabled | Off | Exact | Off |
-| Medium | GTAO Low | Off | Temporal adaptive | Off |
+| Medium | GTAO Low | Off | Exact | Off |
 | High | GTAO Balanced | Environment | Exact | On |
-| DdgiHigh | GTAO High | Off | Temporal adaptive | On |
+| DdgiHigh | GTAO High | Off | Exact | On |
 | Ultra | GTAO High | Environment + exact DDGI | Exact | On |
 
 Meshlet cones and transparent partitioning are enabled in every preset and
 fail closed to visible/universal behavior when their inputs are unavailable.
 GTAO similarly falls back to SSAO when its required formats are unsupported.
-Hardware golden-image, soak, cross-vendor, and statistically paired performance
-campaigns below remain pending validation evidence; they do not disable these
-runtime defaults. P2 content-dependent features remain optional and were not
+The supplied 2026-08-27 hardware frames failed the receiver-cache visual gate,
+so the cache candidates are no longer runtime defaults. The same evidence also
+showed a separate accelerated DDGI fixed-point-tail failure; production uses
+the certified Jacobi solver while acceleration remains explicitly selectable
+for qualification. P2 content-dependent features remain optional and were not
 part of this closure.
 
 ## Recommended implementation order

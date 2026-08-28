@@ -21,7 +21,9 @@ public enum SampleBenchmarkTrajectoryKind : byte
     SponzaHigh,
     SponzaReceiverCacheIncident,
     SponzaHorizontal,
-    SponzaVertical
+    SponzaVertical,
+    BistroSnapshotIncident,
+    SponzaSnapshotIncident
 }
 
 public sealed record SampleBenchmarkCameraPose(
@@ -37,11 +39,15 @@ public static class SampleBenchmarkTrajectory
 {
     public const string StationaryName = "stationary";
     public const string BistroPresentationName = "bistro-presentation";
+    public const string BistroSnapshotIncidentName =
+        "bistro-snapshot-incident";
     public const string BistroLoopName = "bistro-loop";
     public const string SponzaLowName = "sponza-low";
     public const string SponzaHighName = "sponza-high";
     public const string SponzaReceiverCacheIncidentName =
         "sponza-receiver-cache-incident";
+    public const string SponzaSnapshotIncidentName =
+        "sponza-snapshot-incident";
     public const string SponzaHorizontalName = "sponza-horizontal";
     public const string SponzaVerticalName = "sponza-vertical";
 
@@ -57,17 +63,23 @@ public static class SampleBenchmarkTrajectory
             StationaryName => SampleBenchmarkTrajectoryKind.Stationary,
             BistroPresentationName =>
                 SampleBenchmarkTrajectoryKind.BistroPresentation,
+            BistroSnapshotIncidentName =>
+                SampleBenchmarkTrajectoryKind.BistroSnapshotIncident,
             BistroLoopName => SampleBenchmarkTrajectoryKind.BistroLoop,
             SponzaLowName => SampleBenchmarkTrajectoryKind.SponzaLow,
             SponzaHighName => SampleBenchmarkTrajectoryKind.SponzaHigh,
             SponzaReceiverCacheIncidentName =>
                 SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident,
+            SponzaSnapshotIncidentName =>
+                SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident,
             SponzaHorizontalName => SampleBenchmarkTrajectoryKind.SponzaHorizontal,
             SponzaVerticalName => SampleBenchmarkTrajectoryKind.SponzaVertical,
             _ => throw new ArgumentException(
                 $"Unknown benchmark trajectory '{value}'. Valid values: " +
-                $"{StationaryName}, {BistroPresentationName}, {BistroLoopName}, " +
-                $"{SponzaLowName}, {SponzaHighName}, {SponzaReceiverCacheIncidentName}, " +
+                $"{StationaryName}, {BistroPresentationName}, " +
+                $"{BistroSnapshotIncidentName}, {BistroLoopName}, " +
+                $"{SponzaLowName}, {SponzaHighName}, " +
+                $"{SponzaReceiverCacheIncidentName}, {SponzaSnapshotIncidentName}, " +
                 $"{SponzaHorizontalName}, " +
                 $"{SponzaVerticalName}.",
                 nameof(value))
@@ -78,11 +90,15 @@ public static class SampleBenchmarkTrajectory
     {
         SampleBenchmarkTrajectoryKind.Stationary => StationaryName,
         SampleBenchmarkTrajectoryKind.BistroPresentation => BistroPresentationName,
+        SampleBenchmarkTrajectoryKind.BistroSnapshotIncident =>
+            BistroSnapshotIncidentName,
         SampleBenchmarkTrajectoryKind.BistroLoop => BistroLoopName,
         SampleBenchmarkTrajectoryKind.SponzaLow => SponzaLowName,
         SampleBenchmarkTrajectoryKind.SponzaHigh => SponzaHighName,
         SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident =>
             SponzaReceiverCacheIncidentName,
+        SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident =>
+            SponzaSnapshotIncidentName,
         SampleBenchmarkTrajectoryKind.SponzaHorizontal => SponzaHorizontalName,
         SampleBenchmarkTrajectoryKind.SponzaVertical => SponzaVerticalName,
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
@@ -96,6 +112,7 @@ public static class SampleBenchmarkTrajectory
     public static bool RequiresBistro(
         SampleBenchmarkTrajectoryKind kind) => kind is
         SampleBenchmarkTrajectoryKind.BistroPresentation or
+        SampleBenchmarkTrajectoryKind.BistroSnapshotIncident or
         SampleBenchmarkTrajectoryKind.BistroLoop;
 
     public static bool RequiresSponza(
@@ -103,6 +120,7 @@ public static class SampleBenchmarkTrajectory
         SampleBenchmarkTrajectoryKind.SponzaLow or
         SampleBenchmarkTrajectoryKind.SponzaHigh or
         SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident or
+        SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident or
         SampleBenchmarkTrajectoryKind.SponzaHorizontal or
         SampleBenchmarkTrajectoryKind.SponzaVertical;
 
@@ -172,11 +190,13 @@ public static class SampleBenchmarkTrajectory
         string contractFingerprint = kind switch
         {
             SampleBenchmarkTrajectoryKind.BistroPresentation or
+                SampleBenchmarkTrajectoryKind.BistroSnapshotIncident or
                 SampleBenchmarkTrajectoryKind.BistroLoop =>
                 new SampleBistroQualityCaptureContract(bistroVariant).Fingerprint,
             SampleBenchmarkTrajectoryKind.SponzaLow or
                 SampleBenchmarkTrajectoryKind.SponzaHigh or
                 SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident or
+                SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident or
                 SampleBenchmarkTrajectoryKind.SponzaHorizontal or
                 SampleBenchmarkTrajectoryKind.SponzaVertical =>
                 SampleSponzaGiCaptureContract.Default.Fingerprint,
@@ -251,12 +271,17 @@ public static class SampleBenchmarkTrajectory
         if (RequiresBistro(kind))
         {
             var contract = new SampleBistroQualityCaptureContract(bistroVariant);
-            SampleBistroQualityCameraBookmark bookmark = kind ==
-                SampleBenchmarkTrajectoryKind.BistroPresentation
-                    ? contract.ReferenceBeautyBookmark
-                    : contract.ResolveCamera(ValidateFrameIndex(
-                        kind,
-                        trajectoryFrameIndex));
+            SampleBistroQualityCameraBookmark bookmark = kind switch
+            {
+                SampleBenchmarkTrajectoryKind.BistroPresentation =>
+                    contract.ReferenceBeautyBookmark,
+                SampleBenchmarkTrajectoryKind.BistroSnapshotIncident =>
+                    SampleBistroQualityCaptureContract
+                        .SnapshotIncidentBookmark,
+                _ => contract.ResolveCamera(ValidateFrameIndex(
+                    kind,
+                    trajectoryFrameIndex))
+            };
             return FromBistro(bookmark);
         }
 
@@ -268,6 +293,8 @@ public static class SampleBenchmarkTrajectory
             SampleBenchmarkTrajectoryKind.SponzaHigh => sponza.HighBookmark,
             SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident =>
                 SampleSponzaGiCaptureContract.ReceiverCacheIncidentBookmark,
+            SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident =>
+                SampleSponzaGiCaptureContract.SnapshotIncidentBookmark,
             SampleBenchmarkTrajectoryKind.SponzaHorizontal =>
                 sponza.SampleMotionTraversalFrame(ValidateFrameIndex(
                     kind,

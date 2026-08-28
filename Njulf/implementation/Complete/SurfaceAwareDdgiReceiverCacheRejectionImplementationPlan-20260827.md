@@ -1,7 +1,7 @@
 # Surface-Aware Simple-DDGI Receiver-Cache Rejection Implementation Plan
 
-- Status: Implemented through automated contract/build gates; hardware image,
-  soak, and performance evidence remains pending
+- Status: Implemented; hardware image evidence supplied on 2026-08-27 failed
+  the visual promotion gate, so production presets fail closed to `Exact`
 - Date: 2026-08-27
 - Primary target: safely recover the receiver-cache performance opportunity for
   `DdgiHigh`, including `HybridRayQuery`, without reintroducing black noise
@@ -12,9 +12,11 @@
 
 ## 0. Implementation and activation note
 
-The surface-aware spatial and temporal-adaptive implementations are complete.
-`Medium` and `DdgiHigh` request `TemporalAdaptive` by default; all other presets
-retain `Exact`. Exact gathering remains the correctness oracle and is selected
+The surface-aware spatial and temporal-adaptive implementations are complete,
+but their supplied Bistro/Sponza hardware captures did not pass the visual
+promotion gate. Every production preset therefore requests `Exact`; candidate
+modes remain available through explicit settings and benchmark variants. Exact
+gathering remains the correctness oracle and is selected
 automatically for missing resources/pipelines, diagnostics that require exact
 ownership, generation or extent mismatches, and any active GTAO bent-normal
 lighting mode. This explicit preset activation supersedes the pre-promotion
@@ -22,8 +24,9 @@ default restrictions retained later in this historical plan.
 
 No feature is suppressed to admit the cache. Cache rejection executes the exact
 gather, and requested/effective mode plus the stable fallback reason remain
-diagnostic. Device golden-image, soak, and statistically paired performance
-campaigns have not been claimed by the automated implementation pass.
+diagnostic. Fresh device golden-image, soak, and statistically paired
+performance evidence is required before either cache mode may be promoted
+again.
 
 ## 1. Required outcome
 

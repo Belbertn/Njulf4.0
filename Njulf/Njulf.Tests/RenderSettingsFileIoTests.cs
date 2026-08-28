@@ -304,7 +304,7 @@ public sealed class RenderSettingsFileIoTests
                     Is.EqualTo(GtaoQualityPreset.High));
                 Assert.That(loaded.GlobalIllumination
                         .SimpleDdgiReceiverCacheMode,
-                    Is.EqualTo(SimpleDdgiReceiverCacheMode.TemporalAdaptive));
+                    Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
                 Assert.That(loaded.GlobalIllumination
                         .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled,
                     Is.True);

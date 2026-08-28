@@ -10,10 +10,12 @@ public sealed class SampleBenchmarkTrajectoryTests
 {
     [TestCase("stationary", SampleBenchmarkTrajectoryKind.Stationary, 1, false)]
     [TestCase("bistro-presentation", SampleBenchmarkTrajectoryKind.BistroPresentation, 1, false)]
+    [TestCase("bistro-snapshot-incident", SampleBenchmarkTrajectoryKind.BistroSnapshotIncident, 1, false)]
     [TestCase("bistro-loop", SampleBenchmarkTrajectoryKind.BistroLoop, 240, true)]
     [TestCase("sponza-low", SampleBenchmarkTrajectoryKind.SponzaLow, 1, false)]
     [TestCase("sponza-high", SampleBenchmarkTrajectoryKind.SponzaHigh, 1, false)]
     [TestCase("sponza-receiver-cache-incident", SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident, 1, false)]
+    [TestCase("sponza-snapshot-incident", SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident, 1, false)]
     [TestCase("sponza-horizontal", SampleBenchmarkTrajectoryKind.SponzaHorizontal, 300, true)]
     [TestCase("sponza-vertical", SampleBenchmarkTrajectoryKind.SponzaVertical, 960, true)]
     public void NamedContracts_ParseWithLockedFrameCounts(
@@ -57,6 +59,42 @@ public sealed class SampleBenchmarkTrajectoryTests
             Assert.That(pose.Position.Z, Is.EqualTo(1.0029265f));
             Assert.That(pose.Yaw, Is.EqualTo(-1.3008178f));
             Assert.That(pose.Pitch, Is.EqualTo(-0.55801713f));
+        });
+    }
+
+    [Test]
+    public void SnapshotIncidentTrajectories_PreserveBothDistinctReportedCameras()
+    {
+        SampleBenchmarkCameraPose bistro = SampleBenchmarkTrajectory.ResolveCamera(
+            SampleBenchmarkTrajectoryKind.BistroSnapshotIncident,
+            0,
+            SampleBistroQualityCaptureVariant.SunScaleStep)!;
+        SampleBenchmarkCameraPose sponza = SampleBenchmarkTrajectory.ResolveCamera(
+            SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident,
+            0,
+            SampleBistroQualityCaptureVariant.SunScaleStep)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bistro.Name,
+                Is.EqualTo("BistroMaterialAppearanceIncident20260827"));
+            Assert.That(bistro.Position.X, Is.EqualTo(-17.155024f));
+            Assert.That(bistro.Position.Y, Is.EqualTo(2.2722917f));
+            Assert.That(bistro.Position.Z, Is.EqualTo(-0.5056352f));
+            Assert.That(bistro.Yaw, Is.EqualTo(1.7253896f));
+            Assert.That(bistro.Pitch, Is.EqualTo(-0.12267089f));
+            Assert.That(bistro.FieldOfView, Is.EqualTo(0.98174775f));
+            Assert.That(bistro.FarPlane, Is.EqualTo(500.0f));
+
+            Assert.That(sponza.Name,
+                Is.EqualTo("SponzaLightPatchIncident20260827"));
+            Assert.That(sponza.Position.X, Is.EqualTo(5.4001207f));
+            Assert.That(sponza.Position.Y, Is.EqualTo(1.439677f));
+            Assert.That(sponza.Position.Z, Is.EqualTo(0.1114945f));
+            Assert.That(sponza.Yaw, Is.EqualTo(-1.5707964f));
+            Assert.That(sponza.Pitch, Is.EqualTo(0.10086344f));
+            Assert.That(sponza.FieldOfView, Is.EqualTo(0.98174775f));
+            Assert.That(sponza.FarPlane, Is.EqualTo(250.0f));
         });
     }
 

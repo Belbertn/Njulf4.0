@@ -1,10 +1,10 @@
 # Forward+ Adaptive Quality and Performance Implementation Plan
 
-Last updated: 2026-08-27
+Last updated: 2026-08-28
 
-Status: implemented through the automated contract/build gates. Hardware
-golden-image, soak, and performance promotion campaigns remain outstanding
-device evidence; they are validation work, not runtime feature-disable gates.
+Status: implemented through the automated contract/build gates. Supplied
+hardware images failed the receiver-cache promotion gate, so cache modes remain
+explicit candidates and production presets use the exact DDGI receiver.
 
 ## 0. Implementation closure and preset activation
 
@@ -16,9 +16,9 @@ planning record.
 | Preset | AO | Bent-normal diffuse | DDGI receiver | C5 local scheduler | Cones / transparent partition |
 | --- | --- | --- | --- | --- | --- |
 | Low | Disabled | Off | Exact | Off | On / On |
-| Medium | GTAO Low | Off | Temporal adaptive | Off | On / On |
+| Medium | GTAO Low | Off | Exact | Off | On / On |
 | High | GTAO Balanced | Environment | Exact | On | On / On |
-| DdgiHigh | GTAO High | Off | Temporal adaptive | On | On / On |
+| DdgiHigh | GTAO High | Off | Exact | On | On / On |
 | Ultra | GTAO High | Environment + exact DDGI | Exact | On | On / On |
 
 - GTAO falls back to SSAO when either required storage/sampled format is not

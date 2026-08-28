@@ -26,6 +26,16 @@ public static class SampleBenchmarkCaptureVariant
     public const string ForwardGiEnabled = "forward-gi-enabled";
     public const string ForwardGiDisabled = "forward-gi-disabled";
     public const string ForwardGiExact = "forward-gi-exact";
+    public const string ForwardGiSurface = "forward-gi-surface";
+    public const string ForwardGiTemporal = "forward-gi-temporal";
+    public const string ForwardGiExactTailJacobi =
+        "forward-gi-exact-tail-jacobi";
+    public const string ForwardGiExactTailAccelerated =
+        "forward-gi-exact-tail-accelerated";
+    public const string ForwardGiSurfaceTailJacobi =
+        "forward-gi-surface-tail-jacobi";
+    public const string ForwardGiSurfaceTailAccelerated =
+        "forward-gi-surface-tail-accelerated";
     public const string ForwardGiSurfaceDiagnostics =
         "forward-gi-surface-diagnostics";
     public const string AmbientOcclusionDisabled =
@@ -37,6 +47,9 @@ public static class SampleBenchmarkCaptureVariant
     public const string AmbientOcclusionUnblurred =
         "ambient-occlusion-unblurred";
     public const string MaterialOcclusion = "material-occlusion";
+    public const string MaterialBaseColor = "material-base-color";
+    public const string MaterialWorldNormal = "material-world-normal";
+    public const string GiFinalIndirect = "gi-final-indirect";
     public const string ReflectionsDisabled = "reflections-disabled";
     public const string DdgiDiffuseOnly = "ddgi-diffuse-only";
     public const string DdgiDirectionalReceiverOff =
@@ -53,6 +66,8 @@ public static class SampleBenchmarkCaptureVariant
         "reflection-roughness-inputs";
     public const string DirectionalShadowForcedRefresh =
         "directional-shadow-forced-refresh";
+    public const string DirectionalShadowsDisabled =
+        "directional-shadows-disabled";
     public const string DecalMaterialPrefix = "decal-material:";
 
     public static bool IsTailVariant(string? variant)
@@ -60,7 +75,10 @@ public static class SampleBenchmarkCaptureVariant
         string normalized = string.IsNullOrWhiteSpace(variant)
             ? Baseline
             : variant.Trim().ToLowerInvariant();
-        return normalized is TailJacobi or TailAccelerated;
+        return normalized is TailJacobi or TailAccelerated or
+            ForwardGiExactTailJacobi or ForwardGiExactTailAccelerated or
+            ForwardGiSurfaceTailJacobi or
+            ForwardGiSurfaceTailAccelerated;
     }
 
     public static string Apply(RenderSettings settings, string? variant)
@@ -80,6 +98,8 @@ public static class SampleBenchmarkCaptureVariant
         settings.AmbientOcclusion.DebugView = AmbientOcclusionDebugView.None;
         settings.Reflections.DebugView = ReflectionDebugView.None;
         settings.Materials.DebugView = MaterialDebugView.None;
+        settings.GlobalIllumination.DebugView =
+            GlobalIlluminationDebugView.None;
 
         switch (normalized)
         {
@@ -118,7 +138,34 @@ public static class SampleBenchmarkCaptureVariant
                 settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark = true;
                 return normalized;
             case ForwardGiExact:
+                settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                    SimpleDdgiReceiverCacheMode.Exact;
                 settings.Diagnostics.ForceExactForwardGiGatherForBenchmark = true;
+                return normalized;
+            case ForwardGiSurface:
+                settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                    SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial;
+                return normalized;
+            case ForwardGiTemporal:
+                settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                    SimpleDdgiReceiverCacheMode.TemporalAdaptive;
+                return normalized;
+            case ForwardGiExactTailJacobi:
+            case ForwardGiExactTailAccelerated:
+                ConfigureTailSolver(
+                    settings,
+                    normalized == ForwardGiExactTailAccelerated);
+                settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                    SimpleDdgiReceiverCacheMode.Exact;
+                settings.Diagnostics.ForceExactForwardGiGatherForBenchmark = true;
+                return normalized;
+            case ForwardGiSurfaceTailJacobi:
+            case ForwardGiSurfaceTailAccelerated:
+                ConfigureTailSolver(
+                    settings,
+                    normalized == ForwardGiSurfaceTailAccelerated);
+                settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                    SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial;
                 return normalized;
             case ForwardGiSurfaceDiagnostics:
                 settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
@@ -163,6 +210,16 @@ public static class SampleBenchmarkCaptureVariant
                 settings.Materials.DebugView =
                     MaterialDebugView.MaterialOcclusion;
                 return normalized;
+            case MaterialBaseColor:
+                settings.Materials.DebugView = MaterialDebugView.BaseColor;
+                return normalized;
+            case MaterialWorldNormal:
+                settings.Materials.DebugView = MaterialDebugView.WorldNormal;
+                return normalized;
+            case GiFinalIndirect:
+                settings.GlobalIllumination.DebugView =
+                    GlobalIlluminationDebugView.FinalIndirect;
+                return normalized;
             case ReflectionsDisabled:
                 settings.Reflections.Enabled = false;
                 return normalized;
@@ -201,6 +258,9 @@ public static class SampleBenchmarkCaptureVariant
             case DirectionalShadowForcedRefresh:
                 settings.Shadows.ForceStaticCascadeCacheRefresh = true;
                 return normalized;
+            case DirectionalShadowsDisabled:
+                settings.Shadows.DirectionalShadowsEnabled = false;
+                return normalized;
         }
 
         if (normalized.StartsWith(DecalMaterialPrefix, StringComparison.Ordinal))
@@ -224,16 +284,20 @@ public static class SampleBenchmarkCaptureVariant
             DecalShadowsDisabled or TransparentGiDisabled or
             TransparentShadowsDisabled or FarFieldGated or FarFieldForcedOld or
             TailJacobi or TailAccelerated or ForwardGiEnabled or
-            ForwardGiDisabled or ForwardGiExact or
+            ForwardGiDisabled or ForwardGiExact or ForwardGiSurface or
+            ForwardGiTemporal or ForwardGiExactTailJacobi or
+            ForwardGiExactTailAccelerated or ForwardGiSurfaceTailJacobi or
+            ForwardGiSurfaceTailAccelerated or
             ForwardGiSurfaceDiagnostics or ReflectionsDisabled or
             AmbientOcclusionDisabled or AmbientOcclusionRaw or
             AmbientOcclusionBlurred or AmbientOcclusionFinal or
             AmbientOcclusionUnblurred or MaterialOcclusion or
+            MaterialBaseColor or MaterialWorldNormal or GiFinalIndirect or
             DdgiDiffuseOnly or DdgiDirectionalReceiverOff or
             ReflectionSourceSelection or ReflectionDetailBudget or
             ReflectionDdgiLobe or ReflectionReceiverMaterial or
             ReflectionRoughnessInputs or
-            DirectionalShadowForcedRefresh)
+            DirectionalShadowForcedRefresh or DirectionalShadowsDisabled)
         {
             return normalized;
         }
@@ -261,17 +325,35 @@ public static class SampleBenchmarkCaptureVariant
             $"{TransparentShadowsDisabled}, {FarFieldGated}, {FarFieldForcedOld}, " +
             $"{TailJacobi}, {TailAccelerated}, " +
             $"{ForwardGiEnabled}, {ForwardGiDisabled}, {ForwardGiExact}, " +
+            $"{ForwardGiSurface}, {ForwardGiTemporal}, " +
+            $"{ForwardGiExactTailJacobi}, {ForwardGiExactTailAccelerated}, " +
+            $"{ForwardGiSurfaceTailJacobi}, " +
+            $"{ForwardGiSurfaceTailAccelerated}, " +
             $"{ForwardGiSurfaceDiagnostics}, " +
             $"{AmbientOcclusionDisabled}, {AmbientOcclusionRaw}, " +
             $"{AmbientOcclusionBlurred}, {AmbientOcclusionFinal}, " +
             $"{AmbientOcclusionUnblurred}, {MaterialOcclusion}, " +
+            $"{MaterialBaseColor}, {MaterialWorldNormal}, {GiFinalIndirect}, " +
             $"{ReflectionsDisabled}, {DdgiDiffuseOnly}, " +
             $"{DdgiDirectionalReceiverOff}, " +
             $"{ReflectionSourceSelection}, {ReflectionDetailBudget}, " +
             $"{ReflectionDdgiLobe}, {ReflectionReceiverMaterial}, " +
             $"{ReflectionRoughnessInputs}, " +
-            $"{DirectionalShadowForcedRefresh}, " +
+            $"{DirectionalShadowForcedRefresh}, {DirectionalShadowsDisabled}, " +
             $"or {DecalMaterialPrefix}<index>.",
             nameof(variant));
+    }
+
+    private static void ConfigureTailSolver(
+        RenderSettings settings,
+        bool accelerated)
+    {
+        settings.GlobalIllumination.SimpleDdgiSchedulerMode =
+            SimpleDdgiSchedulerMode.GpuResident;
+        settings.GlobalIllumination.SimpleDdgiTransportV2Enabled = true;
+        settings.GlobalIllumination.SimpleDdgiTransportTailCertificationEnabled =
+            true;
+        settings.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled =
+            accelerated;
     }
 }

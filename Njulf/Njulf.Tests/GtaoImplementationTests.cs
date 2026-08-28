@@ -35,7 +35,7 @@ public sealed class GtaoImplementationTests
     }
 
     [Test]
-    public void QualityPresets_SelectThePromotedFeatureMatrix()
+    public void QualityPresets_SelectTheProductionFeatureMatrix()
     {
         var expected = new[]
         {
@@ -46,7 +46,7 @@ public sealed class GtaoImplementationTests
             (RenderQualityPreset.Medium, AmbientOcclusionMode.Gtao,
                 GtaoQualityPreset.Low,
                 AmbientOcclusionBentNormalMode.Off,
-                SimpleDdgiReceiverCacheMode.TemporalAdaptive, false),
+                SimpleDdgiReceiverCacheMode.Exact, false),
             (RenderQualityPreset.High, AmbientOcclusionMode.Gtao,
                 GtaoQualityPreset.Balanced,
                 AmbientOcclusionBentNormalMode.EnvironmentOnly,
@@ -54,7 +54,7 @@ public sealed class GtaoImplementationTests
             (RenderQualityPreset.DdgiHigh, AmbientOcclusionMode.Gtao,
                 GtaoQualityPreset.High,
                 AmbientOcclusionBentNormalMode.Off,
-                SimpleDdgiReceiverCacheMode.TemporalAdaptive, true),
+                SimpleDdgiReceiverCacheMode.Exact, true),
             (RenderQualityPreset.Ultra, AmbientOcclusionMode.Gtao,
                 GtaoQualityPreset.High,
                 AmbientOcclusionBentNormalMode.EnvironmentAndDdgi,

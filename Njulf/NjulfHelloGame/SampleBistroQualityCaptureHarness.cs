@@ -141,6 +141,23 @@ public sealed class SampleBistroQualityCaptureContract
             500.0f);
 
     /// <summary>
+    /// Exact camera from the 2026-08-27 flat/material-appearance incident.
+    /// It is intentionally separate from the authored beauty bookmark so
+    /// renderer and asset-path A/B captures reproduce the reported pixels.
+    /// </summary>
+    public static SampleBistroQualityCameraBookmark SnapshotIncidentBookmark
+    {
+        get;
+    } = new(
+        "BistroMaterialAppearanceIncident20260827",
+        new Vector3(-17.155024f, 2.2722917f, -0.5056352f),
+        1.7253896f,
+        -0.12267089f,
+        0.98174775f,
+        0.05f,
+        500.0f);
+
+    /// <summary>
     /// The motion route is independent of the presentation bookmark. This
     /// keeps visual-composition iteration from weakening the DDGI stress test.
     /// </summary>

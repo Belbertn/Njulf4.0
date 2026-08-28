@@ -407,6 +407,23 @@ public sealed class SampleSponzaGiCaptureContract
         0.05f,
         250.0f);
 
+    /// <summary>
+    /// Exact camera from the separate 2026-08-27 localized-light-patch
+    /// incident. Do not alias this to the receiver-cache incident: the two
+    /// snapshots exercise different failure signatures.
+    /// </summary>
+    public static SampleSponzaGiCameraBookmark SnapshotIncidentBookmark
+    {
+        get;
+    } = new(
+        "SponzaLightPatchIncident20260827",
+        new Vector3(5.4001207f, 1.439677f, 0.1114945f),
+        -1.5707964f,
+        0.10086344f,
+        0.98174775f,
+        0.05f,
+        250.0f);
+
     public string SchemaVersion { get; }
     public SampleSceneKind SceneKind { get; }
     public SamplePerformanceScenario Scenario { get; }

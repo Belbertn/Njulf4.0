@@ -1,5 +1,11 @@
 # Tail-certified DDGI qualification
 
+Current production status (2026-08-28): the supplied Sponza hardware snapshot
+reported a current fixed-point defect above tolerance with repeated solve-epoch
+restarts. Production therefore uses `TailJacobi`. `TailAccelerated` remains an
+explicit qualification variant and must pass the complete gate below before it
+can be promoted again.
+
 Production enablement is authorized by one fail-closed command:
 
 ```powershell

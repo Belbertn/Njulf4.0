@@ -1737,8 +1737,9 @@ public static class SampleSmokeOptionsParser
                         "requires the Bistro scene.");
                 }
                 sceneKind = SampleSceneKind.Bistro;
-                if (controlledTrajectory ==
-                    SampleBenchmarkTrajectoryKind.BistroPresentation)
+                if (controlledTrajectory is
+                    SampleBenchmarkTrajectoryKind.BistroPresentation or
+                    SampleBenchmarkTrajectoryKind.BistroSnapshotIncident)
                 {
                     bistroQualityCaptureVariant =
                         SampleBistroQualityCaptureVariant.Presentation;

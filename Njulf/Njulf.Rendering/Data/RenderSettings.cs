@@ -2648,7 +2648,11 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiTransportAlbedoClamp = 0.95f;
         private float _simpleDdgiTransportTailRelativeTolerance = 0.025f;
         private int _simpleDdgiTransportAcceleratedSweepCount = 2;
-        private bool _simpleDdgiTransportAccelerationEnabled = true;
+        // The certified single-sweep Jacobi path is the correctness fallback.
+        // Accelerated cached sweeps remain explicitly selectable for hardware
+        // qualification, but are not a production default after the
+        // 2026-08-27 fixed-point-tail regression.
+        private bool _simpleDdgiTransportAccelerationEnabled;
         private bool _simpleDdgiTransportTailCertificationEnabled = true;
         private int _simpleDdgiTransportMaximumSolverGenerations = 8;
         // The static source-age watchdog is independent of legacy generation
@@ -4563,7 +4567,9 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportAlbedoClamp = 0.95f;
             SimpleDdgiTransportTailRelativeTolerance = 0.025f;
             SimpleDdgiTransportAcceleratedSweepCount = 2;
-            SimpleDdgiTransportAccelerationEnabled = true;
+            // Preserve the canonical Jacobi solve for every production tier.
+            // Tail-accelerated benchmark variants opt back in explicitly.
+            SimpleDdgiTransportAccelerationEnabled = false;
             SimpleDdgiTransportTailCertificationEnabled = true;
             bool highTier = tier is
                 DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra;
@@ -5627,11 +5633,10 @@ namespace Njulf.Rendering.Data
                         .DefaultSimpleDdgiNearFieldResidualMode
                     : SimpleDdgiNearFieldResidualMode.Off;
 
-            // Candidate promotion is tiered so each production feature is on
-            // in at least one compatible profile.  Bent-normal irradiance is
-            // normal-dependent and therefore remains paired with exact DDGI;
-            // DdgiHigh retains the temporal surface-aware cache as its
-            // performance-oriented receiver path.
+            // Bent-normal irradiance is normal-dependent and remains paired
+            // with the exact receiver gather. The cache candidates stay
+            // available through explicit settings and benchmark variants, but
+            // supplied hardware captures did not pass their visual gate.
             AmbientOcclusion.Mode = preset == RenderQualityPreset.Low
                 ? AmbientOcclusionMode.Disabled
                 : AmbientOcclusionMode.Gtao;
@@ -5643,12 +5648,8 @@ namespace Njulf.Rendering.Data
                     AmbientOcclusionBentNormalMode.EnvironmentAndDdgi,
                 _ => AmbientOcclusionBentNormalMode.Off
             };
-            GlobalIllumination.SimpleDdgiReceiverCacheMode = preset switch
-            {
-                RenderQualityPreset.Medium or RenderQualityPreset.DdgiHigh =>
-                    SimpleDdgiReceiverCacheMode.TemporalAdaptive,
-                _ => SimpleDdgiReceiverCacheMode.Exact
-            };
+            GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                SimpleDdgiReceiverCacheMode.Exact;
             GlobalIllumination
                 .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled =
                 preset is RenderQualityPreset.High or

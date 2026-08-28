@@ -848,6 +848,80 @@ public sealed class SampleBenchmarkPairComparerTests
             Is.EqualTo(ReflectionDebugView.RoughnessInputs));
     }
 
+    [Test]
+    public void SnapshotDiagnosticVariants_IsolateMaterialsGiShadowsAndTailSolver()
+    {
+        var settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.MaterialBaseColor);
+        Assert.That(settings.Materials.DebugView,
+            Is.EqualTo(MaterialDebugView.BaseColor));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.MaterialWorldNormal);
+        Assert.That(settings.Materials.DebugView,
+            Is.EqualTo(MaterialDebugView.WorldNormal));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.GiFinalIndirect);
+        Assert.That(settings.GlobalIllumination.DebugView,
+            Is.EqualTo(GlobalIlluminationDebugView.FinalIndirect));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.DirectionalShadowsDisabled);
+        Assert.That(settings.Shadows.DirectionalShadowsEnabled, Is.False);
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ForwardGiTemporal);
+        Assert.That(
+            settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+            Is.EqualTo(SimpleDdgiReceiverCacheMode.TemporalAdaptive));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ForwardGiSurfaceTailJacobi);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+                Is.EqualTo(SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial));
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled,
+                Is.False);
+            Assert.That(
+                SampleBenchmarkCaptureVariant.IsTailVariant(
+                    SampleBenchmarkCaptureVariant.ForwardGiSurfaceTailJacobi),
+                Is.True);
+        });
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ForwardGiExactTailAccelerated);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+                Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
+            Assert.That(
+                settings.Diagnostics.ForceExactForwardGiGatherForBenchmark,
+                Is.True);
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiTransportAccelerationEnabled,
+                Is.True);
+        });
+    }
+
     private static SampleBenchmarkReport CreateReport(
         string pairId,
         string identityHash,

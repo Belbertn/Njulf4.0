@@ -11,18 +11,18 @@ namespace Njulf.Tests;
 public sealed class GlobalIlluminationDefaultsTests
 {
     [Test]
-    public void ReceiverCacheMode_DdgiHighDefaultsTemporalAndExactRemainsSelectable()
+    public void ReceiverCacheMode_DdgiHighFailsClosedToExactAndCandidatesRemainSelectable()
     {
         var settings = new RenderSettings();
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
-            Is.EqualTo(SimpleDdgiReceiverCacheMode.TemporalAdaptive));
+            Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
 
         settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
-            SimpleDdgiReceiverCacheMode.Exact;
+            SimpleDdgiReceiverCacheMode.TemporalAdaptive;
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
-            Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
+            Is.EqualTo(SimpleDdgiReceiverCacheMode.TemporalAdaptive));
     }
 
     [TestCase(RenderQualityPreset.Low)]
@@ -74,13 +74,14 @@ public sealed class GlobalIlluminationDefaultsTests
 
             var presetSettings = new RenderSettings();
             presetSettings.ApplyQualityPreset(preset);
-            SimpleDdgiReceiverCacheMode expected = preset is
-                RenderQualityPreset.Medium or RenderQualityPreset.DdgiHigh
-                    ? SimpleDdgiReceiverCacheMode.TemporalAdaptive
-                    : SimpleDdgiReceiverCacheMode.Exact;
             Assert.That(
                 presetSettings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
-                Is.EqualTo(expected));
+                Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
+            Assert.That(
+                presetSettings.GlobalIllumination
+                    .SimpleDdgiTransportAccelerationEnabled,
+                Is.False,
+                "Production presets must retain the certified Jacobi fallback.");
         });
     }
 
