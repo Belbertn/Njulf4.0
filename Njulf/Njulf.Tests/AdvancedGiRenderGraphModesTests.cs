@@ -291,24 +291,22 @@ public sealed class AdvancedGiRenderGraphModesTests
                 (usage.StageMask & PipelineStageFlags2.TransferBit) != 0), Is.True);
             Assert.That(reset.Any(usage =>
                 usage.Resource == RenderGraphResourceId.NearFieldResidualFilterScratch &&
-                usage.HistoryBinding == RenderGraphHistoryBindingSelection.All &&
                 (usage.AccessMask & AccessFlags2.TransferWriteBit) != 0), Is.True);
             Assert.That(filter.Any(usage =>
-                usage.Resource == RenderGraphResourceId.NearFieldResidualFilterScratch &&
-                usage.Access == RenderGraphResourceAccess.Write &&
-                usage.HistoryBinding == RenderGraphHistoryBindingSelection.Bank0), Is.True);
+                usage.Resource == RenderGraphResourceId.NearFieldResidualRaw &&
+                usage.Access == RenderGraphResourceAccess.Write), Is.True);
+            Assert.That(filter.Any(usage =>
+                usage.Resource == RenderGraphResourceId.NearFieldResidualFilterScratch),
+                Is.False);
+            Assert.That(filter1.Any(usage =>
+                usage.Resource == RenderGraphResourceId.NearFieldResidualRaw &&
+                usage.Access == RenderGraphResourceAccess.Read), Is.True);
             Assert.That(filter1.Any(usage =>
                 usage.Resource == RenderGraphResourceId.NearFieldResidualFilterScratch &&
-                usage.Access == RenderGraphResourceAccess.Read &&
-                usage.HistoryBinding == RenderGraphHistoryBindingSelection.Bank0), Is.True);
-            Assert.That(filter1.Any(usage =>
-                usage.Resource == RenderGraphResourceId.NearFieldResidualFilterScratch &&
-                usage.Access == RenderGraphResourceAccess.Write &&
-                usage.HistoryBinding == RenderGraphHistoryBindingSelection.Bank1), Is.True);
+                usage.Access == RenderGraphResourceAccess.Write), Is.True);
             Assert.That(frequency.Any(usage =>
                 usage.Resource == RenderGraphResourceId.NearFieldResidualFilterScratch &&
-                usage.Access == RenderGraphResourceAccess.Read &&
-                usage.HistoryBinding == RenderGraphHistoryBindingSelection.Bank1), Is.True);
+                usage.Access == RenderGraphResourceAccess.Read), Is.True);
             Assert.That(composite.Any(usage =>
                 usage.Resource == RenderGraphResourceId.NearFieldResidualRaw &&
                 usage.Access == RenderGraphResourceAccess.Read), Is.True);
@@ -479,17 +477,14 @@ public sealed class AdvancedGiRenderGraphModesTests
                 pass.StartsWith("SimpleDdgiNearFieldResidualFilterPass",
                     System.StringComparison.Ordinal)), Is.EqualTo(3));
             Assert.That(thirdFilter.Any(usage =>
-                usage.Resource == RenderGraphResourceId.NearFieldResidualFilterScratch &&
-                usage.Access == RenderGraphResourceAccess.Read &&
-                usage.HistoryBinding == RenderGraphHistoryBindingSelection.Bank1), Is.True);
+                usage.Resource == RenderGraphResourceId.NearFieldResidualRaw &&
+                usage.Access == RenderGraphResourceAccess.Read), Is.True);
             Assert.That(thirdFilter.Any(usage =>
                 usage.Resource == RenderGraphResourceId.NearFieldResidualFilterScratch &&
-                usage.Access == RenderGraphResourceAccess.Write &&
-                usage.HistoryBinding == RenderGraphHistoryBindingSelection.Bank0), Is.True);
+                usage.Access == RenderGraphResourceAccess.Write), Is.True);
             Assert.That(frequency.Any(usage =>
                 usage.Resource == RenderGraphResourceId.NearFieldResidualFilterScratch &&
-                usage.Access == RenderGraphResourceAccess.Read &&
-                usage.HistoryBinding == RenderGraphHistoryBindingSelection.Bank0), Is.True);
+                usage.Access == RenderGraphResourceAccess.Read), Is.True);
         });
     }
 
@@ -527,7 +522,7 @@ public sealed class AdvancedGiRenderGraphModesTests
             Assert.That(descriptors[RenderGraphResourceId.NearFieldResidualHistoryNormals].Kind,
                 Is.EqualTo(RenderGraphResourceKind.ImageChain));
             Assert.That(descriptors[RenderGraphResourceId.NearFieldResidualFilterScratch].Kind,
-                Is.EqualTo(RenderGraphResourceKind.ImageChain));
+                Is.EqualTo(RenderGraphResourceKind.Image));
         });
     }
 }

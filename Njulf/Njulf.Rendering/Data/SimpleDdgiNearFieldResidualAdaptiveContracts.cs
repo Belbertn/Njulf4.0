@@ -28,7 +28,7 @@ public struct GPUSimpleDdgiNearFieldResidualSchedulerRecord
     public uint PackedEpochAndReceiver;
 }
 
-/// <summary>Shared packing and arena constants for C5 ABI V14.</summary>
+/// <summary>Shared packing and arena constants for C5 ABI V16.</summary>
 public static class SimpleDdgiNearFieldResidualAdaptiveAbi
 {
     public const uint SchedulerRecordByteCount = 16u;

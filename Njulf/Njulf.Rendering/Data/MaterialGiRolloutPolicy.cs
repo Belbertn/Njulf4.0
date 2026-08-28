@@ -106,9 +106,9 @@ public static class MaterialGiReleaseEvidenceContract
     public const string BenchmarkProducerKind =
         "njulf-renderer-benchmark";
     public const string BenchmarkProducerSchema =
-        "njulf-renderer-benchmark/v4";
+        "njulf-renderer-benchmark/v5";
     public const string BenchmarkDdgiTransientRawEvidenceSchema =
-        "njulf-benchmark-ddgi-transient-raw-evidence/v1";
+        "njulf-benchmark-ddgi-transient-raw-evidence/v2";
     public const string BenchmarkDdgiTransientEvidenceSchema =
         "njulf-benchmark-ddgi-transient-evidence/v2";
     public const string LongRunProducerKind =

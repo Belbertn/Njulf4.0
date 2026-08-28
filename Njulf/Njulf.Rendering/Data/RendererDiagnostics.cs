@@ -1583,6 +1583,11 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiDirtyConvergenceLatencyP50Frames { get; init; }
         public int SimpleDdgiDirtyConvergenceLatencyP95Frames { get; init; }
         public int SimpleDdgiDirtyConvergenceLatencyMaxFrames { get; init; }
+        public SimpleDdgiMutationLatencyTelemetry SimpleDdgiMutationLatency
+        {
+            get;
+            init;
+        } = SimpleDdgiMutationLatencyTelemetry.Empty;
         public ulong SimpleDdgiAtlasBytes { get; init; }
         public int SimpleDdgiSampledAtlasRequested { get; init; }
         public int SimpleDdgiSampledAtlasActive { get; init; }

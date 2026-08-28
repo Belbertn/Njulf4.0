@@ -527,6 +527,17 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
             }),
             Is.Not.EqualTo(digest),
             "Both prior feedback witnesses must be authenticated by the durable digest.");
+        Assert.That(
+            SimpleDdgiTailSummaryDigest.Compute(summary with
+            {
+                Generations = summary.Generations with
+                {
+                    DynamicGeometryEpoch =
+                        summary.Generations.DynamicGeometryEpoch + 1U
+                }
+            }),
+            Is.Not.EqualTo(digest),
+            "The frozen dynamic-geometry epoch must be authenticated by the durable digest.");
     }
 
     [Test]
@@ -560,7 +571,7 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
             Assert.That(urgentPass, Does.Contain(
                 "_tracePass.ExecuteCacheReuseOnly(cmd, sceneData);"));
             Assert.That(urgentPass, Does.Contain(
-                "_commitPass.ExecuteResidentLocalOnly(cmd);"));
+                "_commitPass.ExecuteResidentLocalAndPropagation(cmd);"));
         });
     }
 

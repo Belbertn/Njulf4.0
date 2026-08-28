@@ -18,7 +18,9 @@ public enum AdvancedGiQualificationDeviceCoverage : uint
     AdaOrNewer = 1u << 1,
     NonNvidiaRayQuery = 1u << 2,
     FeatureDisabledFallback = 1u << 3,
-    MinimumMemoryProfile = 1u << 4
+    MinimumMemoryProfile = 1u << 4,
+    AmdRayQuery = 1u << 5,
+    IntelRayQuery = 1u << 6
 }
 
 public enum AdvancedGiQualificationEvidenceRole : byte
@@ -40,8 +42,8 @@ public enum AdvancedGiQualificationEvidenceRole : byte
 /// </summary>
 public static class AdvancedGiQualificationContract
 {
-    public const uint ManifestSchemaRevision = 3u;
-    public const uint EvidenceReportSchemaRevision = 3u;
+    public const uint ManifestSchemaRevision = 4u;
+    public const uint EvidenceReportSchemaRevision = 4u;
     public const int MaximumManifestBytes = 256 * 1024;
     public const int MaximumEvidenceArtifactBytes = 16 * 1024 * 1024;
     public const int MaximumFeatures = 5;
@@ -49,8 +51,12 @@ public static class AdvancedGiQualificationContract
     public const int MaximumArtifactsPerFeature = 64;
     public const int MinimumIndependentRuns = 3;
     public const uint MinimumReferenceFrames = 120u;
-    public const uint MinimumLongRunSeconds = 30u * 60u;
+    public const uint MinimumTraversalSeconds = 30u * 60u;
+    public const uint MinimumSoakSeconds = 2u * 60u * 60u;
+    public const uint MinimumLongRunSeconds = MinimumTraversalSeconds;
     public const uint NvidiaVendorId = 0x10DEu;
+    public const uint AmdVendorId = 0x1002u;
+    public const uint IntelVendorId = 0x8086u;
     public const uint MinimumDirectionalGuidingStatisticalCases = 7u;
     public const ulong MinimumDirectionalGuidingSamplesPerCase = 16_384UL;
     public const double MinimumDirectionalGuidingGoodnessOfFitPValue = 0.001;
@@ -81,17 +87,43 @@ public static class AdvancedGiQualificationContract
             new Dictionary<AdvancedGiQualificationEvidenceRole, string[]>
             {
                 [AdvancedGiQualificationEvidenceRole.Correctness] =
-                    ["feature-isolation", "integrated-parity", "reference-quality"],
+                    [
+                        "feature-isolation",
+                        "integrated-parity",
+                        "reference-quality",
+                        "golden-reference",
+                        "equal-work-comparison",
+                        "cross-domain-energy-ownership"
+                    ],
                 [AdvancedGiQualificationEvidenceRole.Performance] =
-                    ["confidence-interval", "promotion-floor", "total-gi-time"],
+                    [
+                        "confidence-interval",
+                        "promotion-floor",
+                        "total-gi-time",
+                        "qualification-binding-provenance"
+                    ],
                 [AdvancedGiQualificationEvidenceRole.Memory] =
                     ["budget-headroom", "exact-bytes", "retired-stable"],
                 [AdvancedGiQualificationEvidenceRole.LongRun] =
-                    ["minimum-duration", "no-growth", "no-p99-trend"],
+                    [
+                        "minimum-duration",
+                        "traversal-script",
+                        "extended-soak",
+                        "no-growth",
+                        "no-p99-trend",
+                        "temporal-failure-audit",
+                        "convergence-starvation-audit"
+                    ],
                 [AdvancedGiQualificationEvidenceRole.Validation] =
                     ["robust-buffer-access", "synchronization-validation", "vulkan-validation"],
                 [AdvancedGiQualificationEvidenceRole.Fallback] =
-                    ["failure-fallback", "feature-off-canonical-parity", "unsupported-zero-allocation"],
+                    [
+                        "failure-fallback",
+                        "feature-off-canonical-parity",
+                        "unsupported-zero-allocation",
+                        "fallback-provenance",
+                        "qualification-binding-provenance"
+                    ],
                 [AdvancedGiQualificationEvidenceRole.Lifecycle] =
                     ["allocation-failure", "device-loss", "reload", "resize"]
             });
@@ -101,6 +133,9 @@ public static class AdvancedGiQualificationContract
         "feature-isolation",
         "integrated-parity",
         "reference-quality",
+        "golden-reference",
+        "equal-work-comparison",
+        "cross-domain-energy-ownership",
         "analytic-distribution-suite",
         "gpu-sampling-goodness-of-fit",
         "independent-estimator-confidence",
@@ -117,6 +152,9 @@ public static class AdvancedGiQualificationContract
         "feature-isolation",
         "integrated-parity",
         "reference-quality",
+        "golden-reference",
+        "equal-work-comparison",
+        "cross-domain-energy-ownership",
         "all-required-producers",
         "exact-compaction-reference-parity",
         "generation-and-viewport-publication"
@@ -211,7 +249,7 @@ public static class AdvancedGiQualificationContract
     private static string ComputeSettingsContractSha256()
     {
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, "advanced-gi-settings-contract/v2");
+        Append(hash, "advanced-gi-settings-contract/v3");
         AppendEnum<SimpleDdgiReceiverFeedbackMode>(hash);
         AppendEnum<DdgiOpacityMicromapMode>(hash);
         AppendEnum<SimpleDdgiDirectionalGuidingMode>(hash);
@@ -220,7 +258,18 @@ public static class AdvancedGiQualificationContract
         AppendEnum<SimpleDdgiAdvancedMemoryCategory>(hash);
         Append(hash, $"runs={MinimumIndependentRuns.ToString(CultureInfo.InvariantCulture)}");
         Append(hash, $"frames={MinimumReferenceFrames.ToString(CultureInfo.InvariantCulture)}");
-        Append(hash, $"soak={MinimumLongRunSeconds.ToString(CultureInfo.InvariantCulture)}");
+        Append(hash,
+            $"traversal={MinimumTraversalSeconds.ToString(CultureInfo.InvariantCulture)}");
+        Append(hash,
+            $"soak={MinimumSoakSeconds.ToString(CultureInfo.InvariantCulture)}");
+        Append(hash, "correctness=golden-reference,equal-work,cross-domain-energy-ownership");
+        Append(hash, "fleet=nvidia-two-generations,amd-ray-query,intel-ray-query");
+        foreach (AdvancedGiQualificationEvidenceRole role in SupportedRoles)
+        foreach (string check in GetRequiredChecks(role))
+        {
+            Append(hash,
+                $"role-check={(byte)role}:{check}");
+        }
         Append(hash, "c1-floor=max(0.05ms,3pct-total-gi)");
         Append(hash, "b1-floor=exact-producer-parity-and-no-total-time-regression");
         Append(hash, "c3-floor=20pct-error-or-10pct-time");
@@ -280,7 +329,9 @@ public sealed record AdvancedGiQualificationDeviceRule
             AdvancedGiQualificationDeviceCoverage.AdaOrNewer |
             AdvancedGiQualificationDeviceCoverage.NonNvidiaRayQuery |
             AdvancedGiQualificationDeviceCoverage.FeatureDisabledFallback |
-            AdvancedGiQualificationDeviceCoverage.MinimumMemoryProfile)) == 0 &&
+            AdvancedGiQualificationDeviceCoverage.MinimumMemoryProfile |
+            AdvancedGiQualificationDeviceCoverage.AmdRayQuery |
+            AdvancedGiQualificationDeviceCoverage.IntelRayQuery)) == 0 &&
         VendorId != 0u && MinimumDeviceId != 0u && MaximumDeviceId >= MinimumDeviceId &&
         MinimumDriverVersion != 0u && MaximumDriverVersion >= MinimumDriverVersion &&
         MinimumApiVersion != 0u && MaximumApiVersion >= MinimumApiVersion;
@@ -307,6 +358,8 @@ public sealed record AdvancedGiQualificationMeasurements
     public uint FrameCount { get; init; }
     public uint IndependentRunCount { get; init; }
     public uint DurationSeconds { get; init; }
+    public uint TraversalDurationSeconds { get; init; }
+    public uint SoakDurationSeconds { get; init; }
     public double BaselineTotalGiP95Milliseconds { get; init; }
     public double CandidateTotalGiP95Milliseconds { get; init; }
     public double BaselineReferenceError { get; init; }
@@ -320,7 +373,13 @@ public sealed record AdvancedGiQualificationMeasurements
     public ulong NonFiniteCount { get; init; }
     public ulong OverflowCount { get; init; }
     public ulong GenerationMismatchCount { get; init; }
+    public ulong TemporalFailureCount { get; init; }
+    public ulong ConvergenceStarvationCount { get; init; }
+    public ulong SteadyStateStartLiveBytes { get; init; }
+    public ulong SteadyStateEndLiveBytes { get; init; }
     public bool ConfidenceIntervalExcludesNoise { get; init; }
+    public bool EqualWorkComparisonVerified { get; init; }
+    public bool EnergyOwnershipVerified { get; init; }
     public bool FeatureOffCanonicalParity { get; init; }
     public bool UnsupportedZeroAllocation { get; init; }
     public bool FailureFallbackVerified { get; init; }
@@ -366,6 +425,13 @@ public sealed record AdvancedGiQualificationEvidenceReport
     public string ContentProfileId { get; init; } = string.Empty;
     public string SceneAssetSha256 { get; init; } = string.Empty;
     public string PrerequisiteQualificationId { get; init; } = string.Empty;
+    /// <summary>
+    /// Canonical runtime fallback provenance. Non-fallback reports use
+    /// <c>not-applicable</c>; fallback reports must name the observed reason.
+    /// BindingId is the report-safe qualification identity because the final
+    /// QualificationId cryptographically includes this report's own bytes.
+    /// </summary>
+    public string FallbackReason { get; init; } = "not-applicable";
     public string[] PassedChecks { get; init; } = Array.Empty<string>();
     public AdvancedGiQualificationMeasurements Measurements { get; init; } = new();
     public string Summary { get; init; } = string.Empty;
@@ -684,7 +750,7 @@ public static class AdvancedGiQualificationManifestCodec
     {
         ArgumentNullException.ThrowIfNull(document);
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AdvancedGiQualificationContract.Append(hash, "advanced-gi-feature-binding/v2");
+        AdvancedGiQualificationContract.Append(hash, "advanced-gi-feature-binding/v3");
         AdvancedGiQualificationContract.Append(hash, ((byte)document.Feature).ToString(CultureInfo.InvariantCulture));
         AdvancedGiQualificationContract.Append(hash, document.FeatureAbiRevision.ToString(CultureInfo.InvariantCulture));
         AdvancedGiQualificationContract.Append(hash, document.AlgorithmRevision ?? string.Empty);
@@ -717,7 +783,7 @@ public static class AdvancedGiQualificationManifestCodec
     {
         string bindingId = ComputeBindingId(document);
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AdvancedGiQualificationContract.Append(hash, "advanced-gi-feature-qualification/v2");
+        AdvancedGiQualificationContract.Append(hash, "advanced-gi-feature-qualification/v3");
         AdvancedGiQualificationContract.Append(hash, bindingId);
         AdvancedGiQualificationContract.Append(hash, document.ApprovalId ?? string.Empty);
         AdvancedGiQualificationContract.Append(hash, document.ApprovedAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
@@ -992,6 +1058,16 @@ public static class AdvancedGiQualificationManifestCodec
             {
                 throw Invalid("advanced-gi-qualification-non-NVIDIA-device-role-invalid");
             }
+            if ((rule.Coverage & AdvancedGiQualificationDeviceCoverage.AmdRayQuery) != 0 &&
+                rule.VendorId != AdvancedGiQualificationContract.AmdVendorId)
+            {
+                throw Invalid("advanced-gi-qualification-AMD-device-role-invalid");
+            }
+            if ((rule.Coverage & AdvancedGiQualificationDeviceCoverage.IntelRayQuery) != 0 &&
+                rule.VendorId != AdvancedGiQualificationContract.IntelVendorId)
+            {
+                throw Invalid("advanced-gi-qualification-Intel-device-role-invalid");
+            }
             if ((rule.Coverage & AdvancedGiQualificationDeviceCoverage.FeatureDisabledFallback) != 0 &&
                 rule.ExpectedFeatureSupported)
             {
@@ -1002,7 +1078,8 @@ public static class AdvancedGiQualificationManifestCodec
         AdvancedGiQualificationDeviceCoverage mandatory =
             AdvancedGiQualificationDeviceCoverage.PrimaryRtx30 |
             AdvancedGiQualificationDeviceCoverage.AdaOrNewer |
-            AdvancedGiQualificationDeviceCoverage.NonNvidiaRayQuery |
+            AdvancedGiQualificationDeviceCoverage.AmdRayQuery |
+            AdvancedGiQualificationDeviceCoverage.IntelRayQuery |
             AdvancedGiQualificationDeviceCoverage.MinimumMemoryProfile;
         if ((coverage & mandatory) != mandatory)
             throw Invalid("advanced-gi-qualification-device-matrix-incomplete");
@@ -1015,16 +1092,30 @@ public static class AdvancedGiQualificationManifestCodec
             throw Invalid("advanced-gi-qualification-NVIDIA-generation-matrix-incomplete");
         }
 
-        bool nonNvidiaExpectedSupport = feature != AdvancedGiPrerequisiteFeature.OpacityMicromaps;
+        bool portableExpectedSupport =
+            feature != AdvancedGiPrerequisiteFeature.OpacityMicromaps;
         if (!rules.Any(rule =>
-                (rule.Coverage & AdvancedGiQualificationDeviceCoverage.NonNvidiaRayQuery) != 0 &&
-                rule.ExpectedFeatureSupported == nonNvidiaExpectedSupport))
+                (rule.Coverage & AdvancedGiQualificationDeviceCoverage.AmdRayQuery) != 0 &&
+                rule.ExpectedFeatureSupported == portableExpectedSupport) ||
+            !rules.Any(rule =>
+                (rule.Coverage & AdvancedGiQualificationDeviceCoverage.IntelRayQuery) != 0 &&
+                rule.ExpectedFeatureSupported == portableExpectedSupport))
         {
             throw Invalid("advanced-gi-qualification-portable-device-matrix-invalid");
         }
         if (feature == AdvancedGiPrerequisiteFeature.OpacityMicromaps &&
-            ((coverage & AdvancedGiQualificationDeviceCoverage.FeatureDisabledFallback) == 0 ||
-             !rules.Any(static rule => !rule.ExpectedFeatureSupported)))
+            (!rules.Any(static rule =>
+                    (rule.Coverage &
+                        AdvancedGiQualificationDeviceCoverage.AmdRayQuery) != 0 &&
+                    (rule.Coverage & AdvancedGiQualificationDeviceCoverage
+                        .FeatureDisabledFallback) != 0 &&
+                    !rule.ExpectedFeatureSupported) ||
+             !rules.Any(static rule =>
+                    (rule.Coverage &
+                        AdvancedGiQualificationDeviceCoverage.IntelRayQuery) != 0 &&
+                    (rule.Coverage & AdvancedGiQualificationDeviceCoverage
+                        .FeatureDisabledFallback) != 0 &&
+                    !rule.ExpectedFeatureSupported)))
         {
             throw Invalid("advanced-gi-qualification-C1-fallback-matrix-incomplete");
         }
@@ -1097,6 +1188,18 @@ public static class AdvancedGiQualificationManifestCodec
             throw Invalid("advanced-gi-qualification-evidence-binding-mismatch");
         }
         if (!AdvancedGiQualificationContract.IsCanonicalToken(report.Summary, 2048) ||
+            !AdvancedGiQualificationContract.IsCanonicalToken(
+                report.FallbackReason, 256) ||
+            (pin.Role == AdvancedGiQualificationEvidenceRole.Fallback &&
+                string.Equals(
+                    report.FallbackReason,
+                    "not-applicable",
+                    StringComparison.Ordinal)) ||
+            (pin.Role != AdvancedGiQualificationEvidenceRole.Fallback &&
+                !string.Equals(
+                    report.FallbackReason,
+                    "not-applicable",
+                    StringComparison.Ordinal)) ||
             report.PassedChecks is null || report.PassedChecks.Length == 0 ||
             report.PassedChecks.Length > 64 ||
             report.PassedChecks.Any(static check =>
@@ -1134,6 +1237,9 @@ public static class AdvancedGiQualificationManifestCodec
                     measurements.IndependentRunCount < AdvancedGiQualificationContract.MinimumIndependentRuns ||
                     !IsFiniteNonNegative(measurements.BaselineReferenceError) ||
                     !IsFiniteNonNegative(measurements.CandidateReferenceError) ||
+                    !IsFiniteNonNegative(measurements.EqualCostAlternativeError) ||
+                    !measurements.EqualWorkComparisonVerified ||
+                    !measurements.EnergyOwnershipVerified ||
                     !countersClean)
                 {
                     throw Invalid("advanced-gi-qualification-correctness-measurement-invalid");
@@ -1236,8 +1342,18 @@ public static class AdvancedGiQualificationManifestCodec
 
             case AdvancedGiQualificationEvidenceRole.LongRun:
                 if (!featureSupported ||
-                    measurements.DurationSeconds < AdvancedGiQualificationContract.MinimumLongRunSeconds ||
+                    measurements.DurationSeconds <
+                        AdvancedGiQualificationContract.MinimumSoakSeconds ||
+                    measurements.TraversalDurationSeconds <
+                        AdvancedGiQualificationContract.MinimumTraversalSeconds ||
+                    measurements.SoakDurationSeconds <
+                        AdvancedGiQualificationContract.MinimumSoakSeconds ||
                     measurements.FrameCount < AdvancedGiQualificationContract.MinimumReferenceFrames ||
+                    measurements.SteadyStateStartLiveBytes == 0UL ||
+                    measurements.SteadyStateEndLiveBytes >
+                        measurements.SteadyStateStartLiveBytes ||
+                    measurements.TemporalFailureCount != 0UL ||
+                    measurements.ConvergenceStarvationCount != 0UL ||
                     !countersClean)
                 {
                     throw Invalid("advanced-gi-qualification-long-run-measurement-invalid");

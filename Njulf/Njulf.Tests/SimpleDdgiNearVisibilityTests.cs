@@ -116,6 +116,38 @@ public sealed class SimpleDdgiNearVisibilityTests
             Assert.That(sample.Confidence, Is.EqualTo(0.125f).Within(1.0e-6f));
             Assert.That(sample.Confidence,
                 Is.LessThan(SimpleDdgiNearVisibility.MinimumConfidence));
+            Assert.That(sample.SecondaryDepth, Is.EqualTo(4.0f));
+            Assert.That(sample.SecondaryConfidence,
+                Is.EqualTo(0.875f).Within(1.0e-6f));
+        });
+    }
+
+    [Test]
+    public void TwoLayerEvidence_UsesConfidentSecondaryWithoutBorrowingConfidence()
+    {
+        SimpleDdgiNearVisibilityQuery query = Query(
+            momentMean: 3.0f,
+            momentSecond: 9.25f,
+            receiverDistance: 2.5f,
+            conservativeDepth: 1.0f,
+            confidence: 0.25f) with
+        {
+            Sidecar = new SimpleDdgiNearVisibilitySample(1.0f, 0.25f)
+            {
+                SecondaryDepth = 1.25f,
+                SecondaryConfidence = 0.90f
+            }
+        };
+
+        SimpleDdgiNearVisibilityEvaluation result =
+            SimpleDdgiNearVisibility.Evaluate(query);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Applied, Is.True);
+            Assert.That(result.FinalVisibility,
+                Is.LessThan(result.MomentVisibility));
+            Assert.That(result.EvidenceTrust, Is.EqualTo(1.0f));
         });
     }
 
@@ -205,20 +237,26 @@ public sealed class SimpleDdgiNearVisibilityTests
     }
 
     [Test]
-    public void PackedSidecar_RoundTripsAtCanonicalFourByteStride()
+    public void PackedSidecar_RoundTripsTwoIndependentRg16Layers()
     {
-        var source = new SimpleDdgiNearVisibilitySample(1.375f, 0.8125f);
+        var source = new SimpleDdgiNearVisibilitySample(1.375f, 0.8125f)
+        {
+            SecondaryDepth = 3.25f,
+            SecondaryConfidence = 0.6875f
+        };
         SimpleDdgiNearVisibilitySample decoded =
-            SimpleDdgiNearVisibility.Unpack(
-                SimpleDdgiNearVisibility.Pack(source));
+            SimpleDdgiNearVisibility.UnpackV2(
+                SimpleDdgiNearVisibility.PackV2(source));
 
         Assert.Multiple(() =>
         {
-            Assert.That(SimpleDdgiNearVisibility.BytesPerTexel,
+            Assert.That(SimpleDdgiNearVisibility.LegacyBytesPerTexel,
                 Is.EqualTo(SimpleDdgiVisibilityPacking.BytesPerTexel));
+            Assert.That(SimpleDdgiNearVisibility.BytesPerTexel,
+                Is.EqualTo(2 * SimpleDdgiVisibilityPacking.BytesPerTexel));
             Assert.That(decoded, Is.EqualTo(source));
-            Assert.That(SimpleDdgiNearVisibility.Unpack(
-                SimpleDdgiNearVisibility.Pack(
+            Assert.That(SimpleDdgiNearVisibility.UnpackV2(
+                SimpleDdgiNearVisibility.PackV2(
                     SimpleDdgiNearVisibilitySample.Empty)),
                 Is.EqualTo(SimpleDdgiNearVisibilitySample.Empty));
         });
@@ -229,7 +267,7 @@ public sealed class SimpleDdgiNearVisibilityTests
     {
         const int probes = 1_024;
         const ulong required = probes *
-            SimpleDdgiMemoryPlan.VisibilityBytesPerProbe * 2UL;
+            SimpleDdgiMemoryPlan.NearVisibilityBytesPerProbe * 2UL;
         SimpleDdgiMemoryPlan rejected = CreatePlan(required - 1UL);
         SimpleDdgiMemoryPlan admitted = CreatePlan(required);
 
@@ -277,15 +315,19 @@ public sealed class SimpleDdgiNearVisibilityTests
             Assert.That(shared, Does.Not.Contain(
                 "float interpolatedConfidence = dot(weights, confidence)"));
             Assert.That(blend, Does.Contain(
-                "coherentDepthWeightSum / narrowWeightSum"));
+                "secondaryDepthWeightSum / narrowWeightSum"));
             Assert.That(blend, Does.Contain(
-                "abs(currentDepth - previousNearVisibility.x) > coherentDepthBand"));
+                "SimpleDdgiBlendNearVisibilityLayers("));
+            Assert.That(shared, Does.Contain(
+                "address.visibilityBaseWord * 2u"));
             Assert.That(blend, Does.Contain(
                 "pc.PrivateVisibilityAtlasOffsetWords +"));
             Assert.That(commit, Does.Contain(
                 "SchedulerVolumeUsesNearVisibilitySidecar(volumeIndex)"));
             Assert.That(commit, Does.Contain(
                 "publicNearVisibilityBase + word"));
+            Assert.That(commit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_NEAR_VISIBILITY_WORDS_PER_PROBE"));
         });
     }
 

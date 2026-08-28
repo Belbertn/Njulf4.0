@@ -820,6 +820,17 @@ public readonly record struct SimpleDdgiNearFieldResidualMemoryTelemetry(
     ulong PeakAllocatedBytes,
     ulong RetiredBytes)
 {
+    /// <summary>Two R16 validity banks plus two packed-R32 normal banks.</summary>
+    public ulong PackedValidityAndNormalBytes { get; init; }
+
+    /// <summary>
+    /// Bytes avoided by aliasing RawCandidate as one filter ping-pong peer.
+    /// This is a physical-plan saving and is not added to AllocatedBytes.
+    /// </summary>
+    public ulong AliasedFilterScratchBytes { get; init; }
+
+    public int PhysicalFilterScratchImageCount { get; init; }
+
     public static SimpleDdgiNearFieldResidualMemoryTelemetry Empty { get; } = new(
         0UL, 0UL, 0UL, 0UL, 0UL);
 
@@ -828,12 +839,23 @@ public readonly record struct SimpleDdgiNearFieldResidualMemoryTelemetry(
             ? this
             : this with { PeakAllocatedBytes = AllocatedBytes };
 
-    public SimpleDdgiNearFieldResidualMemoryTelemetry WithoutLiveAllocation() => new(
-        RequestedBytes,
-        AdmittedBytes,
-        0UL,
-        0UL,
-        0UL);
+    public SimpleDdgiNearFieldResidualMemoryTelemetry WithLayoutSavings(
+        in SimpleDdgiNearFieldResidualLayout layout) => this with
+        {
+            PackedValidityAndNormalBytes = checked(
+                layout.HistoryValidityBytes + layout.HistoryNormalBytes),
+            AliasedFilterScratchBytes = layout.AliasedFilterScratchBytes,
+            PhysicalFilterScratchImageCount =
+                layout.PhysicalFilterScratchImageCount
+        };
+
+    public SimpleDdgiNearFieldResidualMemoryTelemetry WithoutLiveAllocation() =>
+        this with
+        {
+            AllocatedBytes = 0UL,
+            PeakAllocatedBytes = 0UL,
+            RetiredBytes = 0UL
+        };
 }
 
 /// <summary>

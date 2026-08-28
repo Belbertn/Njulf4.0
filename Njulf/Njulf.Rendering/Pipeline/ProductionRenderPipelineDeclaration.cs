@@ -1063,8 +1063,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             if (modes.UsesNearFieldFiltering)
             {
                 nearFieldResetUsages.Add(WriteTransferStorage(
-                    RenderGraphResourceId.NearFieldResidualFilterScratch,
-                    RenderGraphHistoryBindingSelection.All));
+                    RenderGraphResourceId.NearFieldResidualFilterScratch));
             }
             nearFieldResetUsages.Add(WriteTransferAndComputeBuffer(
                 RenderGraphResourceId.NearFieldResidualSchedulerHistory,
@@ -1191,8 +1190,6 @@ internal sealed class ProductionRenderPipelineDeclaration
                  iteration < modes.NearFieldProfile.FilterIterationCount;
                  iteration++)
             {
-                RenderGraphHistoryBindingSelection destinationBank =
-                    GetNearFieldScratchBank(iteration);
                 var filterUsages = new List<RenderGraphResourceUsage>();
                 if (iteration == 0)
                 {
@@ -1203,8 +1200,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                 else
                 {
                     filterUsages.Add(ReadComputeSampled(
-                        RenderGraphResourceId.NearFieldResidualFilterScratch,
-                        GetNearFieldScratchBank(iteration - 1)));
+                        NearFieldFilterTargetResource(
+                            modes.NearFieldProfile.FilterIterationCount,
+                            iteration - 1)));
                 }
 
                 filterUsages.Add(ReadComputeBuffer(
@@ -1218,8 +1216,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                 filterUsages.Add(ReadComputeIndirectBuffer(
                     RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments));
                 filterUsages.Add(WriteComputeStorage(
-                    RenderGraphResourceId.NearFieldResidualFilterScratch,
-                    historyBinding: destinationBank));
+                    NearFieldFilterTargetResource(
+                        modes.NearFieldProfile.FilterIterationCount,
+                        iteration)));
                 declarations.Add(Pass(
                     GetNearFieldFilterPassName(iteration),
                     filterUsages.ToArray()));
@@ -1227,9 +1226,10 @@ internal sealed class ProductionRenderPipelineDeclaration
 
             RenderGraphResourceUsage frequencyInput = modes.UsesNearFieldFiltering
                 ? ReadComputeSampled(
-                    RenderGraphResourceId.NearFieldResidualFilterScratch,
-                    GetNearFieldScratchBank(
-                        modes.NearFieldProfile.FilterIterationCount - 1))
+                    // Parity selection guarantees the final estimate resides
+                    // in the separate scratch image, leaving Raw available as
+                    // the frequency-separation output.
+                    RenderGraphResourceId.NearFieldResidualFilterScratch)
                 : ReadComputeSampled(
                     RenderGraphResourceId.NearFieldResidualHistory,
                     RenderGraphHistoryBindingSelection.Current);
@@ -1586,21 +1586,21 @@ internal sealed class ProductionRenderPipelineDeclaration
             descriptors.Add(OwnedImageChainResource(
                 RenderGraphResourceId.NearFieldResidualValidity,
                 "Near-field residual double-buffered validity",
-                Format.R32Uint,
+                Format.R16Uint,
                 traceSizePolicy));
             descriptors.Add(BufferSetResource(
                 RenderGraphResourceId.NearFieldResidualHistoryMetadata,
                 "Near-field residual double-buffered hit identity SSBO"));
             descriptors.Add(OwnedImageChainResource(
                 RenderGraphResourceId.NearFieldResidualHistoryNormals,
-                "Near-field residual double-buffered geometric normals",
-                Format.R16G16B16A16Sfloat,
+                "Near-field residual packed receiver-normal history",
+                Format.R32Uint,
                 traceSizePolicy));
             if (modes.UsesNearFieldFiltering)
             {
-                descriptors.Add(TransientImageChainResource(
+                descriptors.Add(TransientImageResource(
                     RenderGraphResourceId.NearFieldResidualFilterScratch,
-                    "Near-field residual filter ping-pong scratch",
+                    "Near-field residual filter scratch (Raw is peer target)",
                     Format.R16G16B16A16Sfloat,
                     traceSizePolicy));
             }
@@ -1833,15 +1833,17 @@ internal sealed class ProductionRenderPipelineDeclaration
             : "SimpleDdgiNearFieldResidualFilterPass" + iteration;
     }
 
-    private static RenderGraphHistoryBindingSelection GetNearFieldScratchBank(
+    private static RenderGraphResourceId NearFieldFilterTargetResource(
+        int iterationCount,
         int iteration)
     {
-        if (iteration < 0)
+        if (iterationCount <= 0 ||
+            iteration < 0 || iteration >= iterationCount)
             throw new ArgumentOutOfRangeException(nameof(iteration));
-
-        return (iteration & 1) == 0
-            ? RenderGraphHistoryBindingSelection.Bank0
-            : RenderGraphHistoryBindingSelection.Bank1;
+        bool rawTarget = ((iteration + (iterationCount & 1)) & 1) == 0;
+        return rawTarget
+            ? RenderGraphResourceId.NearFieldResidualRaw
+            : RenderGraphResourceId.NearFieldResidualFilterScratch;
     }
 
     private static RenderGraphResourceDescriptor ImageResource(

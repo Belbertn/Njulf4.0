@@ -110,6 +110,18 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             "GI forward gather (inclusive draw)",
             "DDGI dirty first-update latency",
             "DDGI dirty convergence latency",
+            "DDGI Environment first-visible latency",
+            "DDGI Environment certified latency",
+            "DDGI Light first-visible latency",
+            "DDGI Light certified latency",
+            "DDGI Emissive first-visible latency",
+            "DDGI Emissive certified latency",
+            "DDGI Material first-visible latency",
+            "DDGI Material certified latency",
+            "DDGI Transform first-visible latency",
+            "DDGI Transform certified latency",
+            "DDGI Topology first-visible latency",
+            "DDGI Topology certified latency",
             "GI memory",
             "DDGI probes updated"
         };
@@ -1367,6 +1379,15 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
         out double failure,
         out double warning)
     {
+        if (TryClassifyDdgiMutationLatencyMetric(
+                name,
+                out bool firstVisibleLatency))
+        {
+            failure = firstVisibleLatency ? 1.0 : 8.0;
+            warning = failure;
+            return true;
+        }
+
         bool hardLimit = false;
         failure = name switch
         {
@@ -1422,8 +1443,9 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
         return true;
     }
 
-    private static bool IsHardLimitBenchmarkMetric(string name) => name switch
-    {
+    private static bool IsHardLimitBenchmarkMetric(string name) =>
+        TryClassifyDdgiMutationLatencyMetric(name, out _) || name switch
+        {
         "Material GI non-finite values" or
         "Material GI clamped values" or
         "Material alpha candidate limit" or
@@ -1436,8 +1458,8 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
         "DDGI emissive unsupported skinned importance" or
         "DDGI dirty first-update latency" or
         "DDGI dirty convergence latency" => true,
-        _ => false
-    };
+            _ => false
+        };
 
     private static void RequireBenchmarkMetricThreshold(
         IReadOnlyDictionary<string, JsonElement> metrics,
@@ -1462,8 +1484,11 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             $"benchmark metric '{name}' warning threshold");
     }
 
-    private static string GetBenchmarkMetricUnit(string name) => name switch
-    {
+    private static string GetBenchmarkMetricUnit(string name) =>
+        TryClassifyDdgiMutationLatencyMetric(name, out _)
+            ? "frames"
+            : name switch
+            {
         "CPU renderer" or
         "GPU frame" or
         "Material GI compile P95" or
@@ -1494,8 +1519,31 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
         "DDGI emissive unsupported skinned importance" => "importance",
         "DDGI dirty first-update latency" or
         "DDGI dirty convergence latency" => "frames",
-        _ => "count"
-    };
+                _ => "count"
+            };
+
+    private static bool TryClassifyDdgiMutationLatencyMetric(
+        string name,
+        out bool firstVisibleLatency)
+    {
+        firstVisibleLatency = name switch
+        {
+            "DDGI Environment first-visible latency" or
+            "DDGI Light first-visible latency" or
+            "DDGI Emissive first-visible latency" or
+            "DDGI Material first-visible latency" or
+            "DDGI Transform first-visible latency" or
+            "DDGI Topology first-visible latency" => true,
+            _ => false
+        };
+        return firstVisibleLatency || name is
+            "DDGI Environment certified latency" or
+            "DDGI Light certified latency" or
+            "DDGI Emissive certified latency" or
+            "DDGI Material certified latency" or
+            "DDGI Transform certified latency" or
+            "DDGI Topology certified latency";
+    }
 
     private static void ValidateDdgiProductionGate(JsonElement gate)
     {

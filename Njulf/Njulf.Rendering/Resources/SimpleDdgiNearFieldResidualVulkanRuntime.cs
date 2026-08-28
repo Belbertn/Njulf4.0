@@ -782,6 +782,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 !_hasPublishedSourceLightingEpoch ||
                     _publishedSourceLightingEpoch !=
                     sceneData.SimpleDdgiSourceLightingGeneration,
+                sceneData.CameraOnlyMotionReprojectionEnabled != 0,
                 _recordedExecutionExtent);
             SimpleDdgiNearFieldResidualGpuStageResult completion =
                 _manager.CompleteTemporal(
@@ -1398,9 +1399,9 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             HasExtent(_renderTargets.NearFieldResidualValidity1, traceWidth, traceHeight) &&
             HasExtent(_renderTargets.NearFieldResidualHistoryNormals0, traceWidth, traceHeight) &&
             HasExtent(_renderTargets.NearFieldResidualHistoryNormals1, traceWidth, traceHeight) &&
-            (_layout.FilterScratchBytes == 0UL ||
-             HasExtent(_renderTargets.NearFieldResidualFilterScratch0, traceWidth, traceHeight) &&
-             HasExtent(_renderTargets.NearFieldResidualFilterScratch1, traceWidth, traceHeight));
+            (_layout.FilterIterationCount == 0 ||
+             HasExtent(_renderTargets.NearFieldResidualFilterScratch1,
+                 traceWidth, traceHeight));
     }
 
     private void WriteTraceFrameConstants(
@@ -1675,12 +1676,13 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
     }
 
     private SimpleDdgiNearFieldResidualMemoryTelemetry CreateMemoryTelemetry() =>
-        new(
+        new SimpleDdgiNearFieldResidualMemoryTelemetry(
             RequestedBytes: _layout.TotalBytes,
             AdmittedBytes: _layout.TotalBytes,
             AllocatedBytes: _actualAllocationBytes,
             PeakAllocatedBytes: _peakAllocationBytes,
-            RetiredBytes: 0UL);
+            RetiredBytes: 0UL)
+            .WithLayoutSavings(_layout);
 
     private SimpleDdgiNearFieldResidualAdaptiveResolutionTelemetry
         CreateAdaptiveResolutionTelemetry() =>
@@ -1983,9 +1985,9 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                     SimpleDdgiNearFieldResidualGpuResourceKind.HistoryNormal0),
                 Resource(layout.HistoryNormalBytes / 2UL,
                     SimpleDdgiNearFieldResidualGpuResourceKind.HistoryNormal1),
-                Resource(layout.FilterScratchBytes / 2UL,
+                Resource(0UL,
                     SimpleDdgiNearFieldResidualGpuResourceKind.FilterScratch0),
-                Resource(layout.FilterScratchBytes / 2UL,
+                Resource(layout.FilterScratchBytes,
                     SimpleDdgiNearFieldResidualGpuResourceKind.FilterScratch1),
                 Resource(layout.TileBuffersBytes,
                     SimpleDdgiNearFieldResidualGpuResourceKind.TileBuffers),

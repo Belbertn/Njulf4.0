@@ -157,6 +157,14 @@ public readonly record struct SimpleDdgiTransportGenerations(
     [property: JsonRequired] uint Queue,
     [property: JsonRequired] uint SchedulerResources)
 {
+    /// <summary>
+    /// Folded ray-scene content epoch. Kept as an additive property so legacy
+    /// evidence can deserialize fail-closed without changing the positional
+    /// constructor ABI.
+    /// </summary>
+    [JsonRequired]
+    public uint DynamicGeometryEpoch { get; init; } = 1U;
+
     [JsonIgnore]
     public bool IsInitialized =>
         VolumeTable != 0u &&
@@ -168,7 +176,8 @@ public readonly record struct SimpleDdgiTransportGenerations(
         Solve != 0u &&
         Audit != 0u &&
         Queue != 0u &&
-        SchedulerResources != 0u;
+        SchedulerResources != 0u &&
+        DynamicGeometryEpoch != 0u;
 }
 
 /// <summary>

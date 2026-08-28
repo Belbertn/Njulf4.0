@@ -2946,6 +2946,10 @@ namespace Njulf.Rendering
                 _sceneOpaqueCompactionPass?.GetLastCompletedValidation(_currentFrame) ??
                 SceneSubmissionValidationSnapshot.Invalid;
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
+            _accelerationStructureManager?
+                .ObserveCompletedDynamicGeometryGpuTiming(
+                    _gpuTimestamps.LastCompletedSnapshot,
+                    _currentFrame);
             _giCaustic.CompleteFrameAfterFence(
                 _currentFrame,
                 _sync.GetInFlightFence(_currentFrame));
@@ -8454,7 +8458,9 @@ namespace Njulf.Rendering
                                     { UsesAnalyticSky: true },
                                 _performanceCaptureMetadataProvider
                                     .BuildIdentity.ShaderBundleHash,
-                                reflectionConsumersAvailable),
+                                reflectionConsumersAvailable,
+                                _accelerationStructureManager?
+                                    .RaySceneContentEpoch ?? 1UL),
                             new SimpleDdgiFrameAdmissionInput(
                                 CaptureAdvancedGiRuntimeQualificationContext(
                                     supported: false)),
@@ -9675,7 +9681,21 @@ namespace Njulf.Rendering
                     DynamicScratchBudgetBytes: gi.DdgiDynamicBlasScratchBudgetBytes,
                     MaximumBuildsPerFrame: gi.DdgiDynamicBlasBuildsPerFrame,
                     MaximumPrimitivesPerFrame: gi.DdgiDynamicBlasPrimitivesPerFrame,
-                    DecalCandidateLimit: gi.DdgiDecalCandidateLimit),
+                    DecalCandidateLimit: gi.DdgiDecalCandidateLimit)
+                {
+                    DynamicProviderGeometryEnabled =
+                        ddgiRaySceneEnabled && gi.DdgiQualityTier is
+                            DdgiQualityTier.DdgiHigh or
+                            DdgiQualityTier.DdgiUltra,
+                    DynamicGeometryBudgets =
+                        DdgiDynamicGeometryBudgetPolicy.Production with
+                        {
+                            GpuTimeBudgetMicroseconds =
+                                gi.DdgiQualityTier == DdgiQualityTier.DdgiUltra
+                                    ? 1_000
+                                    : 750
+                        }
+                },
                 sceneContentRevision: sceneData.SceneContentRevision,
                 foliageProxyFrame: _ddgiFoliageProxyFrame,
                 requirement: requirement);

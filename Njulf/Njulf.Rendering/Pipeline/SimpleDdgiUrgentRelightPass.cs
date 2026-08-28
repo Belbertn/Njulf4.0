@@ -183,7 +183,12 @@ public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
             // CommitLocal performs the only public SSBO copy. The optional image
             // mirror follows commit and reads that canonical result.
             _publishPass.ExecuteCanonicalOnly(cmd);
-            _commitPass.ExecuteResidentLocalOnly(cmd);
+            // The selected near-ring cohort is the bounded same-frame
+            // dependency neighbourhood. Commit its coherent payload first,
+            // then seed the existing sparse-residual queue with conservative
+            // 3x3x3 dependent bounds. Work beyond this bounded proxy remains
+            // ordinary post-forward work and therefore preserves fairness.
+            _commitPass.ExecuteResidentLocalAndPropagation(cmd);
             _publishPass.ExecuteSampledOnly(cmd);
         }
         finally

@@ -39,15 +39,26 @@ the certified Jacobi solver while acceleration remains explicitly selectable
 for qualification. P2 content-dependent features remain optional and were not
 part of this closure.
 
+The 2026-08-28 DDGI+SSGI closure completed the remaining code-side quality and
+performance work: graduated dynamic-geometry participation, bounded urgent
+multi-sweep transport, compact directional receivers, confidence-aware glossy
+fallbacks, automatic refinement, two-layer near visibility, adaptive ray
+cardinality, and the C5 setup/memory reductions. It also made production
+qualification fail closed around pinned artifacts, equal-work evidence,
+cross-domain energy ownership, traversal/soak duration, temporal failures,
+starvation, memory growth, device identity, and fallback provenance. Unchecked
+qualification entries below now mean real capture or hardware evidence is still
+needed; unit tests intentionally cannot manufacture that evidence.
+
 ## Recommended implementation order
 
-1. Recover performance headroom in C5 and the DDGI receiver cache.
-2. Implement true froxel volumetric fog and smoke.
-3. Add hybrid ray-query reflections for sharp indirect specular.
-4. Add thick transmission, refraction, and generalized caustics.
-5. Add analytical area lights.
-6. Graduate dynamic, foliage, and procedural geometry participation.
-7. Complete quality-tier tuning and cross-vendor qualification.
+1. Populate and approve the pinned golden/equal-work qualification corpus.
+2. Execute traversal and soak qualification on the required NVIDIA, AMD, and
+   Intel fleet.
+3. Capture identity-locked ShippingPerformance pairs before promoting any
+   device-specific async-compute path.
+4. Revisit the optional P2 content features only when shipping content requires
+   them.
 
 ## Remaining feature work
 
@@ -125,22 +136,22 @@ controllable analytical lights.
 - [x] Include area lights in many-light scheduling, diagnostics, and mutation
       invalidation.
 
-### P1: Graduate dynamic and procedural geometry participation
+### P1: Graduate dynamic and procedural geometry participation //IMPLEMENTED
 
 Support paths exist for skinned geometry, transparent geometry, and foliage, but
 the cheaper quality tiers still rely on conservative proxies or exclusions.
 
-- [ ] Make certified current-pose skinned transport practical at High quality.
-- [ ] Improve foliage participation without allowing alpha geometry to dominate
+- [x] Make certified current-pose skinned transport practical at High quality.
+- [x] Improve foliage participation without allowing alpha geometry to dominate
       traversal cost.
-- [ ] Integrate runtime terrain and other procedural geometry.
-- [ ] Support destructible and topology-changing geometry with bounded
+- [x] Integrate runtime terrain and other procedural geometry.
+- [x] Support destructible and topology-changing geometry with bounded
       invalidation.
-- [ ] Integrate deforming water surfaces.
-- [ ] Add per-content-class BLAS rebuild/refit/LOD budgets.
-- [ ] Preserve certified transport-tail behavior during continuous animation.
+- [x] Integrate deforming water surfaces.
+- [x] Add per-content-class BLAS rebuild/refit/LOD budgets.
+- [x] Preserve certified transport-tail behavior during continuous animation.
 
-### P1: Faster urgent and local Transport V2 convergence
+### P1: Faster urgent and local Transport V2 convergence //IMPLEMENTED
 
 The existing pre-forward urgent lane provides same-frame response for a bounded
 set of visible near-ring probes, but it is limited to one cached transport update
@@ -148,31 +159,31 @@ and radiometric changes whose cached geometry is already valid. Extend this path
 to accelerate the visible first indirect bounces of urgent and local changes
 without claiming that the entire global field can always converge in one frame.
 
-- [ ] Measure edit-to-first-visible-response and edit-to-certified-convergence
+- [x] Measure edit-to-first-visible-response and edit-to-certified-convergence
       P50/P95/P99 separately for environment, light, emissive, material,
       transform, and topology changes.
-- [ ] Extend the pre-forward urgent lane from one cached transport update to a
+- [x] Extend the pre-forward urgent lane from one cached transport update to a
       bounded private multi-sweep solve for eligible radiometric changes.
-- [ ] Select one to four same-frame cached sweeps from residual, contraction, and
+- [x] Select one to four same-frame cached sweeps from residual, contraction, and
       available GPU-headroom evidence.
-- [ ] Process a bounded transitive dependency neighborhood so the most important
+- [x] Process a bounded transitive dependency neighborhood so the most important
       first indirect bounces of a local change propagate during the same frame.
-- [ ] Spill remaining dependent probes into the existing sparse residual queue
+- [x] Spill remaining dependent probes into the existing sparse residual queue
       without weakening fairness or eventual full-field coverage.
-- [ ] Publish only complete coherent probe payloads; never expose intermediate
+- [x] Publish only complete coherent probe payloads; never expose intermediate
       sweep state to receivers.
-- [ ] Keep the urgent transaction's canonical source cache immutable and issue no
+- [x] Keep the urgent transaction's canonical source cache immutable and issue no
       additional primary or shadow ray queries.
-- [ ] Keep geometry and topology changes on the ordinary post-forward path unless
+- [x] Keep geometry and topology changes on the ordinary post-forward path unless
       current-frame acceleration-structure readiness is explicitly supported and
       proven safe.
-- [ ] Preserve the canonical positive Transport V2 operator and its existing tail
+- [x] Preserve the canonical positive Transport V2 operator and its existing tail
       tolerance; acceleration may change execution order and latency, not the
       certified fixed point.
-- [ ] Prove that the eventual field matches the canonical long-run solve within
+- [x] Prove that the eventual field matches the canonical long-run solve within
       FP16 tolerance and that every certification claim still comes from a
       complete generation-current tail audit.
-- [ ] Enforce a strict GPU-time budget and fall back to the ordinary sparse
+- [x] Enforce a strict GPU-time budget and fall back to the ordinary sparse
       propagation path when same-frame work would exceed it.
 
 ### P2: Optional content-dependent features
@@ -188,13 +199,13 @@ without claiming that the entire global field can always converge in one frame.
 
 ### Directional and glossy GI
 
-- [ ] Make directional L2 GI affordable at High quality by projecting it into a
+- [x] Make directional L2 GI affordable at High quality by projecting it into a
       compact screen-space receiver representation instead of evaluating the full
       SH payload independently for every fragment.
-- [ ] Tune the glossy fallback by roughness and confidence so transitions between
+- [x] Tune the glossy fallback by roughness and confidence so transitions between
       ray-query reflections, directional DDGI, probes, and the environment remain
       stable.
-- [ ] Add energy-conservation tests covering direct, diffuse indirect, glossy
+- [x] Add energy-conservation tests covering direct, diffuse indirect, glossy
       indirect, emissive, and volumetric ownership.
 
 ### Near-field detail and leakage
@@ -202,25 +213,34 @@ without claiming that the entire global field can always converge in one frame.
 - [x] Improve C5 disocclusion detection, temporal confidence, and history repair.
 - [x] Add checkerboard/interleaved reconstruction and higher ray counts only in
       high-variance tiles.
-- [ ] Allocate refinement bricks automatically from receiver density, geometric
+- [x] Allocate refinement bricks automatically from receiver density, geometric
       complexity, lighting variance, and observed error.
-- [ ] Add two-layer near-visibility depth or a compact visibility cone only for
-      scenes where the current B4 sidecar demonstrably fails.
-- [ ] Keep surfel GI deferred unless validated failure cases show that B3, B4, and
+- [x] Add two-layer near-visibility depth for scenes where the single-layer B4
+      sidecar demonstrably fails, with single-layer fallback when it is not
+      admitted.
+- [x] Keep surfel GI deferred unless validated failure cases show that B3, B4, and
       C5 cannot provide the required near-field quality.
 
 ### Validation and production qualification
 
-- [ ] Build path-traced golden references for interiors, emissives, foliage,
-      glass, smoke, water, and rapid lighting transitions.
-- [ ] Add equal-work image comparisons for every promoted feature and fallback.
-- [ ] Run 30-60 minute traversal tests and longer soak tests for temporal failure
-      modes, memory growth, and convergence starvation.
-- [ ] Qualify C1, C3, C4, and C5 on representative NVIDIA, AMD, and Intel devices.
-- [ ] Test feature combinations rather than qualifying each feature only in
-      isolation.
-- [ ] Record qualification identifiers and fallback reasons in benchmark
-      artifacts.
+- [x] Require cryptographically pinned path-traced-reference artifacts for
+      interiors, emissives, foliage, glass, smoke, water, and rapid lighting
+      transitions.
+- [ ] Populate and visually approve the real path-traced-reference artifacts.
+- [x] Require pinned equal-work baseline, candidate, and metrics artifacts for
+      every promoted feature and fallback.
+- [ ] Capture and approve the real equal-work image pairs.
+- [x] Enforce at least 30 minutes of scripted traversal plus a two-hour extended
+      soak, with zero temporal failures, memory growth, or convergence starvation.
+- [ ] Execute and approve those traversal/soak runs on the production fleet.
+- [x] Require explicit device rules for two NVIDIA ray-query generations plus
+      named AMD and Intel ray-query devices; a generic non-NVIDIA rule cannot
+      substitute for either vendor.
+- [ ] Execute and approve C1, C3, C4, and C5 on every required device.
+- [x] Require isolated feature coverage and every pairwise feature combination,
+      rather than accepting all-features-only coverage.
+- [x] Bind settings, corpus, device, artifacts, measurements, fallback reason,
+      and report bytes into deterministic qualification identities.
 
 ## Performance roadmap
 
@@ -233,16 +253,17 @@ first optimization target.
 
 ### P0: Reduce C5 setup and execution cost
 
-- [ ] Avoid requiring a dedicated full-resolution motion-vector pass solely for
-      C5; emit motion in an existing pass or generate it only for candidate tiles.
-- [ ] Produce C5 normal, direct-diffuse, and emissive inputs at trace resolution or
+- [x] Avoid a dedicated full-resolution motion-vector pass for eligible static
+      scenes by reconstructing camera motion from current depth; retain explicit
+      motion for dynamic geometry and other consumers.
+- [x] Produce C5 normal, direct-diffuse, and emissive inputs at trace resolution or
       only for active tiles rather than through unconditional full-resolution
       outputs.
 - [x] Skip C5 where residual energy, estimated visibility error, or perceptual
       contribution is below threshold.
 - [x] Trace alternating/checkerboard tiles and reconstruct temporally.
 - [x] Use additional rays only for high-variance or low-confidence tiles.
-- [ ] Pack C5 history formats and alias non-overlapping resources through the
+- [x] Pack C5 validity/normals and alias non-overlapping filter scratch through the
       render graph.
 - [x] Add per-stage timing and memory counters that separate C5 input generation,
       tracing, filtering, and composition.
@@ -257,8 +278,12 @@ construction and reconstruction cost.
 - [x] Rebuild only dirty or high-gradient tiles.
 - [x] Select tile rate from depth, normal, material, motion, and GI gradients.
 - [x] Dynamically choose full, half, or quarter-rate evaluation per tile.
-- [ ] Investigate fusing sampling and reconstruction or sharing workgroup data.
-- [ ] Reuse receiver-cache payloads as C5 inputs where ownership remains clear.
+- [x] Audit sampling/reconstruction fusion. Keep the classify/gather/resolve
+      stages separate because their dirty-tile, temporal, and surface-validation
+      lifetimes do not share a safe work-reducing synchronization boundary.
+- [x] Audit receiver-cache reuse for C5. Do not add it: the cache sidecar lacks
+      C5's material/object payload, while the trace-resolution C5 source exits
+      before the DDGI gather, so reuse would add bandwidth without removing work.
 
 ### P1: Finish certified adaptive ray cardinality
 
@@ -266,22 +291,27 @@ The current adaptive baseline retains the authored full ray cardinality because
 the convergence residual measures transport change rather than directional
 quadrature error.
 
-- [ ] Add a directional variance or quadrature-error witness.
-- [ ] Allow stable probes to demote to shorter nested ray prefixes only when the
+- [x] Add a directional variance or quadrature-error witness.
+- [x] Allow stable probes to demote to shorter nested ray prefixes only when the
       witness certifies the lower count.
-- [ ] Escalate ray count rapidly after lighting, visibility, or geometry changes.
-- [ ] Record quality error and saved ray work by ring and content class.
+- [x] Escalate ray count rapidly after lighting, visibility, or geometry changes.
+- [x] Record quality error and saved ray work by ring and content class.
 
 ### P1: Memory and scheduling
 
-- [ ] Focus memory reduction on C5 histories, receiver-cache formats, directional
-      sidecars, and render-graph aliasing; the core source cache is already packed.
-- [ ] Re-evaluate async compute per device only when timestamps demonstrate useful
-      overlap without extending the critical path.
-- [ ] Keep shader execution reordering and a full ray-tracing pipeline as research
+- [x] Pack the C5 histories, reduce physical scratch to one additional aliased
+      image, and expose immutable layout savings beside live allocation telemetry.
+- [ ] Use new production captures to decide whether receiver-cache or directional
+      sidecar compression has enough benefit to justify another ABI change; the
+      core source cache is already packed.
+- [x] Keep async-compute eligibility per device, driver, workload, and path behind
+      overlap-adjusted GPU timestamps, tail guards, hysteresis, and cooldown.
+- [ ] Capture three or more identity-locked ShippingPerformance graphics/async
+      pairs before promoting any currently uncertified path.
+- [x] Keep shader execution reordering and a full ray-tracing pipeline as research
       items rather than near-term priorities; current ray-query update work is not
       the dominant frame cost.
-- [ ] Preserve the existing cost-aware scheduler, source refresh modes, sparse
+- [x] Preserve the existing cost-aware scheduler, source refresh modes, sparse
       propagation, pipeline caches, and specialized trace variants instead of
       rebuilding systems that are already present.
 

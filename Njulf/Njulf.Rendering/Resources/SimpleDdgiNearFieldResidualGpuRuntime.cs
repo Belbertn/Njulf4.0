@@ -36,7 +36,7 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
     public float ResidualIntensity { get; init; } = 1.0f;
     /// <summary>
     /// Qualification-only local tile scheduling. False preserves the V13
-    /// full-trace behavior while still using V14's split trace/resolve arena.
+    /// full-trace behavior while still using V16's split trace/resolve arena.
     /// </summary>
     public bool LocalAdaptiveSchedulingEnabled { get; init; }
 
@@ -427,8 +427,7 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
             (layout.HistoryMetadataBytes & 1UL) != 0UL ||
             (layout.HistoryNormalBytes & 1UL) != 0UL ||
             (layout.SchedulerHistoryBytes & 1UL) != 0UL ||
-            (layout.TelemetryReadbackBytes & 1UL) != 0UL ||
-            (layout.FilterScratchBytes & 1UL) != 0UL)
+            (layout.TelemetryReadbackBytes & 1UL) != 0UL)
         {
             throw new ArgumentException("C5 allocation requires a complete layout.", nameof(layout));
         }
@@ -496,10 +495,12 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         ValidateResource(HistoryNormal1, layout.HistoryNormalBytes / 2UL,
             SimpleDdgiNearFieldResidualGpuResourceKind.HistoryNormal1,
             nameof(HistoryNormal1));
-        ValidateResource(FilterScratch0, layout.FilterScratchBytes / 2UL,
+        // RawCandidate is reused as logical filter target zero after temporal
+        // resolve, so it is not represented as a second owned allocation.
+        ValidateResource(FilterScratch0, 0UL,
             SimpleDdgiNearFieldResidualGpuResourceKind.FilterScratch0,
             nameof(FilterScratch0));
-        ValidateResource(FilterScratch1, layout.FilterScratchBytes / 2UL,
+        ValidateResource(FilterScratch1, layout.FilterScratchBytes,
             SimpleDdgiNearFieldResidualGpuResourceKind.FilterScratch1,
             nameof(FilterScratch1));
         ValidateResource(SurfaceTable, layout.SurfaceTableBytes,

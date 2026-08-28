@@ -681,6 +681,8 @@ namespace Njulf.Rendering.Resources
         private readonly uint[] _dirtyFirstUpdateLatencyBuckets = new uint[DirtyLatencyBucketCount];
         private readonly uint[] _dirtyConvergenceLatencyBuckets = new uint[DirtyLatencyBucketCount];
         private readonly uint[] _dirtyFirstScheduledLatencyBuckets = new uint[DirtyLatencyBucketCount];
+        private readonly SimpleDdgiMutationLatencyTracker
+            _mutationLatencyTracker = new();
         private uint _dirtyFirstScheduledLatencySampleCount;
         private uint _dirtyFirstUpdateLatencySampleCount;
         private uint _dirtyConvergenceLatencySampleCount;
@@ -1083,6 +1085,10 @@ namespace Njulf.Rendering.Resources
         private bool _blendTransactionExecuted;
         private uint _updateTransactionSerial;
         private ulong _frameSerial;
+        // Exact ray-scene identity is folded at the CPU-only tail-certificate
+        // boundary. A non-zero value is mandatory so default/uninitialized
+        // capability snapshots can never accidentally validate a certificate.
+        private uint _dynamicGeometryEpoch = 1u;
         private SimpleDdgiLayoutReport? _lastLayoutReport;
         // Ring origins may move every frame, but allocation admission only depends
         // on topology and tier inputs. Cache the immutable report so normal camera
@@ -1461,6 +1467,21 @@ namespace Njulf.Rendering.Resources
                     estimate.FarFieldStepsPerPrimaryQ8,
                     ushort.MaxValue)
             };
+        }
+
+        /// <summary>
+        /// Supplies the content epoch of the acceleration-structure scene used
+        /// by this frame. Transport-tail evidence is valid only while this
+        /// identity remains unchanged. The 64-bit renderer epoch is mixed into
+        /// the compact CPU certificate field without permitting zero.
+        /// </summary>
+        public void SetDynamicGeometryEpoch(ulong epoch)
+        {
+            ulong nonZeroEpoch = epoch == 0UL ? 1UL : epoch;
+            uint low = unchecked((uint)nonZeroEpoch);
+            uint high = unchecked((uint)(nonZeroEpoch >> 32));
+            _dynamicGeometryEpoch = NonZeroGeneration(
+                low ^ ((high << 13) | (high >> 19)));
         }
 
         /// <summary>
@@ -3831,6 +3852,8 @@ namespace Njulf.Rendering.Resources
                 _transportSolveController.LastReason;
             if (accepted)
             {
+                _mutationLatencyTracker.RecordCertifiedConvergence(
+                    _frameIndex);
                 _transportGlobalConvergencePending = false;
                 _transportGlobalSourceRepairPhasePending = false;
                 _publishedPropagationGeneration = _transportGeneration;
@@ -4607,6 +4630,11 @@ namespace Njulf.Rendering.Resources
         public int DirtyFirstUpdateLatencyCensoredCount => ClampUIntToInt(_dirtyFirstUpdateLatencyCensoredCount);
         public int DirtyConvergenceLatencyCensoredCount => ClampUIntToInt(_dirtyConvergenceLatencyCensoredCount);
         public int DirtyLatencyOutstandingEventCount => ClampUIntToInt(_dirtyLatencyOutstandingEventCount);
+        public SimpleDdgiMutationLatencySnapshot GetMutationLatencySnapshot(
+            SimpleDdgiMutationClass mutationClass) =>
+            _mutationLatencyTracker.GetSnapshot(mutationClass);
+        public SimpleDdgiMutationLatencyTelemetry MutationLatencyTelemetry =>
+            _mutationLatencyTracker.GetTelemetry();
         public int ProbeRelocationCount => _probeStateReadbackValid != 0 ? _probeRelocationCount : 0;
         public int ClassifiedInactiveProbeCountEstimate => _probeStateReadbackValid != 0 ? _classifiedInactiveProbeCountEstimate : 0;
         public float AverageRelocationFractionEstimate => _probeStateReadbackValid != 0 ? _averageRelocationFractionEstimate : 0.0f;
@@ -5269,7 +5297,8 @@ namespace Njulf.Rendering.Resources
             SimpleDdgiWarmStartSceneIdentity? warmStartSceneIdentity = null,
             IReadOnlyList<SimpleDdgiRefinementDemand>? refinementDemands = null,
             Vector3? visibleReceiverFocus = null,
-            Vector3? cameraForward = null)
+            Vector3? cameraForward = null,
+            SimpleDdgiRefinementDemand? automaticRefinementDemand = null)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -5345,9 +5374,25 @@ namespace Njulf.Rendering.Resources
                         DdgiSkinnedGeometryMode.CurrentPose &&
                     _transportSolveController.Phase ==
                         SimpleDdgiTransportPhase.AuditFrozen;
+                SimpleDdgiMutationClass mutationClasses =
+                    ResolveMutationClasses(
+                        dirtyRegions,
+                        dirtyReasonFlags,
+                        sourceRefreshMode);
+                if (mutationClasses != SimpleDdgiMutationClass.None)
+                    _mutationLatencyTracker.Begin(mutationClasses, _frameIndex);
                 dirtyRegions = _frozenTailInvalidationBuffer.Resolve(
                     mayDeferAnimatedTransformInvalidation,
-                    dirtyRegions);
+                    dirtyRegions,
+                    _frameSerial + 1UL);
+                if (_frozenTailInvalidationBuffer.AuditInvalidatedThisFrame &&
+                    _transportSolveController.Phase ==
+                        SimpleDdgiTransportPhase.AuditFrozen)
+                {
+                    CancelTransportTailAudit(
+                        SimpleDdgiTransportCertificationReason
+                            .GenerationsChanged);
+                }
                 bool deferredAnimatedTransformInvalidation =
                     _frozenTailInvalidationBuffer.DeferredCurrentFrame;
                 BoundingBox sceneBounds = ExpandBounds(
@@ -5375,7 +5420,8 @@ namespace Njulf.Rendering.Resources
                     authoredSceneVolumes,
                     dirtyRegions,
                     refinementDemands,
-                    visibleReceiverFocus);
+                    visibleReceiverFocus,
+                    automaticRefinementDemand);
                 layoutMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 phaseStart = Stopwatch.GetTimestamp();
@@ -6090,6 +6136,7 @@ namespace Njulf.Rendering.Resources
             Array.Clear(_volumePriorities);
             Array.Clear(_probeDirtyLatencyStates);
             Array.Clear(_probeDirtyLatencyStartFrames);
+            _mutationLatencyTracker.ResetActive();
             Array.Clear(_probeSchedulingFlags);
             Array.Clear(_probeAtmosphereCohortFlags);
             Array.Clear(_probeDirtyReasons);
@@ -6373,6 +6420,8 @@ namespace Njulf.Rendering.Resources
                             }
                         }
                         RecordDirtyFirstCompletedUpdate(probeIndex, completedFrame);
+                        _mutationLatencyTracker.RecordFirstVisibleResponse(
+                            completedFrame);
                         MarkProbeSchedulerDirty(probeIndex);
                         MarkProbeVisibilityDirty(probeIndex);
                     }
@@ -8586,7 +8635,31 @@ namespace Njulf.Rendering.Resources
                 solve,
                 audit,
                 queue,
-                scheduler);
+                scheduler)
+            {
+                DynamicGeometryEpoch =
+                    ResolveTransportTailDynamicGeometryEpoch()
+            };
+        }
+
+        private uint ResolveTransportTailDynamicGeometryEpoch()
+        {
+            // Stable-identity transform invalidations may be held for at most
+            // two frames while an already-submitted audit completes. During
+            // that bounded window the audit must retain the ray-scene identity
+            // it froze with. All other callers observe the live identity and
+            // therefore invalidate stale evidence immediately.
+            if (_transportSolveController.Phase ==
+                    SimpleDdgiTransportPhase.AuditFrozen &&
+                _frozenTailInvalidationBuffer.DeferredCount > 0)
+            {
+                uint frozen = _transportSolveController.FrozenGenerations
+                    .DynamicGeometryEpoch;
+                if (frozen != 0u)
+                    return frozen;
+            }
+
+            return NonZeroGeneration(_dynamicGeometryEpoch);
         }
 
         private void MarkTransportLivePropagationBoundary()
@@ -8988,6 +9061,67 @@ namespace Njulf.Rendering.Resources
                 allVolumesCompatible
                     ? SimpleDdgiVolumeRemapKind.CompatibleToroidalScroll
                     : SimpleDdgiVolumeRemapKind.IncompatibleTopologyChange;
+        }
+
+        internal static SimpleDdgiMutationClass ResolveMutationClasses(
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            uint dirtyReasonFlags,
+            SimpleDdgiSourceRefreshMode sourceRefreshMode)
+        {
+            SimpleDdgiMutationClass classes =
+                SimpleDdgiMutationClass.None;
+            if (sourceRefreshMode ==
+                SimpleDdgiSourceRefreshMode.EnvironmentMissRelight)
+            {
+                classes |= SimpleDdgiMutationClass.Environment;
+            }
+            else if ((dirtyReasonFlags &
+                DdgiSceneInvalidationCoordinator.SimpleDdgiDirtyReasonLight) !=
+                0u)
+            {
+                classes |= SimpleDdgiMutationClass.Light;
+            }
+            if ((dirtyReasonFlags &
+                DdgiSceneInvalidationCoordinator.SimpleDdgiDirtyReasonEmissive) !=
+                0u)
+            {
+                classes |= SimpleDdgiMutationClass.Emissive;
+            }
+
+            if (dirtyRegions != null)
+            {
+                for (int index = 0; index < dirtyRegions.Count; index++)
+                {
+                    classes |= dirtyRegions[index].Reason switch
+                    {
+                        DdgiDirtyReason.LocalLightChanged or
+                            DdgiDirtyReason.DirectionalLightChanged =>
+                            SimpleDdgiMutationClass.Light,
+                        DdgiDirtyReason.EmissiveChanged =>
+                            SimpleDdgiMutationClass.Emissive,
+                        DdgiDirtyReason.MaterialChanged =>
+                            SimpleDdgiMutationClass.Material,
+                        DdgiDirtyReason.TransformChanged or
+                            DdgiDirtyReason.Teleport =>
+                            SimpleDdgiMutationClass.Transform,
+                        DdgiDirtyReason.GeometryAdded or
+                            DdgiDirtyReason.GeometryRemoved or
+                            DdgiDirtyReason.StreamIn or
+                            DdgiDirtyReason.StreamOut =>
+                            SimpleDdgiMutationClass.Topology,
+                        _ => SimpleDdgiMutationClass.None
+                    };
+                }
+            }
+            else if ((dirtyReasonFlags & DdgiSceneInvalidationCoordinator
+                .SimpleDdgiDirtyReasonDynamicGeometry) != 0u)
+            {
+                // Legacy whole-scene geometry signatures cannot distinguish a
+                // transform from a topology edit. Classify them conservatively
+                // as topology rather than claiming the faster transform path.
+                classes |= SimpleDdgiMutationClass.Topology;
+            }
+            return classes;
         }
 
         internal static bool ContainsRegionalRadiometricChange(
@@ -12409,7 +12543,8 @@ namespace Njulf.Rendering.Resources
             IReadOnlyList<GlobalIlluminationProbeVolume>? authoredSceneVolumes,
             IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
             IReadOnlyList<SimpleDdgiRefinementDemand>? refinementDemands,
-            Vector3? visibleReceiverFocus)
+            Vector3? visibleReceiverFocus,
+            SimpleDdgiRefinementDemand? automaticRefinementDemand)
         {
             _volumeCandidates.Clear();
             Array.Clear(_volumeScratch);
@@ -12474,7 +12609,8 @@ namespace Njulf.Rendering.Resources
                 authoredSceneVolumes,
                 dirtyRegions,
                 refinementDemands,
-                visibleReceiverFocus);
+                visibleReceiverFocus,
+                automaticRefinementDemand);
 
             _volumeCandidates.Sort(static (left, right) =>
                 CompareVolumeAdmissionOrder(
@@ -13395,7 +13531,8 @@ namespace Njulf.Rendering.Resources
             IReadOnlyList<GlobalIlluminationProbeVolume>? authoredSceneVolumes,
             IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
             IReadOnlyList<SimpleDdgiRefinementDemand>? externalDemands,
-            Vector3? visibleReceiverFocus)
+            Vector3? visibleReceiverFocus,
+            SimpleDdgiRefinementDemand? automaticRefinementDemand)
         {
             _refinementDemandScratch.Clear();
             bool enabled = gi.SimpleDdgiRefinementBricksEnabled &&
@@ -13498,6 +13635,13 @@ namespace Njulf.Rendering.Resources
                             SimpleDdgiRefinementDemandReason.AuthoredHero,
                             StableGuidHash(authored.Id)));
                     }
+                }
+
+                if (automaticRefinementDemand.HasValue &&
+                    _refinementDemandScratch.Count < 96)
+                {
+                    _refinementDemandScratch.Add(
+                        automaticRefinementDemand.Value);
                 }
 
                 if (externalDemands != null)
@@ -19955,7 +20099,11 @@ namespace Njulf.Rendering.Resources
                     _probeRoutineMaintenancePending[probeIndex] =
                         RoutineMaintenanceNone;
                 if (completedThisReadback)
+                {
+                    _mutationLatencyTracker.RecordFirstVisibleResponse(
+                        _frameIndex);
                     RecordDirtyConvergenceIfStable(probeIndex, _frameIndex);
+                }
                 if (completedThisReadback && sourceCacheInvalid && !reactivated)
                 {
                     // The GPU kept this transaction safe by falling back to

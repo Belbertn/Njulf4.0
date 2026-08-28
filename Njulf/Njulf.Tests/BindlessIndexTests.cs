@@ -59,7 +59,10 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase + 1));
             Assert.That(BindlessIndex.SceneGpuLodHistoryBufferBase, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1 + 1));
             Assert.That(BindlessIndex.SceneGpuLodHistoryBufferFrame1, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferBase + 1));
-            Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferFrame1 + 1));
+            Assert.That(BindlessIndex.DdgiDynamicGeometryBufferBase, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferFrame1 + 1));
+            Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(
+                BindlessIndex.DdgiDynamicGeometryBufferBase +
+                BindlessIndex.DdgiDynamicGeometryBufferCount));
             Assert.That(BindlessIndex.AreaLightLtcMatrixTexture, Is.EqualTo(BindlessIndex.PrefilteredEnvironmentNextTexture + 1));
             Assert.That(BindlessIndex.AreaLightLtcAmplitudeTexture, Is.EqualTo(BindlessIndex.AreaLightLtcMatrixTexture + 1));
             Assert.That(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase, Is.EqualTo(BindlessIndex.AreaLightLtcAmplitudeTexture + 1));
@@ -81,6 +84,7 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SceneGpuLodHistoryBufferBase), Is.EqualTo(nameof(BindlessIndex.SceneGpuLodHistoryBufferBase)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SceneGpuLodHistoryBufferFrame1), Is.EqualTo(nameof(BindlessIndex.SceneGpuLodHistoryBufferFrame1)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiDynamicGeometryBufferBase), Is.EqualTo(nameof(BindlessIndex.DdgiDynamicGeometryBufferBase)));
             Assert.That(
                 BindlessIndex.FirstDynamicTextureIndex,
                 Is.EqualTo(BindlessIndex.GtaoDebugTexture + 1));

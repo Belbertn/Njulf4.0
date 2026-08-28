@@ -175,6 +175,43 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
     }
 
     [Test]
+    public void MemoryTelemetry_ReportsPackedHistoryAndPhysicalAliasSavings()
+    {
+        SimpleDdgiNearFieldResidualLayout layout =
+            SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
+                640,
+                360,
+                SimpleDdgiNearFieldResidualProfile.Balanced,
+                512UL * 1024UL * 1024UL);
+        SimpleDdgiNearFieldResidualMemoryTelemetry memory = new(
+            layout.TotalBytes,
+            layout.TotalBytes,
+            layout.TotalBytes,
+            layout.TotalBytes,
+            0UL);
+
+        memory = memory.WithLayoutSavings(layout);
+        SimpleDdgiNearFieldResidualMemoryTelemetry retired =
+            memory.WithoutLiveAllocation();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(layout.IsValid, Is.True, layout.FailureReason);
+            Assert.That(memory.PackedValidityAndNormalBytes,
+                Is.EqualTo(
+                    layout.HistoryValidityBytes +
+                    layout.HistoryNormalBytes));
+            Assert.That(memory.AliasedFilterScratchBytes,
+                Is.EqualTo(layout.RawCandidateBytes));
+            Assert.That(memory.PhysicalFilterScratchImageCount, Is.EqualTo(1));
+            Assert.That(retired.AllocatedBytes, Is.Zero);
+            Assert.That(retired.AliasedFilterScratchBytes,
+                Is.EqualTo(memory.AliasedFilterScratchBytes),
+                "Lifecycle normalization must retain immutable plan savings.");
+        });
+    }
+
+    [Test]
     public void PendingGpuReadback_PreservesMeasuredLiveAllocationWithoutClaimingCounters()
     {
         var memory = new SimpleDdgiNearFieldResidualMemoryTelemetry(

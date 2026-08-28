@@ -112,6 +112,37 @@ public sealed class SimpleDdgiVolumeManagerTests
                 Is.EqualTo(DdgiDirtyReason.GeometryAdded));
             Assert.That(buffer.DeferredCount, Is.Zero);
             Assert.That(buffer.ReleasedDeferredThisFrame, Is.True);
+            Assert.That(buffer.AuditInvalidatedThisFrame, Is.True);
+        });
+    }
+
+    [Test]
+    public void FrozenTailInvalidations_ReleaseAfterTwoFrameSnapshotWindow()
+    {
+        var buffer = new SimpleDdgiFrozenTailInvalidationBuffer();
+        var bounds = new BoundingBox(new Vector3(0f), new Vector3(1f));
+        var pose = new DdgiDirtyRegion(
+            bounds,
+            DdgiDirtyReason.TransformChanged)
+        {
+            OldWorldBounds = bounds,
+            NewWorldBounds = bounds,
+            InfluenceBounds = bounds,
+            SourceIdentifier = 77UL,
+            SourceRevision = 2UL
+        };
+
+        Assert.That(buffer.Resolve(true, new[] { pose }, 10UL), Is.Null);
+        Assert.That(buffer.Resolve(true, null, 11UL), Is.Null);
+        IReadOnlyList<DdgiDirtyRegion>? released =
+            buffer.Resolve(true, null, 12UL);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(released, Has.Count.EqualTo(1));
+            Assert.That(buffer.DeferredCount, Is.Zero);
+            Assert.That(buffer.ReleasedDeferredThisFrame, Is.True);
+            Assert.That(buffer.AuditInvalidatedThisFrame, Is.True);
         });
     }
 

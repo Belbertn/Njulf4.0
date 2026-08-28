@@ -824,6 +824,9 @@ internal sealed class RendererDiagnosticsAssembler
             SimpleDdgiDirtyConvergenceLatencyP50Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyConvergenceLatencyP50Frames : 0,
             SimpleDdgiDirtyConvergenceLatencyP95Frames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyConvergenceLatencyP95Frames : 0,
             SimpleDdgiDirtyConvergenceLatencyMaxFrames = giUsesSimpleDdgi ? sceneData.SimpleDdgiDirtyConvergenceLatencyMaxFrames : 0,
+            SimpleDdgiMutationLatency = giUsesSimpleDdgi
+                ? sceneData.SimpleDdgiMutationLatency
+                : SimpleDdgiMutationLatencyTelemetry.Empty,
             SimpleDdgiAtlasBytes = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasBytes : 0UL,
             SimpleDdgiSampledAtlasRequested = simpleDdgiRequested && giSettings.SimpleDdgiSampledAtlasEnabled ? 1 : 0,
             SimpleDdgiSampledAtlasActive = giUsesSimpleDdgi ? sceneData.SimpleDdgiSampledAtlasActive : 0,

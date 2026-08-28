@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Core;
@@ -172,6 +173,8 @@ internal sealed class SimpleDdgiFrameCoordinator
                 request.Scene.AtmosphereOwnedLights.Span);
 
         _volumeManager.SetSchedulerCostEstimate(_frameEvidence.CostEstimate);
+        _volumeManager.SetDynamicGeometryEpoch(
+            request.Capabilities.RaySceneContentEpoch);
 
         _guidingConfiguration = CompileGuidingConfiguration(
             simpleDdgiActive,
@@ -197,6 +200,7 @@ internal sealed class SimpleDdgiFrameCoordinator
             request.View.CameraPosition +
             receiverForward * visibleReceiverFocusDistance;
         Vector3? measuredReceiverFocus = null;
+        SimpleDdgiReceiverFeedbackRefinementWitness receiverWitness = default;
         uint viewportGeneration =
             request.View.ReceiverFeedbackViewport.Generation;
         if (viewportGeneration != 0u &&
@@ -210,6 +214,7 @@ internal sealed class SimpleDdgiFrameCoordinator
                 out Vector3 resolvedMeasuredReceiverFocus))
         {
             measuredReceiverFocus = resolvedMeasuredReceiverFocus;
+            receiverWitness = witness;
         }
 
         Vector3 visibleReceiverFocus = _refinementFocus.Resolve(
@@ -220,6 +225,28 @@ internal sealed class SimpleDdgiFrameCoordinator
             request.Identity.CameraCutSerial,
             request.Identity.SceneContentRevision,
             measuredReceiverFocus);
+        SimpleDdgiAutomaticRefinementMetrics automaticMetrics =
+            ResolveAutomaticRefinementMetrics(
+                receiverWitness.IsValid
+                    ? receiverWitness.EstimatedContributionMass
+                    : 0.0f,
+                invalidationFrame.DirtyRegions,
+                visibleReceiverFocus,
+                nearRingSpacing,
+                gi.SimpleDdgiArchitecturalThicknessMeters,
+                invalidationIdentity.DirtySignature.ReasonFlags,
+                invalidationIdentity.DirtySignature.SourceRelightScale,
+                _volumeManager.TransportTailSummary);
+        SimpleDdgiRefinementDemand? automaticRefinementDemand =
+            SimpleDdgiAutomaticRefinementDemandBuilder.TryBuild(
+                visibleReceiverFocus,
+                automaticMetrics,
+                receiverWitness.IsValid
+                    ? receiverWitness.ResolvedVirtualProbeId + 1UL
+                    : 0UL,
+                out SimpleDdgiRefinementDemand resolvedAutomaticDemand)
+                ? resolvedAutomaticDemand
+                : null;
         SimpleDdgiReceiverFeedbackGpuSchedulingBinding feedbackBinding =
             request.View.ReceiverFeedbackViewport.Available
                 ? _receiverFeedback.AcquireSchedulingBinding(
@@ -255,7 +282,8 @@ internal sealed class SimpleDdgiFrameCoordinator
             invalidationIdentity.WarmStartIdentity,
             emissive.RefinementDemands,
             visibleReceiverFocus,
-            request.View.CameraForward);
+            request.View.CameraForward,
+            automaticRefinementDemand);
 
         _guidingConfiguration = CompileGuidingConfiguration(
             simpleDdgiActive,
@@ -706,6 +734,161 @@ internal sealed class SimpleDdgiFrameCoordinator
             Reason: "ddgi-ready");
     }
 
+    internal static SimpleDdgiAutomaticRefinementMetrics
+        ResolveAutomaticRefinementMetrics(
+            float receiverDensity,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            Vector3 focus,
+            float nearRingSpacing,
+            float architecturalThickness,
+            uint dirtyReasonFlags,
+            Vector3 sourceRelightScale,
+            in SimpleDdgiTransportTailSummary tail)
+    {
+        receiverDensity = float.IsFinite(receiverDensity)
+            ? Math.Max(receiverDensity, 0.0f)
+            : 0.0f;
+        float spacing = float.IsFinite(nearRingSpacing)
+            ? Math.Max(nearRingSpacing, 0.001f)
+            : 1.0f;
+        float thickness = float.IsFinite(architecturalThickness)
+            ? Math.Max(architecturalThickness, 0.001f)
+            : 0.08f;
+        float geometricComplexity = 0.0f;
+        float lightingVariance =
+            (dirtyReasonFlags &
+                (DdgiSceneInvalidationCoordinator.SimpleDdgiDirtyReasonLight |
+                 DdgiSceneInvalidationCoordinator.SimpleDdgiDirtyReasonEmissive)) !=
+                0u
+                ? 0.85f
+                : 0.0f;
+        if (dirtyRegions != null)
+        {
+            float reach = Math.Max(spacing * 6.0f, thickness * 8.0f);
+            float reachSquared = reach * reach;
+            for (int index = 0; index < dirtyRegions.Count; index++)
+            {
+                DdgiDirtyRegion region = dirtyRegions[index];
+                BoundingBox bounds = region.InfluenceBounds;
+                if (!Finite(bounds.Min) || !Finite(bounds.Max) ||
+                    DistanceSquaredToBounds(focus, bounds) > reachSquared)
+                {
+                    continue;
+                }
+
+                Vector3 extent = new(
+                    Math.Max(bounds.Max.X - bounds.Min.X, 0.0f),
+                    Math.Max(bounds.Max.Y - bounds.Min.Y, 0.0f),
+                    Math.Max(bounds.Max.Z - bounds.Min.Z, 0.0f));
+                float minimumExtent = Math.Min(
+                    extent.X,
+                    Math.Min(extent.Y, extent.Z));
+                float maximumExtent = Math.Max(
+                    extent.X,
+                    Math.Max(extent.Y, extent.Z));
+                float thinness = 1.0f - Math.Clamp(
+                    minimumExtent / Math.Max(thickness * 2.0f, 0.001f),
+                    0.0f,
+                    1.0f);
+                float spatialFrequency = Math.Clamp(
+                    maximumExtent / Math.Max(spacing * 4.0f, 0.001f),
+                    0.0f,
+                    1.0f);
+                float localComplexity = Math.Max(
+                    thinness * 0.90f,
+                    spatialFrequency * 0.50f);
+                if (region.Reason is
+                    DdgiDirtyReason.GeometryAdded or
+                    DdgiDirtyReason.GeometryRemoved or
+                    DdgiDirtyReason.TransformChanged or
+                    DdgiDirtyReason.StreamIn or
+                    DdgiDirtyReason.StreamOut or
+                    DdgiDirtyReason.Teleport)
+                {
+                    localComplexity = Math.Max(localComplexity, 0.75f);
+                }
+                if (region.Reason is
+                    DdgiDirtyReason.MaterialChanged or
+                    DdgiDirtyReason.EmissiveChanged or
+                    DdgiDirtyReason.LocalLightChanged or
+                    DdgiDirtyReason.DirectionalLightChanged)
+                {
+                    lightingVariance = Math.Max(lightingVariance, 0.85f);
+                }
+                geometricComplexity = Math.Max(
+                    geometricComplexity,
+                    localComplexity);
+            }
+        }
+
+        if (Finite(sourceRelightScale))
+        {
+            float minimum = Math.Min(
+                sourceRelightScale.X,
+                Math.Min(sourceRelightScale.Y, sourceRelightScale.Z));
+            float maximum = Math.Max(
+                sourceRelightScale.X,
+                Math.Max(sourceRelightScale.Y, sourceRelightScale.Z));
+            float deviation = Math.Max(
+                Math.Abs(maximum - minimum),
+                Math.Max(
+                    Math.Abs(maximum - 1.0f),
+                    Math.Abs(minimum - 1.0f)));
+            if (float.IsFinite(deviation) && deviation > 0.0f)
+            {
+                lightingVariance = Math.Max(
+                    lightingVariance,
+                    deviation / (deviation + 0.25f));
+            }
+        }
+
+        float observedError = 0.0f;
+        if (float.IsFinite(tail.Tolerance) && tail.Tolerance > 0.0f)
+        {
+            float error = float.IsFinite(tail.RelativeTailBound) &&
+                    tail.RelativeTailBound >= 0.0f
+                ? tail.RelativeTailBound
+                : float.IsFinite(tail.FixedPointDefect) &&
+                    tail.FixedPointDefect >= 0.0f
+                    ? tail.FixedPointDefect
+                    : 0.0f;
+            observedError = Math.Max(error / tail.Tolerance, 0.0f);
+        }
+
+        return new SimpleDdgiAutomaticRefinementMetrics(
+            receiverDensity,
+            Math.Clamp(geometricComplexity, 0.0f, 1.0f),
+            Math.Clamp(lightingVariance, 0.0f, 1.0f),
+            observedError);
+    }
+
+    private static float DistanceSquaredToBounds(
+        Vector3 point,
+        in BoundingBox bounds)
+    {
+        float dx = point.X < bounds.Min.X
+            ? bounds.Min.X - point.X
+            : point.X > bounds.Max.X
+                ? point.X - bounds.Max.X
+                : 0.0f;
+        float dy = point.Y < bounds.Min.Y
+            ? bounds.Min.Y - point.Y
+            : point.Y > bounds.Max.Y
+                ? point.Y - bounds.Max.Y
+                : 0.0f;
+        float dz = point.Z < bounds.Min.Z
+            ? bounds.Min.Z - point.Z
+            : point.Z > bounds.Max.Z
+                ? point.Z - bounds.Max.Z
+                : 0.0f;
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    private static bool Finite(Vector3 value) =>
+        float.IsFinite(value.X) &&
+        float.IsFinite(value.Y) &&
+        float.IsFinite(value.Z);
+
     private static ulong ResolveMemoryHeadroom(
         in MemoryHeapBudgetSnapshot snapshot) =>
         snapshot.IsAvailable &&
@@ -761,7 +944,8 @@ internal readonly record struct SimpleDdgiFrameCapabilities(
     ulong EnvironmentGiLightingSignature,
     bool EnvironmentUsesAnalyticSky,
     string ShaderBundleHash,
-    bool ReflectionConsumersAvailable);
+    bool ReflectionConsumersAvailable,
+    ulong RaySceneContentEpoch);
 
 internal readonly record struct SimpleDdgiFrameAdmissionInput(
     AdvancedGiRuntimeQualificationContext

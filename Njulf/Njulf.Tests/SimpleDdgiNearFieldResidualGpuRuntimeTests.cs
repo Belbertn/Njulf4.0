@@ -51,7 +51,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                 SimpleDdgiNearFieldResidualGpuAbi.AllowedTraceSourceTerms |
                 (uint)SimpleDdgiNearFieldTraceSourceTerm.DdgiIndirect), Is.False);
             Assert.That(SimpleDdgiNearFieldResidualGpuAllocation.ExpectedDescriptorCount(
-                CreateLayout()), Is.EqualTo(26u));
+                CreateLayout()), Is.EqualTo(25u));
         });
     }
 
@@ -84,11 +84,19 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
     }
 
     [Test]
-    public void ValidityRenderTargetUsesTheFourByteR32UintAccountingContract()
+    public void PackedHistoryRenderTargetsUseTheV16AccountingContract()
     {
-        Assert.That(
-            RenderTarget.CalculateByteSize(320, 180, Format.R32Uint),
-            Is.EqualTo(320UL * 180UL * 4UL));
+        Assert.Multiple(() =>
+        {
+            Assert.That(RenderTargetManager.NearFieldResidualValidityFormat,
+                Is.EqualTo(Format.R16Uint));
+            Assert.That(RenderTarget.CalculateByteSize(320, 180, Format.R16Uint),
+                Is.EqualTo(320UL * 180UL * 2UL));
+            Assert.That(RenderTargetManager.NearFieldResidualNormalsFormat,
+                Is.EqualTo(Format.R32Uint));
+            Assert.That(RenderTarget.CalculateByteSize(320, 180, Format.R32Uint),
+                Is.EqualTo(320UL * 180UL * 4UL));
+        });
     }
 
     [Test]
@@ -534,7 +542,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
     }
 
     [Test]
-    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV15Contract()
+    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV16Contract()
     {
         string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
         string shared = File.ReadAllText(Path.Combine(shaderDirectory,
@@ -572,7 +580,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(shared, Does.Contain("0x4335000fu"));
+            Assert.That(shared, Does.Contain("0x43350010u"));
             Assert.That(shared, Does.Contain("uvec2 receiverIdentity;"));
             Assert.That(shared, Does.Contain("uvec2 hitIdentity;"));
             Assert.That(shared, Does.Not.Contain("uvec4 identity;"));
@@ -622,6 +630,12 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(temporal, Does.Contain("historyMetadata"));
             Assert.That(temporal, Does.Contain("temporalMetadataOutput"));
             Assert.That(temporal, Does.Contain("temporalHistoryNormalOutput"));
+            Assert.That(temporal, Does.Contain(
+                "layout(r16ui, set = 0, binding = 8)"));
+            Assert.That(temporal, Does.Contain("packSnorm4x8"));
+            Assert.That(temporal, Does.Contain("unpackSnorm4x8"));
+            Assert.That(temporal, Does.Contain(
+                "SIMPLE_DDGI_NEAR_FIELD_FLAG_CAMERA_ONLY_REPROJECTION"));
             Assert.That(temporal, Does.Contain("SimpleDdgiNearFieldUnpackHistoryValidity"));
             Assert.That(temporal, Does.Contain("TryGetCurrentNeighbourhoodBounds"));
             Assert.That(temporal, Does.Contain(
@@ -719,7 +733,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(SimpleDdgiNearFieldResidualGpuAbi.Version,
-                Is.EqualTo(0x4335_000Fu));
+                Is.EqualTo(0x4335_0010u));
             Assert.That(shared, Does.Match(
                 $@"const\s+uint\s+SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION\s*=\s*{Regex.Escape(abiLiteral)}\s*;"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualHitMetadata"));
@@ -1002,7 +1016,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(recorder, Does.Contain(
                 "HistoryNormals(token.HistoryWriteIndex)"));
             Assert.That(recorder, Does.Contain(
-                "NearFieldResidualFilterScratch0"));
+                "NearFieldResidualFilterScratch1"));
             Assert.That(targets, Does.Contain(
                 "NearFieldStorageSampledDescriptor"));
             Assert.That(targets, Does.Contain("transferDestination: true"));
@@ -1187,9 +1201,9 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                     SimpleDdgiNearFieldResidualGpuResourceKind.HistoryNormal0),
                 Resource(layout.HistoryNormalBytes / 2UL,
                     SimpleDdgiNearFieldResidualGpuResourceKind.HistoryNormal1),
-                Resource(layout.FilterScratchBytes / 2UL,
+                Resource(0UL,
                     SimpleDdgiNearFieldResidualGpuResourceKind.FilterScratch0),
-                Resource(layout.FilterScratchBytes / 2UL,
+                Resource(layout.FilterScratchBytes,
                     SimpleDdgiNearFieldResidualGpuResourceKind.FilterScratch1),
                 Resource(layout.TileBuffersBytes,
                     SimpleDdgiNearFieldResidualGpuResourceKind.TileBuffers),

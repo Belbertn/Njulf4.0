@@ -551,6 +551,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         in SimpleDdgiNearFieldResidualGpuHistoryRevision revision,
         bool historyInputValid,
         bool sourceLightingEpochChanged,
+        bool cameraOnlyReprojection,
         in SimpleDdgiNearFieldResidualExecutionExtent extent)
     {
         ThrowIfDisposed();
@@ -567,6 +568,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         }
         if (_configuration.LocalAdaptiveSchedulingEnabled)
             flags |= SimpleDdgiNearFieldResidualGpuFlags.LocalAdaptiveScheduling;
+        if (cameraOnlyReprojection)
+            flags |= SimpleDdgiNearFieldResidualGpuFlags.CameraOnlyReprojection;
         var push = new GPUSimpleDdgiNearFieldResidualTemporalPushConstants
         {
             AbiVersion = SimpleDdgiNearFieldResidualGpuAbi.Version,
@@ -1353,7 +1356,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         images[0] = Sampled(_targets.NearFieldResidualRaw!, _bindlessHeap.ScreenSampler);
         images[1] = Sampled(historyRead, _bindlessHeap.ScreenSampler);
         images[2] = Sampled(momentsRead, _bindlessHeap.ScreenSampler);
-        // R32_UINT validity is fetched with texelFetch in the shader and is
+        // R16_UINT validity is fetched with texelFetch in the shader and is
         // not a linearly filterable format. Keep a nearest sampler in the
         // combined descriptor so validation and implementations that inspect
         // sampler state never see an illegal linear-filter pairing.
@@ -1431,8 +1434,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         DescriptorSet set = _filterSets[FilterSetIndex(writeBank, iteration)];
         RenderTarget input = iteration == 0
             ? HistoryRadiance(writeBank)
-            : FilterScratch((iteration - 1) & 1);
-        RenderTarget output = FilterScratch(iteration & 1);
+            : FilterTarget(iteration - 1);
+        RenderTarget output = FilterTarget(iteration);
         DescriptorImageInfo* images = stackalloc DescriptorImageInfo[4];
         images[0] = Sampled(input, _bindlessHeap.ScreenSampler);
         images[1] = Storage(output);
@@ -1459,7 +1462,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         DescriptorSet set = _frequencySets[writeBank];
         RenderTarget nearEstimate = _configuration.FilterIterationCount == 0
             ? HistoryRadiance(writeBank)
-            : FilterScratch((_configuration.FilterIterationCount - 1) & 1);
+            : FilterTarget(_configuration.FilterIterationCount - 1);
         DescriptorImageInfo* images = stackalloc DescriptorImageInfo[4];
         images[0] = Sampled(nearEstimate, _bindlessHeap.ScreenSampler);
         images[1] = Sampled(_targets.NearFieldPreparedDepthFootprint!,
@@ -1607,9 +1610,20 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
     private RenderTarget HistoryNormals(int index) => index == 0
         ? _targets.NearFieldResidualHistoryNormals0!
         : _targets.NearFieldResidualHistoryNormals1!;
-    private RenderTarget FilterScratch(int index) => index == 0
-        ? _targets.NearFieldResidualFilterScratch0!
-        : _targets.NearFieldResidualFilterScratch1!;
+    private RenderTarget FilterTarget(int iteration)
+    {
+        if ((uint)iteration >= (uint)_configuration.FilterIterationCount)
+            throw new ArgumentOutOfRangeException(nameof(iteration));
+        // For odd iteration counts start in the physical scratch image; for
+        // even counts start in RawCandidate. This always leaves the last
+        // filtered estimate in scratch, so frequency separation can safely
+        // write its final band back to RawCandidate.
+        bool rawTarget = ((iteration +
+            (_configuration.FilterIterationCount & 1)) & 1) == 0;
+        return rawTarget
+            ? _targets.NearFieldResidualRaw!
+            : _targets.NearFieldResidualFilterScratch1!;
+    }
 
     private int FilterSetIndex(int writeBank, int iteration) => checked(
         writeBank * _configuration.FilterIterationCount + iteration);

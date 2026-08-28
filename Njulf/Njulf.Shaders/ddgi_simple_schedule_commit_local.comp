@@ -565,7 +565,7 @@ void main()
             if (physicalProbeIndex < physicalProbeCapacity &&
                 physicalProbeCapacity <=
                     0xffffffffu /
-                        SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE)
+                        SIMPLE_DDGI_SCHEDULER_NEAR_VISIBILITY_WORDS_PER_PROBE)
             {
                 uint canonicalVisibilityWords = physicalProbeCapacity *
                     SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
@@ -573,13 +573,14 @@ void main()
                     pc.PrivateVisibilityAtlasOffsetWords +
                     canonicalVisibilityWords +
                     physicalProbeIndex *
-                        SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
+                        SIMPLE_DDGI_SCHEDULER_NEAR_VISIBILITY_WORDS_PER_PROBE;
                 uint publicNearVisibilityBase =
                     canonicalVisibilityWords +
                     physicalProbeIndex *
-                        SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
+                        SIMPLE_DDGI_SCHEDULER_NEAR_VISIBILITY_WORDS_PER_PROBE;
                 for (uint word = 0u;
-                     word < SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
+                     word <
+                        SIMPLE_DDGI_SCHEDULER_NEAR_VISIBILITY_WORDS_PER_PROBE;
                      word++)
                 {
                     WriteStorageWordUniform(

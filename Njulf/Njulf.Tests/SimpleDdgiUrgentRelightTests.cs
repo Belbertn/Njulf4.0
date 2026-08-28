@@ -351,7 +351,10 @@ public sealed class SimpleDdgiUrgentRelightTests
             Assert.That(sampled, Does.Contain("COMPLETE_URGENT_COMMIT"));
             Assert.That(pass, Does.Contain("ExecuteCacheReuseOnly"));
             Assert.That(pass, Does.Contain("ExecuteCanonicalOnly"));
-            Assert.That(pass, Does.Contain("ExecuteResidentLocalOnly"));
+            Assert.That(pass, Does.Contain(
+                "ExecuteResidentLocalAndPropagation"));
+            Assert.That(pass, Does.Contain(
+                "seed the existing sparse-residual queue"));
             Assert.That(pass, Does.Contain("ExecuteSampledOnly"));
             Assert.That(pass, Does.Not.Contain("AccelerationStructure"));
             Assert.That(scheduler, Does.Contain("_layout.Counters.Offset"));

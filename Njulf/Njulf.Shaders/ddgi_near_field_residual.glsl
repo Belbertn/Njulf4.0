@@ -6,10 +6,11 @@
 // C5 is intentionally a separate, opt-in ABI.  These stages are not part of
 // the global bindless contract until the renderer has explicitly created the
 // source attachment, history identity resources, barriers, and dispatch path.
-// V14 separates trace work from resolve coverage and owns a distinct 16-byte
-// double-buffered scheduler history.
+// V16 separates trace work from resolve coverage, packs temporal history,
+// reuses the raw candidate as one filtering peer, and retains a distinct
+// 16-byte double-buffered scheduler history.
 // Keep this in lockstep with SimpleDdgiNearFieldResidualGpuAbi.
-const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000fu;
+const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x43350010u;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_MAGIC = 0x4335544du;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS = 32u;
 const uint SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS = 64u;
@@ -37,6 +38,7 @@ const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_LOCAL_ADAPTIVE_SCHEDULING = 1u << 11u;
 const uint SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_SHIFT = 12u;
 const uint SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_MASK = 0xfu <<
     SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_SHIFT;
+const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_CAMERA_ONLY_REPROJECTION = 1u << 16u;
 
 // Raw values of GlobalIlluminationDebugView. They travel through a dedicated
 // C5 frame channel and never enter the legacy forward debug-number namespace.
@@ -76,7 +78,9 @@ const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_LENGTH_SHIFT = 1u;
 const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_LENGTH_MASK = 0x7fu <<
     SIMPLE_DDGI_NEAR_FIELD_HISTORY_LENGTH_SHIFT;
 const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_SHIFT = 8u;
-const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_MASK = 0x00ffffffu <<
+// Both banks are fully initialized on every history reset. An eight-bit epoch
+// is therefore a stale-bank guard, not the sole lifetime authority.
+const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_MASK = 0xffu <<
     SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_SHIFT;
 
 // Exactly twelve 32-bit words (48 bytes). Flags occupy the lower 16 bits of
@@ -528,7 +532,7 @@ uint SimpleDdgiNearFieldPackHistoryValidity(uint historyLength, uint historyEpoc
         SIMPLE_DDGI_NEAR_FIELD_MAX_HISTORY_LENGTH);
     return SIMPLE_DDGI_NEAR_FIELD_HISTORY_VALID_BIT |
         (length << SIMPLE_DDGI_NEAR_FIELD_HISTORY_LENGTH_SHIFT) |
-        ((historyEpoch & 0x00ffffffu) <<
+        ((historyEpoch & 0xffu) <<
             SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_SHIFT);
 }
 
@@ -542,7 +546,7 @@ bool SimpleDdgiNearFieldUnpackHistoryValidity(uint packed,
     return (packed & SIMPLE_DDGI_NEAR_FIELD_HISTORY_VALID_BIT) != 0u &&
         historyLength >= 1u &&
         historyLength <= SIMPLE_DDGI_NEAR_FIELD_MAX_HISTORY_LENGTH &&
-        epoch == (expectedHistoryEpoch & 0x00ffffffu);
+        epoch == (expectedHistoryEpoch & 0xffu);
 }
 
 bool SimpleDdgiNearFieldIsValidCandidate(vec4 residual)

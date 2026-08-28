@@ -99,7 +99,7 @@ public sealed class DdgiContentDependentContractsTests
     }
 
     [Test]
-    public void HighPreset_ProvisionsDirectionalL2ForFroxelFog()
+    public void HighPreset_ProvisionsGraduatedDynamicGeometryAndDirectionalL2()
     {
         var settings = new GlobalIlluminationSettings();
         settings.ApplyDdgiQualityTier(DdgiQualityTier.DdgiHigh);
@@ -109,9 +109,9 @@ public sealed class DdgiContentDependentContractsTests
             Assert.That(settings.SimpleDdgiLocalLightSamplingMode,
                 Is.EqualTo(SimpleDdgiLocalLightSamplingMode.Auto));
             Assert.That(settings.DdgiSkinnedGeometryMode,
-                Is.EqualTo(DdgiSkinnedGeometryMode.ConservativeProxy));
+                Is.EqualTo(DdgiSkinnedGeometryMode.CurrentPose));
             Assert.That(settings.EffectiveDdgiSkinnedGeometryMode,
-                Is.EqualTo(DdgiSkinnedGeometryMode.ConservativeProxy));
+                Is.EqualTo(DdgiSkinnedGeometryMode.CurrentPose));
             Assert.That(settings.SimpleDdgiDirectionalRadianceMode,
                 Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
             Assert.That(settings.ContentDependentRollout.ApprovedFeatures,
@@ -122,8 +122,10 @@ public sealed class DdgiContentDependentContractsTests
                     DdgiContentRolloutPolicy.ProductionBaseline));
             Assert.That(settings.ActiveContentDependentFeatures &
                 DdgiContentFeature.FoliageGeometry,
-                Is.EqualTo(DdgiContentFeature.None),
-                "The RTX 3060-oriented High tier keeps foliage proxies Ultra-only.");
+                Is.EqualTo(DdgiContentFeature.FoliageGeometry));
+            Assert.That(settings.EffectiveDdgiFoliageGeometryMode,
+                Is.EqualTo(DdgiFoliageGeometryMode.AuthoredMeshOnly),
+                "High admits bounded authored foliage; procedural proxies remain Ultra-only.");
             Assert.That(settings.EffectiveSimpleDdgiDirectionalRadianceMode,
                 Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
             Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,

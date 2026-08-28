@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -65,7 +66,25 @@ namespace Njulf.Rendering.Resources
         private readonly Dictionary<DynamicBlasKey, DynamicBottomLevelAccelerationStructure>
             _dynamicBlasPool = new();
         private readonly List<int> _dynamicAdmissionScratch = new();
+        private readonly List<int>[] _dynamicClassAdmissionScratch =
+        [
+            new(),
+            new(),
+            new(),
+            new(),
+            new()
+        ];
+        private readonly int[] _dynamicClassAdmissionCursors = new int[5];
         private readonly HashSet<Guid> _activeDynamicObjectScratch = new();
+        private readonly List<DdgiDynamicGeometrySubmission>
+            _dynamicGeometrySubmissionScratch = new(
+                BindlessIndex.DdgiDynamicGeometryMaximumSubmissionsPerFrame);
+        private readonly DynamicGeometryCollectionSink
+            _dynamicGeometryCollectionSink;
+        private readonly DdgiDynamicGeometryGpuBudgetGovernor
+            _dynamicGeometryGpuBudgetGovernor = new();
+        private readonly int[] _dynamicBuildCountsPerFrameSlot =
+            new int[RenderingConstants.FramesInFlight];
         // Vulkan build-size queries are stable for a mesh-buffer generation but
         // expensive enough to dominate a no-build frame when hundreds of meshes
         // are reconsidered by the residency policy.
@@ -190,6 +209,12 @@ namespace Njulf.Rendering.Resources
         private int _lastDynamicBlasTopologyMismatchCount;
         private ulong _lastDynamicBlasScratchBytes;
         private ulong _lastDynamicBlasPrimitiveCount;
+        private int _lastDynamicProviderCount;
+        private int _lastDynamicProviderSubmittedCount;
+        private int _lastDynamicProviderAcceptedCount;
+        private int _lastDynamicProviderRejectedCount;
+        private string _lastDynamicProviderFailureReason = string.Empty;
+        private int _lastDynamicGpuGovernedBuildLimit;
 
         public AccelerationStructureManager(
             VulkanContext context,
@@ -204,6 +229,10 @@ namespace Njulf.Rendering.Resources
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
             _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
+            _dynamicGeometryCollectionSink = new DynamicGeometryCollectionSink(
+                _bufferManager,
+                _materialManager,
+                _dynamicGeometrySubmissionScratch);
             _opacityMicromapRuntimeRegistrations =
                 opacityMicromapRuntimeRegistrations;
             if (_opacityMicromapRuntimeRegistrations is not null)
@@ -239,6 +268,32 @@ namespace Njulf.Rendering.Resources
         }
 
         public bool Supported => _context.RayQuerySupported && _khrAccelerationStructure != null;
+
+        /// <summary>
+        /// Consumes a fence-complete dynamic-BLAS timestamp for the supplied
+        /// frame slot. This must run before that slot is reused for recording.
+        /// </summary>
+        public void ObserveCompletedDynamicGeometryGpuTiming(
+            FrameTimingSnapshot timings,
+            int frameIndex)
+        {
+            ArgumentNullException.ThrowIfNull(timings);
+            ValidateCompactionFrameIndex(frameIndex);
+
+            int buildCount = _dynamicBuildCountsPerFrameSlot[frameIndex];
+            if (buildCount <= 0 ||
+                !timings.TryGetPass(
+                    "DynamicAccelerationStructureBlasPass",
+                    out PassTiming timing) ||
+                !timing.GpuAvailable)
+            {
+                return;
+            }
+
+            _dynamicGeometryGpuBudgetGovernor.Observe(
+                timing.GpuMicroseconds,
+                buildCount);
+        }
         /// <summary>
         /// The sole C1 native lifecycle boundary owned by this AS manager.
         /// It deliberately remains fail-closed until the renderer provides an
@@ -694,6 +749,11 @@ namespace Njulf.Rendering.Resources
 
             ValidateCompactionFrameIndex(frameIndex);
             _preparedInstanceScratch.Clear();
+            _lastDynamicProviderCount = 0;
+            _lastDynamicProviderSubmittedCount = 0;
+            _lastDynamicProviderAcceptedCount = 0;
+            _lastDynamicProviderRejectedCount = 0;
+            _lastDynamicProviderFailureReason = string.Empty;
             _preparedRaySceneRequirement = requirement;
             _preparedRaySceneSupportedCategories = ResolveSupportedCategories(dynamicPolicy);
             _preparedRaySceneCoverageFailure =
@@ -714,7 +774,8 @@ namespace Njulf.Rendering.Resources
                     dynamicPolicy.SkinnedGeometryMode,
                     frameIndex,
                     dynamicPolicy.FoliageGeometryMode,
-                    foliageProxyFrame);
+                    foliageProxyFrame,
+                    dynamicPolicy);
             }
 
             ulong contentSignature = CreateRaySceneContentSignature(
@@ -768,7 +829,18 @@ namespace Njulf.Rendering.Resources
                 transparentCount,
                 decalCount,
                 frameIndex,
-                sceneContentRevision);
+                sceneContentRevision)
+            {
+                DynamicProviderCount = _lastDynamicProviderCount,
+                DynamicProviderSubmittedCount =
+                    _lastDynamicProviderSubmittedCount,
+                DynamicProviderAcceptedCount =
+                    _lastDynamicProviderAcceptedCount,
+                DynamicProviderRejectedCount =
+                    _lastDynamicProviderRejectedCount,
+                DynamicProviderFailureReason =
+                    _lastDynamicProviderFailureReason
+            };
         }
 
         /// <summary>
@@ -823,6 +895,7 @@ namespace Njulf.Rendering.Resources
             _residencyPolicy = prepared.ResidencyPolicy;
             ValidateCompactionFrameIndex(frameIndex);
             _blasCompactionQueryPoolResetThisFrame[frameIndex] = false;
+            _dynamicBuildCountsPerFrameSlot[frameIndex] = 0;
 
             // BeginFrame has already observed this frame slot's fence. Query
             // results are therefore read without VK_QUERY_RESULT_WAIT_BIT and
@@ -941,10 +1014,30 @@ namespace Njulf.Rendering.Resources
                 try
                 {
                     ProcessReadyBlasCompactions(commandBuffer);
-                    EnsureDynamicBottomLevelAccelerationStructures(
-                        _instanceScratch,
-                        skinnedVertexBuffer,
-                        commandBuffer);
+                    bool dynamicBuildRecorded = _instanceScratch.Exists(
+                        static instance => instance.UsesDynamicBlas);
+                    if (dynamicBuildRecorded)
+                    {
+                        gpuTimestamps?.BeginPass(
+                            commandBuffer,
+                            frameIndex,
+                            "DynamicAccelerationStructureBlasPass");
+                    }
+                    try
+                    {
+                        EnsureDynamicBottomLevelAccelerationStructures(
+                            _instanceScratch,
+                            skinnedVertexBuffer,
+                            commandBuffer);
+                    }
+                    finally
+                    {
+                        if (dynamicBuildRecorded)
+                            gpuTimestamps?.EndPass(commandBuffer, frameIndex);
+                    }
+                    _dynamicBuildCountsPerFrameSlot[frameIndex] = checked(
+                        _lastDynamicBlasFullBuildCount +
+                        _lastDynamicBlasRefitCount);
                     EnsureBottomLevelAccelerationStructures(
                         _instanceScratch,
                         commandBuffer,
@@ -1048,7 +1141,8 @@ namespace Njulf.Rendering.Resources
             DdgiSkinnedGeometryMode skinnedGeometryMode = DdgiSkinnedGeometryMode.ConservativeProxy,
             int frameSlot = 0,
             DdgiFoliageGeometryMode foliageGeometryMode = DdgiFoliageGeometryMode.Excluded,
-            DdgiFoliageProxyFrame? foliageProxyFrame = null)
+            DdgiFoliageProxyFrame? foliageProxyFrame = null,
+            DdgiDynamicRayScenePolicy? dynamicPolicy = null)
         {
             instances.Clear();
 
@@ -1188,6 +1282,15 @@ namespace Njulf.Rendering.Resources
                 }
             }
 
+            if (dynamicPolicy is { DynamicProviderGeometryEnabled: true } policy)
+            {
+                CollectDynamicGeometryProviderInstances(
+                    scene,
+                    instances,
+                    policy,
+                    frameSlot);
+            }
+
             CollectFoliageProxyInstances(
                 foliageProxyFrame,
                 instances,
@@ -1195,6 +1298,292 @@ namespace Njulf.Rendering.Resources
                 transparentGeometryMode,
                 foliageGeometryMode,
                 frameSlot);
+        }
+
+        private void CollectDynamicGeometryProviderInstances(
+            Scene scene,
+            List<StaticOpaqueInstance> instances,
+            in DdgiDynamicRayScenePolicy policy,
+            int frameSlot)
+        {
+            _lastDynamicProviderCount = 0;
+            _lastDynamicProviderSubmittedCount = 0;
+            _lastDynamicProviderAcceptedCount = 0;
+            _lastDynamicProviderRejectedCount = 0;
+            _lastDynamicProviderFailureReason = string.Empty;
+
+            var context = new DdgiDynamicGeometryFrameContext(
+                _frameSerial + 1UL,
+                Math.Max(1UL, _resourceGeneration),
+                frameSlot);
+            _dynamicGeometryCollectionSink.Reset(context);
+            foreach (IDdgiDynamicGeometryProvider provider in
+                     scene.GetComponents<IDdgiDynamicGeometryProvider>())
+            {
+                _lastDynamicProviderCount++;
+                int checkpoint = _dynamicGeometryCollectionSink.Checkpoint;
+                try
+                {
+                    checkpoint = _dynamicGeometryCollectionSink.BeginProvider(
+                        provider.StableSourceId);
+                    provider.CollectDdgiDynamicGeometry(
+                        context,
+                        _dynamicGeometryCollectionSink);
+                    _dynamicGeometryCollectionSink.CommitProvider();
+                }
+                catch (Exception exception) when (exception is
+                    ArgumentException or InvalidOperationException or
+                    OverflowException)
+                {
+                    _dynamicGeometryCollectionSink.RollbackProvider(checkpoint);
+                    _lastDynamicProviderFailureReason =
+                        "dynamic-provider-collection-" +
+                        exception.GetType().Name;
+                }
+            }
+
+            _lastDynamicProviderSubmittedCount =
+                _dynamicGeometryCollectionSink.SubmittedCount;
+            _lastDynamicProviderRejectedCount =
+                _dynamicGeometryCollectionSink.RejectedCount;
+            _dynamicGeometrySubmissionScratch.Sort(
+                static (left, right) =>
+                {
+                    int comparison = left.StableSourceId.CompareTo(
+                        right.StableSourceId);
+                    if (comparison != 0)
+                        return comparison;
+                    comparison = left.GeometryPartId.CompareTo(
+                        right.GeometryPartId);
+                    return comparison != 0
+                        ? comparison
+                        : left.ContentClass.CompareTo(right.ContentClass);
+                });
+
+            for (int submissionIndex = 0;
+                 submissionIndex < _dynamicGeometrySubmissionScratch.Count;
+                 submissionIndex++)
+            {
+                DdgiDynamicGeometrySubmission submission =
+                    _dynamicGeometrySubmissionScratch[submissionIndex];
+                if (!TryCreateDynamicProviderInstance(
+                        submission,
+                        policy,
+                        frameSlot,
+                        submissionIndex,
+                        out StaticOpaqueInstance instance))
+                {
+                    _lastDynamicProviderRejectedCount++;
+                    continue;
+                }
+
+                instances.Add(instance);
+                _lastDynamicProviderAcceptedCount++;
+            }
+        }
+
+        private bool TryCreateDynamicProviderInstance(
+            in DdgiDynamicGeometrySubmission submission,
+            in DdgiDynamicRayScenePolicy policy,
+            int frameSlot,
+            int submissionIndex,
+            out StaticOpaqueInstance instance)
+        {
+            instance = default;
+            if (_registeredBindlessHeap is null)
+            {
+                _lastDynamicProviderFailureReason =
+                    "dynamic-provider-bindless-heap-unavailable";
+                return false;
+            }
+
+            try
+            {
+                int vertexBufferIndex =
+                    BindlessIndex.GetDdgiDynamicGeometryVertexBufferIndex(
+                        frameSlot,
+                        submissionIndex);
+                int indexBufferIndex =
+                    BindlessIndex.GetDdgiDynamicGeometryIndexBufferIndex(
+                        frameSlot,
+                        submissionIndex);
+                _registeredBindlessHeap.RegisterStorageBuffer(
+                    vertexBufferIndex,
+                    _bufferManager.GetBuffer(submission.VertexBuffer),
+                    0UL,
+                    _bufferManager.GetBufferSize(submission.VertexBuffer));
+                _registeredBindlessHeap.RegisterStorageBuffer(
+                    indexBufferIndex,
+                    _bufferManager.GetBuffer(submission.IndexBuffer),
+                    0UL,
+                    _bufferManager.GetBufferSize(submission.IndexBuffer));
+
+                AccelerationStructureGeometryDomain domain =
+                    submission.ContentClass switch
+                    {
+                        DdgiDynamicGeometryContentClass.Skinned =>
+                            AccelerationStructureGeometryDomain.Skinned,
+                        DdgiDynamicGeometryContentClass.Foliage =>
+                            AccelerationStructureGeometryDomain.Foliage,
+                        _ => AccelerationStructureGeometryDomain.Dynamic
+                    };
+                if (!TryGetRayQueryMaterial(
+                        submission.Material,
+                        $"DDGI dynamic source {submission.StableSourceId:X16}/" +
+                        submission.GeometryPartId,
+                        submission.ContentClass ==
+                            DdgiDynamicGeometryContentClass.Skinned,
+                        domain,
+                        out uint materialIndex,
+                        out GeometryInstanceFlagsKHR instanceFlags,
+                        out RayQueryMaterialContract materialContract,
+                        policy.AlphaMaskedTransportEnabled,
+                        policy.TransparentGeometryMode,
+                        policy.GeometryDecalsEnabled,
+                        policy.SkinnedGeometryMode,
+                        policy.FoliageGeometryMode))
+                {
+                    _lastDynamicProviderFailureReason =
+                        "dynamic-provider-material-policy-rejected";
+                    return false;
+                }
+
+                var meshInfo = new MeshInfo
+                {
+                    BoundingBoxMin = ToNumerics(submission.LocalBounds.Min),
+                    BoundingBoxMax = ToNumerics(submission.LocalBounds.Max),
+                    VertexOffset = submission.VertexOffset,
+                    VertexCount = submission.VertexCount,
+                    IndexOffset = submission.IndexOffset,
+                    IndexCount = submission.IndexCount,
+                    IsSkinned = submission.ContentClass ==
+                        DdgiDynamicGeometryContentClass.Skinned
+                };
+                Guid objectIdentity = CreateDynamicProviderObjectIdentity(
+                    submission.StableSourceId,
+                    submission.GeometryPartId,
+                    submission.ContentClass);
+                uint stableIdentity = StableInstanceIdentity(objectIdentity);
+                DdgiRayGeometryFlags geometryFlags =
+                    materialContract.GeometryFlags |
+                    DdgiRayGeometryFlags.DynamicVertexSource;
+                if (submission.ContentClass ==
+                    DdgiDynamicGeometryContentClass.Foliage)
+                {
+                    geometryFlags |= DdgiRayGeometryFlags.Foliage;
+                }
+                if (submission.ContentClass ==
+                    DdgiDynamicGeometryContentClass.DeformingWater)
+                {
+                    geometryFlags |= DdgiRayGeometryFlags.WaterSurface;
+                }
+
+                DdgiRayGeometryClass geometryClass =
+                    materialContract.ResolveGeometryClass(domain);
+                if (submission.ContentClass ==
+                    DdgiDynamicGeometryContentClass.Foliage)
+                {
+                    geometryClass = DdgiRayGeometryClass.ProceduralFoliageProxy;
+                }
+                else if (submission.ContentClass ==
+                         DdgiDynamicGeometryContentClass.DeformingWater)
+                {
+                    geometryClass = DdgiRayGeometryClass.WaterSurface;
+                }
+                else if (submission.ContentClass ==
+                         DdgiDynamicGeometryContentClass.Skinned)
+                {
+                    geometryClass = DdgiRayGeometryClass.SkinnedCurrentPose;
+                }
+
+                instance = new StaticOpaqueInstance(
+                    MeshHandle.Invalid,
+                    meshInfo,
+                    materialIndex,
+                    submission.WorldMatrix,
+                    domain,
+                    instanceFlags)
+                {
+                    ObjectIdentity = objectIdentity,
+                    StableInstanceIdentity = stableIdentity,
+                    MaterialRevision = materialContract.MaterialRevision,
+                    TransformRevision = submission.TransformRevision,
+                    PackedAlpha = materialContract.PackedAlpha,
+                    PackedDecalLayerAndOrder = WithStableDecalOrder(
+                        materialContract.PackedDecalLayerAndOrder,
+                        stableIdentity),
+                    DecalDepthTolerance = materialContract.DecalDepthTolerance,
+                    DecalDepthBias = materialContract.DecalDepthBias,
+                    GeometryClass = geometryClass,
+                    GeometryFlags = geometryFlags,
+                    VertexBufferIndex = checked((uint)vertexBufferIndex),
+                    IndexBufferIndex = checked((uint)indexBufferIndex),
+                    VertexOffset = submission.VertexOffset,
+                    VertexStride = submission.VertexStride,
+                    VertexFormat = submission.VertexFormat,
+                    PositionOffset = submission.PositionOffset,
+                    NormalOffset = submission.NormalOffset,
+                    TangentOffset = submission.TangentOffset,
+                    TexCoord0Offset = submission.TexCoord0Offset,
+                    TexCoord1Offset = submission.TexCoord1Offset,
+                    ColorOffset = submission.ColorOffset,
+                    IndexOffset = submission.IndexOffset,
+                    GeometryVertexBuffer = submission.VertexBuffer,
+                    GeometryIndexBuffer = submission.IndexBuffer,
+                    UsesDynamicBlas = true,
+                    FrameSlot = frameSlot,
+                    DynamicContentClass = submission.ContentClass,
+                    DynamicBuildPreference = submission.BuildPreference,
+                    DynamicGeometryPartId = submission.GeometryPartId,
+                    DynamicTopologyRevision = submission.TopologyRevision,
+                    ExternalDynamicGeometry = true,
+                    PreviousWorldBounds = submission.PreviousWorldBounds,
+                    CurrentWorldBounds = submission.CurrentWorldBounds,
+                    InfluenceBounds = submission.InfluenceBounds,
+                    RepresentationGeneration = FoldDynamicRepresentation(
+                        submission)
+                };
+                return true;
+            }
+            catch (Exception exception) when (exception is
+                ArgumentException or InvalidOperationException or
+                OverflowException)
+            {
+                _lastDynamicProviderFailureReason =
+                    "dynamic-provider-publication-" +
+                    exception.GetType().Name;
+                return false;
+            }
+        }
+
+        private static System.Numerics.Vector3 ToNumerics(CoreVector3 value) =>
+            new(value.X, value.Y, value.Z);
+
+        private static Guid CreateDynamicProviderObjectIdentity(
+            ulong stableSourceId,
+            uint geometryPartId,
+            DdgiDynamicGeometryContentClass contentClass)
+        {
+            Span<byte> bytes = stackalloc byte[16];
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes, stableSourceId);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes[8..], geometryPartId);
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes[12..],
+                0x4444_0000U | (uint)contentClass);
+            return new Guid(bytes);
+        }
+
+        private static uint FoldDynamicRepresentation(
+            in DdgiDynamicGeometrySubmission submission)
+        {
+            ulong generation = submission.ResourceGeneration;
+            generation ^= System.Numerics.BitOperations.RotateLeft(
+                submission.TopologyRevision,
+                13);
+            generation ^= System.Numerics.BitOperations.RotateLeft(
+                submission.DeformationRevision,
+                29);
+            return FoldContentGeneration(generation);
         }
 
         private void CollectFoliageProxyInstances(
@@ -1651,6 +2040,8 @@ namespace Njulf.Rendering.Resources
 
         private static CoreBoundingBox GetInstanceWorldBounds(StaticOpaqueInstance instance)
         {
+            if (instance.ExternalDynamicGeometry)
+                return instance.CurrentWorldBounds;
             CoreBoundingBox localBounds = new(
                 new CoreVector3(
                     instance.MeshInfo.BoundingBoxMin.X,
@@ -1894,23 +2285,16 @@ namespace Njulf.Rendering.Resources
         {
             _dynamicAdmissionScratch.Clear();
             _activeDynamicObjectScratch.Clear();
-            bool hasCurrentPoseSkinnedCandidates = false;
-            bool hasProceduralFoliageCandidates = false;
+            Span<bool> activeContentClasses = stackalloc bool[5];
             for (int i = 0; i < instances.Count; i++)
             {
                 if (!instances[i].UsesDynamicBlas)
                     continue;
                 _dynamicAdmissionScratch.Add(i);
                 _activeDynamicObjectScratch.Add(instances[i].ObjectIdentity);
-                if (ResolveDynamicBlasContentClass(instances[i]) ==
-                    DdgiDynamicBlasContentClass.ProceduralFoliage)
-                {
-                    hasProceduralFoliageCandidates = true;
-                }
-                else
-                {
-                    hasCurrentPoseSkinnedCandidates = true;
-                }
+                int contentClass = checked((int)
+                    ResolveDynamicBlasContentClass(instances[i]));
+                activeContentClasses[contentClass] = true;
             }
 
             PruneInactiveDynamicBottomLevelAccelerationStructures();
@@ -1932,36 +2316,37 @@ namespace Njulf.Rendering.Resources
                     ? comparison
                     : left.StableInstanceIdentity.CompareTo(right.StableInstanceIdentity);
             });
+            ApplyDynamicClassFairOrdering(instances, policy);
 
             int admittedBuilds = 0;
+            int maximumBuildsThisFrame =
+                _dynamicGeometryGpuBudgetGovernor.ResolveMaximumBuilds(
+                    policy.EffectiveMaximumBuildsPerFrame,
+                    policy.EffectiveDynamicGeometryBudgets
+                        .GpuTimeBudgetMicroseconds);
+            _lastDynamicGpuGovernedBuildLimit = maximumBuildsThisFrame;
             ulong admittedPrimitives = 0;
             ulong plannedAdditionalStorage = 0;
-            int admittedSkinnedBuilds = 0;
-            int admittedFoliageBuilds = 0;
-            ulong admittedSkinnedPrimitives = 0;
-            ulong admittedFoliagePrimitives = 0;
-            ulong plannedSkinnedStorage = 0;
-            ulong plannedFoliageStorage = 0;
-            ulong residentSkinnedStorage = 0;
-            ulong residentFoliageStorage = 0;
+            Span<int> admittedClassBuilds = stackalloc int[5];
+            Span<ulong> admittedClassPrimitives = stackalloc ulong[5];
+            Span<ulong> plannedClassStorage = stackalloc ulong[5];
+            Span<ulong> residentClassStorage = stackalloc ulong[5];
             foreach (DynamicBottomLevelAccelerationStructure dynamicBlas in
                      _dynamicBlasPool.Values)
             {
-                if (dynamicBlas.ContentClass ==
-                    DdgiDynamicBlasContentClass.ProceduralFoliage)
-                {
-                    residentFoliageStorage = checked(
-                        residentFoliageStorage + dynamicBlas.Size);
-                }
-                else
-                {
-                    residentSkinnedStorage = checked(
-                        residentSkinnedStorage + dynamicBlas.Size);
-                }
+                int classIndex = checked((int)dynamicBlas.ContentClass);
+                residentClassStorage[classIndex] = checked(
+                    residentClassStorage[classIndex] + dynamicBlas.Size);
             }
-            bool mixedDynamicContent =
-                hasCurrentPoseSkinnedCandidates &&
-                hasProceduralFoliageCandidates;
+            int activeContentClassCount = 0;
+            for (int contentClass = 0;
+                 contentClass < activeContentClasses.Length;
+                 contentClass++)
+            {
+                if (activeContentClasses[contentClass])
+                    activeContentClassCount++;
+            }
+            bool mixedDynamicContent = activeContentClassCount > 1;
             for (int candidate = 0; candidate < _dynamicAdmissionScratch.Count; candidate++)
             {
                 int instanceIndex = _dynamicAdmissionScratch[candidate];
@@ -1972,14 +2357,10 @@ namespace Njulf.Rendering.Resources
                     policy.ResolveContentBudget(
                         contentClass,
                         mixedDynamicContent);
-                int classAdmittedBuilds = contentClass ==
-                    DdgiDynamicBlasContentClass.ProceduralFoliage
-                        ? admittedFoliageBuilds
-                        : admittedSkinnedBuilds;
-                ulong classAdmittedPrimitives = contentClass ==
-                    DdgiDynamicBlasContentClass.ProceduralFoliage
-                        ? admittedFoliagePrimitives
-                        : admittedSkinnedPrimitives;
+                int classIndex = checked((int)contentClass);
+                int classAdmittedBuilds = admittedClassBuilds[classIndex];
+                ulong classAdmittedPrimitives =
+                    admittedClassPrimitives[classIndex];
                 uint primitiveCount = instance.MeshInfo.IndexCount / 3u;
                 BufferHandle dynamicVertexBuffer =
                     ResolveDynamicVertexBuffer(instance, skinnedVertexBuffer);
@@ -1989,7 +2370,7 @@ namespace Njulf.Rendering.Resources
                     dynamicVertexBuffer.IsValid &&
                     dynamicIndexBuffer.IsValid &&
                     primitiveCount > 0 &&
-                    admittedBuilds < policy.EffectiveMaximumBuildsPerFrame &&
+                    admittedBuilds < maximumBuildsThisFrame &&
                     admittedPrimitives + primitiveCount <=
                         (ulong)policy.EffectiveMaximumPrimitivesPerFrame &&
                     classAdmittedBuilds <
@@ -2023,14 +2404,10 @@ namespace Njulf.Rendering.Resources
                     requiredScratch = hasCompatible && sizes.UpdateScratchSize > 0
                         ? sizes.UpdateScratchSize
                         : sizes.BuildScratchSize;
-                    ulong classResidentStorage = contentClass ==
-                        DdgiDynamicBlasContentClass.ProceduralFoliage
-                            ? residentFoliageStorage
-                            : residentSkinnedStorage;
-                    ulong classPlannedStorage = contentClass ==
-                        DdgiDynamicBlasContentClass.ProceduralFoliage
-                            ? plannedFoliageStorage
-                            : plannedSkinnedStorage;
+                    ulong classResidentStorage =
+                        residentClassStorage[classIndex];
+                    ulong classPlannedStorage =
+                        plannedClassStorage[classIndex];
                     bool classStorageAvailable = requiredStorage == 0UL ||
                         !WouldExceedBudget(
                             classResidentStorage,
@@ -2047,28 +2424,19 @@ namespace Njulf.Rendering.Resources
 
                 if (!canAttempt)
                 {
-                    if (TryEvictRejectedDynamicBottomLevelAccelerationStructure(
+                    if (!instance.ExternalDynamicGeometry &&
+                        TryEvictRejectedDynamicBottomLevelAccelerationStructure(
                             instance,
                             out ulong removedStorage))
                     {
-                        if (contentClass ==
-                            DdgiDynamicBlasContentClass.ProceduralFoliage)
-                        {
-                            residentFoliageStorage =
-                                residentFoliageStorage >= removedStorage
-                                    ? residentFoliageStorage - removedStorage
-                                    : 0UL;
-                        }
-                        else
-                        {
-                            residentSkinnedStorage =
-                                residentSkinnedStorage >= removedStorage
-                                    ? residentSkinnedStorage - removedStorage
-                                    : 0UL;
-                        }
+                        residentClassStorage[classIndex] =
+                            residentClassStorage[classIndex] >= removedStorage
+                                ? residentClassStorage[classIndex] - removedStorage
+                                : 0UL;
                     }
-                    if (instance.GeometryClass ==
-                        DdgiRayGeometryClass.ProceduralFoliageProxy)
+                    if (instance.ExternalDynamicGeometry ||
+                        instance.GeometryClass ==
+                            DdgiRayGeometryClass.ProceduralFoliageProxy)
                     {
                         instances[instanceIndex] = instance with
                         {
@@ -2090,23 +2458,11 @@ namespace Njulf.Rendering.Resources
                 admittedBuilds++;
                 admittedPrimitives = checked(admittedPrimitives + primitiveCount);
                 plannedAdditionalStorage = checked(plannedAdditionalStorage + requiredStorage);
-                if (contentClass ==
-                    DdgiDynamicBlasContentClass.ProceduralFoliage)
-                {
-                    admittedFoliageBuilds++;
-                    admittedFoliagePrimitives = checked(
-                        admittedFoliagePrimitives + primitiveCount);
-                    plannedFoliageStorage = checked(
-                        plannedFoliageStorage + requiredStorage);
-                }
-                else
-                {
-                    admittedSkinnedBuilds++;
-                    admittedSkinnedPrimitives = checked(
-                        admittedSkinnedPrimitives + primitiveCount);
-                    plannedSkinnedStorage = checked(
-                        plannedSkinnedStorage + requiredStorage);
-                }
+                admittedClassBuilds[classIndex]++;
+                admittedClassPrimitives[classIndex] = checked(
+                    admittedClassPrimitives[classIndex] + primitiveCount);
+                plannedClassStorage[classIndex] = checked(
+                    plannedClassStorage[classIndex] + requiredStorage);
                 _lastDynamicBlasScratchBytes = Math.Max(
                     _lastDynamicBlasScratchBytes,
                     requiredScratch);
@@ -2116,11 +2472,101 @@ namespace Njulf.Rendering.Resources
                 instance.GeometryClass == DdgiRayGeometryClass.Invalid);
         }
 
+        private void ApplyDynamicClassFairOrdering(
+            IReadOnlyList<StaticOpaqueInstance> instances,
+            in DdgiDynamicRayScenePolicy policy)
+        {
+            for (int contentClass = 0;
+                 contentClass < _dynamicClassAdmissionScratch.Length;
+                 contentClass++)
+            {
+                _dynamicClassAdmissionScratch[contentClass].Clear();
+                _dynamicClassAdmissionCursors[contentClass] = 0;
+            }
+
+            for (int index = 0; index < _dynamicAdmissionScratch.Count; index++)
+            {
+                int instanceIndex = _dynamicAdmissionScratch[index];
+                int contentClass = checked((int)ResolveDynamicBlasContentClass(
+                    instances[instanceIndex]));
+                _dynamicClassAdmissionScratch[contentClass].Add(instanceIndex);
+            }
+
+            _dynamicAdmissionScratch.Clear();
+            int startClass = checked((int)(_frameSerial %
+                (ulong)_dynamicClassAdmissionScratch.Length));
+
+            // Give every active class its nearest candidate before weighted
+            // borrowing. Rotating the first class prevents a permanently full
+            // budget from favoring an enum value.
+            for (int offset = 0;
+                 offset < _dynamicClassAdmissionScratch.Length;
+                 offset++)
+            {
+                int contentClass =
+                    (startClass + offset) % _dynamicClassAdmissionScratch.Length;
+                List<int> candidates =
+                    _dynamicClassAdmissionScratch[contentClass];
+                if (candidates.Count == 0)
+                    continue;
+                _dynamicAdmissionScratch.Add(candidates[0]);
+                _dynamicClassAdmissionCursors[contentClass] = 1;
+            }
+
+            bool emitted;
+            do
+            {
+                emitted = false;
+                for (int offset = 0;
+                     offset < _dynamicClassAdmissionScratch.Length;
+                     offset++)
+                {
+                    int contentClass = (startClass + offset) %
+                        _dynamicClassAdmissionScratch.Length;
+                    List<int> candidates =
+                        _dynamicClassAdmissionScratch[contentClass];
+                    int cursor = _dynamicClassAdmissionCursors[contentClass];
+                    int weight = policy.EffectiveDynamicGeometryBudgets.For(
+                        ToPublicDynamicContentClass(
+                            (DdgiDynamicBlasContentClass)contentClass)).Weight;
+                    int end = Math.Min(candidates.Count, cursor + weight);
+                    while (cursor < end)
+                    {
+                        _dynamicAdmissionScratch.Add(candidates[cursor++]);
+                        emitted = true;
+                    }
+                    _dynamicClassAdmissionCursors[contentClass] = cursor;
+                }
+            } while (emitted);
+        }
+
+        private static DdgiDynamicGeometryContentClass ToPublicDynamicContentClass(
+            DdgiDynamicBlasContentClass contentClass) => contentClass switch
+            {
+                DdgiDynamicBlasContentClass.ProceduralFoliage =>
+                    DdgiDynamicGeometryContentClass.Foliage,
+                DdgiDynamicBlasContentClass.RuntimeTerrain =>
+                    DdgiDynamicGeometryContentClass.Terrain,
+                DdgiDynamicBlasContentClass.TopologyChanging =>
+                    DdgiDynamicGeometryContentClass.TopologyChanging,
+                DdgiDynamicBlasContentClass.DeformingWater =>
+                    DdgiDynamicGeometryContentClass.DeformingWater,
+                _ => DdgiDynamicGeometryContentClass.Skinned
+            };
+
         private static DdgiDynamicBlasContentClass ResolveDynamicBlasContentClass(
-            in StaticOpaqueInstance instance) =>
-            instance.GeometryClass == DdgiRayGeometryClass.ProceduralFoliageProxy
-                ? DdgiDynamicBlasContentClass.ProceduralFoliage
-                : DdgiDynamicBlasContentClass.CurrentPoseSkinned;
+            in StaticOpaqueInstance instance) => instance.DynamicContentClass switch
+            {
+                DdgiDynamicGeometryContentClass.Foliage =>
+                    DdgiDynamicBlasContentClass.ProceduralFoliage,
+                DdgiDynamicGeometryContentClass.Terrain =>
+                    DdgiDynamicBlasContentClass.RuntimeTerrain,
+                DdgiDynamicGeometryContentClass.TopologyChanging =>
+                    DdgiDynamicBlasContentClass.TopologyChanging,
+                DdgiDynamicGeometryContentClass.DeformingWater =>
+                    DdgiDynamicBlasContentClass.DeformingWater,
+                _ => DdgiDynamicBlasContentClass.CurrentPoseSkinned
+            };
 
         private static bool DynamicBuildContractMatches(
             DynamicBottomLevelAccelerationStructure existing,
@@ -2131,7 +2577,9 @@ namespace Njulf.Rendering.Resources
             existing.VertexStride == instance.VertexStride &&
             existing.VertexFormat == instance.VertexFormat &&
             existing.InstanceFlags == instance.InstanceFlags &&
-            existing.ContentClass == ResolveDynamicBlasContentClass(instance);
+            existing.ContentClass == ResolveDynamicBlasContentClass(instance) &&
+            instance.DynamicBuildPreference !=
+                DdgiDynamicGeometryBuildPreference.RebuildRequired;
 
         private static StaticOpaqueInstance CreateConservativeSkinnedProxy(
             StaticOpaqueInstance instance) =>
@@ -2190,6 +2638,65 @@ namespace Njulf.Rendering.Resources
             RecalculateAccelerationStructureBytes();
         }
 
+        private void PruneSupersededDynamicProviderStructures(
+            IReadOnlyList<StaticOpaqueInstance> instances)
+        {
+            if (_dynamicBlasPool.Count == 0)
+                return;
+
+            List<DynamicBlasKey>? removed = null;
+            for (int instanceIndex = 0;
+                 instanceIndex < instances.Count;
+                 instanceIndex++)
+            {
+                StaticOpaqueInstance instance = instances[instanceIndex];
+                if (!instance.ExternalDynamicGeometry ||
+                    !instance.UsesDynamicBlas)
+                {
+                    continue;
+                }
+
+                DynamicBlasKey current = CreateDynamicBlasKey(instance);
+                if (!_dynamicBlasPool.ContainsKey(current))
+                    continue;
+                foreach (DynamicBlasKey candidate in _dynamicBlasPool.Keys)
+                {
+                    if (candidate == current ||
+                        candidate.ObjectIdentity != current.ObjectIdentity ||
+                        candidate.FrameSlot != current.FrameSlot ||
+                        candidate.GeometryPartId != current.GeometryPartId)
+                    {
+                        continue;
+                    }
+                    removed ??= new List<DynamicBlasKey>();
+                    if (!removed.Contains(candidate))
+                        removed.Add(candidate);
+                }
+            }
+
+            if (removed is null)
+                return;
+            for (int index = 0; index < removed.Count; index++)
+            {
+                DynamicBlasKey key = removed[index];
+                if (!_dynamicBlasPool.Remove(
+                        key,
+                        out DynamicBottomLevelAccelerationStructure? resource))
+                {
+                    continue;
+                }
+                RetireAccelerationStructureResource(
+                    resource.Handle,
+                    resource.StorageBuffer,
+                    resource.Size,
+                    AccelerationStructureRetirementOwner.Dynamic);
+                _dynamicBlasBytes = _dynamicBlasBytes >= resource.Size
+                    ? _dynamicBlasBytes - resource.Size
+                    : 0UL;
+                AdvanceResourceGeneration();
+            }
+        }
+
         private bool TryEvictRejectedDynamicBottomLevelAccelerationStructure(
             in StaticOpaqueInstance instance,
             out ulong removedStorage)
@@ -2244,18 +2751,15 @@ namespace Njulf.Rendering.Resources
                 bool update = _dynamicBlasPool.TryGetValue(
                     key,
                     out DynamicBottomLevelAccelerationStructure? resource);
+                DynamicBottomLevelAccelerationStructure? replacedResource = null;
+                bool replacementAllocated = false;
                 if (update && !DynamicBuildContractMatches(resource!, instance, primitiveCount))
                 {
                     _lastDynamicBlasTopologyMismatchCount++;
-                    _dynamicBlasPool.Remove(key);
-                    RetireAccelerationStructureResource(
-                        resource!.Handle,
-                        resource.StorageBuffer,
-                        resource.Size,
-                        AccelerationStructureRetirementOwner.Dynamic);
-                    _dynamicBlasBytes = _dynamicBlasBytes >= resource.Size
-                        ? _dynamicBlasBytes - resource.Size
-                        : 0;
+                    // Keep the previous complete generation addressable until
+                    // its replacement allocation and native handle both exist.
+                    // Allocation failure therefore cannot destroy the fallback.
+                    replacedResource = resource;
                     resource = null;
                     update = false;
                 }
@@ -2299,12 +2803,17 @@ namespace Njulf.Rendering.Resources
                             instance.InstanceFlags,
                             ResolveDynamicBlasContentClass(instance),
                             instance.RepresentationGeneration);
-                        _dynamicBlasPool.Add(key, resource);
-                        _dynamicBlasBytes = checked(_dynamicBlasBytes + storageSize);
-                        _peakDynamicBlasBytes = Math.Max(
-                            _peakDynamicBlasBytes,
-                            _dynamicBlasBytes);
-                        AdvanceResourceGeneration();
+                        replacementAllocated = true;
+
+                        // Reserve the dictionary entry before recording a GPU
+                        // command. Publication itself then cannot allocate and
+                        // the previous complete BLAS remains authoritative until
+                        // the replacement build has been recorded successfully.
+                        if (replacedResource is null)
+                        {
+                            _dynamicBlasPool.EnsureCapacity(
+                                checked(_dynamicBlasPool.Count + 1));
+                        }
                     }
                     catch
                     {
@@ -2313,30 +2822,73 @@ namespace Njulf.Rendering.Resources
                     }
                 }
 
-                geometry = CreateDynamicBottomLevelGeometry(instance, skinnedVertexBuffer);
-                AccelerationStructureBuildGeometryInfoKHR buildInfo =
-                    CreateDynamicBottomLevelBuildInfo(
-                        &geometry,
-                        resource!.Handle,
-                        update ? resource.Handle : default,
-                        _scratchBufferDeviceAddress,
-                        update
-                            ? BuildAccelerationStructureModeKHR.UpdateKhr
-                            : BuildAccelerationStructureModeKHR.BuildKhr);
-                var range = new AccelerationStructureBuildRangeInfoKHR
+                try
                 {
-                    PrimitiveCount = primitiveCount,
-                    PrimitiveOffset = 0,
-                    FirstVertex = 0,
-                    TransformOffset = 0
-                };
-                AccelerationStructureBuildRangeInfoKHR* rangePointer = &range;
-                _khrAccelerationStructure!.CmdBuildAccelerationStructures(
-                    commandBuffer,
-                    1,
-                    &buildInfo,
-                    &rangePointer);
-                InsertAccelerationStructureBuildBarrier(commandBuffer);
+                    geometry = CreateDynamicBottomLevelGeometry(
+                        instance,
+                        skinnedVertexBuffer);
+                    AccelerationStructureBuildGeometryInfoKHR buildInfo =
+                        CreateDynamicBottomLevelBuildInfo(
+                            &geometry,
+                            resource!.Handle,
+                            update ? resource.Handle : default,
+                            _scratchBufferDeviceAddress,
+                            update
+                                ? BuildAccelerationStructureModeKHR.UpdateKhr
+                                : BuildAccelerationStructureModeKHR.BuildKhr);
+                    var range = new AccelerationStructureBuildRangeInfoKHR
+                    {
+                        PrimitiveCount = primitiveCount,
+                        PrimitiveOffset = 0,
+                        FirstVertex = 0,
+                        TransformOffset = 0
+                    };
+                    AccelerationStructureBuildRangeInfoKHR* rangePointer = &range;
+                    _khrAccelerationStructure!.CmdBuildAccelerationStructures(
+                        commandBuffer,
+                        1,
+                        &buildInfo,
+                        &rangePointer);
+                    InsertAccelerationStructureBuildBarrier(commandBuffer);
+                }
+                catch
+                {
+                    if (replacementAllocated && resource is not null)
+                    {
+                        DestroyAccelerationStructureResource(
+                            resource.Handle,
+                            resource.StorageBuffer);
+                    }
+                    throw;
+                }
+
+                if (replacementAllocated)
+                {
+                    ulong retainedBytes = replacedResource is null
+                        ? _dynamicBlasBytes
+                        : _dynamicBlasBytes >= replacedResource.Size
+                            ? _dynamicBlasBytes - replacedResource.Size
+                            : 0UL;
+                    ulong publishedBytes = checked(retainedBytes + resource!.Size);
+                    if (replacedResource is null)
+                    {
+                        _dynamicBlasPool.Add(key, resource);
+                    }
+                    else
+                    {
+                        _dynamicBlasPool[key] = resource;
+                        RetireAccelerationStructureResource(
+                            replacedResource.Handle,
+                            replacedResource.StorageBuffer,
+                            replacedResource.Size,
+                            AccelerationStructureRetirementOwner.Dynamic);
+                    }
+                    _dynamicBlasBytes = publishedBytes;
+                    _peakDynamicBlasBytes = Math.Max(
+                        _peakDynamicBlasBytes,
+                        _dynamicBlasBytes);
+                    AdvanceResourceGeneration();
+                }
 
                 resource.LastUsedFrameSerial = _frameSerial;
                 resource.RepresentationRevision = instance.RepresentationGeneration;
@@ -2355,6 +2907,7 @@ namespace Njulf.Rendering.Resources
                 _lastDynamicBlasPrimitiveCount = checked(
                     _lastDynamicBlasPrimitiveCount + primitiveCount);
             }
+            PruneSupersededDynamicProviderStructures(instances);
             RecalculateAccelerationStructureBytes();
         }
 
@@ -2367,6 +2920,10 @@ namespace Njulf.Rendering.Resources
                 unchecked((uint)key.FrameSlot));
             generation ^= unchecked((uint)key.Mesh.Index) * 0x9e3779b9u;
             generation ^= unchecked((uint)key.Mesh.Generation) * 0x85ebca6bu;
+            generation ^= key.GeometryPartId * 0x27d4eb2du;
+            generation ^= unchecked((uint)key.TopologyRevision) * 0x165667b1u;
+            generation ^= unchecked((uint)(key.TopologyRevision >> 32)) *
+                0xd3a2646cu;
             generation ^= sourceGeneration * 0xc2b2ae35u;
             return generation == 0u ? 1u : generation;
         }
@@ -3449,11 +4006,15 @@ namespace Njulf.Rendering.Resources
             if (!vertexBuffer.IsValid || !indexBuffer.IsValid)
                 throw new InvalidOperationException(
                     "Dynamic DDGI geometry requires valid frame-slot vertex and index buffers.");
-            if (instance.VertexStride != (uint)Marshal.SizeOf<GPUVertex>() ||
-                instance.PositionOffset != 0u)
+            if (instance.VertexStride < 12U ||
+                instance.VertexStride >
+                    DdgiDynamicGeometrySubmissionValidator.MaximumVertexStride ||
+                instance.VertexStride % 4U != 0U ||
+                instance.PositionOffset % 4U != 0U ||
+                instance.PositionOffset > instance.VertexStride - 12U)
             {
                 throw new InvalidOperationException(
-                    "The current-pose BLAS contract requires GPUVertex position at byte offset zero and the exact GPUVertex stride.");
+                    "Dynamic DDGI geometry has an incompatible R32G32B32 position layout.");
             }
 
             ulong vertexAddress = checked(
@@ -4237,6 +4798,13 @@ namespace Njulf.Rendering.Resources
                 hash = HashAdd(hash, instance.VertexStride);
                 hash = HashAdd(hash, unchecked((uint)instance.FrameSlot));
                 hash = HashAdd(hash, instance.RepresentationGeneration);
+                hash = HashAdd(hash, (uint)instance.DynamicContentClass);
+                hash = HashAdd(hash, (uint)instance.DynamicBuildPreference);
+                hash = HashAdd(hash, instance.DynamicGeometryPartId);
+                hash = HashAdd(hash,
+                    unchecked((uint)instance.DynamicTopologyRevision));
+                hash = HashAdd(hash,
+                    unchecked((uint)(instance.DynamicTopologyRevision >> 32)));
                 hash = HashAdd(hash, instance.WorldMatrix);
             }
 
@@ -4263,6 +4831,11 @@ namespace Njulf.Rendering.Resources
             hash = HashAdd(hash, (uint)policy.FoliageGeometryMode);
             hash = HashAdd(hash, policy.GeometryDecalsEnabled ? 1u : 0u);
             hash = HashAdd(hash, policy.AlphaMaskedTransportEnabled ? 1u : 0u);
+            hash = HashAdd(hash,
+                policy.DynamicProviderGeometryEnabled ? 1u : 0u);
+            hash = HashAdd(hash,
+                policy.EffectiveDynamicGeometryBudgets
+                    .GpuTimeBudgetMicroseconds);
             hash = HashAdd(hash, instances.Count);
             for (int i = 0; i < instances.Count; i++)
             {
@@ -4301,6 +4874,13 @@ namespace Njulf.Rendering.Resources
                 hash = HashAdd(hash, instance.VertexStride);
                 hash = HashAdd(hash, (uint)instance.VertexFormat);
                 hash = HashAdd(hash, instance.IndexOffset);
+                hash = HashAdd(hash, (uint)instance.DynamicContentClass);
+                hash = HashAdd(hash, (uint)instance.DynamicBuildPreference);
+                hash = HashAdd(hash, instance.DynamicGeometryPartId);
+                hash = HashAdd(hash,
+                    unchecked((uint)instance.DynamicTopologyRevision));
+                hash = HashAdd(hash,
+                    unchecked((uint)(instance.DynamicTopologyRevision >> 32)));
                 hash = HashAdd(hash, instance.WorldMatrix);
             }
 
@@ -4412,7 +4992,9 @@ namespace Njulf.Rendering.Resources
             return new DynamicBlasKey(
                 instance.ObjectIdentity,
                 instance.Mesh,
-                instance.FrameSlot);
+                instance.FrameSlot,
+                instance.DynamicGeometryPartId,
+                instance.DynamicTopologyRevision);
         }
 
         internal static TransformMatrixKHR CreateTransform(CoreMatrix4x4 matrix)
@@ -4490,7 +5072,16 @@ namespace Njulf.Rendering.Resources
                 _lastDynamicBlasTopologyMismatchCount,
                 _lastDynamicBlasScratchBytes,
                 _lastDynamicBlasPrimitiveCount,
-                _lastFallbackReason);
+                _lastFallbackReason)
+            {
+                DynamicGpuGovernedBuildLimit =
+                    _lastDynamicGpuGovernedBuildLimit,
+                DynamicGpuBudgetSampleCount =
+                    _dynamicGeometryGpuBudgetGovernor.SampleCount,
+                DynamicGpuEstimatedMicrosecondsPerBuild =
+                    _dynamicGeometryGpuBudgetGovernor
+                        .ConservativeMicrosecondsPerBuild
+            };
         }
 
         private void UpdateReadinessSnapshot(bool active)
@@ -4679,6 +5270,7 @@ namespace Njulf.Rendering.Resources
             _lastDynamicBlasTopologyMismatchCount = 0;
             _lastDynamicBlasScratchBytes = 0;
             _lastDynamicBlasPrimitiveCount = 0;
+            _lastDynamicGpuGovernedBuildLimit = 0;
         }
 
         private void RecalculateAccelerationStructureBytes()
@@ -4939,6 +5531,189 @@ namespace Njulf.Rendering.Resources
 
         }
 
+        private readonly record struct DynamicProviderSubmissionKey(
+            ulong StableSourceId,
+            uint GeometryPartId);
+
+        private sealed class DynamicGeometryCollectionSink :
+            IDdgiDynamicGeometrySink
+        {
+            private const BufferUsageFlags RequiredBufferUsage =
+                BufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKhr |
+                BufferUsageFlags.ShaderDeviceAddressBit |
+                BufferUsageFlags.StorageBufferBit;
+
+            private readonly BufferManager _bufferManager;
+            private readonly MaterialManager _materialManager;
+            private readonly List<DdgiDynamicGeometrySubmission> _destination;
+            private readonly HashSet<DynamicProviderSubmissionKey> _identities =
+                new();
+            private DdgiDynamicGeometryFrameContext _context;
+            private ulong _providerStableSourceId;
+            private bool _providerOpen;
+
+            public DynamicGeometryCollectionSink(
+                BufferManager bufferManager,
+                MaterialManager materialManager,
+                List<DdgiDynamicGeometrySubmission> destination)
+            {
+                _bufferManager = bufferManager;
+                _materialManager = materialManager;
+                _destination = destination;
+            }
+
+            public int Checkpoint => _destination.Count;
+            public int SubmittedCount { get; private set; }
+            public int RejectedCount { get; private set; }
+
+            public void Reset(in DdgiDynamicGeometryFrameContext context)
+            {
+                _context = context;
+                _destination.Clear();
+                _identities.Clear();
+                _providerStableSourceId = 0UL;
+                _providerOpen = false;
+                SubmittedCount = 0;
+                RejectedCount = 0;
+            }
+
+            public int BeginProvider(ulong stableSourceId)
+            {
+                if (_providerOpen)
+                {
+                    throw new InvalidOperationException(
+                        "A DDGI dynamic-geometry provider transaction is already open.");
+                }
+                _providerStableSourceId = stableSourceId;
+                _providerOpen = true;
+                return _destination.Count;
+            }
+
+            public void CommitProvider()
+            {
+                if (!_providerOpen)
+                {
+                    throw new InvalidOperationException(
+                        "No DDGI dynamic-geometry provider transaction is open.");
+                }
+                _providerOpen = false;
+                _providerStableSourceId = 0UL;
+            }
+
+            public void RollbackProvider(int checkpoint)
+            {
+                int clampedCheckpoint = Math.Clamp(
+                    checkpoint,
+                    0,
+                    _destination.Count);
+                for (int index = _destination.Count - 1;
+                     index >= clampedCheckpoint;
+                     index--)
+                {
+                    DdgiDynamicGeometrySubmission submission =
+                        _destination[index];
+                    _identities.Remove(new DynamicProviderSubmissionKey(
+                        submission.StableSourceId,
+                        submission.GeometryPartId));
+                    _destination.RemoveAt(index);
+                    RejectedCount++;
+                }
+                _providerOpen = false;
+                _providerStableSourceId = 0UL;
+            }
+
+            public DdgiDynamicGeometrySubmissionDisposition Submit(
+                in DdgiDynamicGeometrySubmission submission)
+            {
+                SubmittedCount++;
+                if (!_providerOpen || _providerStableSourceId == 0UL ||
+                    submission.StableSourceId != _providerStableSourceId)
+                {
+                    RejectedCount++;
+                    return DdgiDynamicGeometrySubmissionDisposition.InvalidIdentity;
+                }
+
+                DdgiDynamicGeometrySubmissionDisposition validation =
+                    DdgiDynamicGeometrySubmissionValidator.Validate(
+                        submission,
+                        _context);
+                if (validation !=
+                    DdgiDynamicGeometrySubmissionDisposition.Accepted)
+                {
+                    RejectedCount++;
+                    return validation;
+                }
+
+                if (_destination.Count >=
+                    BindlessIndex.DdgiDynamicGeometryMaximumSubmissionsPerFrame)
+                {
+                    RejectedCount++;
+                    return DdgiDynamicGeometrySubmissionDisposition.CapacityExceeded;
+                }
+
+                var identity = new DynamicProviderSubmissionKey(
+                    submission.StableSourceId,
+                    submission.GeometryPartId);
+                if (!_identities.Add(identity))
+                {
+                    RejectedCount++;
+                    return DdgiDynamicGeometrySubmissionDisposition.InvalidIdentity;
+                }
+
+                try
+                {
+                    ValidateBuffer(
+                        submission.VertexBuffer,
+                        checked(((ulong)submission.VertexOffset +
+                            submission.VertexCount) *
+                            submission.VertexStride));
+                    ValidateBuffer(
+                        submission.IndexBuffer,
+                        checked(((ulong)submission.IndexOffset +
+                            submission.IndexCount) * sizeof(uint)));
+                }
+                catch (Exception exception) when (exception is
+                    ArgumentException or InvalidOperationException or
+                    OverflowException)
+                {
+                    _identities.Remove(identity);
+                    RejectedCount++;
+                    return exception is OverflowException
+                        ? DdgiDynamicGeometrySubmissionDisposition.InvalidTopology
+                        : DdgiDynamicGeometrySubmissionDisposition.InvalidBuffers;
+                }
+
+                try
+                {
+                    _ = _materialManager.GetMaterialData(submission.Material);
+                }
+                catch (Exception exception) when (exception is
+                    ArgumentException or InvalidOperationException)
+                {
+                    _identities.Remove(identity);
+                    RejectedCount++;
+                    return DdgiDynamicGeometrySubmissionDisposition.InvalidMaterial;
+                }
+
+                _destination.Add(submission);
+                return DdgiDynamicGeometrySubmissionDisposition.Accepted;
+            }
+
+            private void ValidateBuffer(
+                BufferHandle handle,
+                ulong requiredBytes)
+            {
+                BufferUsageFlags usage = _bufferManager.GetBufferUsage(handle);
+                if ((usage & RequiredBufferUsage) != RequiredBufferUsage ||
+                    requiredBytes == 0UL ||
+                    requiredBytes > _bufferManager.GetBufferSize(handle))
+                {
+                    throw new ArgumentException(
+                        "DDGI dynamic geometry buffer usage or range is invalid.");
+                }
+            }
+        }
+
         internal readonly record struct StaticOpaqueInstance
         {
             public StaticOpaqueInstance(
@@ -4990,6 +5765,20 @@ namespace Njulf.Rendering.Resources
                 GeometryIndexBuffer = BufferHandle.Invalid;
                 UsesDynamicBlas = false;
                 FrameSlot = 0;
+                DynamicContentClass = domain switch
+                {
+                    AccelerationStructureGeometryDomain.Foliage =>
+                        DdgiDynamicGeometryContentClass.Foliage,
+                    _ => DdgiDynamicGeometryContentClass.Skinned
+                };
+                DynamicBuildPreference =
+                    DdgiDynamicGeometryBuildPreference.RefitAllowed;
+                DynamicGeometryPartId = 0U;
+                DynamicTopologyRevision = 1UL;
+                ExternalDynamicGeometry = false;
+                PreviousWorldBounds = default;
+                CurrentWorldBounds = default;
+                InfluenceBounds = default;
             }
 
             public MeshHandle Mesh { get; init; }
@@ -5025,6 +5814,22 @@ namespace Njulf.Rendering.Resources
             public BufferHandle GeometryIndexBuffer { get; init; }
             public bool UsesDynamicBlas { get; init; }
             public int FrameSlot { get; init; }
+            public DdgiDynamicGeometryContentClass DynamicContentClass
+            {
+                get;
+                init;
+            }
+            public DdgiDynamicGeometryBuildPreference DynamicBuildPreference
+            {
+                get;
+                init;
+            }
+            public uint DynamicGeometryPartId { get; init; }
+            public ulong DynamicTopologyRevision { get; init; }
+            public bool ExternalDynamicGeometry { get; init; }
+            public CoreBoundingBox PreviousWorldBounds { get; init; }
+            public CoreBoundingBox CurrentWorldBounds { get; init; }
+            public CoreBoundingBox InfluenceBounds { get; init; }
         }
 
         private readonly record struct AccelerationStructurePreparationIdentity(
@@ -5076,7 +5881,9 @@ namespace Njulf.Rendering.Resources
         private readonly record struct DynamicBlasKey(
             Guid ObjectIdentity,
             MeshHandle Mesh,
-            int FrameSlot);
+            int FrameSlot,
+            uint GeometryPartId,
+            ulong TopologyRevision);
 
         private sealed class DynamicBottomLevelAccelerationStructure
         {
@@ -5278,7 +6085,10 @@ namespace Njulf.Rendering.Resources
     internal enum DdgiDynamicBlasContentClass
     {
         CurrentPoseSkinned = 0,
-        ProceduralFoliage = 1
+        ProceduralFoliage = 1,
+        RuntimeTerrain = 2,
+        TopologyChanging = 3,
+        DeformingWater = 4
     }
 
     internal readonly record struct DdgiDynamicBlasContentBudget(
@@ -5303,6 +6113,23 @@ namespace Njulf.Rendering.Resources
         int MaximumPrimitivesPerFrame,
         int DecalCandidateLimit)
     {
+        /// <summary>
+        /// Enables scene-provided terrain, topology-changing, water, and other
+        /// dynamic triangle submissions. Existing skinned and foliage paths do
+        /// not depend on this switch.
+        /// </summary>
+        public bool DynamicProviderGeometryEnabled { get; init; }
+
+        /// <summary>
+        /// Class fairness and measured GPU-time governor. This is deliberately
+        /// additive so the original positional constructor remains compatible.
+        /// </summary>
+        public DdgiDynamicGeometryBudgetPolicy DynamicGeometryBudgets
+        {
+            get;
+            init;
+        } = DdgiDynamicGeometryBudgetPolicy.Production;
+
         public static DdgiDynamicRayScenePolicy LegacyBaseline => new(
             DdgiSkinnedGeometryMode.ConservativeProxy,
             DdgiTransparentGeometryMode.MaskAndThin,
@@ -5318,18 +6145,23 @@ namespace Njulf.Rendering.Resources
         internal ulong EffectiveDynamicStorageBudgetBytes =>
             SkinnedGeometryMode == DdgiSkinnedGeometryMode.CurrentPose ||
             FoliageGeometryMode ==
-                DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
+                DdgiFoliageGeometryMode.AuthoredAndProceduralProxy ||
+            DynamicProviderGeometryEnabled
                 ? DynamicStorageBudgetBytes
                 : 0UL;
         internal ulong EffectiveDynamicScratchBudgetBytes =>
             SkinnedGeometryMode == DdgiSkinnedGeometryMode.CurrentPose ||
             FoliageGeometryMode ==
-                DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
+                DdgiFoliageGeometryMode.AuthoredAndProceduralProxy ||
+            DynamicProviderGeometryEnabled
                 ? DynamicScratchBudgetBytes
                 : 0UL;
         internal int EffectiveMaximumBuildsPerFrame => Math.Max(0, MaximumBuildsPerFrame);
         internal int EffectiveMaximumPrimitivesPerFrame => Math.Max(0, MaximumPrimitivesPerFrame);
         internal int EffectiveDecalCandidateLimit => Math.Clamp(DecalCandidateLimit, 0, 64);
+        internal DdgiDynamicGeometryBudgetPolicy EffectiveDynamicGeometryBudgets =>
+            DynamicGeometryBudgets ??
+            DdgiDynamicGeometryBudgetPolicy.Production;
 
         /// <summary>
         /// When live skinned meshes and procedural foliage coexist, cap foliage
@@ -5353,21 +6185,39 @@ namespace Njulf.Rendering.Resources
                     primitives);
             }
 
-            ulong foliageStorage = storage / 4UL;
-            int foliageBuilds = builds <= 1
-                ? 0
-                : Math.Max(1, builds / 4);
-            int foliagePrimitives = primitives / 4;
-            return contentClass ==
-                    DdgiDynamicBlasContentClass.ProceduralFoliage
-                ? new DdgiDynamicBlasContentBudget(
-                    foliageStorage,
-                    foliageBuilds,
-                    foliagePrimitives)
-                : new DdgiDynamicBlasContentBudget(
+            DdgiDynamicGeometryContentClass publicClass = contentClass switch
+            {
+                DdgiDynamicBlasContentClass.ProceduralFoliage =>
+                    DdgiDynamicGeometryContentClass.Foliage,
+                DdgiDynamicBlasContentClass.RuntimeTerrain =>
+                    DdgiDynamicGeometryContentClass.Terrain,
+                DdgiDynamicBlasContentClass.TopologyChanging =>
+                    DdgiDynamicGeometryContentClass.TopologyChanging,
+                DdgiDynamicBlasContentClass.DeformingWater =>
+                    DdgiDynamicGeometryContentClass.DeformingWater,
+                _ => DdgiDynamicGeometryContentClass.Skinned
+            };
+            DdgiDynamicGeometryBudgetPolicy budgetPolicy =
+                EffectiveDynamicGeometryBudgets;
+            double share = budgetPolicy.For(publicClass)
+                .MaximumMixedShare;
+            if (share >= 1.0)
+            {
+                return new DdgiDynamicBlasContentBudget(
                     storage,
                     builds,
                     primitives);
+            }
+
+            ulong classStorage = checked((ulong)Math.Floor(storage * share));
+            int classBuilds = builds <= 0
+                ? 0
+                : Math.Max(1, (int)Math.Floor(builds * share));
+            int classPrimitives = checked((int)Math.Floor(primitives * share));
+            return new DdgiDynamicBlasContentBudget(
+                classStorage,
+                classBuilds,
+                classPrimitives);
         }
     }
 
@@ -5378,7 +6228,14 @@ namespace Njulf.Rendering.Resources
         int TransparentInstanceCount,
         int DecalInstanceCount,
         int FrameIndex,
-        ulong SceneContentRevision);
+        ulong SceneContentRevision)
+    {
+        public int DynamicProviderCount { get; init; }
+        public int DynamicProviderSubmittedCount { get; init; }
+        public int DynamicProviderAcceptedCount { get; init; }
+        public int DynamicProviderRejectedCount { get; init; }
+        public string DynamicProviderFailureReason { get; init; } = string.Empty;
+    }
 
     internal enum AccelerationStructureGeometryDomain
     {
@@ -5467,5 +6324,10 @@ namespace Njulf.Rendering.Resources
         int DynamicTopologyMismatchCount,
         ulong DynamicScratchBytes,
         ulong DynamicPrimitiveCount,
-        string FallbackReason);
+        string FallbackReason)
+    {
+        public int DynamicGpuGovernedBuildLimit { get; init; }
+        public int DynamicGpuBudgetSampleCount { get; init; }
+        public double DynamicGpuEstimatedMicrosecondsPerBuild { get; init; }
+    }
 }

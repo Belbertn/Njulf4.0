@@ -4516,17 +4516,23 @@ uint SimpleDdgiVisibilityAtlasWordCount(SimpleDdgiParams p)
     return p.physicalProbeCapacity * SimpleDdgiVisibilityWordsPerProbe(p);
 }
 
-vec2 ReadSimpleDdgiNearVisibilityAtOffset(
+vec4 ReadSimpleDdgiNearVisibilityAtOffset(
     uint bufferIndex,
     uint baseOffsetWords,
     uint probeIndex,
     uint texelIndex,
     SimpleDdgiParams p)
 {
-    return unpackHalf2x16(ReadStorageWordUniform(
-        bufferIndex,
-        baseOffsetWords + SimpleDdgiVisibilityAtlasWord(
-            probeIndex, texelIndex, p.visibilityTexels)));
+    uint sidecarWord = baseOffsetWords +
+        SimpleDdgiVisibilityAtlasWord(
+            probeIndex, texelIndex, p.visibilityTexels) * 2u;
+    return vec4(
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex,
+            sidecarWord)),
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex,
+            sidecarWord + 1u)));
 }
 
 void WriteSimpleDdgiNearVisibilityAtOffset(
@@ -4535,16 +4541,24 @@ void WriteSimpleDdgiNearVisibilityAtOffset(
     uint probeIndex,
     uint texelIndex,
     SimpleDdgiParams p,
-    vec2 conservativeDepthAndConfidence)
+    vec4 conservativeDepthAndConfidence)
 {
-    vec2 packedValue = vec2(
+    vec4 packedValue = vec4(
         clamp(conservativeDepthAndConfidence.x, 0.0, 65504.0),
-        clamp(conservativeDepthAndConfidence.y, 0.0, 1.0));
+        clamp(conservativeDepthAndConfidence.y, 0.0, 1.0),
+        clamp(conservativeDepthAndConfidence.z, 0.0, 65504.0),
+        clamp(conservativeDepthAndConfidence.w, 0.0, 1.0));
+    uint sidecarWord = baseOffsetWords +
+        SimpleDdgiVisibilityAtlasWord(
+            probeIndex, texelIndex, p.visibilityTexels) * 2u;
     WriteStorageWordUniform(
         bufferIndex,
-        baseOffsetWords + SimpleDdgiVisibilityAtlasWord(
-            probeIndex, texelIndex, p.visibilityTexels),
-        packHalf2x16(packedValue));
+        sidecarWord,
+        packHalf2x16(packedValue.xy));
+    WriteStorageWordUniform(
+        bufferIndex,
+        sidecarWord + 1u,
+        packHalf2x16(packedValue.zw));
 }
 
 uint SimpleDdgiDirectionTexel(vec3 direction, uint texelsPerProbe)
@@ -4884,7 +4898,7 @@ vec2 SampleSimpleDdgiVisibilityBilinearAtAddress(
     return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
 }
 
-float SimpleDdgiNearVisibilityTapFactor(
+float SimpleDdgiNearVisibilityLayerFactor(
     SimpleDdgiParams p,
     SimpleDdgiVolume volume,
     vec2 sidecar,
@@ -4951,6 +4965,33 @@ float SimpleDdgiNearVisibilityTapFactor(
     return mix(1.0, 0.02, occluderCoverage * evidenceTrust);
 }
 
+float SimpleDdgiNearVisibilityTapFactor(
+    SimpleDdgiParams p,
+    SimpleDdgiVolume volume,
+    vec4 sidecar,
+    float tapMomentMean,
+    float receiverDistance,
+    float tapWeight)
+{
+    float primary = SimpleDdgiNearVisibilityLayerFactor(
+        p,
+        volume,
+        sidecar.xy,
+        tapMomentMean,
+        receiverDistance,
+        tapWeight);
+    if (sidecar.w <= 0.0)
+        return primary;
+    float secondary = SimpleDdgiNearVisibilityLayerFactor(
+        p,
+        volume,
+        sidecar.zw,
+        tapMomentMean,
+        receiverDistance,
+        tapWeight);
+    return min(primary, secondary);
+}
+
 float SimpleDdgiApplyNearVisibilitySidecar(
     SimpleDdgiParams p,
     SimpleDdgiVolume volume,
@@ -4976,16 +5017,28 @@ float SimpleDdgiApplyNearVisibilitySidecar(
         SimpleDdgiMirrorOctTexelIndex(base + ivec2(0, 1), p.visibilityTexels),
         SimpleDdgiMirrorOctTexelIndex(base + ivec2(1, 1), p.visibilityTexels));
     uint sidecarProbeBase = SimpleDdgiVisibilityAtlasWordCount(p) +
-        address.visibilityBaseWord;
+        address.visibilityBaseWord * 2u;
 
-    vec2 sidecar00 = unpackHalf2x16(ReadStorageWordUniform(
-        bufferIndex, sidecarProbeBase + indices.x));
-    vec2 sidecar10 = unpackHalf2x16(ReadStorageWordUniform(
-        bufferIndex, sidecarProbeBase + indices.y));
-    vec2 sidecar01 = unpackHalf2x16(ReadStorageWordUniform(
-        bufferIndex, sidecarProbeBase + indices.z));
-    vec2 sidecar11 = unpackHalf2x16(ReadStorageWordUniform(
-        bufferIndex, sidecarProbeBase + indices.w));
+    vec4 sidecar00 = vec4(
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex, sidecarProbeBase + indices.x * 2u)),
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex, sidecarProbeBase + indices.x * 2u + 1u)));
+    vec4 sidecar10 = vec4(
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex, sidecarProbeBase + indices.y * 2u)),
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex, sidecarProbeBase + indices.y * 2u + 1u)));
+    vec4 sidecar01 = vec4(
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex, sidecarProbeBase + indices.z * 2u)),
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex, sidecarProbeBase + indices.z * 2u + 1u)));
+    vec4 sidecar11 = vec4(
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex, sidecarProbeBase + indices.w * 2u)),
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex, sidecarProbeBase + indices.w * 2u + 1u)));
     vec2 moments00 = ReadSimpleDdgiVisibilityMomentsAtBase(
         bufferIndex, address.visibilityBaseWord, indices.x);
     vec2 moments10 = ReadSimpleDdgiVisibilityMomentsAtBase(

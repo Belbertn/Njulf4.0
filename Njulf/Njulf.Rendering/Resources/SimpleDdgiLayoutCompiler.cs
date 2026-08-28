@@ -165,6 +165,10 @@ namespace Njulf.Rendering.Resources
         public const ulong VisibilityBytesPerProbe =
             (ulong)(SimpleDdgiVolumeManager.VisibilityTexelsPerProbe *
                 SimpleDdgiVolumeManager.VisibilityTexelsPerProbe) * 4UL;
+        public const ulong NearVisibilityBytesPerProbe =
+            (ulong)(SimpleDdgiVolumeManager.VisibilityTexelsPerProbe *
+                SimpleDdgiVolumeManager.VisibilityTexelsPerProbe) *
+            SimpleDdgiNearVisibility.BytesPerTexel;
         public const ulong LegacyRayResultBytes = 32;
         public const ulong RayResultBytes = 20;
         public const ulong GuidingTraceDirectionRecordBytes = 32;
@@ -450,7 +454,8 @@ namespace Njulf.Rendering.Resources
             ulong visibilityBytes = AtLeastOneAllocation(
                 checked(physicalProbeCount64 * VisibilityBytesPerProbe));
             ulong nearVisibilityPublicRequiredBytes = physicalProbeCapacity > 0
-                ? checked(physicalProbeCount64 * VisibilityBytesPerProbe)
+                ? checked(
+                    physicalProbeCount64 * NearVisibilityBytesPerProbe)
                 : 0UL;
             ulong nearVisibilityPrivateRequiredBytes =
                 residentPrivateTargets

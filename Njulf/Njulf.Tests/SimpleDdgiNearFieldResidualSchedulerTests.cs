@@ -9,13 +9,13 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiNearFieldResidualSchedulerTests
 {
     [Test]
-    public void V15ArenaOwnsIndependentFullCapacityTraceAndResolveLists()
+    public void V16ArenaOwnsIndependentFullCapacityTraceAndResolveLists()
     {
         const uint capacity = 713u;
         Assert.Multiple(() =>
         {
             Assert.That(SimpleDdgiNearFieldResidualGpuAbi.Version,
-                Is.EqualTo(0x4335_000Fu));
+                Is.EqualTo(0x4335_0010u));
             Assert.That(SimpleDdgiNearFieldResidualAdaptiveAbi.TraceListFirstWord,
                 Is.EqualTo(64u));
             Assert.That(SimpleDdgiNearFieldResidualAdaptiveAbi

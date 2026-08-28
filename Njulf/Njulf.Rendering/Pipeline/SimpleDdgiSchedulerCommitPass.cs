@@ -145,11 +145,12 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
     }
 
     /// <summary>
-    /// Commits the producer-complete urgent cohort without running residual
-    /// propagation or exporting feedback. The ordinary post-forward commit
-    /// retains sole ownership of those stages and its delayed policy sample.
+    /// Commits the producer-complete urgent cohort and conservatively spills
+    /// its 3x3x3 dependency proxy into the persistent sparse-residual queue.
+    /// Feedback export remains owned by the ordinary post-forward commit, so
+    /// the pre-forward transaction cannot publish a partial policy sample.
     /// </summary>
-    public void ExecuteResidentLocalOnly(CommandBuffer cmd)
+    public void ExecuteResidentLocalAndPropagation(CommandBuffer cmd)
     {
         if (_volumeManager.SchedulerMode != SimpleDdgiSchedulerMode.GpuResident)
             return;
@@ -163,6 +164,12 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         pushConstants.PrivateVisibilityAtlasOffsetWords =
             _volumeManager.GpuSchedulerPrivateVisibilityOffsetWords;
         DispatchResidentLocal(cmd, pushConstants);
+        DispatchIndirect(
+            cmd,
+            pushConstants,
+            1,
+            scheduler.GetIndirectCommandOffset(
+                SimpleDdgiSchedulerDispatchSlot.CommitPropagation));
     }
 
     private void DispatchResidentLocal(

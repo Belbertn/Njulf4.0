@@ -935,8 +935,26 @@ namespace Njulf.Rendering.Descriptors
         public const int SceneGpuLodHistoryBufferFrame1 =
             SceneGpuLodHistoryBufferBase + 1;
 
-        public const int StaticBufferCount =
+        /// <summary>
+        /// Renderer-owned per-frame descriptor arena for scene-provided DDGI
+        /// dynamic geometry. Every submission owns one vertex/index pair;
+        /// frame slots are disjoint so descriptor rewrites occur only after
+        /// the corresponding in-flight fence has completed.
+        /// </summary>
+        public const int DdgiDynamicGeometryBufferBase =
             SceneGpuLodHistoryBufferFrame1 + 1;
+
+        public const int DdgiDynamicGeometryMaximumSubmissionsPerFrame = 128;
+        public const int DdgiDynamicGeometryDescriptorsPerSubmission = 2;
+        public const int DdgiDynamicGeometryDescriptorsPerFrame =
+            DdgiDynamicGeometryMaximumSubmissionsPerFrame *
+            DdgiDynamicGeometryDescriptorsPerSubmission;
+        public const int DdgiDynamicGeometryBufferCount =
+            DdgiDynamicGeometryDescriptorsPerFrame *
+            RenderingConstants.FramesInFlight;
+
+        public const int StaticBufferCount =
+            DdgiDynamicGeometryBufferBase + DdgiDynamicGeometryBufferCount;
 
         // ============================================
         // UTILITY METHODS
@@ -946,6 +964,34 @@ namespace Njulf.Rendering.Descriptors
         public static bool IsStaticBufferIndex(int index)
         {
             return index >= 0 && index < StaticBufferCount;
+        }
+
+        public static int GetDdgiDynamicGeometryVertexBufferIndex(
+            int frameSlot,
+            int submissionIndex)
+        {
+            ValidateDdgiDynamicGeometryDescriptor(frameSlot, submissionIndex);
+            return DdgiDynamicGeometryBufferBase +
+                frameSlot * DdgiDynamicGeometryDescriptorsPerFrame +
+                submissionIndex * DdgiDynamicGeometryDescriptorsPerSubmission;
+        }
+
+        public static int GetDdgiDynamicGeometryIndexBufferIndex(
+            int frameSlot,
+            int submissionIndex) =>
+            GetDdgiDynamicGeometryVertexBufferIndex(frameSlot, submissionIndex) + 1;
+
+        private static void ValidateDdgiDynamicGeometryDescriptor(
+            int frameSlot,
+            int submissionIndex)
+        {
+            if (frameSlot is < 0 or >= RenderingConstants.FramesInFlight)
+                throw new ArgumentOutOfRangeException(nameof(frameSlot));
+            if (submissionIndex is < 0 or >=
+                DdgiDynamicGeometryMaximumSubmissionsPerFrame)
+            {
+                throw new ArgumentOutOfRangeException(nameof(submissionIndex));
+            }
         }
 
         /// <summary>Validates that an index is a texture index</summary>
@@ -972,6 +1018,8 @@ namespace Njulf.Rendering.Descriptors
                     SimpleDdgiReceiverGatherSurfaceBufferFrame1 => nameof(SimpleDdgiReceiverGatherSurfaceBufferFrame1),
                     SceneGpuLodHistoryBufferBase => nameof(SceneGpuLodHistoryBufferBase),
                     SceneGpuLodHistoryBufferFrame1 => nameof(SceneGpuLodHistoryBufferFrame1),
+                    >= DdgiDynamicGeometryBufferBase and < StaticBufferCount =>
+                        nameof(DdgiDynamicGeometryBufferBase),
                     SceneMeshMetadataBuffer => nameof(SceneMeshMetadataBuffer),
                     VertexBuffer => nameof(VertexBuffer),
                     IndexBuffer => nameof(IndexBuffer),

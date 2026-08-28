@@ -401,11 +401,15 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData)
         {
             ArgumentNullException.ThrowIfNull(sceneData);
-            // Camera reprojection is sufficient only when reflections are the
-            // sole temporal consumer and every submitted surface is static.
-            // TAA, screen-space shadows, C5, foliage, or any dynamic BLAS keep
-            // the authored per-object motion-vector pass.
-            return consumers == SurfaceHistoryConsumer.Reflection &&
+            // Reflection and C5 both reconstruct static receiver history from
+            // depth plus the current/previous camera matrices. Other temporal
+            // consumers still require the authored full-resolution velocity
+            // target. Any moving surface also retains the authored pass.
+            const SurfaceHistoryConsumer cameraOnlyCompatible =
+                SurfaceHistoryConsumer.Reflection |
+                SurfaceHistoryConsumer.NearFieldResidual;
+            return consumers != SurfaceHistoryConsumer.None &&
+                   (consumers & ~cameraOnlyCompatible) == 0 &&
                    !sceneData.AnimationEnabled &&
                    sceneData.SkinnedObjectCount == 0 &&
                    !(sceneData.FoliageMotionVectorsEnabled &&

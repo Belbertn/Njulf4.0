@@ -1335,7 +1335,7 @@ public sealed partial class SampleBenchmarkDdgiTransientEvidenceTests
     {
         Assert.That(
             MaterialGiReleaseEvidenceContract.BenchmarkProducerSchema,
-            Is.EqualTo("njulf-renderer-benchmark/v4"));
+            Is.EqualTo("njulf-renderer-benchmark/v5"));
         SampleBenchmarkReport report = CreateValidTransientReport() with
         {
             Schema = "njulf-renderer-benchmark/v3"

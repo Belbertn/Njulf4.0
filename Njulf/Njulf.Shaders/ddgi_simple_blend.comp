@@ -612,6 +612,113 @@ float BlendIrradianceTexel(
             0.02);
 }
 
+vec2 SimpleDdgiBlendNearVisibilityLayer(
+    vec2 current,
+    vec2 previous,
+    float hysteresis,
+    float coherentDepthBand)
+{
+    if (current.y < 0.65 || previous.y < 0.65 ||
+        abs(current.x - previous.x) > coherentDepthBand)
+    {
+        hysteresis = 0.0;
+    }
+    return vec2(
+        mix(current.x, previous.x, hysteresis),
+        clamp(mix(current.y, previous.y, hysteresis), 0.0, 1.0));
+}
+
+vec4 SimpleDdgiBlendNearVisibilityLayers(
+    vec4 current,
+    vec4 previous,
+    float hysteresis,
+    float coherentDepthBand)
+{
+    vec2 currentPrimary = current.xy;
+    vec2 currentSecondary = current.zw;
+    if (currentSecondary.y > 0.0 &&
+        (currentPrimary.y <= 0.0 ||
+            currentSecondary.x < currentPrimary.x))
+    {
+        vec2 swapLayer = currentPrimary;
+        currentPrimary = currentSecondary;
+        currentSecondary = swapLayer;
+    }
+
+    vec2 previousPrimary = previous.xy;
+    vec2 previousSecondary = previous.zw;
+    if (previousSecondary.y > 0.0 &&
+        (previousPrimary.y <= 0.0 ||
+            previousSecondary.x < previousPrimary.x))
+    {
+        vec2 swapLayer = previousPrimary;
+        previousPrimary = previousSecondary;
+        previousSecondary = swapLayer;
+    }
+
+    bool previousPrimaryUsed = false;
+    bool previousSecondaryUsed = false;
+    int primaryMatch = -1;
+    if (currentPrimary.y >= 0.65)
+    {
+        float primaryDistance = previousPrimary.y >= 0.65
+            ? abs(currentPrimary.x - previousPrimary.x)
+            : 65504.0;
+        float secondaryDistance = previousSecondary.y >= 0.65
+            ? abs(currentPrimary.x - previousSecondary.x)
+            : 65504.0;
+        float nearestDistance = min(primaryDistance, secondaryDistance);
+        if (nearestDistance <= coherentDepthBand)
+            primaryMatch = primaryDistance <= secondaryDistance ? 0 : 1;
+    }
+    previousPrimaryUsed = primaryMatch == 0;
+    previousSecondaryUsed = primaryMatch == 1;
+    vec2 blendedPrimary = SimpleDdgiBlendNearVisibilityLayer(
+        currentPrimary,
+        primaryMatch == 0
+            ? previousPrimary
+            : primaryMatch == 1
+                ? previousSecondary
+                : vec2(0.0),
+        primaryMatch >= 0 ? hysteresis : 0.0,
+        coherentDepthBand);
+
+    int secondaryMatch = -1;
+    if (currentSecondary.y >= 0.65)
+    {
+        float primaryDistance = !previousPrimaryUsed &&
+                previousPrimary.y >= 0.65
+            ? abs(currentSecondary.x - previousPrimary.x)
+            : 65504.0;
+        float secondaryDistance = !previousSecondaryUsed &&
+                previousSecondary.y >= 0.65
+            ? abs(currentSecondary.x - previousSecondary.x)
+            : 65504.0;
+        float nearestDistance = min(primaryDistance, secondaryDistance);
+        if (nearestDistance <= coherentDepthBand)
+            secondaryMatch = primaryDistance <= secondaryDistance ? 0 : 1;
+    }
+    vec2 blendedSecondary = SimpleDdgiBlendNearVisibilityLayer(
+        currentSecondary,
+        secondaryMatch == 0
+            ? previousPrimary
+            : secondaryMatch == 1
+                ? previousSecondary
+                : vec2(0.0),
+        secondaryMatch >= 0 ? hysteresis : 0.0,
+        coherentDepthBand);
+
+    if (blendedSecondary.y > 0.0 &&
+        (blendedPrimary.y <= 0.0 ||
+            blendedSecondary.x < blendedPrimary.x))
+    {
+        vec2 swapLayer = blendedPrimary;
+        blendedPrimary = blendedSecondary;
+        blendedSecondary = swapLayer;
+    }
+    return vec4(blendedPrimary, blendedSecondary);
+}
+
 void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint physicalProbeIndex, uint localProbeOffset, uint texel, float probeHysteresis, bool sharedRayCacheEnabled, uint activeRayCount, bool maintenanceUpdate, bool freshUpdate, bool visibilityHistoryValid)
 {
     uint x = texel % params.visibilityTexels;
@@ -627,8 +734,11 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
     float narrowHitWeightSum = 0.0;
     float narrowWeightSum = 0.0;
     float nearestQualifyingHitDistance = 65504.0;
+    float secondaryQualifyingHitDistance = 65504.0;
     float coherentDepthWeightedSum = 0.0;
     float coherentDepthWeightSum = 0.0;
+    float secondaryDepthWeightedSum = 0.0;
+    float secondaryDepthWeightSum = 0.0;
     float coherentDepthBand = max(
         0.02,
         min(volume.spacing * 0.10, params.architecturalThickness * 0.50));
@@ -730,20 +840,72 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
                 coherentDepthWeightedSum += d * narrowWeight;
                 coherentDepthWeightSum += narrowWeight;
             }
+            else if (visibilityHit.y >= 0.5 &&
+                d > nearestQualifyingHitDistance + coherentDepthBand &&
+                narrowWeight >= 0.04)
+            {
+                secondaryQualifyingHitDistance = min(
+                    secondaryQualifyingHitDistance,
+                    d);
+            }
+        }
+    }
+
+    if (nearVisibilitySidecarActive &&
+        secondaryQualifyingHitDistance < 65503.0)
+    {
+        for (uint ray = 0u; ray < rayCount; ray++)
+        {
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+            if (guidingActive &&
+                SharedSimpleRayGuidingTechnique[ray] !=
+                    SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE)
+            {
+                continue;
+            }
+#endif
+            vec4 directionHit = ReadCachedSimpleRayDirectionHit(
+                params,
+                localProbeOffset,
+                ray,
+                sharedRayCacheEnabled);
+            float cosine = max(
+                dot(texelDirection, normalize(directionHit.xyz)),
+                0.0);
+            float broadWeight = pow(
+                cosine,
+                SIMPLE_DDGI_VISIBILITY_BROAD_MOMENT_EXPONENT);
+            float narrowWeight = broadWeight * broadWeight;
+            if (narrowWeight <= 0.000001)
+                continue;
+
+            vec2 visibilityHit = ReadCachedSimpleRayVisibilityHit(
+                params,
+                localProbeOffset,
+                ray,
+                sharedRayCacheEnabled);
+            float d = max(visibilityHit.x, 0.0);
+            if (visibilityHit.y >= 0.5 &&
+                abs(d - nearestQualifyingHitDistance) > coherentDepthBand &&
+                abs(d - secondaryQualifyingHitDistance) <= coherentDepthBand)
+            {
+                secondaryDepthWeightedSum += d * narrowWeight;
+                secondaryDepthWeightSum += narrowWeight;
+            }
         }
     }
 
     vec2 previous = ReadSimpleDdgiVisibilityMoments(pc.VisibilityAtlasBufferIndex, physicalProbeIndex, texel, params.visibilityTexels);
     uint publicNearVisibilityOffsetWords =
         SimpleDdgiVisibilityAtlasWordCount(params);
-    vec2 previousNearVisibility = nearVisibilitySidecarActive
+    vec4 previousNearVisibility = nearVisibilitySidecarActive
         ? ReadSimpleDdgiNearVisibilityAtOffset(
             pc.VisibilityAtlasBufferIndex,
             publicNearVisibilityOffsetWords,
             physicalProbeIndex,
             texel,
             params)
-        : vec2(65504.0, 0.0);
+        : vec4(65504.0, 0.0, 65504.0, 0.0);
     vec2 moments;
     if (broadHitWeightSum > 0.000001 || broadMissWeightSum > 0.000001)
     {
@@ -805,44 +967,53 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
     }
     float texelHysteresis = SimpleDdgiAdaptiveVisibilityHysteresis(params, previous, moments, probeHysteresis, maintenanceUpdate, visibilityHistoryValid, volume.spacing);
     vec2 blended = mix(moments, previous, texelHysteresis);
-    vec2 blendedNearVisibility = vec2(65504.0, 0.0);
+    vec4 blendedNearVisibility =
+        vec4(65504.0, 0.0, 65504.0, 0.0);
     if (nearVisibilitySidecarActive)
     {
-        float currentConfidence = narrowWeightSum > 0.000001 &&
+        float primaryConfidence = narrowWeightSum > 0.000001 &&
                 coherentDepthWeightSum > 0.000001
             ? clamp(coherentDepthWeightSum / narrowWeightSum, 0.0, 1.0)
             : 0.0;
+        float secondaryConfidence = narrowWeightSum > 0.000001 &&
+                secondaryDepthWeightSum > 0.000001
+            ? clamp(secondaryDepthWeightSum / narrowWeightSum, 0.0, 1.0)
+            : 0.0;
         AddRendererDiagnostic(
             pc.CurrentFrameIndex,
-            currentConfidence >= 0.65
+            primaryConfidence >= 0.65 || secondaryConfidence >= 0.65
                 ? SIMPLE_DDGI_NEAR_VISIBILITY_COHERENT_CLUSTER_COUNTER
                 : SIMPLE_DDGI_NEAR_VISIBILITY_REJECTED_CLUSTER_COUNTER,
             1u);
         // Preserve a finite depth while confidence is released. Confidence is
         // authoritative, so a miss update disables stale occlusion in one
         // refresh without blending toward half-float infinity.
-        float currentDepth = coherentDepthWeightSum > 0.000001
+        float primaryDepth = coherentDepthWeightSum > 0.000001
             ? coherentDepthWeightedSum / coherentDepthWeightSum
             : (previousNearVisibility.y > 0.0
                 ? previousNearVisibility.x
                 : 65504.0);
-        vec2 currentNearVisibility = vec2(currentDepth, currentConfidence);
+        float secondaryDepth = secondaryDepthWeightSum > 0.000001
+            ? secondaryDepthWeightedSum / secondaryDepthWeightSum
+            : (previousNearVisibility.w > 0.0
+                ? previousNearVisibility.z
+                : 65504.0);
+        vec4 currentNearVisibility = vec4(
+            primaryDepth,
+            primaryConfidence,
+            secondaryDepth,
+            secondaryConfidence);
         float nearHysteresis = visibilityHistoryValid && !freshUpdate
             ? min(texelHysteresis, 0.85)
             : 0.0;
-        // Confidence is the authority gate. A miss or incoherent cluster must
-        // release stale occlusion in one refresh. Distinct confident layers are
-        // replacements, never averaged depths that invent a phantom blocker.
-        if (currentConfidence < 0.65 || previousNearVisibility.y < 0.65 ||
-            abs(currentDepth - previousNearVisibility.x) > coherentDepthBand)
-        {
-            nearHysteresis = 0.0;
-        }
-        blendedNearVisibility = mix(
+        // Each layer independently matches the nearest unused history layer.
+        // A miss releases confidence in one refresh, while distinct layers are
+        // replacements rather than averaged phantom blockers.
+        blendedNearVisibility = SimpleDdgiBlendNearVisibilityLayers(
             currentNearVisibility,
             previousNearVisibility,
-            nearHysteresis);
-        blendedNearVisibility.y = clamp(blendedNearVisibility.y, 0.0, 1.0);
+            nearHysteresis,
+            coherentDepthBand);
     }
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
     if (SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex))
@@ -1193,7 +1364,7 @@ void main()
                         physicalProbeIndex,
                         texel,
                         params,
-                        vec2(65504.0, 0.0));
+                        vec4(65504.0, 0.0, 65504.0, 0.0));
                 }
             }
             else
@@ -1212,7 +1383,7 @@ void main()
                         physicalProbeIndex,
                         texel,
                         params,
-                        vec2(65504.0, 0.0));
+                        vec4(65504.0, 0.0, 65504.0, 0.0));
                 }
             }
         }
@@ -1273,7 +1444,7 @@ void main()
                 {
                     uint publicNearVisibilityOffsetWords =
                         SimpleDdgiVisibilityAtlasWordCount(params);
-                    vec2 canonicalNearVisibility =
+                    vec4 canonicalNearVisibility =
                         ReadSimpleDdgiNearVisibilityAtOffset(
                             pc.VisibilityAtlasBufferIndex,
                             publicNearVisibilityOffsetWords,

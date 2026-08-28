@@ -12,7 +12,11 @@ public enum SimpleDdgiRefinementDemandReason : uint
     ThinSurface = 1u << 1,
     DynamicGeometry = 1u << 2,
     CompactEmissive = 1u << 3,
-    AuthoredHero = 1u << 4
+    AuthoredHero = 1u << 4,
+    HighReceiverDensity = 1u << 5,
+    GeometricComplexity = 1u << 6,
+    LightingVariance = 1u << 7,
+    ObservedError = 1u << 8
 }
 
 public readonly record struct SimpleDdgiRefinementDemand(
@@ -28,6 +32,97 @@ public readonly record struct SimpleDdgiRefinementDemand(
     /// constructor and deconstructor for existing callers.
     /// </summary>
     public BoundingBox? SourceBounds { get; init; }
+}
+
+/// <summary>
+/// Independent automatic-refinement signals. Receiver density is the raw B1
+/// corrected contribution mass, geometric complexity and lighting variance
+/// are normalized [0,1] observations, and observed error is expressed as a
+/// non-negative ratio to the configured transport tolerance.
+/// </summary>
+public readonly record struct SimpleDdgiAutomaticRefinementMetrics(
+    float ReceiverDensity,
+    float GeometricComplexity,
+    float LightingVariance,
+    float ObservedError);
+
+/// <summary>
+/// Deterministic production scoring for automatic refinement placement. It
+/// admits a strong single witness as well as combinations of moderate signals,
+/// while the brick pool supplies spatial retention and replacement hysteresis.
+/// </summary>
+public static class SimpleDdgiAutomaticRefinementDemandBuilder
+{
+    public const float AdmissionThreshold = 0.45f;
+    public const float ReasonThreshold = 0.35f;
+    public const float ReceiverDensityReferenceMass = 8.0f;
+
+    public static bool TryBuild(
+        Vector3 position,
+        in SimpleDdgiAutomaticRefinementMetrics metrics,
+        ulong stableSourceId,
+        out SimpleDdgiRefinementDemand demand)
+    {
+        demand = default;
+        if (!Finite(position) ||
+            !FiniteNonNegative(metrics.ReceiverDensity) ||
+            !FiniteNonNegative(metrics.GeometricComplexity) ||
+            !FiniteNonNegative(metrics.LightingVariance) ||
+            !FiniteNonNegative(metrics.ObservedError))
+        {
+            return false;
+        }
+
+        float receiver = SaturatingNormalize(
+            metrics.ReceiverDensity,
+            ReceiverDensityReferenceMass);
+        float geometry = Math.Clamp(metrics.GeometricComplexity, 0.0f, 1.0f);
+        float lighting = Math.Clamp(metrics.LightingVariance, 0.0f, 1.0f);
+        float error = SaturatingNormalize(metrics.ObservedError, 1.0f);
+        float weighted =
+            receiver * 0.35f +
+            geometry * 0.25f +
+            lighting * 0.20f +
+            error * 0.20f;
+        float score = Math.Max(
+            weighted,
+            Math.Max(
+                Math.Max(receiver, geometry),
+                Math.Max(lighting, error)) * 0.55f);
+        if (score < AdmissionThreshold)
+            return false;
+
+        SimpleDdgiRefinementDemandReason reason =
+            SimpleDdgiRefinementDemandReason.None;
+        if (receiver >= ReasonThreshold)
+            reason |= SimpleDdgiRefinementDemandReason.HighReceiverDensity;
+        if (geometry >= ReasonThreshold)
+            reason |= SimpleDdgiRefinementDemandReason.GeometricComplexity;
+        if (lighting >= ReasonThreshold)
+            reason |= SimpleDdgiRefinementDemandReason.LightingVariance;
+        if (error >= ReasonThreshold)
+            reason |= SimpleDdgiRefinementDemandReason.ObservedError;
+        if (reason == SimpleDdgiRefinementDemandReason.None)
+            return false;
+
+        demand = new SimpleDdgiRefinementDemand(
+            position,
+            144.0f + score * 160.0f,
+            reason,
+            stableSourceId);
+        return true;
+    }
+
+    private static float SaturatingNormalize(float value, float scale) =>
+        value <= 0.0f ? 0.0f : value / (value + scale);
+
+    private static bool FiniteNonNegative(float value) =>
+        float.IsFinite(value) && value >= 0.0f;
+
+    private static bool Finite(Vector3 value) =>
+        float.IsFinite(value.X) &&
+        float.IsFinite(value.Y) &&
+        float.IsFinite(value.Z);
 }
 
 public readonly record struct SimpleDdgiRefinementBrickConfiguration(

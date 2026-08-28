@@ -173,7 +173,7 @@ namespace Njulf.Rendering.Diagnostics
                         profile.DdgiProbeBudget,
                         "count",
                         diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null);
-            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 40 : 39)
+            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 52 : 51)
             {
                 CreateMetric("CPU renderer", diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0, profile.CpuFrameBudgetMilliseconds, "ms"),
                 CreateMetric("GPU frame", diagnostics.GpuFrameMicroseconds / 1000.0, profile.GpuFrameBudgetMilliseconds, "ms",
@@ -324,6 +324,28 @@ namespace Njulf.Rendering.Diagnostics
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiActiveProbeCount <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateMetric("Transparent objects", diagnostics.TransparentObjectCount, profile.TransparentObjectBudget, "count")
             };
+
+            foreach (SimpleDdgiMutationLatencySnapshot latency in
+                     diagnostics.SimpleDdgiMutationLatency.Enumerate())
+            {
+                bool active = diagnostics.SimpleDdgiActive != 0;
+                metrics.Add(CreateHardLimitMetric(
+                    $"DDGI {latency.MutationClass} first-visible latency",
+                    latency.FirstVisibleResponse.P95Frames,
+                    1,
+                    "frames",
+                    !active || latency.FirstVisibleResponse.SampleCount <= 0
+                        ? RenderBudgetStatus.Unavailable
+                        : null));
+                metrics.Add(CreateHardLimitMetric(
+                    $"DDGI {latency.MutationClass} certified latency",
+                    latency.CertifiedConvergence.P95Frames,
+                    8,
+                    "frames",
+                    !active || latency.CertifiedConvergence.SampleCount <= 0
+                        ? RenderBudgetStatus.Unavailable
+                        : null));
+            }
 
             if (hasActualGpuMemoryBudget)
                 metrics.Add(CreateMetric(TrackedGpuMemoryMetricName, memory.TotalTrackedBytes, profile.GpuMemoryBudgetBytes, "bytes"));

@@ -99,7 +99,7 @@ function Invoke-SyntheticHealthReportCase {
     }
     $report = [pscustomobject]@{
         Kind = "njulf-renderer-benchmark"
-        Schema = "njulf-renderer-benchmark/v4"
+        Schema = "njulf-renderer-benchmark/v5"
         ProducerIdentity = [pscustomobject]@{
             Schema = "material-gi-producer-identity/v1"
             BuildCommit = $commit
@@ -198,7 +198,7 @@ function Invoke-SyntheticHealthReportCase {
     if (-not $failedClosed) {
         throw "Synthetic failed health report did not fail closed."
     }
-    Write-Host "PASS synthetic-benchmark-v4-health-v3-contract"
+    Write-Host "PASS synthetic-benchmark-v5-health-v3-contract"
 
     $bundleRoot = Join-Path $testRoot "runtime-bundle"
     New-Item -ItemType Directory -Path $bundleRoot | Out-Null

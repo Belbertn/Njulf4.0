@@ -17,9 +17,9 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     /// Increment when any C5 GPU field, binding meaning, source ownership rule,
     /// or history-reuse rule changes.
     /// </summary>
-    // V14 gives trace and resolve coverage independent compact lists and adds
-    // a separate double-buffered 16-byte per-tile scheduler history.
-    public const uint Version = 0x4335_000Fu;
+    // V16 packs validity and receiver-normal history and makes the raw
+    // candidate image the first post-temporal filter ping-pong target.
+    public const uint Version = 0x4335_0010u;
 
     public const uint DirectDiffuseTraceSourceTerm = 1u << 0;
     public const uint EmissiveTraceSourceTerm = 1u << 1;
@@ -95,11 +95,11 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     /// receiver metadata, and final canonical scene-color descriptors are
     /// externally owned by the renderer integration.
     /// </summary>
-    // V14 appends two persistent scheduler-history buffers. Disabled local
-    // adaptivity never dispatches their classifier, but generation accounting
-    // remains complete and deterministic.
+    // The raw candidate descriptor is already included in this base count and
+    // is reused as filter target zero after temporal resolve. At most one
+    // additional physical filter image is owned.
     public const uint BaseOwnedDescriptorCount = 24u;
-    public const uint FilterScratchDescriptorCount = 2u;
+    public const uint FilterScratchDescriptorCount = 1u;
 
     public static bool HasOnlyAllowedTraceSources(uint sourceTerms) =>
         (sourceTerms & ~AllowedTraceSourceTerms) == 0u &&
@@ -278,7 +278,9 @@ public enum SimpleDdgiNearFieldResidualGpuFlags : uint
     CompositeUsesValidResidualOnly = 1u << 8,
     FoliageMotionVectorsValid = 1u << 9,
     SourceLightingEpochChanged = 1u << 10,
-    LocalAdaptiveScheduling = 1u << 11
+    LocalAdaptiveScheduling = 1u << 11,
+    // Bits 12..15 are the per-pixel history rejection reason lane.
+    CameraOnlyReprojection = 1u << 16
 }
 
 /// <summary>

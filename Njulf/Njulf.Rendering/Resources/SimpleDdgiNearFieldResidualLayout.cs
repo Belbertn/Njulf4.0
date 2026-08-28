@@ -255,6 +255,17 @@ public readonly record struct SimpleDdgiNearFieldResidualLayout(
         PreparedMotionBytes + SourceLuminanceBytes + RawCandidateBytes +
         HitMetadataBytes + FilterScratchBytes + ActiveTileAndIndirectBytes +
         TileBuffersBytes + TelemetryReadbackBytes);
+
+    /// <summary>
+    /// Physical bytes avoided by reusing RawCandidate as the alternating
+    /// filter target after temporal resolve has consumed the candidate.
+    /// </summary>
+    public ulong AliasedFilterScratchBytes => FilterIterationCount > 0
+        ? RawCandidateBytes
+        : 0UL;
+
+    public int PhysicalFilterScratchImageCount =>
+        FilterIterationCount > 0 ? 1 : 0;
 }
 
 public static class SimpleDdgiNearFieldResidualLayoutCompiler
@@ -269,8 +280,11 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
         (int)SimpleDdgiNearFieldResidualGpuAbi.HitMetadataByteCount;
     // R16G16_SFLOAT stores two 16-bit channels, not two 32-bit floats.
     private const int MomentBytesPerPixel = 4;
-    private const int HistoryValidityBytesPerPixel = 4;
-    private const int HistoryNormalBytesPerPixel = Rgba16FloatBytesPerPixel;
+    // The reset pass fully initializes the current bank, so an eight-bit epoch
+    // tag plus seven-bit history length is sufficient in R16_UINT. Receiver
+    // geometric/shading octahedra are four signed normalized bytes in R32_UINT.
+    private const int HistoryValidityBytesPerPixel = 2;
+    private const int HistoryNormalBytesPerPixel = 4;
     private const int TileWidth = 8;
     private const int TileHeight = 8;
     private const int TileRecordBytes =
@@ -390,11 +404,15 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
             ulong historyNormals = checked(2UL * CalculateImageBytes(
                 traceWidth, traceHeight, HistoryNormalBytesPerPixel,
                 profile.ImageRowAlignment, profile.ImageAllocationGranularity));
+            // Temporal consumes RawCandidate before filtering begins. Reuse it
+            // as one ping-pong target and allocate only the other target. The
+            // iteration parity is selected so the final estimate always lives
+            // in the separate image before frequency separation rewrites Raw.
             ulong filterScratch = profile.FilterIterationCount == 0
                 ? 0UL
-                : checked(2UL * CalculateImageBytes(
+                : CalculateImageBytes(
                     traceWidth, traceHeight, Rgba16FloatBytesPerPixel,
-                    profile.ImageRowAlignment, profile.ImageAllocationGranularity));
+                    profile.ImageRowAlignment, profile.ImageAllocationGranularity);
             int tileCountX = checked((traceWidth + TileWidth - 1) / TileWidth);
             int tileCountY = checked((traceHeight + TileHeight - 1) / TileHeight);
             uint tileCapacity = checked((uint)(tileCountX * tileCountY));

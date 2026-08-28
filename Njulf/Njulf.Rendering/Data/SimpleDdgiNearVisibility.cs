@@ -14,15 +14,19 @@ public enum SimpleDdgiNearVisibilityDisposition
 }
 
 /// <summary>
-/// One packed B4 sidecar texel. X is conservative hit distance and Y is the
-/// directional hit confidence. It deliberately has the same four-byte stride
-/// as the canonical RG16F visibility moments.
+/// One packed B4 sidecar texel containing the two nearest independently
+/// coherent hit layers. Each depth/confidence pair occupies one RG16F word;
+/// the second layer prevents a foreground sliver from erasing reliable wall
+/// evidence behind it without ever averaging the two depths.
 /// </summary>
 public readonly record struct SimpleDdgiNearVisibilitySample(
     float ConservativeDepth,
     float Confidence)
 {
     public const float MaximumHalf = 65_504.0f;
+
+    public float SecondaryDepth { get; init; } = MaximumHalf;
+    public float SecondaryConfidence { get; init; }
 
     public static SimpleDdgiNearVisibilitySample Empty { get; } =
         new(MaximumHalf, 0.0f);
@@ -74,7 +78,8 @@ public readonly record struct SimpleDdgiNearVisibilityBilinearEvaluation(
 /// </summary>
 public static class SimpleDdgiNearVisibility
 {
-    public const int BytesPerTexel = sizeof(uint);
+    public const int LegacyBytesPerTexel = sizeof(uint);
+    public const int BytesPerTexel = 2 * sizeof(uint);
     public const float MinimumConfidence = 0.65f;
     public const float FullConfidence = 0.90f;
     public const float MinimumQualifyingNarrowWeight = 0.04f;
@@ -97,7 +102,7 @@ public static class SimpleDdgiNearVisibility
         float probeSpacing,
         float architecturalThickness)
     {
-        float nearest = SimpleDdgiNearVisibilitySample.MaximumHalf;
+        float primarySeed = SimpleDdgiNearVisibilitySample.MaximumHalf;
         double allNarrowWeight = 0.0;
         for (int index = 0; index < rays.Length; index++)
         {
@@ -110,38 +115,92 @@ public static class SimpleDdgiNearVisibility
             float narrowWeight = broadWeight * broadWeight;
             allNarrowWeight += narrowWeight;
             if (ray.Hit && narrowWeight >= MinimumQualifyingNarrowWeight)
-                nearest = Math.Min(nearest, Math.Max(ray.Distance, 0.0f));
+            {
+                primarySeed = Math.Min(
+                    primarySeed,
+                    Math.Max(ray.Distance, 0.0f));
+            }
         }
 
-        if (nearest >= SimpleDdgiNearVisibilitySample.MaximumHalf - 1.0f ||
+        if (primarySeed >=
+                SimpleDdgiNearVisibilitySample.MaximumHalf - 1.0f ||
             allNarrowWeight <= 1.0e-6)
         {
             return SimpleDdgiNearVisibilitySample.Empty;
         }
 
         float band = CoherentDepthBand(probeSpacing, architecturalThickness);
-        double clusteredWeight = 0.0;
-        double clusteredDepth = 0.0;
+        float secondarySeed = SimpleDdgiNearVisibilitySample.MaximumHalf;
+        double primaryWeight = 0.0;
+        double primaryDepth = 0.0;
         for (int index = 0; index < rays.Length; index++)
         {
             SimpleDdgiNearVisibilityRay ray = rays[index];
             float depth = Math.Max(ray.Distance, 0.0f);
-            if (!ray.Hit || Math.Abs(depth - nearest) > band)
+            if (!ray.Hit)
                 continue;
 
             float broadWeight = MathF.Pow(
                 Math.Clamp(ray.Cosine, 0.0f, 1.0f),
                 16.0f);
             float narrowWeight = broadWeight * broadWeight;
-            clusteredWeight += narrowWeight;
-            clusteredDepth += depth * narrowWeight;
+            if (Math.Abs(depth - primarySeed) <= band)
+            {
+                primaryWeight += narrowWeight;
+                primaryDepth += depth * narrowWeight;
+            }
+            else if (depth > primarySeed + band &&
+                narrowWeight >= MinimumQualifyingNarrowWeight)
+            {
+                secondarySeed = Math.Min(secondarySeed, depth);
+            }
         }
 
-        if (clusteredWeight <= 1.0e-6)
+        if (primaryWeight <= 1.0e-6)
             return SimpleDdgiNearVisibilitySample.Empty;
+
+        double secondaryWeight = 0.0;
+        double secondaryDepth = 0.0;
+        if (secondarySeed <
+            SimpleDdgiNearVisibilitySample.MaximumHalf - 1.0f)
+        {
+            for (int index = 0; index < rays.Length; index++)
+            {
+                SimpleDdgiNearVisibilityRay ray = rays[index];
+                float depth = Math.Max(ray.Distance, 0.0f);
+                if (!ray.Hit ||
+                    Math.Abs(depth - primarySeed) <= band ||
+                    Math.Abs(depth - secondarySeed) > band)
+                {
+                    continue;
+                }
+
+                float broadWeight = MathF.Pow(
+                    Math.Clamp(ray.Cosine, 0.0f, 1.0f),
+                    16.0f);
+                float narrowWeight = broadWeight * broadWeight;
+                secondaryWeight += narrowWeight;
+                secondaryDepth += depth * narrowWeight;
+            }
+        }
+
         return new SimpleDdgiNearVisibilitySample(
-            (float)(clusteredDepth / clusteredWeight),
-            Math.Clamp((float)(clusteredWeight / allNarrowWeight), 0.0f, 1.0f));
+            (float)(primaryDepth / primaryWeight),
+            Math.Clamp(
+                (float)(primaryWeight / allNarrowWeight),
+                0.0f,
+                1.0f))
+        {
+            SecondaryDepth = secondaryWeight > 1.0e-6
+                ? (float)(secondaryDepth / secondaryWeight)
+                : SimpleDdgiNearVisibilitySample.MaximumHalf,
+            SecondaryConfidence = secondaryWeight > 1.0e-6
+                ? Math.Clamp(
+                    (float)(secondaryWeight / allNarrowWeight),
+                    0.0f,
+                    1.0f)
+                : 0.0f
+        };
     }
 
     public static bool UsesSidecar(
@@ -172,6 +231,30 @@ public static class SimpleDdgiNearVisibility
         (float)BitConverter.UInt16BitsToHalf(
             checked((ushort)(packed >> 16))));
 
+    public static ulong PackV2(SimpleDdgiNearVisibilitySample sample)
+    {
+        EnsureFinite(sample.SecondaryDepth, nameof(sample));
+        EnsureFinite(sample.SecondaryConfidence, nameof(sample));
+        uint primary = Pack(sample);
+        uint secondary = Pack(new SimpleDdgiNearVisibilitySample(
+            sample.SecondaryDepth,
+            sample.SecondaryConfidence));
+        return primary | ((ulong)secondary << 32);
+    }
+
+    public static SimpleDdgiNearVisibilitySample UnpackV2(ulong packed)
+    {
+        SimpleDdgiNearVisibilitySample primary = Unpack(
+            unchecked((uint)packed));
+        SimpleDdgiNearVisibilitySample secondary = Unpack(
+            unchecked((uint)(packed >> 32)));
+        return primary with
+        {
+            SecondaryDepth = secondary.ConservativeDepth,
+            SecondaryConfidence = secondary.Confidence
+        };
+    }
+
     public static SimpleDdgiNearVisibilitySample BlendEvidence(
         SimpleDdgiNearVisibilitySample previous,
         SimpleDdgiNearVisibilitySample current,
@@ -183,46 +266,107 @@ public static class SimpleDdgiNearVisibility
     {
         EnsureFinite(previous.ConservativeDepth, nameof(previous));
         EnsureFinite(previous.Confidence, nameof(previous));
+        EnsureFinite(previous.SecondaryDepth, nameof(previous));
+        EnsureFinite(previous.SecondaryConfidence, nameof(previous));
         EnsureFinite(current.ConservativeDepth, nameof(current));
         EnsureFinite(current.Confidence, nameof(current));
+        EnsureFinite(current.SecondaryDepth, nameof(current));
+        EnsureFinite(current.SecondaryConfidence, nameof(current));
         EnsureFinite(texelHysteresis, nameof(texelHysteresis));
         EnsureFinite(probeSpacing, nameof(probeSpacing));
         EnsureFinite(architecturalThickness, nameof(architecturalThickness));
 
-        float previousDepth = Math.Clamp(
+        NearLayer previousPrimary = NormalizeLayer(
             previous.ConservativeDepth,
-            0.0f,
-            SimpleDdgiNearVisibilitySample.MaximumHalf);
-        float previousConfidence = Math.Clamp(previous.Confidence, 0.0f, 1.0f);
-        float currentConfidence = Math.Clamp(current.Confidence, 0.0f, 1.0f);
-        float currentDepth = currentConfidence > 0.0f
-            ? Math.Clamp(
-                current.ConservativeDepth,
-                0.0f,
-                SimpleDdgiNearVisibilitySample.MaximumHalf)
-            : (previousConfidence > 0.0f
-                ? previousDepth
-                : SimpleDdgiNearVisibilitySample.MaximumHalf);
+            previous.Confidence);
+        NearLayer previousSecondary = NormalizeLayer(
+            previous.SecondaryDepth,
+            previous.SecondaryConfidence);
+        SortActiveLayers(ref previousPrimary, ref previousSecondary);
 
-        float hysteresis = historyValid && !freshUpdate
+        NearLayer currentPrimary = NormalizeLayer(
+            current.ConservativeDepth,
+            current.Confidence);
+        NearLayer currentSecondary = NormalizeLayer(
+            current.SecondaryDepth,
+            current.SecondaryConfidence);
+        SortActiveLayers(ref currentPrimary, ref currentSecondary);
+
+        // A no-hit refresh releases confidence immediately, but retaining the
+        // previous finite depth avoids half-float infinity entering arithmetic
+        // and preserves the original one-layer ABI behavior.
+        if (currentPrimary.Confidence <= 0.0f &&
+            previousPrimary.Confidence > 0.0f)
+        {
+            currentPrimary = currentPrimary with
+            {
+                Depth = previousPrimary.Depth
+            };
+        }
+        if (currentSecondary.Confidence <= 0.0f &&
+            previousSecondary.Confidence > 0.0f)
+        {
+            currentSecondary = currentSecondary with
+            {
+                Depth = previousSecondary.Depth
+            };
+        }
+
+        float baseHysteresis = historyValid && !freshUpdate
             ? Math.Min(Math.Clamp(texelHysteresis, 0.0f, 1.0f), 0.85f)
             : 0.0f;
         float depthBand = CoherentDepthBand(
             Math.Max(probeSpacing, 0.001f),
             Math.Max(architecturalThickness, 0.008f));
-        if (currentConfidence < MinimumConfidence ||
-            previousConfidence < MinimumConfidence ||
-            Math.Abs(currentDepth - previousDepth) > depthBand)
-        {
-            hysteresis = 0.0f;
-        }
+
+        bool previousPrimaryUsed = false;
+        bool previousSecondaryUsed = false;
+        int primaryMatch = ResolveNearestPreviousLayer(
+            currentPrimary,
+            previousPrimary,
+            previousSecondary,
+            previousPrimaryUsed,
+            previousSecondaryUsed,
+            depthBand);
+        if (primaryMatch == 0)
+            previousPrimaryUsed = true;
+        else if (primaryMatch == 1)
+            previousSecondaryUsed = true;
+        NearLayer blendedPrimary = BlendLayer(
+            currentPrimary,
+            primaryMatch == 0
+                ? previousPrimary
+                : primaryMatch == 1
+                    ? previousSecondary
+                    : default,
+            primaryMatch >= 0 ? baseHysteresis : 0.0f,
+            depthBand);
+
+        int secondaryMatch = ResolveNearestPreviousLayer(
+            currentSecondary,
+            previousPrimary,
+            previousSecondary,
+            previousPrimaryUsed,
+            previousSecondaryUsed,
+            depthBand);
+        NearLayer blendedSecondary = BlendLayer(
+            currentSecondary,
+            secondaryMatch == 0
+                ? previousPrimary
+                : secondaryMatch == 1
+                    ? previousSecondary
+                    : default,
+            secondaryMatch >= 0 ? baseHysteresis : 0.0f,
+            depthBand);
+        SortActiveLayers(ref blendedPrimary, ref blendedSecondary);
 
         return new SimpleDdgiNearVisibilitySample(
-            Lerp(currentDepth, previousDepth, hysteresis),
-            Math.Clamp(
-                Lerp(currentConfidence, previousConfidence, hysteresis),
-                0.0f,
-                1.0f));
+            blendedPrimary.Depth,
+            blendedPrimary.Confidence)
+        {
+            SecondaryDepth = blendedSecondary.Depth,
+            SecondaryConfidence = blendedSecondary.Confidence
+        };
     }
 
     public static SimpleDdgiNearVisibilityBilinearEvaluation EvaluateBilinear(
@@ -292,54 +436,60 @@ public static class SimpleDdgiNearVisibility
                 SimpleDdgiNearVisibilityDisposition.IneligibleVolume);
         }
 
-        float depth = query.Sidecar.ConservativeDepth;
-        float confidence = Math.Clamp(query.Sidecar.Confidence, 0.0f, 1.0f);
-        if (confidence < MinimumConfidence)
-        {
-            return Unchanged(
-                SimpleDdgiNearVisibilityDisposition.InsufficientConfidence);
-        }
-        if (depth <= 0.0f ||
-            depth >= SimpleDdgiNearVisibilitySample.MaximumHalf - 1.0f)
-            return Unchanged(SimpleDdgiNearVisibilityDisposition.InvalidDepth);
-
         float discrepancyMargin = Math.Max(
             0.02f,
             Math.Min(spacing * 0.12f, thickness * 0.75f));
-        if (query.MomentMean <= depth + discrepancyMargin)
-        {
-            return Unchanged(
-                SimpleDdgiNearVisibilityDisposition.NoMomentDiscrepancy);
-        }
-
         float receiverMargin = Math.Max(
             0.01f,
             Math.Min(spacing * 0.04f, thickness * 0.35f));
-        float receiverDepthDelta = query.ReceiverDistance - depth;
-        if (receiverDepthDelta <= receiverMargin)
-        {
-            return Unchanged(
-                SimpleDdgiNearVisibilityDisposition.ReceiverInFront);
-        }
-
         float transitionWidth = Math.Max(
             0.03f,
             Math.Min(spacing * 0.15f, Math.Max(thickness, 0.02f) * 1.5f));
-        float coverage = SmoothStep(
+
+        NearLayerEvaluation primary = EvaluateLayer(
+            query.Sidecar.ConservativeDepth,
+            query.Sidecar.Confidence,
+            query.MomentMean,
+            query.ReceiverDistance,
+            discrepancyMargin,
             receiverMargin,
-            receiverMargin + transitionWidth,
-            receiverDepthDelta);
-        float trust = SmoothStep(MinimumConfidence, FullConfidence, confidence);
-        float conservativeVisibility = Lerp(
-            1.0f,
-            0.02f,
-            coverage * trust);
+            transitionWidth);
+        bool secondaryPresent = query.Sidecar.SecondaryConfidence > 0.0f;
+        NearLayerEvaluation secondary = secondaryPresent
+            ? EvaluateLayer(
+                query.Sidecar.SecondaryDepth,
+                query.Sidecar.SecondaryConfidence,
+                query.MomentMean,
+                query.ReceiverDistance,
+                discrepancyMargin,
+                receiverMargin,
+                transitionWidth)
+            : default;
+        if (!primary.Applied && !secondary.Applied)
+        {
+            return Unchanged(
+                secondaryPresent &&
+                primary.Disposition is
+                    SimpleDdgiNearVisibilityDisposition.InsufficientConfidence or
+                    SimpleDdgiNearVisibilityDisposition.InvalidDepth
+                    ? secondary.Disposition
+                    : primary.Disposition);
+        }
+
+        NearLayerEvaluation selected = !primary.Applied
+            ? secondary
+            : !secondary.Applied ||
+                primary.ConservativeVisibility <=
+                    secondary.ConservativeVisibility
+                ? primary
+                : secondary;
+        float conservativeVisibility = selected.ConservativeVisibility;
         return new SimpleDdgiNearVisibilityEvaluation(
             momentVisibility,
             Math.Min(momentVisibility, conservativeVisibility),
             conservativeVisibility,
-            trust,
-            coverage,
+            selected.Trust,
+            selected.Coverage,
             SimpleDdgiNearVisibilityDisposition.Applied);
     }
 
@@ -367,6 +517,139 @@ public static class SimpleDdgiNearVisibility
             1.0f);
     }
 
+    private static NearLayerEvaluation EvaluateLayer(
+        float depth,
+        float confidence,
+        float momentMean,
+        float receiverDistance,
+        float discrepancyMargin,
+        float receiverMargin,
+        float transitionWidth)
+    {
+        confidence = Math.Clamp(confidence, 0.0f, 1.0f);
+        if (confidence < MinimumConfidence)
+        {
+            return new NearLayerEvaluation(
+                1.0f,
+                0.0f,
+                0.0f,
+                SimpleDdgiNearVisibilityDisposition.InsufficientConfidence,
+                false);
+        }
+        if (depth <= 0.0f ||
+            depth >= SimpleDdgiNearVisibilitySample.MaximumHalf - 1.0f)
+        {
+            return new NearLayerEvaluation(
+                1.0f,
+                0.0f,
+                0.0f,
+                SimpleDdgiNearVisibilityDisposition.InvalidDepth,
+                false);
+        }
+        if (momentMean <= depth + discrepancyMargin)
+        {
+            return new NearLayerEvaluation(
+                1.0f,
+                0.0f,
+                0.0f,
+                SimpleDdgiNearVisibilityDisposition.NoMomentDiscrepancy,
+                false);
+        }
+
+        float receiverDepthDelta = receiverDistance - depth;
+        if (receiverDepthDelta <= receiverMargin)
+        {
+            return new NearLayerEvaluation(
+                1.0f,
+                0.0f,
+                0.0f,
+                SimpleDdgiNearVisibilityDisposition.ReceiverInFront,
+                false);
+        }
+
+        float coverage = SmoothStep(
+            receiverMargin,
+            receiverMargin + transitionWidth,
+            receiverDepthDelta);
+        float trust = SmoothStep(
+            MinimumConfidence,
+            FullConfidence,
+            confidence);
+        return new NearLayerEvaluation(
+            Lerp(1.0f, 0.02f, coverage * trust),
+            trust,
+            coverage,
+            SimpleDdgiNearVisibilityDisposition.Applied,
+            true);
+    }
+
+    private static NearLayer NormalizeLayer(float depth, float confidence) =>
+        new(
+            Math.Clamp(
+                depth,
+                0.0f,
+                SimpleDdgiNearVisibilitySample.MaximumHalf),
+            Math.Clamp(confidence, 0.0f, 1.0f));
+
+    private static void SortActiveLayers(
+        ref NearLayer primary,
+        ref NearLayer secondary)
+    {
+        if (secondary.Confidence <= 0.0f ||
+            (primary.Confidence > 0.0f && primary.Depth <= secondary.Depth))
+        {
+            return;
+        }
+
+        (primary, secondary) = (secondary, primary);
+    }
+
+    private static int ResolveNearestPreviousLayer(
+        NearLayer current,
+        NearLayer previousPrimary,
+        NearLayer previousSecondary,
+        bool previousPrimaryUsed,
+        bool previousSecondaryUsed,
+        float depthBand)
+    {
+        if (current.Confidence < MinimumConfidence)
+            return -1;
+
+        float primaryDistance = !previousPrimaryUsed &&
+            previousPrimary.Confidence >= MinimumConfidence
+                ? Math.Abs(current.Depth - previousPrimary.Depth)
+                : float.PositiveInfinity;
+        float secondaryDistance = !previousSecondaryUsed &&
+            previousSecondary.Confidence >= MinimumConfidence
+                ? Math.Abs(current.Depth - previousSecondary.Depth)
+                : float.PositiveInfinity;
+        float nearestDistance = Math.Min(primaryDistance, secondaryDistance);
+        if (nearestDistance > depthBand)
+            return -1;
+        return primaryDistance <= secondaryDistance ? 0 : 1;
+    }
+
+    private static NearLayer BlendLayer(
+        NearLayer current,
+        NearLayer previous,
+        float hysteresis,
+        float depthBand)
+    {
+        if (current.Confidence < MinimumConfidence ||
+            previous.Confidence < MinimumConfidence ||
+            Math.Abs(current.Depth - previous.Depth) > depthBand)
+        {
+            hysteresis = 0.0f;
+        }
+
+        return new NearLayer(
+            Lerp(current.Depth, previous.Depth, hysteresis),
+            Math.Clamp(
+                Lerp(current.Confidence, previous.Confidence, hysteresis),
+                0.0f,
+                1.0f));
+    }
+
     private static void Validate(in SimpleDdgiNearVisibilityQuery query)
     {
         EnsureFinite(query.MomentMean, nameof(query));
@@ -376,6 +659,8 @@ public static class SimpleDdgiNearVisibility
         EnsureFinite(query.ArchitecturalThickness, nameof(query));
         EnsureFinite(query.Sidecar.ConservativeDepth, nameof(query));
         EnsureFinite(query.Sidecar.Confidence, nameof(query));
+        EnsureFinite(query.Sidecar.SecondaryDepth, nameof(query));
+        EnsureFinite(query.Sidecar.SecondaryConfidence, nameof(query));
         if (query.MomentMean < 0.0f || query.MomentSecond < 0.0f ||
             query.ReceiverDistance < 0.0f || query.ProbeSpacing <= 0.0f ||
             query.ArchitecturalThickness <= 0.0f)
@@ -399,4 +684,13 @@ public static class SimpleDdgiNearVisibility
             1.0f);
         return t * t * (3.0f - 2.0f * t);
     }
+
+    private readonly record struct NearLayer(float Depth, float Confidence);
+
+    private readonly record struct NearLayerEvaluation(
+        float ConservativeVisibility,
+        float Trust,
+        float Coverage,
+        SimpleDdgiNearVisibilityDisposition Disposition,
+        bool Applied);
 }

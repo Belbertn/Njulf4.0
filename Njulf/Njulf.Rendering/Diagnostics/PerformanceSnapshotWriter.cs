@@ -102,7 +102,7 @@ namespace Njulf.Rendering.Diagnostics
         /// Version 10 adds fence-validated B1 publication counters, bounded
         /// stage timings, and exact central-memory telemetry.
         /// </summary>
-        public const int CurrentSchemaVersion = 10;
+        public const int CurrentSchemaVersion = 11;
 
         public int SchemaVersion { get; init; } = CurrentSchemaVersion;
         /// <summary>Persisted source version before migration, useful when opening baselines.</summary>
@@ -393,6 +393,15 @@ namespace Njulf.Rendering.Diagnostics
             get;
             init;
         }
+        /// <summary>
+        /// Mutation-to-first-visible and mutation-to-certified latency for all
+        /// six production edit classes.
+        /// </summary>
+        public SimpleDdgiMutationLatencyTelemetry SimpleDdgiMutationLatency
+        {
+            get;
+            init;
+        } = SimpleDdgiMutationLatencyTelemetry.Empty;
         /// <summary>Authored GI intent, retained even when a live fallback suppresses rendering.</summary>
         public bool Requested { get; init; }
         public GlobalIlluminationMode RequestedMode { get; init; } = GlobalIlluminationMode.Disabled;
@@ -798,6 +807,24 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.SimpleDdgiDirtyConvergenceLatencyP95Frames > 8)
             {
                 warnings.Add("Simple DDGI dirty-to-convergence P95 exceeds the eight-frame target.");
+            }
+            foreach (SimpleDdgiMutationLatencySnapshot latency in
+                     diagnostics.SimpleDdgiMutationLatency.Enumerate())
+            {
+                if (latency.FirstVisibleResponse.SampleCount > 0 &&
+                    latency.FirstVisibleResponse.P95Frames > 1)
+                {
+                    warnings.Add(
+                        $"Simple DDGI {latency.MutationClass} mutation-to-first-visible P95 " +
+                        "exceeds the one-frame target.");
+                }
+                if (latency.CertifiedConvergence.SampleCount > 0 &&
+                    latency.CertifiedConvergence.P95Frames > 8)
+                {
+                    warnings.Add(
+                        $"Simple DDGI {latency.MutationClass} mutation-to-certified P95 " +
+                        "exceeds the eight-frame target.");
+                }
             }
             if (diagnostics.StreamedGiAccelerationStructuresFeatureEnabled != 0 &&
                 diagnostics.AccelerationStructureMemoryBudgetBytes > 0UL &&
@@ -1661,6 +1688,8 @@ namespace Njulf.Rendering.Diagnostics
                 SimpleDdgiScheduling = diagnostics.SimpleDdgiScheduling,
                 SimpleDdgiAdaptiveRayEvidence =
                     diagnostics.SimpleDdgiAdaptiveRayEvidence,
+                SimpleDdgiMutationLatency =
+                    diagnostics.SimpleDdgiMutationLatency,
                 GiPipelineCacheLoaded = diagnostics.GiPipelineCacheLoaded != 0,
                 GiPipelineCacheRejected = diagnostics.GiPipelineCacheRejected != 0,
                 GiPipelineCacheSaved = diagnostics.GiPipelineCacheSaved != 0,
@@ -1865,12 +1894,12 @@ namespace Njulf.Rendering.Diagnostics
                         "Performance snapshot does not contain a valid SchemaVersion.");
                 }
                 if (schemaVersion is not 2 and not 3 and not 4 and not 5 and
-                    not 6 and not 7 and not 8 and not 9 and
+                    not 6 and not 7 and not 8 and not 9 and not 10 and
                     not PerformanceSnapshot.CurrentSchemaVersion)
                 {
                     throw new NotSupportedException(
                         $"Performance snapshot schema {schemaVersion} is not supported. " +
-                        $"Supported schemas are 2, 3, 4, 5, 6, 7, 8, 9, and " +
+                        $"Supported schemas are 2, 3, 4, 5, 6, 7, 8, 9, 10, and " +
                         $"{PerformanceSnapshot.CurrentSchemaVersion}.");
                 }
 
@@ -1888,6 +1917,7 @@ namespace Njulf.Rendering.Diagnostics
                 {
                     PerformanceSnapshot.CurrentSchemaVersion =>
                         NormalizeCurrentSchema(deserialized),
+                    10 => MigrateSchemaV10(deserialized),
                     9 => MigrateSchemaV9(deserialized),
                     8 => MigrateSchemaV8(deserialized),
                     7 => MigrateSchemaV7(deserialized),
@@ -2086,6 +2116,54 @@ namespace Njulf.Rendering.Diagnostics
             });
         }
 
+        /// <summary>
+        /// Schema v10 has complete Advanced-GI telemetry but predates C5's
+        /// explicit packed-history and physical scratch-alias counters. The
+        /// exact live byte totals remain valid; the new plan-savings fields
+        /// stay zero rather than being reconstructed from incomplete layout
+        /// metadata in an archived capture.
+        /// </summary>
+        private static PerformanceSnapshot MigrateSchemaV10(
+            PerformanceSnapshot legacy)
+        {
+            SimpleDdgiNearFieldResidualDiagnostics diagnosticsTelemetry =
+                RemoveC5PlanSavings(
+                    legacy.Diagnostics.SimpleDdgiNearFieldResidual);
+            SimpleDdgiNearFieldResidualDiagnostics snapshotTelemetry =
+                RemoveC5PlanSavings(
+                    legacy.GlobalIllumination.SimpleDdgiNearFieldResidual);
+            return NormalizeCurrentSchema(legacy with
+            {
+                OriginalSchemaVersion = 10,
+                Diagnostics = legacy.Diagnostics with
+                {
+                    SimpleDdgiNearFieldResidual = diagnosticsTelemetry
+                },
+                GlobalIllumination = legacy.GlobalIllumination with
+                {
+                    SimpleDdgiNearFieldResidual = snapshotTelemetry
+                }
+            });
+        }
+
+        private static SimpleDdgiNearFieldResidualDiagnostics
+            RemoveC5PlanSavings(
+                SimpleDdgiNearFieldResidualDiagnostics? telemetry)
+        {
+            SimpleDdgiNearFieldResidualDiagnostics safeTelemetry = telemetry ??
+                SimpleDdgiNearFieldResidualDiagnostics.Disabled(
+                    "C5 telemetry was absent from a schema-v10 snapshot.");
+            return safeTelemetry with
+            {
+                Memory = safeTelemetry.Memory with
+                {
+                    PackedValidityAndNormalBytes = 0UL,
+                    AliasedFilterScratchBytes = 0UL,
+                    PhysicalFilterScratchImageCount = 0
+                }
+            };
+        }
+
         private static PerformanceSnapshot NormalizeCurrentSchema(
             PerformanceSnapshot snapshot)
         {
@@ -2111,10 +2189,14 @@ namespace Njulf.Rendering.Diagnostics
                     .ReceiverFeedbackRuntime ??
                  SimpleDdgiReceiverFeedbackDiagnostics.Disabled)
                 .NormalizeForPersistence();
+            SimpleDdgiMutationLatencyTelemetry mutationLatency =
+                snapshot.Diagnostics.SimpleDdgiMutationLatency
+                    .NormalizeForPersistence();
             RendererDiagnostics diagnostics = snapshot.Diagnostics with
             {
                 SimpleDdgiNearFieldResidual = nearFieldResidual,
                 SimpleDdgiContentMemory = contentMemory,
+                SimpleDdgiMutationLatency = mutationLatency,
                 GiRoadmapExperiments = snapshot.Diagnostics.GiRoadmapExperiments with
                 {
                     OpacityMicromapRuntime = snapshot.Diagnostics
@@ -2131,7 +2213,8 @@ namespace Njulf.Rendering.Diagnostics
                 {
                     SimpleDdgiNearFieldResidual = nearFieldResidual,
                     GiRoadmapExperiments = diagnostics.GiRoadmapExperiments,
-                    SimpleDdgiContentMemory = contentMemory
+                    SimpleDdgiContentMemory = contentMemory,
+                    SimpleDdgiMutationLatency = mutationLatency
                 };
             return snapshot with
             {

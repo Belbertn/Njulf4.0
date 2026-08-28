@@ -70,8 +70,8 @@ namespace Njulf.Rendering.Resources
         public const Format WeightedOitRevealageFormat = Format.R8Unorm;
         public const Format NearFieldResidualRadianceFormat = Format.R16G16B16A16Sfloat;
         public const Format NearFieldResidualMomentsFormat = Format.R16G16Sfloat;
-        public const Format NearFieldResidualValidityFormat = Format.R32Uint;
-        public const Format NearFieldResidualNormalsFormat = Format.R16G16B16A16Sfloat;
+        public const Format NearFieldResidualValidityFormat = Format.R16Uint;
+        public const Format NearFieldResidualNormalsFormat = Format.R32Uint;
         public const Format NearFieldPreparedDepthFootprintFormat = Format.R32G32Sfloat;
         public const Format NearFieldPreparedPayloadFormat = Format.R32G32B32A32Uint;
         public const Format NearFieldPreparedMotionFormat = Format.R16G16Sfloat;
@@ -379,15 +379,9 @@ namespace Njulf.Rendering.Resources
                 CreateNearFieldHistoryTargets(traceExtent);
                 if (nearFieldResidualLayout.FilterScratchBytes != 0UL)
                 {
-                    NearFieldResidualFilterScratch0 = CreateGraphOwnedRenderTarget(
-                        RenderGraphResourceId.NearFieldResidualFilterScratch,
-                        "Near-Field Filter Scratch 0",
-                        NearFieldResidualRadianceFormat,
-                        traceExtent,
-                        NearFieldStorageSampledDescriptor);
                     NearFieldResidualFilterScratch1 = CreateGraphOwnedRenderTarget(
                         RenderGraphResourceId.NearFieldResidualFilterScratch,
-                        "Near-Field Filter Scratch 1",
+                        "Near-Field Filter Scratch",
                         NearFieldResidualRadianceFormat,
                         traceExtent,
                         NearFieldStorageSampledDescriptor);
@@ -568,7 +562,7 @@ namespace Njulf.Rendering.Resources
             (NearFieldDirectSource is null ? 0 :
                 14 + (NearFieldSourceLuminance is null ? 0 : 1) +
                 (NearFieldTraceRasterDepth is null ? 0 : 1) +
-                (NearFieldResidualFilterScratch0 is null ? 0 : 2)) +
+                (NearFieldResidualFilterScratch1 is null ? 0 : 1)) +
             (GiCausticReceiverPayload is null ? 0 : 3) +
             (HybridReflectionReceiverPayload is null ? 0 : 11);
         public ulong TotalEstimatedBytes =>
@@ -629,7 +623,7 @@ namespace Njulf.Rendering.Resources
                     SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat)
             {
                 throw new ArgumentException(
-                    "C5 generation allocation requires a valid V13 layout.",
+                    "C5 generation allocation requires a valid V16 layout.",
                     nameof(layout));
             }
 
@@ -773,15 +767,9 @@ namespace Njulf.Rendering.Resources
                 RenderTarget? scratch1 = null;
                 if (layout.FilterScratchBytes != 0UL)
                 {
-                    scratch0 = Create(
-                        RenderGraphResourceId.NearFieldResidualFilterScratch,
-                        "Near-Field Filter Scratch 0",
-                        NearFieldResidualRadianceFormat,
-                        traceExtent,
-                        NearFieldStorageSampledDescriptor);
                     scratch1 = Create(
                         RenderGraphResourceId.NearFieldResidualFilterScratch,
-                        "Near-Field Filter Scratch 1",
+                        "Near-Field Filter Scratch",
                         NearFieldResidualRadianceFormat,
                         traceExtent,
                         NearFieldStorageSampledDescriptor);
@@ -1020,9 +1008,8 @@ namespace Njulf.Rendering.Resources
                 [generation.HistoryNormals0, generation.HistoryNormals1]);
             _renderGraph.PublishOwnedRenderTargets(
                 RenderGraphResourceId.NearFieldResidualFilterScratch,
-                generation.FilterScratch0 is not null &&
                 generation.FilterScratch1 is not null
-                    ? [generation.FilterScratch0, generation.FilterScratch1]
+                    ? [generation.FilterScratch1]
                     : []);
         }
 
@@ -1064,7 +1051,7 @@ namespace Njulf.Rendering.Resources
                 layout.TraceResolutionScale is not (0.5f or 0.25f or 0.125f))
             {
                 throw new ArgumentException(
-                    "C5 replacement render targets require a valid V13 layout.",
+                    "C5 replacement render targets require a valid V16 layout.",
                     nameof(layout));
             }
             if (NearFieldDirectSource is null)

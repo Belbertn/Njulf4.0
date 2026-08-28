@@ -181,7 +181,7 @@ namespace Njulf.Rendering.Pipeline
         AreaRayShadowMask,
         // Sparse per-tile DDGI cohort records. Appended to preserve capture IDs.
         HybridReflectionDdgiCohorts,
-        // C5 V14 persistent 16-byte tile scheduler records.
+        // C5 V16 persistent 16-byte tile scheduler records.
         NearFieldResidualSchedulerHistory,
         // Distinct GTAO resources are append-only so existing capture IDs stay
         // stable and the SSAO resource contract remains untouched.

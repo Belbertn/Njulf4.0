@@ -5432,7 +5432,7 @@ function Assert-BenchmarkReport {
         [string]$ExpectedCandidatePath
     )
     if ([string]$Report.Kind -ne "njulf-renderer-benchmark" -or
-        [string]$Report.Schema -ne "njulf-renderer-benchmark/v4") {
+        [string]$Report.Schema -ne "njulf-renderer-benchmark/v5") {
         throw "$Label has unexpected report kind/schema '$($Report.Kind)'/'$($Report.Schema)'."
     }
     if ([int]$Report.MeasurementFrameCount -ne [int]$Workload.measureFrames) {

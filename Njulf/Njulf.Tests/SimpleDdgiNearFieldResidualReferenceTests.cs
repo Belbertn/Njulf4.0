@@ -572,6 +572,62 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
     }
 
     [Test]
+    public void V16Layout_PacksHistoryAndAllocatesOneAliasedFilterPeer()
+    {
+        const ulong budget = 512UL * 1024UL * 1024UL;
+        SimpleDdgiNearFieldResidualProfile baseProfile =
+            SimpleDdgiNearFieldResidualProfile.Balanced with
+            {
+                ImageRowAlignment = 1,
+                ImageAllocationGranularity = 1
+            };
+        SimpleDdgiNearFieldResidualLayout noFilter =
+            SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
+                64, 32, baseProfile with { FilterIterationCount = 0 }, budget);
+        SimpleDdgiNearFieldResidualLayout oneFilter =
+            SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
+                64, 32, baseProfile with { FilterIterationCount = 1 }, budget);
+        SimpleDdgiNearFieldResidualLayout twoFilters =
+            SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
+                64, 32, baseProfile with { FilterIterationCount = 2 }, budget);
+        SimpleDdgiNearFieldResidualLayout threeFilters =
+            SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
+                64, 32, baseProfile with { FilterIterationCount = 3 }, budget);
+
+        const ulong tracePixels = 32UL * 16UL;
+        Assert.Multiple(() =>
+        {
+            Assert.That(noFilter.IsValid, Is.True);
+            Assert.That(oneFilter.IsValid, Is.True);
+            Assert.That(twoFilters.IsValid, Is.True);
+            Assert.That(threeFilters.IsValid, Is.True);
+            Assert.That(oneFilter.HistoryValidityBytes,
+                Is.EqualTo(2UL * tracePixels * 2UL),
+                "Two R16_UINT banks must be charged exactly.");
+            Assert.That(oneFilter.HistoryNormalBytes,
+                Is.EqualTo(2UL * tracePixels * 4UL),
+                "Two packed R32_UINT normal banks must be charged exactly.");
+            Assert.That(noFilter.FilterScratchBytes, Is.Zero);
+            Assert.That(noFilter.AliasedFilterScratchBytes, Is.Zero);
+            Assert.That(noFilter.PhysicalFilterScratchImageCount, Is.Zero);
+            Assert.That(oneFilter.FilterScratchBytes,
+                Is.EqualTo(oneFilter.RawCandidateBytes));
+            Assert.That(twoFilters.FilterScratchBytes,
+                Is.EqualTo(oneFilter.FilterScratchBytes));
+            Assert.That(threeFilters.FilterScratchBytes,
+                Is.EqualTo(oneFilter.FilterScratchBytes));
+            Assert.That(threeFilters.AliasedFilterScratchBytes,
+                Is.EqualTo(threeFilters.RawCandidateBytes));
+            Assert.That(threeFilters.PhysicalFilterScratchImageCount, Is.EqualTo(1));
+            Assert.That(oneFilter.TotalBytes - noFilter.TotalBytes,
+                Is.EqualTo(oneFilter.FilterScratchBytes),
+                "Filtering must add one physical peer regardless of iteration count.");
+            Assert.That(twoFilters.TotalBytes, Is.EqualTo(oneFilter.TotalBytes));
+            Assert.That(threeFilters.TotalBytes, Is.EqualTo(oneFilter.TotalBytes));
+        });
+    }
+
+    [Test]
     public void ProductionProfiles_HonorTheIndependentNinetySixMiBEnvelope()
     {
         const ulong budget = 96UL * 1024UL * 1024UL;

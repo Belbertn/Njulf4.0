@@ -53,33 +53,54 @@ namespace Njulf.Rendering.Resources
     internal sealed class SimpleDdgiFrozenTailInvalidationBuffer
     {
         internal const int MaximumDeferredSourceCount = 1_024;
+        internal const ulong MaximumDeferredFrameCount = 2UL;
 
         private readonly List<DdgiDirtyRegion> _deferred =
             new(MaximumDeferredSourceCount);
         private readonly List<DdgiDirtyRegion> _releaseScratch =
             new(MaximumDeferredSourceCount);
+        private ulong _firstDeferredFrameSerial;
+        private ulong _syntheticFrameSerial;
 
         public int DeferredCount => _deferred.Count;
         public bool DeferredCurrentFrame { get; private set; }
         public bool ReleasedDeferredThisFrame { get; private set; }
+        public bool AuditInvalidatedThisFrame { get; private set; }
 
         public IReadOnlyList<DdgiDirtyRegion>? Resolve(
             bool auditFrozen,
-            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions)
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            ulong frameSerial = 0UL)
         {
             DeferredCurrentFrame = false;
             ReleasedDeferredThisFrame = false;
+            AuditInvalidatedThisFrame = false;
             _releaseScratch.Clear();
+
+            ulong currentFrameSerial = frameSerial != 0UL
+                ? frameSerial
+                : ++_syntheticFrameSerial;
 
             if (!auditFrozen)
                 return ReleaseWith(dirtyRegions);
+            if (_deferred.Count > 0 &&
+                currentFrameSerial >= _firstDeferredFrameSerial &&
+                currentFrameSerial - _firstDeferredFrameSerial >=
+                    MaximumDeferredFrameCount)
+            {
+                AuditInvalidatedThisFrame = true;
+                return ReleaseWith(dirtyRegions);
+            }
             if (dirtyRegions == null || dirtyRegions.Count == 0)
                 return null;
 
             for (int i = 0; i < dirtyRegions.Count; i++)
             {
                 if (!CanDefer(dirtyRegions[i]))
+                {
+                    AuditInvalidatedThisFrame = true;
                     return ReleaseWith(dirtyRegions);
+                }
             }
 
             for (int i = 0; i < dirtyRegions.Count; i++)
@@ -95,7 +116,12 @@ namespace Njulf.Rendering.Resources
                 }
 
                 if (_deferred.Count >= MaximumDeferredSourceCount)
+                {
+                    AuditInvalidatedThisFrame = true;
                     return ReleaseWith(dirtyRegions);
+                }
+                if (_deferred.Count == 0)
+                    _firstDeferredFrameSerial = currentFrameSerial;
                 _deferred.Add(current);
             }
 
@@ -149,6 +175,7 @@ namespace Njulf.Rendering.Resources
                     _releaseScratch.Add(dirtyRegions[i]);
             }
             _deferred.Clear();
+            _firstDeferredFrameSerial = 0UL;
             ReleasedDeferredThisFrame = true;
             return _releaseScratch;
         }

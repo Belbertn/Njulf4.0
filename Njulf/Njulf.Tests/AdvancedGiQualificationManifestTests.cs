@@ -205,6 +205,45 @@ public sealed class AdvancedGiQualificationManifestTests
     }
 
     [Test]
+    public void GenericNonNvidiaEvidence_CannotReplaceExplicitIntelCoverage()
+    {
+        string path = WriteValidC1Manifest();
+        AdvancedGiQualificationManifestDocument document = ReadDocument(path);
+        AdvancedGiFeatureQualificationDocument feature =
+            document.Features.Single();
+        feature = feature with
+        {
+            DeviceRules = feature.DeviceRules
+                .Where(static rule => rule.RuleId != "intel-fallback")
+                .ToArray()
+        };
+        feature = feature with
+        {
+            QualificationId =
+                AdvancedGiQualificationManifestCodec.ComputeQualificationId(
+                    feature)
+        };
+        File.WriteAllText(
+            path,
+            AdvancedGiQualificationManifestCodec.SerializeDocument(
+                document with { Features = [feature] }));
+
+        bool loaded = AdvancedGiQualificationManifestCodec.TryLoad(
+            path,
+            out _,
+            out string reason,
+            new DateTimeOffset(2026, 8, 10, 0, 0, 0, TimeSpan.Zero));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loaded, Is.False);
+            Assert.That(reason,
+                Is.EqualTo(
+                    "advanced-gi-qualification-device-matrix-incomplete"));
+        });
+    }
+
+    [Test]
     public void DisabledFallbackDevice_IsAuthenticatedButCannotActivateTheFeature()
     {
         string path = WriteValidC1Manifest();
@@ -358,14 +397,30 @@ public sealed class AdvancedGiQualificationManifestTests
             },
             new()
             {
-                RuleId = "non-nvidia-fallback",
+                RuleId = "amd-fallback",
                 Coverage = AdvancedGiQualificationDeviceCoverage.NonNvidiaRayQuery |
+                    AdvancedGiQualificationDeviceCoverage.AmdRayQuery |
                     AdvancedGiQualificationDeviceCoverage.FeatureDisabledFallback,
-                VendorId = 0x1002u,
+                VendorId = AdvancedGiQualificationContract.AmdVendorId,
                 MinimumDeviceId = 0x73BFu,
                 MaximumDeviceId = 0x73BFu,
                 MinimumDriverVersion = 200u,
                 MaximumDriverVersion = 200u,
+                MinimumApiVersion = 1u,
+                MaximumApiVersion = 1u,
+                ExpectedFeatureSupported = false
+            },
+            new()
+            {
+                RuleId = "intel-fallback",
+                Coverage = AdvancedGiQualificationDeviceCoverage.NonNvidiaRayQuery |
+                    AdvancedGiQualificationDeviceCoverage.IntelRayQuery |
+                    AdvancedGiQualificationDeviceCoverage.FeatureDisabledFallback,
+                VendorId = AdvancedGiQualificationContract.IntelVendorId,
+                MinimumDeviceId = 0x56A0u,
+                MaximumDeviceId = 0x56A0u,
+                MinimumDriverVersion = 300u,
+                MaximumDriverVersion = 300u,
                 MinimumApiVersion = 1u,
                 MaximumApiVersion = 1u,
                 ExpectedFeatureSupported = false
@@ -414,6 +469,10 @@ public sealed class AdvancedGiQualificationManifestTests
                     ContentProfileId = ContentProfile,
                     SceneAssetSha256 = sceneAsset,
                     PrerequisiteQualificationId = prerequisite,
+                    FallbackReason = role ==
+                        AdvancedGiQualificationEvidenceRole.Fallback
+                            ? "extension-or-device-profile-unsupported"
+                            : "not-applicable",
                     PassedChecks = AdvancedGiQualificationContract.GetRequiredChecks(role).ToArray(),
                     Measurements = CreateMeasurements(role, candidateP95Milliseconds),
                     Summary = $"Pinned {role} evidence for {rule.RuleId}."
@@ -461,7 +520,10 @@ public sealed class AdvancedGiQualificationManifestTests
                 FrameCount = AdvancedGiQualificationContract.MinimumReferenceFrames,
                 IndependentRunCount = AdvancedGiQualificationContract.MinimumIndependentRuns,
                 BaselineReferenceError = 0.0,
-                CandidateReferenceError = 0.0
+                CandidateReferenceError = 0.0,
+                EqualCostAlternativeError = 0.0,
+                EqualWorkComparisonVerified = true,
+                EnergyOwnershipVerified = true
             },
             AdvancedGiQualificationEvidenceRole.Performance => new()
             {
@@ -479,7 +541,13 @@ public sealed class AdvancedGiQualificationManifestTests
             AdvancedGiQualificationEvidenceRole.LongRun => new()
             {
                 FrameCount = AdvancedGiQualificationContract.MinimumReferenceFrames,
-                DurationSeconds = AdvancedGiQualificationContract.MinimumLongRunSeconds
+                DurationSeconds = AdvancedGiQualificationContract.MinimumSoakSeconds,
+                TraversalDurationSeconds =
+                    AdvancedGiQualificationContract.MinimumTraversalSeconds,
+                SoakDurationSeconds =
+                    AdvancedGiQualificationContract.MinimumSoakSeconds,
+                SteadyStateStartLiveBytes = 768,
+                SteadyStateEndLiveBytes = 768
             },
             AdvancedGiQualificationEvidenceRole.Validation => new(),
             AdvancedGiQualificationEvidenceRole.Fallback => new()

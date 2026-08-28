@@ -989,6 +989,57 @@ public sealed class PerformanceSnapshotWriterTests
         }
     }
 
+    [Test]
+    public void SnapshotReader_MigratesSchemaTenWithoutTrustingC5Savings()
+    {
+        SimpleDdgiNearFieldResidualDiagnostics telemetry =
+            CreateNearFieldResidualTelemetry();
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            SimpleDdgiNearFieldResidual = telemetry
+        };
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "NjulfPerformanceSnapshotTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            string path = new PerformanceSnapshotWriter().Write(
+                directory,
+                diagnostics,
+                RenderBudgetSnapshot.Empty);
+            JsonNode root = JsonNode.Parse(File.ReadAllText(path))
+                ?? throw new InvalidOperationException(
+                    "Expected a snapshot JSON object.");
+            root["SchemaVersion"] = 10;
+            root["OriginalSchemaVersion"] = 10;
+            File.WriteAllText(path, root.ToJsonString());
+
+            PerformanceSnapshot snapshot =
+                new PerformanceSnapshotReader().Read(path);
+            SimpleDdgiNearFieldResidualMemoryTelemetry memory = snapshot
+                .Diagnostics.SimpleDdgiNearFieldResidual.Memory;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(snapshot.SchemaVersion,
+                    Is.EqualTo(PerformanceSnapshot.CurrentSchemaVersion));
+                Assert.That(snapshot.OriginalSchemaVersion, Is.EqualTo(10));
+                Assert.That(memory.AllocatedBytes, Is.EqualTo(1_920UL));
+                Assert.That(memory.PackedValidityAndNormalBytes, Is.Zero);
+                Assert.That(memory.AliasedFilterScratchBytes, Is.Zero);
+                Assert.That(memory.PhysicalFilterScratchImageCount, Is.Zero);
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static SimpleDdgiDirectionalGuidingDiagnostics
         CreateDirectionalGuidingTelemetry() => new()
         {
@@ -1332,7 +1383,12 @@ public sealed class PerformanceSnapshotWriterTests
             completedFrameSerial: 44UL,
             ageFrames: 1U,
             memory: new SimpleDdgiNearFieldResidualMemoryTelemetry(
-                2_048UL, 2_048UL, 1_920UL, 2_048UL, 128UL),
+                2_048UL, 2_048UL, 1_920UL, 2_048UL, 128UL)
+            {
+                PackedValidityAndNormalBytes = 384UL,
+                AliasedFilterScratchBytes = 512UL,
+                PhysicalFilterScratchImageCount = 1
+            },
             timings: new SimpleDdgiNearFieldResidualStageTimings(
                 3UL, 5UL, 7UL, 11UL, 15UL),
             trace: new SimpleDdgiNearFieldResidualTraceTelemetry(

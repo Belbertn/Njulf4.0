@@ -30,7 +30,7 @@ public sealed record AdvancedGiQualificationCorpusCase
 /// </summary>
 public sealed record AdvancedGiQualificationCorpusDocument
 {
-    public const uint CurrentSchemaRevision = 1u;
+    public const uint CurrentSchemaRevision = 2u;
     public uint SchemaRevision { get; init; } = CurrentSchemaRevision;
     public string CorpusId { get; init; } = string.Empty;
     public AdvancedGiQualificationCorpusCase[] Cases { get; init; } = [];
@@ -56,8 +56,29 @@ public static class AdvancedGiQualificationCorpusCodec
     private const int MaximumCases = 64;
     private const int MaximumArtifactsPerCase = 16;
     private const long MaximumArtifactBytes = 2L * 1024L * 1024L * 1024L;
-    private static readonly string[] RequiredRoles =
-        ["scene", "camera-script", "settings", "reference"];
+    public static IReadOnlyList<string> RequiredProductionScenarios { get; } =
+        Array.AsReadOnly(new[]
+        {
+            "interior",
+            "emissive",
+            "foliage",
+            "glass",
+            "smoke",
+            "water",
+            "rapid-lighting-transition"
+        });
+
+    public static IReadOnlyList<string> RequiredArtifactRoles { get; } =
+        Array.AsReadOnly(new[]
+        {
+            "scene",
+            "camera-script",
+            "settings",
+            "path-traced-reference",
+            "equal-work-baseline",
+            "equal-work-candidate",
+            "metrics"
+        });
     private static readonly JsonSerializerOptions JsonOptions = CreateOptions();
 
     public static bool TryLoadAndVerify(
@@ -214,7 +235,7 @@ public static class AdvancedGiQualificationCorpusCodec
         using IncrementalHash hash = IncrementalHash.CreateHash(
             HashAlgorithmName.SHA256);
         AdvancedGiQualificationContract.Append(
-            hash, "advanced-gi-reference-corpus/v1");
+            hash, "advanced-gi-reference-corpus/v2");
         AdvancedGiQualificationContract.Append(
             hash, document.SchemaRevision.ToString(CultureInfo.InvariantCulture));
         AdvancedGiQualificationContract.Append(hash, document.CorpusId);
@@ -280,6 +301,7 @@ public static class AdvancedGiQualificationCorpusCodec
 
         var caseIds = new HashSet<string>(StringComparer.Ordinal);
         var coverage = new HashSet<AdvancedGiPrerequisiteFeature>();
+        var scenarioCoverage = new HashSet<string>(StringComparer.Ordinal);
         foreach (AdvancedGiQualificationCorpusCase item in document.Cases)
         {
             if (!AdvancedGiQualificationContract.IsCanonicalToken(
@@ -287,9 +309,12 @@ public static class AdvancedGiQualificationCorpusCodec
                 throw Invalid("advanced-gi-corpus-case-id-invalid-or-duplicate");
             if (!AdvancedGiQualificationContract.IsCanonicalToken(
                     item.Scenario, 256) ||
+                !RequiredProductionScenarios.Contains(
+                    item.Scenario, StringComparer.Ordinal) ||
                 !AdvancedGiQualificationContract.IsCanonicalToken(
                     item.Description, 1_024))
                 throw Invalid("advanced-gi-corpus-case-metadata-invalid");
+            scenarioCoverage.Add(item.Scenario);
             if (item.Features is null || item.Features.Length == 0 ||
                 item.Features.Any(static feature => !Enum.IsDefined(feature)) ||
                 item.Features.Distinct().Count() != item.Features.Length)
@@ -322,8 +347,14 @@ public static class AdvancedGiQualificationCorpusCodec
                     artifact.ByteLength > MaximumArtifactBytes))
                     throw Invalid("advanced-gi-corpus-artifact-length-invalid");
             }
-            if (RequiredRoles.Any(role => !roles.Contains(role)))
+            if (RequiredArtifactRoles.Any(role => !roles.Contains(role)))
                 throw Invalid("advanced-gi-corpus-required-artifact-role-missing");
+        }
+
+        if (RequiredProductionScenarios.Any(
+                scenario => !scenarioCoverage.Contains(scenario)))
+        {
+            throw Invalid("advanced-gi-corpus-production-scenario-coverage-incomplete");
         }
 
         foreach (AdvancedGiPrerequisiteFeature feature in
@@ -331,6 +362,28 @@ public static class AdvancedGiQualificationCorpusCodec
         {
             if (!coverage.Contains(feature))
                 throw Invalid("advanced-gi-corpus-feature-coverage-incomplete");
+            if (!document.Cases.Any(item =>
+                    item.Features.Length == 1 &&
+                    item.Features[0] == feature))
+            {
+                throw Invalid(
+                    "advanced-gi-corpus-feature-isolation-coverage-incomplete");
+            }
+        }
+
+        AdvancedGiPrerequisiteFeature[] features =
+            Enum.GetValues<AdvancedGiPrerequisiteFeature>();
+        for (int first = 0; first < features.Length; first++)
+        for (int second = first + 1; second < features.Length; second++)
+        {
+            AdvancedGiPrerequisiteFeature a = features[first];
+            AdvancedGiPrerequisiteFeature b = features[second];
+            if (!document.Cases.Any(item =>
+                    item.Features.Contains(a) && item.Features.Contains(b)))
+            {
+                throw Invalid(
+                    "advanced-gi-corpus-pairwise-feature-coverage-incomplete");
+            }
         }
     }
 

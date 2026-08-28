@@ -402,11 +402,12 @@ public sealed class ProceduralSkyModelTests
                 Is.EqualTo(BindlessIndex.SimpleDdgiStorageValidationBufferBase + 1));
             // Fixed slots are append-only so existing environment/DDGI
             // bindings keep their historical indices while the heap grows at
-            // the tail. GPU LOD history is the current terminal reservation.
+            // the tail. Dynamic DDGI geometry is the current terminal arena.
             Assert.That(
                 BindlessIndex.StaticBufferCount,
                 Is.EqualTo(
-                    BindlessIndex.SceneGpuLodHistoryBufferFrame1 + 1));
+                    BindlessIndex.DdgiDynamicGeometryBufferBase +
+                    BindlessIndex.DdgiDynamicGeometryBufferCount));
         });
     }
 

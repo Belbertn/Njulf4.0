@@ -1158,6 +1158,7 @@ internal static class SimpleDdgiTailSummaryDigest
         Add(ref hash, generations.Audit);
         Add(ref hash, generations.Queue);
         Add(ref hash, generations.SchedulerResources);
+        Add(ref hash, generations.DynamicGeometryEpoch);
     }
 
     private static void Add(

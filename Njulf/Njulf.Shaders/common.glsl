@@ -294,7 +294,9 @@ const int SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_BASE_INDEX = 226;
 const int SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_FRAME1_INDEX = 227;
 const int SCENE_GPU_LOD_HISTORY_BUFFER_BASE_INDEX = 228;
 const int SCENE_GPU_LOD_HISTORY_BUFFER_FRAME1_INDEX = 229;
-const int STATIC_BUFFER_COUNT = 230;
+// Keep synchronized with BindlessIndex.StaticBufferCount. The final 512 slots
+// are a frame-partitioned arena for 128 DDGI dynamic-geometry submissions.
+const int STATIC_BUFFER_COUNT = 742;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;

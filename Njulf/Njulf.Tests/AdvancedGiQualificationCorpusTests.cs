@@ -47,8 +47,15 @@ public sealed class AdvancedGiQualificationCorpusTests
                 Is.EqualTo(pinned.CorpusSha256));
             Assert.That(verified.CorpusSha256,
                 Does.StartWith("sha256:").And.Length.EqualTo(71));
-            Assert.That(verified.CaseCount, Is.EqualTo(1));
-            Assert.That(verified.ArtifactCount, Is.EqualTo(4));
+            Assert.That(verified.CaseCount,
+                Is.EqualTo(AdvancedGiQualificationCorpusCodec
+                    .RequiredProductionScenarios.Count));
+            Assert.That(verified.ArtifactCount,
+                Is.EqualTo(
+                    AdvancedGiQualificationCorpusCodec
+                        .RequiredProductionScenarios.Count *
+                    AdvancedGiQualificationCorpusCodec
+                        .RequiredArtifactRoles.Count));
             Assert.That(verified.CoveredFeatures,
                 Is.EquivalentTo(Enum.GetValues<
                     AdvancedGiPrerequisiteFeature>()));
@@ -62,8 +69,10 @@ public sealed class AdvancedGiQualificationCorpusTests
         string outputPath = Path.Combine(_directory, "corpus.json");
         _ = AdvancedGiQualificationCorpusCodec.Pin(
             _directory, requestPath, outputPath);
-        File.AppendAllText(Path.Combine(_directory, "case", "scene.json"),
-            " ");
+        string firstScene = CreateRequest().Cases[0].Artifacts
+            .Single(static artifact => artifact.Role == "scene")
+            .RelativePath.Replace('/', Path.DirectorySeparatorChar);
+        File.AppendAllText(Path.Combine(_directory, firstScene), " ");
 
         bool accepted =
             AdvancedGiQualificationCorpusCodec.TryLoadAndVerify(
@@ -80,25 +89,22 @@ public sealed class AdvancedGiQualificationCorpusTests
     [Test]
     public void TraversalPath_IsRejectedBeforePinning()
     {
-        AdvancedGiQualificationCorpusDocument request = CreateRequest() with
+        AdvancedGiQualificationCorpusDocument source = CreateRequest();
+        AdvancedGiQualificationCorpusDocument request = source with
         {
-            Cases =
-            [
-                CreateRequest().Cases.Single() with
+            Cases = source.Cases.Select((item, index) => index == 0
+                ? item with
                 {
-                    Artifacts =
-                    [
-                        new AdvancedGiQualificationCorpusArtifact
-                        {
-                            Role = "scene",
-                            RelativePath = "../escape.json"
-                        },
-                        Artifact("camera-script", "case/camera.json"),
-                        Artifact("settings", "case/settings.json"),
-                        Artifact("reference", "case/reference.exr")
-                    ]
+                    Artifacts = item.Artifacts.Select(artifact =>
+                            artifact.Role == "scene"
+                                ? artifact with
+                                {
+                                    RelativePath = "../escape.json"
+                                }
+                                : artifact)
+                        .ToArray()
                 }
-            ]
+                : item).ToArray()
         };
         string requestPath = Path.Combine(_directory, "request.json");
         File.WriteAllText(requestPath,
@@ -118,7 +124,9 @@ public sealed class AdvancedGiQualificationCorpusTests
     {
         string requestPath = WriteRequestAndArtifacts(_directory);
         string artifactPath = Path.Combine(
-            _directory, "case", "scene.json");
+            _directory,
+            CreateRequest().Cases[0].Artifacts[0].RelativePath.Replace(
+                '/', Path.DirectorySeparatorChar));
         string original = File.ReadAllText(artifactPath);
 
         Assert.Multiple(() =>
@@ -134,22 +142,76 @@ public sealed class AdvancedGiQualificationCorpusTests
         });
     }
 
+    [Test]
+    public void MissingProductionScenario_IsRejectedBeforeArtifactIo()
+    {
+        AdvancedGiQualificationCorpusDocument source = CreateRequest();
+        AdvancedGiQualificationCorpusDocument incomplete = source with
+        {
+            Cases = source.Cases
+                .Where(static item => item.Scenario != "water")
+                .ToArray()
+        };
+        string requestPath = Path.Combine(_directory, "request.json");
+        File.WriteAllText(
+            requestPath,
+            AdvancedGiQualificationCorpusCodec.SerializeDocument(incomplete));
+
+        Assert.That(
+            () => AdvancedGiQualificationCorpusCodec.Pin(
+                _directory,
+                requestPath,
+                Path.Combine(_directory, "corpus.json")),
+            Throws.TypeOf<InvalidDataException>().With.Message.EqualTo(
+                "advanced-gi-corpus-production-scenario-coverage-incomplete"));
+    }
+
+    [Test]
+    public void IsolationWithoutPairwiseCombinationCoverage_IsRejected()
+    {
+        AdvancedGiQualificationCorpusDocument source = CreateRequest();
+        AdvancedGiPrerequisiteFeature[] features =
+            Enum.GetValues<AdvancedGiPrerequisiteFeature>();
+        AdvancedGiQualificationCorpusDocument isolatedOnly = source with
+        {
+            Cases = source.Cases.Select((item, index) => item with
+            {
+                Features = [features[index % features.Length]]
+            }).ToArray()
+        };
+        string requestPath = Path.Combine(_directory, "request.json");
+        File.WriteAllText(
+            requestPath,
+            AdvancedGiQualificationCorpusCodec.SerializeDocument(isolatedOnly));
+
+        Assert.That(
+            () => AdvancedGiQualificationCorpusCodec.Pin(
+                _directory,
+                requestPath,
+                Path.Combine(_directory, "corpus.json")),
+            Throws.TypeOf<InvalidDataException>().With.Message.EqualTo(
+                "advanced-gi-corpus-pairwise-feature-coverage-incomplete"));
+    }
+
     private static string WriteRequestAndArtifacts(string root)
     {
-        string caseDirectory = Path.Combine(root, "case");
-        Directory.CreateDirectory(caseDirectory);
-        File.WriteAllText(Path.Combine(caseDirectory, "scene.json"),
-            "{\"scene\":1}");
-        File.WriteAllText(Path.Combine(caseDirectory, "camera.json"),
-            "{\"camera\":1}");
-        File.WriteAllText(Path.Combine(caseDirectory, "settings.json"),
-            "{\"settings\":1}");
-        File.WriteAllBytes(Path.Combine(caseDirectory, "reference.exr"),
-            [1, 2, 3, 4]);
+        AdvancedGiQualificationCorpusDocument request = CreateRequest();
+        foreach (AdvancedGiQualificationCorpusArtifact artifact in
+                 request.Cases.SelectMany(static item => item.Artifacts))
+        {
+            string path = Path.Combine(
+                root,
+                artifact.RelativePath.Replace(
+                    '/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(
+                path,
+                $"{{\"role\":\"{artifact.Role}\",\"path\":\"{artifact.RelativePath}\"}}");
+        }
         string requestPath = Path.Combine(root, "request.json");
         File.WriteAllText(requestPath,
             AdvancedGiQualificationCorpusCodec.SerializeDocument(
-                CreateRequest()));
+                request));
         return requestPath;
     }
 
@@ -157,26 +219,38 @@ public sealed class AdvancedGiQualificationCorpusTests
         new()
         {
             CorpusId = "advanced-gi-test-corpus",
-            Cases =
-            [
-                new AdvancedGiQualificationCorpusCase
-                {
-                    Id = "all-feature-case",
-                    Scenario = "deterministic-test",
-                    Description =
-                        "Synthetic fixture covering all Advanced GI identities.",
-                    Features = Enum.GetValues<
-                        AdvancedGiPrerequisiteFeature>(),
-                    Artifacts =
-                    [
-                        Artifact("scene", "case/scene.json"),
-                        Artifact("camera-script", "case/camera.json"),
-                        Artifact("settings", "case/settings.json"),
-                        Artifact("reference", "case/reference.exr")
-                    ]
-                }
-            ]
+            Cases = AdvancedGiQualificationCorpusCodec
+                .RequiredProductionScenarios
+                .Select((scenario, index) =>
+                    CreateCase(scenario, index))
+                .ToArray()
         };
+
+    private static AdvancedGiQualificationCorpusCase CreateCase(
+        string scenario,
+        int index)
+    {
+        AdvancedGiPrerequisiteFeature[] all =
+            Enum.GetValues<AdvancedGiPrerequisiteFeature>();
+        AdvancedGiPrerequisiteFeature[] features = index < all.Length
+            ? [all[index]]
+            : all;
+        string directory = $"case-{index:D2}-{scenario}";
+        return new AdvancedGiQualificationCorpusCase
+        {
+            Id = directory,
+            Scenario = scenario,
+            Description =
+                $"Deterministic {scenario} golden/equal-work fixture.",
+            Features = features,
+            Artifacts = AdvancedGiQualificationCorpusCodec
+                .RequiredArtifactRoles
+                .Select(role => Artifact(
+                    role,
+                    $"{directory}/{role}.bin"))
+                .ToArray()
+        };
+    }
 
     private static AdvancedGiQualificationCorpusArtifact Artifact(
         string role,

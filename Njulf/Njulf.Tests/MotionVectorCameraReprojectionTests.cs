@@ -22,7 +22,6 @@ public sealed class MotionVectorCameraReprojectionTests
     [TestCase(SurfaceHistoryConsumer.TemporalAntiAliasing)]
     [TestCase(SurfaceHistoryConsumer.DirectionalCsmTemporal)]
     [TestCase(SurfaceHistoryConsumer.DirectionalRaySoft)]
-    [TestCase(SurfaceHistoryConsumer.NearFieldResidual)]
     public void OtherTemporalConsumer_RequiresAuthoredMotionVectors(
         SurfaceHistoryConsumer additionalConsumer)
     {
@@ -33,6 +32,19 @@ public sealed class MotionVectorCameraReprojectionTests
                 SurfaceHistoryConsumer.Reflection | additionalConsumer,
                 scene),
             Is.False);
+    }
+
+    [TestCase(SurfaceHistoryConsumer.NearFieldResidual)]
+    [TestCase(SurfaceHistoryConsumer.Reflection |
+        SurfaceHistoryConsumer.NearFieldResidual)]
+    public void StaticC5Consumer_UsesCameraReprojection(
+        SurfaceHistoryConsumer consumers)
+    {
+        var scene = new SceneRenderingData();
+
+        Assert.That(
+            MotionVectorPass.ShouldUseCameraOnlyReprojection(consumers, scene),
+            Is.True);
     }
 
     [Test]

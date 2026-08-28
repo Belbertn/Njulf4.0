@@ -2635,7 +2635,7 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiRefinementMaximumEmitterAreaSquareMeters = 4f;
         private bool _simpleDdgiNearVisibilitySidecarEnabled = true;
         private ulong _simpleDdgiNearVisibilitySidecarMemoryBudgetBytes =
-            32UL * 1024UL * 1024UL;
+            64UL * 1024UL * 1024UL;
         private int _simpleDdgiRaysPerProbe = 96;
         private int _simpleDdgiMaintenanceRaysPerProbe = 24;
         private float _simpleDdgiHysteresis = 0.97f;
@@ -4582,9 +4582,9 @@ namespace Njulf.Rendering.Data
             SimpleDdgiNearVisibilitySidecarEnabled = highTier;
             SimpleDdgiNearVisibilitySidecarMemoryBudgetBytes = tier ==
                 DdgiQualityTier.DdgiUltra
-                    ? 48UL * 1024UL * 1024UL
+                    ? 96UL * 1024UL * 1024UL
                     : tier == DdgiQualityTier.DdgiHigh
-                        ? 32UL * 1024UL * 1024UL
+                        ? 64UL * 1024UL * 1024UL
                         : 0UL;
             SimpleDdgiSourceCacheLayoutMode =
                 SimpleDdgiSourceCacheLayoutMode.Auto;
@@ -4646,12 +4646,12 @@ namespace Njulf.Rendering.Data
                 _ => SimpleDdgiGlossyTransportMode.Off
             };
             SimpleDdgiDirectionalFogEnabled = highTier;
-            // Certified transport must use a time-invariant skinned
-            // representation. Live current-pose transport is available only
-            // when tail certification is explicitly disabled.
+            // Current-pose transport remains gated by the authenticated
+            // content-dependent rollout. Tail audits use geometry-epoch
+            // snapshots and never claim a stale pose as generation-current.
             DdgiSkinnedGeometryMode = tier is
                 DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra
-                    ? DdgiSkinnedGeometryMode.ConservativeProxy
+                    ? DdgiSkinnedGeometryMode.CurrentPose
                     : DdgiSkinnedGeometryMode.Excluded;
             DdgiTransparentGeometryMode = tier switch
             {
@@ -4659,9 +4659,14 @@ namespace Njulf.Rendering.Data
                 DdgiQualityTier.DdgiHigh => DdgiTransparentGeometryMode.MaskAndThin,
                 _ => DdgiTransparentGeometryMode.MaskOnly
             };
-            DdgiFoliageGeometryMode = tier == DdgiQualityTier.DdgiUltra
-                ? DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
-                : DdgiFoliageGeometryMode.Excluded;
+            DdgiFoliageGeometryMode = tier switch
+            {
+                DdgiQualityTier.DdgiUltra =>
+                    DdgiFoliageGeometryMode.AuthoredAndProceduralProxy,
+                DdgiQualityTier.DdgiHigh =>
+                    DdgiFoliageGeometryMode.AuthoredMeshOnly,
+                _ => DdgiFoliageGeometryMode.Excluded
+            };
             SimpleDdgiExactLocalLightThreshold = tier == DdgiQualityTier.DdgiUltra ? 12 : 8;
             SimpleDdgiDirectionalRadianceMemoryBudgetBytes = tier switch
             {

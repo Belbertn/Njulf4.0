@@ -698,6 +698,7 @@ internal static class DdgiFrameDataProjector
             manager.DirtyConvergenceLatencyP95Frames;
         sceneData.SimpleDdgiDirtyConvergenceLatencyMaxFrames =
             manager.DirtyConvergenceLatencyMaxFrames;
+        sceneData.SimpleDdgiMutationLatency = manager.MutationLatencyTelemetry;
         sceneData.SimpleDdgiAtlasBytes = manager.AtlasBytes;
         sceneData.SimpleDdgiSampledAtlasRequested =
             manager.SampledAtlasRequested ? 1 : 0;

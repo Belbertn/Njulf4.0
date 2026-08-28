@@ -122,7 +122,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
                         Plan.Active ? Plan.Layout.TotalBytes : 0UL,
                         generation.LiveBytes,
                         generation.PeakLiveBytes,
-                        generation.RetiredBytes),
+                        generation.RetiredBytes)
+                        .WithLayoutSavings(Plan.Layout),
                     Recovery = diagnostics.Recovery with
                     {
                         GenerationRebuildAttemptCount =
@@ -150,7 +151,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
                     Plan.Active ? Plan.Layout.TotalBytes : 0UL,
                     generation.LiveBytes,
                     generation.PeakLiveBytes,
-                    generation.RetiredBytes);
+                    generation.RetiredBytes)
+                    .WithLayoutSavings(Plan.Layout);
                 return generation.HasActive || generation.HasPending ||
                        generation.HasRetired
                     ? SimpleDdgiNearFieldResidualDiagnostics
@@ -167,7 +169,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
                             Plan.Active ? Plan.AllocatedBytes : 0UL,
                             0UL,
                             0UL,
-                            0UL),
+                            0UL)
+                            .WithLayoutSavings(Plan.Layout),
                         Plan.Status)
                 : SimpleDdgiNearFieldResidualDiagnostics.Disabled(
                     Plan.Status);

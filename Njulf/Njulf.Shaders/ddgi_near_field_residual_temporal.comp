@@ -22,15 +22,15 @@ layout(std430, set = 0, binding = 5) readonly buffer HistoryMetadataBuffer
 } historyMetadata;
 layout(rgba16f, set = 0, binding = 6) uniform writeonly image2D temporalRadianceOutput;
 layout(rg16f, set = 0, binding = 7) uniform writeonly image2D temporalMomentsOutput;
-layout(r32ui, set = 0, binding = 8) uniform writeonly uimage2D temporalValidityOutput;
+layout(r16ui, set = 0, binding = 8) uniform writeonly uimage2D temporalValidityOutput;
 layout(std430, set = 0, binding = 9) buffer TemporalMetadataOutputBuffer
 {
     SimpleDdgiNearFieldResidualHitMetadata values[];
 } temporalMetadataOutput;
 layout(set = 0, binding = 10) uniform sampler2D motionVectors;
 layout(set = 0, binding = 11) uniform usampler2D currentReceiverPayload;
-layout(set = 0, binding = 12) uniform sampler2D historyReceiverNormals;
-layout(rgba16f, set = 0, binding = 13) uniform writeonly image2D temporalHistoryNormalOutput;
+layout(set = 0, binding = 12) uniform usampler2D historyReceiverNormals;
+layout(r32ui, set = 0, binding = 13) uniform writeonly uimage2D temporalHistoryNormalOutput;
 layout(std430, set = 0, binding = 14) buffer TemporalTileRecordsBuffer
 {
     uint words[];
@@ -109,7 +109,7 @@ void WriteInvalid(ivec2 pixel, uint outputIndex)
     imageStore(temporalRadianceOutput, pixel, vec4(0.0));
     imageStore(temporalMomentsOutput, pixel, vec4(0.0));
     imageStore(temporalValidityOutput, pixel, uvec4(0u));
-    imageStore(temporalHistoryNormalOutput, pixel, vec4(0.0));
+    imageStore(temporalHistoryNormalOutput, pixel, uvec4(0u));
     if (outputIndex < uint(temporalMetadataOutput.values.length()))
         temporalMetadataOutput.values[outputIndex] = SimpleDdgiNearFieldZeroMetadata();
 }
@@ -231,6 +231,76 @@ float C5TemporalPositiveLinearDepth(float storedDepth)
         ? nearPlane + storedDepth * (farPlane - nearPlane)
         : farPlane - storedDepth * (farPlane - nearPlane);
     return nearPlane * farPlane / max(denominator, 1.0e-7);
+}
+
+bool C5ResolvePreviousUv(
+    vec2 outputUv,
+    out vec2 previousUv,
+    out bool nonFinite)
+{
+    previousUv = vec2(-1.0);
+    nonFinite = false;
+    if (!SimpleDdgiNearFieldHasFlag(
+            pc.flags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_CAMERA_ONLY_REPROJECTION))
+    {
+        vec2 motion = textureLod(motionVectors, outputUv, 0.0).xy;
+        nonFinite = !SimpleDdgiNearFieldFinite(motion.x) ||
+            !SimpleDdgiNearFieldFinite(motion.y);
+        if (nonFinite)
+            return false;
+        previousUv = outputUv - motion;
+        return all(greaterThanEqual(previousUv, vec2(0.0))) &&
+            all(lessThan(previousUv, vec2(1.0)));
+    }
+
+    ivec2 fullExtent = textureSize(currentFullDepth, 0);
+    if (fullExtent.x <= 0 || fullExtent.y <= 0)
+        return false;
+    ivec2 fullPixel = clamp(
+        ivec2(outputUv * vec2(fullExtent)),
+        ivec2(0),
+        fullExtent - ivec2(1));
+    float storedDepth = texelFetch(currentFullDepth, fullPixel, 0).r;
+    if (!SimpleDdgiNearFieldFinite(storedDepth))
+    {
+        nonFinite = true;
+        return false;
+    }
+    if (storedDepth < 0.0 || storedDepth > 1.0)
+        return false;
+
+    vec4 currentClip = vec4(
+        outputUv * 2.0 - vec2(1.0), storedDepth, 1.0);
+    vec4 world = C5TemporalMulRowMajor(
+        currentClip,
+        temporalFrameConstants.frame.inverseViewProjection);
+    if (!C5TemporalFinite(world) || abs(world.w) <= 1.0e-7)
+    {
+        nonFinite = !C5TemporalFinite(world);
+        return false;
+    }
+    world /= world.w;
+    vec4 previousClip = C5TemporalMulRowMajor(
+        vec4(world.xyz, 1.0),
+        temporalFrameConstants.frame.previousViewProjection);
+    if (!C5TemporalFinite(previousClip) || previousClip.w <= 1.0e-7)
+    {
+        nonFinite = !C5TemporalFinite(previousClip);
+        return false;
+    }
+    vec3 previousNdc = previousClip.xyz / previousClip.w;
+    previousUv = previousNdc.xy * 0.5 + vec2(0.5);
+    if (!SimpleDdgiNearFieldFinite(previousUv.x) ||
+        !SimpleDdgiNearFieldFinite(previousUv.y) ||
+        !SimpleDdgiNearFieldFinite(previousNdc.z))
+    {
+        nonFinite = true;
+        return false;
+    }
+    return previousNdc.z >= 0.0 && previousNdc.z <= 1.0 &&
+        all(greaterThanEqual(previousUv, vec2(0.0))) &&
+        all(lessThan(previousUv, vec2(1.0)));
 }
 
 bool C5TemporalReadSurface(
@@ -623,18 +693,14 @@ bool EvaluateTemporalPixel(
             candidateLuminance * candidateLuminance);
     }
 
-    vec2 motion = textureLod(motionVectors, outputUv, 0.0).xy;
-    bool finiteMotion = SimpleDdgiNearFieldFinite(motion.x) &&
-        SimpleDdgiNearFieldFinite(motion.y);
-    vec2 previousUv = finiteMotion ? outputUv - motion : vec2(-1.0);
-    bool insidePrevious = finiteMotion &&
-        all(greaterThanEqual(previousUv, vec2(0.0))) &&
-        all(lessThan(previousUv, vec2(1.0)));
-    if (!finiteMotion)
-        historyReasonFlags |= C5_HISTORY_REASON_REPROJECTION |
-            C5_HISTORY_REASON_NONFINITE;
-    else if (!insidePrevious)
+    vec2 previousUv;
+    bool nonFiniteReprojection;
+    bool insidePrevious = C5ResolvePreviousUv(
+        outputUv, previousUv, nonFiniteReprojection);
+    if (!insidePrevious)
         historyReasonFlags |= C5_HISTORY_REASON_REPROJECTION;
+    if (nonFiniteReprojection)
+        historyReasonFlags |= C5_HISTORY_REASON_NONFINITE;
     if (!SimpleDdgiNearFieldHasFlag(pc.flags,
             SIMPLE_DDGI_NEAR_FIELD_FLAG_HISTORY_INPUT_VALID))
     {
@@ -697,8 +763,8 @@ bool EvaluateTemporalPixel(
                     historyValidityInput, previousPixel, 0).r;
                 SimpleDdgiNearFieldResidualHitMetadata previous =
                     historyMetadata.values[previousIndex];
-                vec4 previousPackedNormals = texelFetch(
-                    historyReceiverNormals, previousPixel, 0);
+                vec4 previousPackedNormals = unpackSnorm4x8(texelFetch(
+                    historyReceiverNormals, previousPixel, 0).r);
                 bool previousPayloadValid =
                     SimpleDdgiNearFieldIsValidCandidate(previousResidual) &&
                     SimpleDdgiNearFieldFinite(previousMoments.x) &&
@@ -1176,6 +1242,8 @@ void main()
         vec4(outputMoments, 0.0, 0.0));
     imageStore(temporalValidityOutput, pixel,
         uvec4(outputValidity, 0u, 0u, 0u));
-    imageStore(temporalHistoryNormalOutput, pixel, outputPackedNormals);
+    imageStore(temporalHistoryNormalOutput, pixel,
+        uvec4(packSnorm4x8(clamp(outputPackedNormals,
+            vec4(-1.0), vec4(1.0))), 0u, 0u, 0u));
     temporalMetadataOutput.values[outputIndex] = outputMetadata;
 }

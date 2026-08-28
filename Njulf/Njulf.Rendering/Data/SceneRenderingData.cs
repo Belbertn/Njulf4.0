@@ -1265,6 +1265,11 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiDirtyConvergenceLatencyP50Frames { get; set; }
         public int SimpleDdgiDirtyConvergenceLatencyP95Frames { get; set; }
         public int SimpleDdgiDirtyConvergenceLatencyMaxFrames { get; set; }
+        public SimpleDdgiMutationLatencyTelemetry SimpleDdgiMutationLatency
+        {
+            get;
+            set;
+        } = SimpleDdgiMutationLatencyTelemetry.Empty;
         public ulong SimpleDdgiAtlasBytes { get; set; }
         public int SimpleDdgiSampledAtlasRequested { get; set; }
         public int SimpleDdgiSampledAtlasActive { get; set; }
@@ -2872,6 +2877,7 @@ namespace Njulf.Rendering.Data
             SimpleDdgiDirtyConvergenceLatencyP50Frames = 0;
             SimpleDdgiDirtyConvergenceLatencyP95Frames = 0;
             SimpleDdgiDirtyConvergenceLatencyMaxFrames = 0;
+            SimpleDdgiMutationLatency = SimpleDdgiMutationLatencyTelemetry.Empty;
             SimpleDdgiAtlasBytes = 0;
             SimpleDdgiSampledAtlasRequested = 0;
             SimpleDdgiSampledAtlasActive = 0;
