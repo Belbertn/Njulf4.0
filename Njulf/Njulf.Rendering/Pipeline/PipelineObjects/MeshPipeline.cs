@@ -671,15 +671,21 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             int combination = (giCausticReceiverEnabled ? 1 : 0) |
                 (nearFieldDirectSourceEnabled ? 2 : 0);
-            for (int family = 0; family < 6; family++)
+            for (int receiver = 0; receiver < 2; receiver++)
             {
-                if (_hybridReflectionPipelines[0, combination, family].Handle == 0 &&
-                    !TryCreateHybridReflectionPipeline(
-                        combination,
-                        family,
-                        receiverCacheRequired: false))
+                for (int family = 0; family < 6; family++)
                 {
-                    return false;
+                    if (_hybridReflectionPipelines[
+                                receiver,
+                                combination,
+                                family].Handle == 0 &&
+                        !TryCreateHybridReflectionPipeline(
+                            combination,
+                            family,
+                            receiverCacheRequired: receiver != 0))
+                    {
+                        return false;
+                    }
                 }
             }
             return true;

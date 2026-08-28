@@ -1088,6 +1088,66 @@ public sealed class HybridReflectionContractsTests
         });
     }
 
+    [Test]
+    public void SceneTransitionPublication_PreparesReceiverCacheBankBeforeRepublish()
+    {
+        string runtime = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "HybridReflectionVulkanRuntime.cs");
+        string mesh = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "PipelineObjects",
+            "MeshPipeline.cs");
+        string renderer = ReadRepoText(
+            "Njulf.Rendering",
+            "VulkanRenderer.cs");
+
+        int completedRuntimeDeferral = runtime.IndexOf(
+            "if (_initializationState == 2 &&",
+            StringComparison.Ordinal);
+        int publicationWithdrawn = runtime.IndexOf(
+            "ScreenPipelinesAvailable = false;",
+            completedRuntimeDeferral,
+            StringComparison.Ordinal);
+        int backgroundPublication = runtime.IndexOf(
+            "PrepareDeferredPublication(",
+            publicationWithdrawn,
+            StringComparison.Ordinal);
+        int publicationRestored = runtime.IndexOf(
+            "ScreenPipelinesAvailable = true;",
+            backgroundPublication,
+            StringComparison.Ordinal);
+        int preparationStart = mesh.IndexOf(
+            "public bool TryPrepareHybridReflectionPipelines(",
+            StringComparison.Ordinal);
+        int preparationEnd = mesh.IndexOf(
+            "private bool TryResolveBasePipelineFamily(",
+            preparationStart,
+            StringComparison.Ordinal);
+        string preparation = mesh[preparationStart..preparationEnd];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(completedRuntimeDeferral,
+                Is.GreaterThanOrEqualTo(0));
+            Assert.That(publicationWithdrawn,
+                Is.GreaterThan(completedRuntimeDeferral));
+            Assert.That(backgroundPublication,
+                Is.GreaterThan(publicationWithdrawn));
+            Assert.That(publicationRestored,
+                Is.GreaterThan(backgroundPublication),
+                "Screen pipelines must remain unavailable until background preparation returns successfully.");
+            Assert.That(preparation, Does.Contain(
+                "for (int receiver = 0; receiver < 2; receiver++)"));
+            Assert.That(preparation, Does.Contain(
+                "receiverCacheRequired: receiver != 0"));
+            Assert.That(renderer, Does.Contain(
+                "ref _hybridReflectionReceiverPipelinesPrepared"));
+        });
+    }
+
     private static HybridReflectionHistoryRevision Revision() => new(
         Width: 1920u,
         Height: 1080u,

@@ -167,6 +167,7 @@ namespace Njulf.Rendering
         private AutoExposureManager? _autoExposureManager;
         private GiPipelineCacheService? _giPipelineCacheService;
         private HybridReflectionVulkanRuntime? _hybridReflectionRuntime;
+        private int _hybridReflectionReceiverPipelinesPrepared;
         private SmaaResources? _smaaResources;
         private SkinningManager _skinningManager = null!;
         private GpuParticleRuntimeManager _gpuParticleRuntimeManager = null!;
@@ -3444,7 +3445,11 @@ namespace Njulf.Rendering
             HybridReflectionVulkanRuntime runtime =
                 _hybridReflectionRuntime ?? throw new InvalidOperationException(
                     "Hybrid reflection runtime is not initialized.");
-            runtime.DeferInitialize();
+            if (Volatile.Read(
+                    ref _hybridReflectionReceiverPipelinesPrepared) == 0)
+            {
+                runtime.DeferInitialize();
+            }
         }
 
         private bool PrepareHybridReflectionReceiverPipelines()
@@ -3465,6 +3470,9 @@ namespace Njulf.Rendering
                 }
             }
 
+            Volatile.Write(
+                ref _hybridReflectionReceiverPipelinesPrepared,
+                1);
             return true;
         }
 

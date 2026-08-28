@@ -82,6 +82,9 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     private TaskCompletionSource<bool>? _initializationCompletion;
     private Func<bool>? _publicationPreparation;
     private bool _backgroundInitializationStarted;
+    private TaskCompletionSource<bool>? _publicationCompletion;
+    private bool _publicationDeferred;
+    private bool _backgroundPublicationStarted;
     private int _screenPipelinesAvailable;
     private int _rayPipelineAvailable;
     private bool _disposeRequested;
@@ -205,9 +208,10 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     }
 
     /// <summary>
-    /// Reserves initialization without starting driver work. Scene commit uses
-    /// this to guarantee that its first present stays on the reflection
-    /// fallback; background compilation begins after that present.
+    /// Withdraws optional screen-pipeline publication without starting driver
+    /// work. Before initialization this reserves the work; after initialization
+    /// it temporarily restores the reflection fallback until every scene-specific
+    /// receiver variant has been prepared in the background.
     /// </summary>
     public void DeferInitialize()
     {
@@ -215,7 +219,28 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         {
             ThrowIfDisposingLocked();
             if (_initializationState == 0)
+            {
                 ClaimInitializationLocked();
+                return;
+            }
+
+            if (_initializationState == 2 &&
+                ScreenPipelinesAvailable &&
+                !_publicationDeferred)
+            {
+                // The runtime may already have been initialized by the source
+                // scene. Withdraw publication while a later scene streams so
+                // its first receiver-cache variant cannot be compiled from the
+                // render thread.
+                ScreenPipelinesAvailable = false;
+                FailureDetail =
+                    "hybrid reflection receiver pipelines are deferred " +
+                    "until scene streaming completes";
+                _publicationDeferred = true;
+                _publicationCompletion =
+                    new TaskCompletionSource<bool>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+            }
         }
     }
 
@@ -231,7 +256,32 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         {
             ThrowIfDisposingLocked();
             if (_initializationState == 2)
-                return Task.CompletedTask;
+            {
+                if (!_publicationDeferred ||
+                    publicationPreparation == null)
+                {
+                    return Task.CompletedTask;
+                }
+
+                Task publication = _publicationCompletion!.Task;
+                if (_backgroundPublicationStarted)
+                    return publication;
+
+                _backgroundPublicationStarted = true;
+                try
+                {
+                    _ = Task.Run(() =>
+                        PrepareDeferredPublication(
+                            publicationPreparation));
+                }
+                catch
+                {
+                    _backgroundPublicationStarted = false;
+                    throw;
+                }
+
+                return publication;
+            }
             if (_initializationState == 0)
                 ClaimInitializationLocked();
             Task completion = _initializationCompletion!.Task;
@@ -254,6 +304,40 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             }
 
             return completion;
+        }
+    }
+
+    private void PrepareDeferredPublication(
+        Func<bool> publicationPreparation)
+    {
+        try
+        {
+            if (!publicationPreparation())
+            {
+                throw new InvalidOperationException(
+                    "hybrid reflection receiver pipelines could not be prepared");
+            }
+
+            FailureDetail = string.Empty;
+            ScreenPipelinesAvailable = true;
+        }
+        catch (Exception exception)
+        {
+            ScreenPipelinesAvailable = false;
+            FailureDetail =
+                "hybrid reflection receiver pipeline preparation failed: " +
+                exception.Message;
+        }
+        finally
+        {
+            TaskCompletionSource<bool>? completion;
+            lock (_initializationGate)
+            {
+                _publicationDeferred = false;
+                _backgroundPublicationStarted = false;
+                completion = _publicationCompletion;
+            }
+            completion?.TrySetResult(true);
         }
     }
 
@@ -1733,6 +1817,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     public void Dispose()
     {
         Task? initialization = null;
+        Task? publication = null;
         lock (_initializationGate)
         {
             if (_disposed || _disposeRequested)
@@ -1753,12 +1838,24 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                     _initializationCompletion?.TrySetResult(true);
                 }
             }
+            if (_backgroundPublicationStarted)
+            {
+                publication = _publicationCompletion?.Task;
+            }
+            else if (_publicationDeferred)
+            {
+                // Publication was withdrawn but its optional preparation was
+                // never queued. Complete the dormant claim for shutdown.
+                _publicationDeferred = false;
+                _publicationCompletion?.TrySetResult(true);
+            }
         }
 
         // Native pipeline creation must finish before the device-owned cache,
         // layouts, and buffers are destroyed. This wait is shutdown-only; the
         // render host never waits for background transition preparation.
         initialization?.GetAwaiter().GetResult();
+        publication?.GetAwaiter().GetResult();
 
         lock (_initializationGate)
         {
