@@ -26,6 +26,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferManager _bufferManager;
         private readonly StagingRing _stagingRing;
         private readonly RenderTargetManager _renderTargets;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly List<GPUDebugLineVertex> _vertices = new();
         private readonly nint _entryPointName;
         private readonly DebugVertexBuffer[] _vertexBuffers = new DebugVertexBuffer[FramesInFlight];
@@ -41,18 +42,23 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             BufferManager bufferManager,
             StagingRing stagingRing,
-            RenderTargetManager renderTargets)
+            RenderTargetManager renderTargets,
+            GiPipelineCacheService? pipelineCacheService = null)
             : base("DebugDrawPass", context, swapchain, bindlessHeap)
         {
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
         public override void Initialize()
         {
-            _pipelineCache = GraphicsPipelineFactory.CreatePipelineCache(_context, "Debug Draw Pipeline Cache");
+            _pipelineCache = _pipelineCacheService?.Cache ??
+                GraphicsPipelineFactory.CreatePipelineCache(
+                    _context,
+                    "Debug Draw Pipeline Cache");
             CreatePipelineLayout();
             _depthTestedPipeline = CreatePipeline(depthTestEnabled: true, "Debug Draw Depth-Tested Pipeline");
             _overlayPipeline = CreatePipeline(depthTestEnabled: false, "Debug Draw Overlay Pipeline");
@@ -153,7 +159,7 @@ namespace Njulf.Rendering.Pipeline
                 _pipelineLayout = default;
             }
 
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
                 _pipelineCache = default;
@@ -297,13 +303,21 @@ namespace Njulf.Rendering.Pipeline
                     Layout = _pipelineLayout
                 };
 
-                Result result = _context.Api.CreateGraphicsPipelines(
-                    _context.Device,
-                    _pipelineCache,
-                    1,
-                    &pipelineInfo,
-                    null,
-                    out VkPipeline pipeline);
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateGraphicsPipeline(
+                        new PipelineArtifactId(
+                            depthTestEnabled
+                                ? "DebugDraw.DepthTested"
+                                : "DebugDraw.Overlay"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateGraphicsPipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out pipeline);
                 if (result != Result.Success)
                     throw new VulkanException($"Failed to create {debugName}", result);
                 _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, debugName);

@@ -78,6 +78,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
     private readonly SimpleDdgiNearFieldResidualLayout _layout;
     private readonly SimpleDdgiNearFieldResidualGpuConfiguration _configuration;
     private readonly SimpleDdgiNearFieldResidualVulkanBuffers _buffers;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly nint _entryPointName;
 
     private DescriptorSetLayout _resetSetLayout;
@@ -129,7 +130,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         HiZDepthPyramid hiZ,
         in SimpleDdgiNearFieldResidualLayout layout,
         in SimpleDdgiNearFieldResidualGpuConfiguration configuration,
-        in SimpleDdgiNearFieldResidualVulkanBuffers buffers)
+        in SimpleDdgiNearFieldResidualVulkanBuffers buffers,
+        GiPipelineCacheService? pipelineCacheService = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
@@ -139,6 +141,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         _layout = layout;
         _configuration = configuration;
         _buffers = buffers;
+        _pipelineCacheService = pipelineCacheService;
         _filterSets = new DescriptorSet[checked(2 * _configuration.FilterIterationCount)];
         _entryPointName = SilkMarshal.StringToPtr("main");
 
@@ -1105,6 +1108,12 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
 
     private void CreatePipelineCache()
     {
+        if (_pipelineCacheService != null)
+        {
+            _pipelineCache = _pipelineCacheService.Cache;
+            return;
+        }
+
         var info = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
         Result result = _context.Api.CreatePipelineCache(
             _context.Device, &info, null, out _pipelineCache);
@@ -1162,13 +1171,19 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
                 Layout = layout,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device,
-                _pipelineCache,
-                1u,
-                &info,
-                null,
-                out VkPipeline pipeline);
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId(
+                        $"SimpleDdgi.NearFieldResidual.{shaderName}"),
+                    &info,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1u,
+                    &info,
+                    null,
+                    out pipeline);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create " + debugName + ".", result);
             _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, debugName);
@@ -1684,7 +1699,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         DestroyDescriptorSetLayout(_filterSetLayout);
         DestroyDescriptorSetLayout(_frequencySetLayout);
         DestroyDescriptorSetLayout(_compositeSetLayout);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_entryPointName != 0)
             SilkMarshal.Free(_entryPointName);

@@ -118,11 +118,10 @@ internal sealed class ShadowFramePlanner
             input.Candidate.FallbackReason;
         string fallbackDetail = input.Candidate.FallbackDetail;
         bool csmTemporalActive = input.CsmTemporalActive;
-        bool csmTemporalAutoRequested =
-            settings.RequestedDirectionalShadowMode ==
-                DirectionalShadowMode.Cascaded &&
-            settings.DirectionalCsmTemporalMode ==
-                DirectionalCsmTemporalMode.Auto;
+        // Auto is migrated to the ordinary Enabled production request. Keep
+        // the legacy value executable, but never make a manifest the owner of
+        // activation or budget demotion.
+        bool csmTemporalAutoRequested = false;
 
         if (csmTemporalActive && csmTemporalAutoRequested &&
             IsQualifiedBudgetDemoted(
@@ -191,20 +190,18 @@ internal sealed class ShadowFramePlanner
                 ? DirectionalShadowQualificationLevel.Production
                 : DirectionalShadowQualificationLevel.Experimental;
         }
-        else if (csmTemporalActive &&
-            settings.DirectionalCsmTemporalMode ==
-                DirectionalCsmTemporalMode.Auto)
-        {
-            qualification = input.CsmTemporalQualification;
-            qualificationLevel = qualification.Passed
-                ? DirectionalShadowQualificationLevel.Production
-                : DirectionalShadowQualificationLevel.Experimental;
-        }
         else if (csmTemporalActive)
         {
             qualification = DirectionalShadowQualificationGateResult.Reject(
-                "directional-shadow-csm-temporal-developer-force");
-            qualificationLevel = DirectionalShadowQualificationLevel.Developer;
+                settings.DirectionalCsmTemporalMode ==
+                    DirectionalCsmTemporalMode.DeveloperForce
+                    ? "directional-shadow-csm-temporal-developer-force"
+                    : "directional-shadow-csm-temporal-production-enabled");
+            qualificationLevel =
+                settings.DirectionalCsmTemporalMode ==
+                    DirectionalCsmTemporalMode.DeveloperForce
+                    ? DirectionalShadowQualificationLevel.Developer
+                    : DirectionalShadowQualificationLevel.Production;
         }
         else
         {

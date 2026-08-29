@@ -50,12 +50,13 @@
 #endif
 
 #include "common.glsl"
+#include "automatic_planar_reflection.glsl"
 #include "foliage_coverage.glsl"
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 #include "c5_receiver_payload.glsl"
 #endif
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
-#if NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION != 1
+#if NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION != 2
 #error "Hybrid reflection foliage receiver shader semantics version mismatch."
 #endif
 #include "hybrid_reflection_payload.glsl"
@@ -94,6 +95,7 @@
 
 const uint FOLIAGE_MATERIAL_TRANSPORT_PROVENANCE_FLAG = 1u << 2u;
 const uint FOLIAGE_REFLECTION_FEEDBACK_FLAG = 1u << 3u;
+const uint FOLIAGE_REFLECTION_CAPTURE_FLAG = 1u << 4u;
 const uint FOLIAGE_REFLECTION_CAPTURE_LAYER_SHIFT = 8u;
 const uint FOLIAGE_REFLECTION_CAPTURE_LAYER_MASK = 0x1fffu;
 
@@ -107,6 +109,7 @@ layout(location = 6) flat in uint fragGeometryMode;
 layout(location = 7) flat in uint fragDebugMeshletIndex;
 layout(location = 8) flat in vec4 fragColorVariation;
 layout(location = 9) flat in vec4 fragDdgiIrradianceCoverage;
+layout(location = 10) flat in uint fragImpostorMetadataIndex;
 
 #if NJULF_C5_TRACE_RESOLUTION_SOURCE
 layout(location = 0) out vec4 outC5DirectDiffuseEmissive;
@@ -132,12 +135,16 @@ layout(location = 2) out uvec4 outC5ReceiverPayload;
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
 #if NJULF_C4_RECEIVER_OUTPUT && NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 layout(location = 4) out uvec4 outHybridReflectionReceiverPayload;
+layout(location = 5) out uvec2 outHybridReflectionLobeExtension;
 #elif NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 layout(location = 3) out uvec4 outHybridReflectionReceiverPayload;
+layout(location = 4) out uvec2 outHybridReflectionLobeExtension;
 #elif NJULF_C4_RECEIVER_OUTPUT
 layout(location = 2) out uvec4 outHybridReflectionReceiverPayload;
+layout(location = 3) out uvec2 outHybridReflectionLobeExtension;
 #else
 layout(location = 1) out uvec4 outHybridReflectionReceiverPayload;
+layout(location = 2) out uvec2 outHybridReflectionLobeExtension;
 #endif
 #endif
 
@@ -312,6 +319,22 @@ void C5WriteFoliageDirectDiffuseAndEmissiveSource(
 
 void main()
 {
+    uint automaticPlanarCaptureLayer =
+        (pc.Push.Flags >> FOLIAGE_REFLECTION_CAPTURE_LAYER_SHIFT) &
+        FOLIAGE_REFLECTION_CAPTURE_LAYER_MASK;
+    if ((pc.Push.Flags & FOLIAGE_REFLECTION_CAPTURE_FLAG) != 0u &&
+        (automaticPlanarCaptureLayer &
+            AUTOMATIC_PLANAR_CAPTURE_LAYER_FLAG) != 0u &&
+        AutomaticPlanarShouldDiscardCaptureFragment(
+            pc.Push.CurrentFrameIndex,
+            automaticPlanarCaptureLayer &
+                (AUTOMATIC_PLANAR_CAPTURE_LAYER_FLAG - 1u),
+            0xffffffffu,
+            fragWorldPosition,
+            pc.Push.CameraPositionTime.xyz))
+    {
+        discard;
+    }
 #if NJULF_C4_RECEIVER_OUTPUT
     // Qualified C5 foliage remains inside the combined MRT pass. C4 does not
     // own a foliage transport payload, so its attachment is explicitly invalid.
@@ -323,6 +346,7 @@ void main()
 #endif
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
     outHybridReflectionReceiverPayload = uvec4(0u);
+    outHybridReflectionLobeExtension = uvec2(0u);
 #endif
     WriteFoliageMaterialTransportProvenance(255u);
     GPUMaterialData material = ReadForwardMaterial(fragMaterialIndex);
@@ -333,6 +357,7 @@ void main()
             fragGeometryMode,
             fragClusterIndex,
             fragLodBand,
+            fragImpostorMetadataIndex,
             FoliageScreenPixel(),
             sampledAlbedo))
         discard;
@@ -365,6 +390,25 @@ void main()
 
     vec3 viewDirection = SafeNormalize(pc.Push.CameraPositionTime.xyz - fragWorldPosition, vec3(0.0, 0.0, 1.0));
     vec3 normal = ComputeBentNormal(fragNormal, viewDirection, cluster, prototype);
+    if (HasFoliageImpostor(fragImpostorMetadataIndex))
+    {
+        GPUFoliageImpostor impostor = ReadFoliageImpostor(
+            fragImpostorMetadataIndex);
+        vec3 atlasNormal = texture(
+            BindlessTextures[nonuniformEXT(impostor.NormalTextureIndex)],
+            fragTexCoord).xyz * 2.0 - 1.0;
+        vec3 tangent = SafeNormalize(
+            cross(vec3(0.0, 1.0, 0.0), fragNormal),
+            vec3(1.0, 0.0, 0.0));
+        vec3 bitangent = SafeNormalize(
+            cross(fragNormal, tangent),
+            vec3(0.0, 1.0, 0.0));
+        normal = SafeNormalize(
+            tangent * atlasNormal.x +
+            bitangent * atlasNormal.y +
+            fragNormal * atlasNormal.z,
+            normal);
+    }
     vec3 foliageDirectLighting = ApplyFoliageLighting(baseColor, normal, viewDirection, prototype);
 #if NJULF_C5_TRACE_RESOLUTION_SOURCE
     C5WriteFoliageDirectDiffuseAndEmissiveSource(
@@ -426,7 +470,10 @@ void main()
         clamp(material.MetallicRoughnessAO.y, 0.04, 1.0),
         clamp(material.MetallicRoughnessAO.z, 0.0, 1.0),
         0u,
-        uvec3(fragClusterIndex, fragMaterialIndex, 0u),
+        uvec3(
+            fragClusterIndex,
+            fragMaterialIndex,
+            material.MaterialRevision),
         outHybridReflectionReceiverPayload);
 #endif
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT

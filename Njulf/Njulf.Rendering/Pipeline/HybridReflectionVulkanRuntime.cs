@@ -26,11 +26,15 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
 {
     private const uint WorkgroupSize = 8u;
     private const ulong TaskHeaderBytes = 16UL;
-    private const ulong TaskBytes = 16UL;
+    private const ulong TaskBytes =
+        HybridReflectionGpuContract.TaskWords * sizeof(uint);
+    private const ulong TileHeaderBytes = 16UL;
+    private const ulong TileBytes = 16UL;
     private const ulong CounterBytes =
         HybridReflectionGpuContract.CounterWords * sizeof(uint);
-    private const ulong IndirectBytes =
-        HybridReflectionGpuContract.IndirectArgumentWords * sizeof(uint);
+    private const ulong IndirectBytes = 6UL * sizeof(uint);
+    private const ulong RayIndirectOffset = 0UL;
+    private const ulong SsrIndirectOffset = 3UL * sizeof(uint);
 
     private readonly VulkanContext _context;
     private readonly BindlessHeap _bindlessHeap;
@@ -48,6 +52,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         new BufferHandle[RenderingConstants.FramesInFlight];
     private readonly BufferHandle[] _indirectBuffers =
         new BufferHandle[RenderingConstants.FramesInFlight];
+    private readonly BufferHandle[] _tileBuffers =
+        new BufferHandle[RenderingConstants.FramesInFlight];
     private readonly DescriptorSet[] _descriptorSets =
         new DescriptorSet[RenderingConstants.FramesInFlight];
     private readonly bool[] _counterFrameSubmitted =
@@ -55,14 +61,25 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     private readonly HybridReflectionCounterSnapshot[] _completedCounters =
         new HybridReflectionCounterSnapshot[RenderingConstants.FramesInFlight];
     private readonly object _initializationGate = new();
+    private readonly HybridReflectionBudgetController _budgetController =
+        new();
 
     private nint _entryPointName;
     private DescriptorSetLayout _localSetLayout;
     private DescriptorSetLayout _emptyRaySetLayout;
+    private DescriptorSetLayout _colorMipSetLayout;
     private DescriptorPool _descriptorPool;
+    private DescriptorPool _colorMipDescriptorPool;
+    private DescriptorSet _opaqueColorMipBaseSet;
+    private readonly DescriptorSet[] _transparentColorMipBaseSets =
+        new DescriptorSet[RenderingConstants.FramesInFlight];
+    private DescriptorSet[] _colorMipDownsampleSets =
+        Array.Empty<DescriptorSet>();
     private PipelineLayout _pipelineLayout;
+    private PipelineLayout _colorMipPipelineLayout;
     private PipelineCache _pipelineCache;
     private VkPipeline _ssrPipeline;
+    private VkPipeline _classifyPipeline;
     private VkPipeline _rayPipeline;
     private VkPipeline _ddgiBasePipeline;
     private VkPipeline _resolvePipeline;
@@ -70,9 +87,11 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     private VkPipeline _spatialPipeline;
     private VkPipeline _compositePipeline;
     private VkPipeline _opaqueSceneColorSnapshotPipeline;
+    private VkPipeline _colorMipPipeline;
     private uint _allocatedWidth;
     private uint _allocatedHeight;
     private uint _allocatedTaskCapacity;
+    private uint _allocatedTileCapacity;
     private ulong _descriptorSignature;
     // 0 = not started, 1 = running, 2 = completed (successfully or degraded).
     // A transition may compile these pipelines away from the render host; the
@@ -93,8 +112,11 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     private HybridReflectionHistoryRevision _previousRevision;
     private HybridReflectionHistoryRevision _currentRevision;
     private ReflectionHistoryResetReason _currentResetReasons;
+    private ReflectionHistorySourceInvalidation _currentSourceInvalidations;
     private ulong _preparedFrameSerial = ulong.MaxValue;
     private uint _preparedTemporalSample = uint.MaxValue;
+    private ulong _recordInitializedFrameSerial = ulong.MaxValue;
+    private int _recordInitializedBank = -1;
 
     public HybridReflectionVulkanRuntime(
         VulkanContext context,
@@ -123,6 +145,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         Array.Fill(_counterBuffers, BufferHandle.Invalid);
         Array.Fill(_counterReadbackBuffers, BufferHandle.Invalid);
         Array.Fill(_indirectBuffers, BufferHandle.Invalid);
+        Array.Fill(_tileBuffers, BufferHandle.Invalid);
     }
 
     public bool ScreenPipelinesAvailable
@@ -150,6 +173,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     public uint RayTaskCapacity => _allocatedTaskCapacity;
     public ulong BufferBytes => checked(
         (TaskHeaderBytes + (ulong)_allocatedTaskCapacity * TaskBytes +
+         TileHeaderBytes + (ulong)_allocatedTileCapacity * TileBytes +
          CounterBytes * 2UL + IndirectBytes) *
         RenderingConstants.FramesInFlight);
 
@@ -161,6 +185,9 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
 
     public BufferHandle GetIndirectBuffer(int frameIndex) =>
         GetFrameBuffer(_indirectBuffers, frameIndex);
+
+    public BufferHandle GetTileBuffer(int frameIndex) =>
+        GetFrameBuffer(_tileBuffers, frameIndex);
 
     public void ReadCompletedFrame(int frameIndex)
     {
@@ -186,13 +213,27 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             RayMisses: values[5],
             DdgiFallbacks: values[6],
             ProbeFallbacks: values[7],
-            EnvironmentFallbacks: values[8]);
+            EnvironmentFallbacks: values[8],
+            FullRateTiles: values[9],
+            HalfRateTiles: values[10],
+            QuarterRateTiles: values[11],
+            AnalyticTiles: values[12],
+            ReuseTiles: values[13],
+            ActiveTiles: values[14],
+            TileOverflows: values[15]);
         _counterFrameSubmitted[bank] = false;
     }
 
     public HybridReflectionCounterSnapshot GetLastCompletedCounters(
         int frameIndex) =>
         _completedCounters[ValidateFrameIndex(frameIndex)];
+
+    public HybridReflectionBudgetDecision BudgetDecision =>
+        _budgetController.Current;
+
+    public HybridReflectionBudgetDecision ObserveCompletedBudgetSample(
+        in HybridReflectionBudgetSample sample) =>
+        _budgetController.Observe(sample);
 
     public void Initialize()
     {
@@ -356,9 +397,13 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             _entryPointName = SilkMarshal.StringToPtr("main");
             CreateLocalSetLayout();
             CreateEmptyRaySetLayoutIfNeeded();
+            CreateColorMipSetLayout();
             CreatePipelineCache();
             CreatePipelineLayout();
+            CreateColorMipPipelineLayout();
             _ssrPipeline = CreatePipeline("hybrid_reflection_ssr.comp.spv");
+            _classifyPipeline = CreatePipeline(
+                "hybrid_reflection_classify.comp.spv");
             _ddgiBasePipeline = CreatePipeline(
                 "hybrid_reflection_ddgi_base.comp.spv");
             _resolvePipeline = CreatePipeline(
@@ -371,6 +416,9 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 "hybrid_reflection_composite.comp.spv");
             _opaqueSceneColorSnapshotPipeline = CreatePipeline(
                 "opaque_scene_color_snapshot.comp.spv");
+            _colorMipPipeline = CreatePipeline(
+                "bloom_downsample.comp.spv",
+                _colorMipPipelineLayout);
             FailureDetail = string.Empty;
             TryCreateRayPipeline();
             EnsureResources();
@@ -415,6 +463,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         ArgumentNullException.ThrowIfNull(sceneData);
         if (sceneData.EffectiveReflectionMode is not
                 (ReflectionMode.StaticProbesAndSsr or
+                 ReflectionMode.StaticProbesAndPlanar or
                  ReflectionMode.HybridRayQuery))
         {
             InvalidateHistory();
@@ -476,9 +525,21 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 sceneData.GiTransportMaterialRevision,
                 sceneData.ReflectionProbeContentRevision,
                 sceneData.ReflectionEnvironmentGeneration,
-                sceneData.CaptureCameraCutSerial);
+                sceneData.CaptureCameraCutSerial,
+                sceneData.EffectiveReflectionImplementation,
+                ReflectionSettings.HistoryMetadataAbiVersion,
+                sceneData.AutomaticPlanarCaptureGeneration);
             _currentResetReasons = _currentRevision.ResolveResetReasons(
                 _previousRevision, _historyValid);
+            _currentSourceInvalidations =
+                _currentRevision.ResolveSourceInvalidations(
+                    _previousRevision,
+                    _historyValid);
+            if ((_currentResetReasons &
+                    ReflectionHistoryResetReason.CameraCut) != 0)
+            {
+                _budgetController.Reset();
+            }
         }
 
         sceneData.HybridReflectionPassEnabled = true;
@@ -495,6 +556,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 ? 1
                 : 0;
         sceneData.HybridReflectionHistoryResetReason = _currentResetReasons;
+        sceneData.HybridReflectionSourceInvalidation =
+            _currentSourceInvalidations;
         return true;
     }
 
@@ -517,6 +580,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
 
     public bool ShouldEvaluateDdgiBase(SceneRenderingData sceneData) =>
         PrepareFrame(sceneData) &&
+        sceneData.EffectiveReflectionMode !=
+            ReflectionMode.StaticProbesAndPlanar &&
         sceneData.SimpleDdgiActive != 0 &&
         _settings.GlobalIllumination.EffectiveSimpleDdgiDirectionalRadianceMode !=
             SimpleDdgiDirectionalRadianceMode.Off &&
@@ -539,15 +604,54 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             return;
         int bank = ValidateFrameIndex(frameIndex);
         bool traceRays = ShouldTraceRays(sceneData);
-        SynchronizePreviousHybridFrame(commandBuffer);
-        TransitionSsrResources(commandBuffer, bank);
-        ResetTaskAndCounterBuffers(commandBuffer, bank);
-        if (_currentResetReasons != ReflectionHistoryResetReason.None)
-            ClearHistoryResources(commandBuffer);
+        BeginFrameWork(commandBuffer, bank, sceneData);
+        if (sceneData.EffectiveReflectionMode ==
+            ReflectionMode.StaticProbesAndPlanar)
+        {
+            // Resolve owns every pixel in planar-only mode. The frame reset
+            // above still establishes fresh task/counter state and resource
+            // layouts, while no SSR work or color-mip build is submitted.
+            return;
+        }
+        RecordColorMipTail(
+            commandBuffer,
+            _renderTargets.SceneColor,
+            _opaqueColorMipBaseSet,
+            "Hybrid Reflection Opaque HDR Mip Build");
+
+        ReflectionSettings reflection = _settings.Reflections;
+        bool adaptive = sceneData.EffectiveReflectionImplementation ==
+            ReflectionImplementationMode.Adaptive;
+        if (adaptive)
+        {
+            BindPipelineAndDescriptors(
+                commandBuffer,
+                _classifyPipeline,
+                bank,
+                bindRayScene: false);
+            var classifyPush = new GPUHybridReflectionClassifyPushConstants
+            {
+                ScreenWidth = _allocatedWidth,
+                ScreenHeight = _allocatedHeight,
+                FullResolutionRoughness = reflection
+                    .SsrFullResolutionRoughness,
+                HalfResolutionRoughness = reflection
+                    .SsrHalfResolutionRoughness,
+                QuarterResolutionRoughness = reflection
+                    .SsrQuarterResolutionRoughness,
+                MaximumReuseMotionPixels = 0.25f,
+                HistoryValid = sceneData.HybridReflectionHistoryValid != 0
+                    ? 1u
+                    : 0u,
+                SourceInvalidations = (uint)_currentSourceInvalidations
+            };
+            Push(commandBuffer, classifyPush);
+            DispatchScreen(commandBuffer);
+            PublishComputeWrites(commandBuffer);
+        }
 
         BindPipelineAndDescriptors(commandBuffer, _ssrPipeline, bank,
             bindRayScene: false);
-        ReflectionSettings reflection = _settings.Reflections;
         HybridReflectionCounterSnapshot requestFeedback =
             _completedCounters[bank];
         bool requestFeedbackValid =
@@ -561,6 +665,9 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 requestFeedback.RayRequests,
                 requestFeedbackValid)
             : 0u;
+        rayAdmissionThreshold = ScaleAdmissionThreshold(
+            rayAdmissionThreshold,
+            _budgetController.Current.LowImportanceRayAdmissionScale);
         var push = new GPUHybridReflectionSsrPushConstants
         {
             InverseViewProjectionMatrix = sceneData.InverseViewProjectionMatrix,
@@ -569,7 +676,9 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             ScreenWidth = _allocatedWidth,
             ScreenHeight = _allocatedHeight,
             MaximumSteps = checked((uint)reflection.SsrMaxSteps),
-            HiZMipCount = sceneData.HiZMipCount,
+            HiZMipCount = PackHiZAndColorMipCounts(
+                sceneData.HiZMipCount,
+                _renderTargets.BloomMipCount),
             FullResolutionRoughness = reflection.SsrFullResolutionRoughness,
             HalfResolutionRoughness = reflection.SsrHalfResolutionRoughness,
             QuarterResolutionRoughness = reflection.SsrQuarterResolutionRoughness,
@@ -577,12 +686,23 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             TemporalSampleIndex = sceneData.TemporalSampleIndex,
             HistoryValidAndCurrentFrameIndex =
                 (checked((uint)bank) << 1) |
-                (sceneData.HybridReflectionHistoryValid != 0 ? 1u : 0u),
+                (sceneData.HybridReflectionHistoryValid != 0 ? 1u : 0u) |
+                (adaptive ? 0x80000000u : 0u),
             RayQueriesEnabled = traceRays ? 1u : 0u,
             RayAdmissionThreshold = rayAdmissionThreshold
         };
         Push(commandBuffer, push);
-        DispatchScreen(commandBuffer);
+        if (adaptive)
+        {
+            _context.Api.CmdDispatchIndirect(
+                commandBuffer,
+                _bufferManager.GetBuffer(_indirectBuffers[bank]),
+                SsrIndirectOffset);
+        }
+        else
+        {
+            DispatchScreen(commandBuffer);
+        }
         PublishComputeWrites(commandBuffer);
     }
 
@@ -618,7 +738,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         };
         Push(commandBuffer, push);
         _context.Api.CmdDispatchIndirect(commandBuffer,
-            _bufferManager.GetBuffer(_indirectBuffers[bank]), 0UL);
+            _bufferManager.GetBuffer(_indirectBuffers[bank]),
+            RayIndirectOffset);
         PublishComputeWrites(commandBuffer);
     }
 
@@ -630,14 +751,13 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         if (!ShouldEvaluateDdgiBase(sceneData))
             return;
         int bank = ValidateFrameIndex(frameIndex);
+        BeginFrameWork(commandBuffer, bank, sceneData);
         BindPipelineAndDescriptors(commandBuffer, _ddgiBasePipeline, bank,
             bindRayScene: false);
         Required(_renderTargets.HybridReflectionDdgiCohorts,
                 "DDGI cohorts")
             .TransitionToStorageReadWrite(commandBuffer);
-        Required(_renderTargets.HybridReflectionFilterScratch,
-                "filter scratch")
-            .TransitionToStorageReadWrite(commandBuffer);
+        HistoryTarget(bank).TransitionToStorageReadWrite(commandBuffer);
         bool fullResolutionOracle = _settings.Reflections
             .DdgiReflectionFullResolutionOracle;
         uint receiverScale = fullResolutionOracle
@@ -714,7 +834,10 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 .SsrHalfResolutionRoughness,
             AnalyticTransitionEndRoughness = _settings.Reflections
                 .SsrQuarterResolutionRoughness,
-            DdgiBaseAvailable = ShouldEvaluateDdgiBase(sceneData) ? 1u : 0u
+            DdgiBaseAvailable = ShouldEvaluateDdgiBase(sceneData) ? 1u : 0u,
+            CurrentFrameIndex = checked((uint)bank),
+            EffectiveReflectionMode =
+                (uint)sceneData.EffectiveReflectionMode
         };
         Push(commandBuffer, push);
         DispatchScreen(commandBuffer);
@@ -749,7 +872,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             CurrentFrameIndex = checked((uint)bank),
             CameraOnlyReprojection = checked((uint)Math.Max(
                 0,
-                sceneData.CameraOnlyMotionReprojectionEnabled))
+                sceneData.CameraOnlyMotionReprojectionEnabled)),
+            SourceInvalidations = (uint)_currentSourceInvalidations
         };
         Push(commandBuffer, push);
         DispatchScreen(commandBuffer);
@@ -765,14 +889,13 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         if (!PrepareFrame(sceneData))
             return;
         int bank = ValidateFrameIndex(frameIndex);
-        int passCount = _settings.Reflections.SpatialFilterPassCount;
+        int passCount = ResolveSpatialPassCount(sceneData);
         if (passCount <= 0)
             return;
         Required(_renderTargets.HybridReflectionRawRadiance,
                 "raw radiance")
             .TransitionToStorageReadWrite(commandBuffer);
-        _renderTargets.HybridReflectionFilterScratch!
-            .TransitionToStorageReadWrite(commandBuffer);
+        HistoryTarget(1 - bank).TransitionToStorageReadWrite(commandBuffer);
         for (int iteration = 0; iteration < passCount; iteration++)
         {
             BindPipelineAndDescriptors(commandBuffer, _spatialPipeline, bank,
@@ -785,7 +908,9 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 ReadScratch = (iteration & 1) != 0 ? 1u : 0u,
                 NormalPower = 32.0f,
                 DepthSigma = 0.0025f * (iteration + 1),
-                RoughnessSigma = 0.12f
+                RoughnessSigma = 0.12f,
+                Padding0 = _budgetController.Current
+                    .SecondSpatialVarianceThreshold
             };
             Push(commandBuffer, push);
             DispatchScreen(commandBuffer);
@@ -808,8 +933,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         {
             ScreenWidth = _allocatedWidth,
             ScreenHeight = _allocatedHeight,
-            SpatialPassCount = checked((uint)_settings.Reflections
-                .SpatialFilterPassCount),
+            SpatialPassCount = checked((uint)ResolveSpatialPassCount(
+                sceneData)),
             DebugView = (uint)sceneData.ReflectionDebugView,
             FullResolutionRoughness = _settings.Reflections
                 .SsrFullResolutionRoughness,
@@ -826,6 +951,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         _counterFrameSubmitted[bank] = true;
         _previousRevision = _currentRevision;
         _currentResetReasons = ReflectionHistoryResetReason.None;
+        _currentSourceInvalidations =
+            ReflectionHistorySourceInvalidation.None;
     }
 
     public void RecordOpaqueSceneColorSnapshot(
@@ -839,7 +966,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
 
         int bank = ValidateFrameIndex(frameIndex);
         RenderTarget snapshot = Required(
-            _renderTargets.HybridReflectionFilterScratch,
+            HistoryTarget(1 - bank),
             "opaque SceneColor snapshot");
         _renderTargets.SceneColor.TransitionToStorageReadWrite(commandBuffer);
         snapshot.TransitionToStorageWrite(commandBuffer);
@@ -851,6 +978,16 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         DispatchScreen(commandBuffer);
         PublishComputeWrites(commandBuffer);
         snapshot.TransitionToShaderRead(commandBuffer);
+        _bindlessHeap.RegisterTexture(
+            BindlessIndex.OpaqueSceneColorSnapshotTexture,
+            snapshot.View,
+            _bindlessHeap.ScreenSampler,
+            imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+        RecordColorMipTail(
+            commandBuffer,
+            snapshot,
+            _transparentColorMipBaseSets[bank],
+            "Hybrid Reflection Transparent HDR Mip Build");
         _renderTargets.SceneColor.TransitionToColorAttachment(commandBuffer);
         sceneData.OpaqueSceneColorSnapshotAvailable = true;
     }
@@ -881,7 +1018,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         _allocatedWidth == sceneData.ScreenWidth &&
         _allocatedHeight == sceneData.ScreenHeight &&
         _allocatedWidth > 1u && _allocatedHeight > 1u &&
-        _descriptorPool.Handle != 0;
+        _descriptorPool.Handle != 0 &&
+        _colorMipDescriptorPool.Handle != 0;
 
     private void EnsureResources()
     {
@@ -892,10 +1030,14 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         uint height = receiver.Extent.Height;
         uint capacity = HybridReflectionBudgetPlanner.ResolveRayQueryCapacity(
             _settings.Reflections, width, height);
+        uint tileCapacity = checked(
+            ((width + WorkgroupSize - 1u) / WorkgroupSize) *
+            ((height + WorkgroupSize - 1u) / WorkgroupSize));
         ulong signature = ComputeDescriptorSignature();
         bool buffersValid = AllBuffersValid();
         if (width == _allocatedWidth && height == _allocatedHeight &&
             capacity == _allocatedTaskCapacity && buffersValid &&
+            tileCapacity == _allocatedTileCapacity &&
             signature == _descriptorSignature && _descriptorPool.Handle != 0)
         {
             return;
@@ -906,9 +1048,11 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         _allocatedWidth = width;
         _allocatedHeight = height;
         _allocatedTaskCapacity = capacity;
+        _allocatedTileCapacity = tileCapacity;
         AllocateBuffers();
         CreateDescriptorPoolAndSets();
         WriteDescriptorSets();
+        CreateColorMipDescriptorSets();
         _descriptorSignature = ComputeDescriptorSignature();
         _historyValid = false;
         _preparedFrameSerial = ulong.MaxValue;
@@ -918,6 +1062,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     {
         ulong taskBytes = checked(TaskHeaderBytes +
             (ulong)_allocatedTaskCapacity * TaskBytes);
+        ulong tileBytes = checked(TileHeaderBytes +
+            (ulong)_allocatedTileCapacity * TileBytes);
         for (int frameIndex = 0;
              frameIndex < RenderingConstants.FramesInFlight;
              frameIndex++)
@@ -956,6 +1102,14 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 debugName:
                     $"Hybrid Reflection Indirect Arguments Frame {frameIndex}",
                 category: MemoryBudgetCategory.RenderTargets);
+            _tileBuffers[frameIndex] = _bufferManager.CreateBuffer(
+                tileBytes,
+                BufferUsageFlags.StorageBufferBit |
+                BufferUsageFlags.TransferDstBit,
+                MemoryUsage.AutoPreferDevice,
+                debugName:
+                    $"Hybrid Reflection Active Tiles Frame {frameIndex}",
+                category: MemoryBudgetCategory.RenderTargets);
         }
     }
 
@@ -971,7 +1125,31 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         CurrentMetadataTarget(raw: true, bank)
             .TransitionToStorageReadWrite(commandBuffer);
         HistoryTarget(1 - bank).TransitionToStorageReadWrite(commandBuffer);
+        HistoryTarget(bank).TransitionToStorageReadWrite(commandBuffer);
         MetadataTarget(1 - bank).TransitionToStorageReadWrite(commandBuffer);
+        Required(_renderTargets.HybridReflectionDdgiCohorts,
+                "DDGI cohorts/secondary lobe")
+            .TransitionToStorageReadWrite(commandBuffer);
+    }
+
+    private void BeginFrameWork(
+        CommandBuffer commandBuffer,
+        int bank,
+        SceneRenderingData sceneData)
+    {
+        if (_recordInitializedFrameSerial == sceneData.DdgiFrameSerial &&
+            _recordInitializedBank == bank)
+        {
+            return;
+        }
+
+        SynchronizePreviousHybridFrame(commandBuffer);
+        TransitionSsrResources(commandBuffer, bank);
+        ResetTaskAndCounterBuffers(commandBuffer, bank);
+        if (_currentResetReasons != ReflectionHistoryResetReason.None)
+            ClearHistoryResources(commandBuffer);
+        _recordInitializedFrameSerial = sceneData.DdgiFrameSerial;
+        _recordInitializedBank = bank;
     }
 
     private void TransitionTemporalResources(
@@ -994,9 +1172,6 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         ClearStorageTarget(commandBuffer, MomentsTarget(1));
         ClearStorageTarget(commandBuffer, MetadataTarget(0));
         ClearStorageTarget(commandBuffer, MetadataTarget(1));
-        ClearStorageTarget(commandBuffer,
-            Required(_renderTargets.HybridReflectionFilterScratch,
-                "filter scratch"));
         PublishTransferWrites(commandBuffer);
     }
 
@@ -1028,8 +1203,9 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         VkBuffer task = _bufferManager.GetBuffer(_taskBuffers[bank]);
         VkBuffer counters = _bufferManager.GetBuffer(_counterBuffers[bank]);
         VkBuffer indirect = _bufferManager.GetBuffer(_indirectBuffers[bank]);
+        VkBuffer tiles = _bufferManager.GetBuffer(_tileBuffers[bank]);
         Span<BufferMemoryBarrier2> beforeReset =
-            stackalloc BufferMemoryBarrier2[3];
+            stackalloc BufferMemoryBarrier2[4];
         beforeReset[0] = BarrierBuilder.BufferBarrier(
             task,
             PipelineStageFlags2.ComputeShaderBit,
@@ -1061,6 +1237,15 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             AccessFlags2.TransferWriteBit,
             0UL,
             IndirectBytes);
+        beforeReset[3] = BarrierBuilder.BufferBarrier(
+            tiles,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.CopyBit,
+            AccessFlags2.TransferWriteBit,
+            0UL,
+            _bufferManager.GetBufferSize(_tileBuffers[bank]));
         ExecuteBufferBarriers(commandBuffer, beforeReset);
 
         // Stamp each heterogeneous header in one update. Overlapping fills do
@@ -1075,17 +1260,32 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         _context.Api.CmdUpdateBuffer(commandBuffer, task, 0UL, taskHeader);
         _context.Api.CmdFillBuffer(commandBuffer, counters, 0UL,
             CounterBytes, 0u);
-        Span<uint> indirectHeader = stackalloc uint[3]
+        Span<uint> indirectHeader = stackalloc uint[6]
         {
+            0u,
+            1u,
+            1u,
             0u,
             1u,
             1u
         };
         _context.Api.CmdUpdateBuffer(
             commandBuffer, indirect, 0UL, indirectHeader);
+        Span<uint> tileHeader = stackalloc uint[4]
+        {
+            0u,
+            _allocatedTileCapacity,
+            0u,
+            0u
+        };
+        _context.Api.CmdUpdateBuffer(
+            commandBuffer,
+            tiles,
+            0UL,
+            tileHeader);
 
         Span<BufferMemoryBarrier2> afterReset =
-            stackalloc BufferMemoryBarrier2[3];
+            stackalloc BufferMemoryBarrier2[4];
         afterReset[0] = BarrierBuilder.BufferBarrier(
             task,
             PipelineStageFlags2.CopyBit,
@@ -1115,6 +1315,15 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 AccessFlags2.IndirectCommandReadBit,
             0UL,
             IndirectBytes);
+        afterReset[3] = BarrierBuilder.BufferBarrier(
+            tiles,
+            PipelineStageFlags2.CopyBit,
+            AccessFlags2.TransferWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+            AccessFlags2.ShaderStorageWriteBit,
+            0UL,
+            _bufferManager.GetBufferSize(_tileBuffers[bank]));
         ExecuteBufferBarriers(commandBuffer, afterReset);
     }
 
@@ -1143,6 +1352,83 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             3u, 1u, &local, 0u, null);
     }
 
+    private void RecordColorMipTail(
+        CommandBuffer commandBuffer,
+        RenderTarget source,
+        DescriptorSet baseSet,
+        string label)
+    {
+        int mipCount = _renderTargets.BloomMipCount;
+        if (mipCount == 0 || baseSet.Handle == 0 ||
+            _colorMipPipeline.Handle == 0)
+        {
+            return;
+        }
+
+        _context.BeginDebugLabel(commandBuffer, label);
+        try
+        {
+            source.TransitionToShaderRead(commandBuffer);
+            _context.Api.CmdBindPipeline(
+                commandBuffer,
+                PipelineBindPoint.Compute,
+                _colorMipPipeline);
+            for (int mip = 0; mip < mipCount; mip++)
+            {
+                RenderTarget input = mip == 0
+                    ? source
+                    : _renderTargets.BloomMipChain[mip - 1];
+                RenderTarget destination =
+                    _renderTargets.BloomMipChain[mip];
+                DescriptorSet descriptorSet = mip == 0
+                    ? baseSet
+                    : _colorMipDownsampleSets[mip - 1];
+                destination.TransitionToStorageWrite(commandBuffer);
+                _context.Api.CmdBindDescriptorSets(
+                    commandBuffer,
+                    PipelineBindPoint.Compute,
+                    _colorMipPipelineLayout,
+                    0u,
+                    1u,
+                    &descriptorSet,
+                    0u,
+                    null);
+                var push = new GPUBloomPushConstants
+                {
+                    SourceDimensions = new Vector2(
+                        input.Extent.Width,
+                        input.Extent.Height),
+                    DestinationDimensions = new Vector2(
+                        destination.Extent.Width,
+                        destination.Extent.Height),
+                    Threshold = 0.0f,
+                    Knee = 0.0f,
+                    Radius = 1.0f,
+                    Mode = 0u
+                };
+                _context.Api.CmdPushConstants(
+                    commandBuffer,
+                    _colorMipPipelineLayout,
+                    ShaderStageFlags.ComputeBit,
+                    0u,
+                    checked((uint)Marshal.SizeOf<GPUBloomPushConstants>()),
+                    &push);
+                _context.Api.CmdDispatch(
+                    commandBuffer,
+                    (destination.Extent.Width + WorkgroupSize - 1u) /
+                        WorkgroupSize,
+                    (destination.Extent.Height + WorkgroupSize - 1u) /
+                        WorkgroupSize,
+                    1u);
+                destination.TransitionToShaderRead(commandBuffer);
+            }
+        }
+        finally
+        {
+            _context.EndDebugLabel(commandBuffer);
+        }
+    }
+
     private void DispatchScreen(
         CommandBuffer commandBuffer,
         uint receiverScale = 1u)
@@ -1156,6 +1442,39 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             1u);
     }
 
+    private int ResolveSpatialPassCount(SceneRenderingData sceneData)
+    {
+        int configured = _settings.Reflections.SpatialFilterPassCount;
+        return sceneData.EffectiveReflectionImplementation ==
+            ReflectionImplementationMode.Adaptive
+                ? Math.Min(configured, 2)
+                : configured;
+    }
+
+    private static uint ScaleAdmissionThreshold(
+        uint threshold,
+        float scale)
+    {
+        if (threshold == 0u)
+            return 0u;
+        double sanitized = float.IsFinite(scale)
+            ? Math.Clamp(scale, 0.0f, 1.0f)
+            : 1.0;
+        return checked((uint)Math.Clamp(
+            Math.Floor(threshold * sanitized),
+            1.0,
+            uint.MaxValue));
+    }
+
+    private static uint PackHiZAndColorMipCounts(
+        uint hiZMipCount,
+        int colorMipCount) =>
+        Math.Min(hiZMipCount, ushort.MaxValue) |
+        (checked((uint)Math.Clamp(
+            colorMipCount,
+            0,
+            ushort.MaxValue)) << 16);
+
     private void Push<T>(CommandBuffer commandBuffer, T push)
         where T : unmanaged
     {
@@ -1166,13 +1485,14 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
 
     private void CreateLocalSetLayout()
     {
-        var bindings = stackalloc DescriptorSetLayoutBinding[17];
-        for (uint binding = 0u; binding < 17u; binding++)
+        var bindings = stackalloc DescriptorSetLayoutBinding[18];
+        for (uint binding = 0u; binding < 18u; binding++)
         {
             DescriptorType type = binding switch
             {
                 0u or 11u or 12u => DescriptorType.CombinedImageSampler,
-                13u or 14u or 15u => DescriptorType.StorageBuffer,
+                13u or 14u or 15u or 17u =>
+                    DescriptorType.StorageBuffer,
                 _ => DescriptorType.StorageImage
             };
             bindings[binding] = new DescriptorSetLayoutBinding
@@ -1186,7 +1506,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         var info = new DescriptorSetLayoutCreateInfo
         {
             SType = StructureType.DescriptorSetLayoutCreateInfo,
-            BindingCount = 17u,
+            BindingCount = 18u,
             PBindings = bindings
         };
         Result result = _context.Api.CreateDescriptorSetLayout(
@@ -1195,6 +1515,39 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             throw new VulkanException(
                 "Failed to create hybrid reflection descriptor layout",
                 result);
+    }
+
+    private void CreateColorMipSetLayout()
+    {
+        var bindings = stackalloc DescriptorSetLayoutBinding[2];
+        bindings[0] = new DescriptorSetLayoutBinding
+        {
+            Binding = 0u,
+            DescriptorType = DescriptorType.CombinedImageSampler,
+            DescriptorCount = 2u,
+            StageFlags = ShaderStageFlags.ComputeBit
+        };
+        bindings[1] = new DescriptorSetLayoutBinding
+        {
+            Binding = 1u,
+            DescriptorType = DescriptorType.StorageImage,
+            DescriptorCount = 1u,
+            StageFlags = ShaderStageFlags.ComputeBit
+        };
+        var info = new DescriptorSetLayoutCreateInfo
+        {
+            SType = StructureType.DescriptorSetLayoutCreateInfo,
+            BindingCount = 2u,
+            PBindings = bindings
+        };
+        Result result = _context.Api.CreateDescriptorSetLayout(
+            _context.Device, &info, null, out _colorMipSetLayout);
+        if (result != Result.Success)
+        {
+            throw new VulkanException(
+                "Failed to create hybrid reflection color-mip layout",
+                result);
+        }
     }
 
     private void CreateEmptyRaySetLayoutIfNeeded()
@@ -1264,7 +1617,38 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 "Failed to create hybrid reflection pipeline layout", result);
     }
 
-    private VkPipeline CreatePipeline(string shaderName)
+    private void CreateColorMipPipelineLayout()
+    {
+        var pushRange = new PushConstantRange
+        {
+            StageFlags = ShaderStageFlags.ComputeBit,
+            Size = checked((uint)Marshal.SizeOf<GPUBloomPushConstants>())
+        };
+        DescriptorSetLayout layout = _colorMipSetLayout;
+        var info = new PipelineLayoutCreateInfo
+        {
+            SType = StructureType.PipelineLayoutCreateInfo,
+            SetLayoutCount = 1u,
+            PSetLayouts = &layout,
+            PushConstantRangeCount = 1u,
+            PPushConstantRanges = &pushRange
+        };
+        Result result = _context.Api.CreatePipelineLayout(
+            _context.Device, &info, null, out _colorMipPipelineLayout);
+        if (result != Result.Success)
+        {
+            throw new VulkanException(
+                "Failed to create hybrid reflection color-mip pipeline layout",
+                result);
+        }
+    }
+
+    private VkPipeline CreatePipeline(string shaderName) =>
+        CreatePipeline(shaderName, _pipelineLayout);
+
+    private VkPipeline CreatePipeline(
+        string shaderName,
+        PipelineLayout pipelineLayout)
     {
         ShaderModule module = default;
         try
@@ -1281,28 +1665,28 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             {
                 SType = StructureType.ComputePipelineCreateInfo,
                 Stage = stage,
-                Layout = _pipelineLayout,
+                Layout = pipelineLayout,
                 BasePipelineIndex = -1
             };
-            long start = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-            Result result;
-            try
-            {
-                result = _context.Api.CreateComputePipelines(
-                    _context.Device, _pipelineCache, 1u, &info, null,
-                    out VkPipeline pipeline);
-                if (result != Result.Success)
-                    throw new VulkanException(
-                        $"Failed to create {shaderName}", result);
-                _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline,
-                    shaderName);
-                return pipeline;
-            }
-            finally
-            {
-                _pipelineCacheService?.EndPipelineCreation(
-                    $"HybridReflection:{shaderName}", start);
-            }
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId(
+                        $"HybridReflection:{shaderName}"),
+                    &info,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1u,
+                    &info,
+                    null,
+                    out pipeline);
+            if (result != Result.Success)
+                throw new VulkanException(
+                    $"Failed to create {shaderName}", result);
+            _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline,
+                shaderName);
+            return pipeline;
         }
         finally
         {
@@ -1352,7 +1736,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             new DescriptorPoolSize
             {
                 Type = DescriptorType.StorageBuffer,
-                DescriptorCount = 6u
+                DescriptorCount = 8u
             }
         };
         var poolInfo = new DescriptorPoolCreateInfo
@@ -1389,11 +1773,150 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 "Failed to allocate hybrid reflection descriptor sets", result);
     }
 
+    private void CreateColorMipDescriptorSets()
+    {
+        int mipCount = _renderTargets.BloomMipCount;
+        if (mipCount == 0)
+            return;
+        int baseSetCount = 1 + RenderingConstants.FramesInFlight;
+        int downsampleCount = Math.Max(0, mipCount - 1);
+        int setCount = baseSetCount + downsampleCount;
+        var sizes = stackalloc DescriptorPoolSize[2]
+        {
+            new DescriptorPoolSize
+            {
+                Type = DescriptorType.CombinedImageSampler,
+                DescriptorCount = checked((uint)(setCount * 2))
+            },
+            new DescriptorPoolSize
+            {
+                Type = DescriptorType.StorageImage,
+                DescriptorCount = checked((uint)setCount)
+            }
+        };
+        var poolInfo = new DescriptorPoolCreateInfo
+        {
+            SType = StructureType.DescriptorPoolCreateInfo,
+            PoolSizeCount = 2u,
+            PPoolSizes = sizes,
+            MaxSets = checked((uint)setCount)
+        };
+        Result result = _context.Api.CreateDescriptorPool(
+            _context.Device,
+            &poolInfo,
+            null,
+            out _colorMipDescriptorPool);
+        if (result != Result.Success)
+        {
+            throw new VulkanException(
+                "Failed to create hybrid reflection color-mip descriptor pool",
+                result);
+        }
+
+        var layouts = new DescriptorSetLayout[setCount];
+        var sets = new DescriptorSet[setCount];
+        Array.Fill(layouts, _colorMipSetLayout);
+        fixed (DescriptorSetLayout* layoutPointer = layouts)
+        fixed (DescriptorSet* setPointer = sets)
+        {
+            var allocation = new DescriptorSetAllocateInfo
+            {
+                SType = StructureType.DescriptorSetAllocateInfo,
+                DescriptorPool = _colorMipDescriptorPool,
+                DescriptorSetCount = checked((uint)setCount),
+                PSetLayouts = layoutPointer
+            };
+            result = _context.Api.AllocateDescriptorSets(
+                _context.Device,
+                &allocation,
+                setPointer);
+        }
+        if (result != Result.Success)
+        {
+            throw new VulkanException(
+                "Failed to allocate hybrid reflection color-mip descriptor sets",
+                result);
+        }
+
+        int index = 0;
+        _opaqueColorMipBaseSet = sets[index++];
+        for (int bank = 0;
+             bank < RenderingConstants.FramesInFlight;
+             bank++)
+        {
+            _transparentColorMipBaseSets[bank] = sets[index++];
+        }
+        _colorMipDownsampleSets = sets[index..];
+        WriteColorMipDescriptorSet(
+            _opaqueColorMipBaseSet,
+            _renderTargets.SceneColor.View,
+            _renderTargets.BloomMipChain[0].View);
+        for (int bank = 0;
+             bank < RenderingConstants.FramesInFlight;
+             bank++)
+        {
+            WriteColorMipDescriptorSet(
+                _transparentColorMipBaseSets[bank],
+                HistoryTarget(1 - bank).View,
+                _renderTargets.BloomMipChain[0].View);
+        }
+        for (int mip = 1; mip < mipCount; mip++)
+        {
+            WriteColorMipDescriptorSet(
+                _colorMipDownsampleSets[mip - 1],
+                _renderTargets.BloomMipChain[mip - 1].View,
+                _renderTargets.BloomMipChain[mip].View);
+        }
+    }
+
+    private void WriteColorMipDescriptorSet(
+        DescriptorSet set,
+        ImageView source,
+        ImageView destination)
+    {
+        var sourceInfos = stackalloc DescriptorImageInfo[2];
+        for (int index = 0; index < 2; index++)
+        {
+            sourceInfos[index] = new DescriptorImageInfo
+            {
+                Sampler = _bindlessHeap.ScreenSampler,
+                ImageView = source,
+                ImageLayout = ImageLayout.ShaderReadOnlyOptimal
+            };
+        }
+        var destinationInfo = new DescriptorImageInfo
+        {
+            ImageView = destination,
+            ImageLayout = ImageLayout.General
+        };
+        var writes = stackalloc WriteDescriptorSet[2];
+        writes[0] = new WriteDescriptorSet
+        {
+            SType = StructureType.WriteDescriptorSet,
+            DstSet = set,
+            DstBinding = 0u,
+            DescriptorCount = 2u,
+            DescriptorType = DescriptorType.CombinedImageSampler,
+            PImageInfo = sourceInfos
+        };
+        writes[1] = new WriteDescriptorSet
+        {
+            SType = StructureType.WriteDescriptorSet,
+            DstSet = set,
+            DstBinding = 1u,
+            DescriptorCount = 1u,
+            DescriptorType = DescriptorType.StorageImage,
+            PImageInfo = &destinationInfo
+        };
+        _context.Api.UpdateDescriptorSets(
+            _context.Device, 2u, writes, 0u, null);
+    }
+
     private void WriteDescriptorSets()
     {
         var imageInfos = stackalloc DescriptorImageInfo[14];
-        var bufferInfos = stackalloc DescriptorBufferInfo[3];
-        var writes = stackalloc WriteDescriptorSet[17];
+        var bufferInfos = stackalloc DescriptorBufferInfo[4];
+        var writes = stackalloc WriteDescriptorSet[18];
         for (int bank = 0; bank < RenderingConstants.FramesInFlight; bank++)
         {
             RenderTarget[] imageTargets =
@@ -1409,8 +1932,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 MomentsTarget(bank),
                 MetadataTarget(1 - bank),
                 MetadataTarget(bank),
-                Required(_renderTargets.HybridReflectionFilterScratch,
-                    "filter scratch"),
+                HistoryTarget(1 - bank),
                 _renderTargets.SceneColor,
                 _renderTargets.MotionVectors,
                 _renderTargets.SceneDepth
@@ -1447,6 +1969,11 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             {
                 Buffer = _bufferManager.GetBuffer(_indirectBuffers[bank]),
                 Range = IndirectBytes
+            };
+            bufferInfos[3] = new DescriptorBufferInfo
+            {
+                Buffer = _bufferManager.GetBuffer(_tileBuffers[bank]),
+                Range = _bufferManager.GetBufferSize(_tileBuffers[bank])
             };
             for (uint binding = 0u; binding < 13u; binding++)
             {
@@ -1490,8 +2017,17 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 DescriptorType = DescriptorType.StorageImage,
                 PImageInfo = &imageInfos[13]
             };
+            writes[17] = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = _descriptorSets[bank],
+                DstBinding = 17u,
+                DescriptorCount = 1u,
+                DescriptorType = DescriptorType.StorageBuffer,
+                PBufferInfo = &bufferInfos[3]
+            };
             _context.Api.UpdateDescriptorSets(
-                _context.Device, 17u, writes, 0u, null);
+                _context.Device, 18u, writes, 0u, null);
         }
     }
 
@@ -1510,6 +2046,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             Marshal.SizeOf<GPUHybridReflectionCompositePushConstants>());
         maximum = Math.Max(maximum,
             Marshal.SizeOf<GPUHybridReflectionDdgiPushConstants>());
+        maximum = Math.Max(maximum,
+            Marshal.SizeOf<GPUHybridReflectionClassifyPushConstants>());
         if (maximum > HybridReflectionGpuContract.MaximumPushConstantBytes)
         {
             throw new InvalidOperationException(
@@ -1537,13 +2075,14 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         Mix(MomentsTarget(1).View.Handle);
         Mix(MetadataTarget(0).View.Handle);
         Mix(MetadataTarget(1).View.Handle);
-        Mix(Required(_renderTargets.HybridReflectionFilterScratch,
-            "filter scratch").View.Handle);
         Mix(Required(_renderTargets.HybridReflectionDdgiCohorts,
             "DDGI cohorts").View.Handle);
         Mix(_renderTargets.SceneColor.View.Handle);
         Mix(_renderTargets.MotionVectors.View.Handle);
         Mix(_renderTargets.SceneDepth.View.Handle);
+        Mix(checked((ulong)_renderTargets.BloomMipCount));
+        foreach (RenderTarget target in _renderTargets.BloomMipChain)
+            Mix(target.View.Handle);
         return hash;
     }
 
@@ -1554,7 +2093,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             if (!_taskBuffers[index].IsValid ||
                 !_counterBuffers[index].IsValid ||
                 !_counterReadbackBuffers[index].IsValid ||
-                !_indirectBuffers[index].IsValid)
+                !_indirectBuffers[index].IsValid ||
+                !_tileBuffers[index].IsValid)
             {
                 return false;
             }
@@ -1741,6 +2281,17 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             _context.Api.DestroyDescriptorPool(
                 _context.Device, _descriptorPool, null);
         _descriptorPool = default;
+        if (_colorMipDescriptorPool.Handle != 0)
+        {
+            _context.Api.DestroyDescriptorPool(
+                _context.Device,
+                _colorMipDescriptorPool,
+                null);
+        }
+        _colorMipDescriptorPool = default;
+        _opaqueColorMipBaseSet = default;
+        Array.Clear(_transparentColorMipBaseSets);
+        _colorMipDownsampleSets = Array.Empty<DescriptorSet>();
     }
 
     private void DestroyBuffers()
@@ -1749,6 +2300,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         DestroyBufferArray(_counterBuffers);
         DestroyBufferArray(_counterReadbackBuffers);
         DestroyBufferArray(_indirectBuffers);
+        DestroyBufferArray(_tileBuffers);
         Array.Fill(_counterFrameSubmitted, false);
         Array.Fill(_completedCounters, HybridReflectionCounterSnapshot.Empty);
     }
@@ -1768,6 +2320,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         DestroyDescriptorPool();
         DestroyBuffers();
         DestroyPipeline(ref _ssrPipeline);
+        DestroyPipeline(ref _classifyPipeline);
         DestroyPipeline(ref _rayPipeline);
         DestroyPipeline(ref _ddgiBasePipeline);
         DestroyPipeline(ref _resolvePipeline);
@@ -1775,6 +2328,14 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         DestroyPipeline(ref _spatialPipeline);
         DestroyPipeline(ref _compositePipeline);
         DestroyPipeline(ref _opaqueSceneColorSnapshotPipeline);
+        DestroyPipeline(ref _colorMipPipeline);
+        if (_colorMipPipelineLayout.Handle != 0)
+        {
+            _context.Api.DestroyPipelineLayout(
+                _context.Device,
+                _colorMipPipelineLayout,
+                null);
+        }
         if (_pipelineLayout.Handle != 0)
             _context.Api.DestroyPipelineLayout(
                 _context.Device, _pipelineLayout, null);
@@ -1787,15 +2348,24 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         if (_localSetLayout.Handle != 0)
             _context.Api.DestroyDescriptorSetLayout(
                 _context.Device, _localSetLayout, null);
+        if (_colorMipSetLayout.Handle != 0)
+        {
+            _context.Api.DestroyDescriptorSetLayout(
+                _context.Device,
+                _colorMipSetLayout,
+                null);
+        }
         if (_entryPointName != 0)
         {
             SilkMarshal.Free(_entryPointName);
             _entryPointName = 0;
         }
         _pipelineLayout = default;
+        _colorMipPipelineLayout = default;
         _pipelineCache = default;
         _emptyRaySetLayout = default;
         _localSetLayout = default;
+        _colorMipSetLayout = default;
     }
 
     private void DestroyPipeline(ref VkPipeline pipeline)

@@ -309,8 +309,6 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipeline()
         {
-            long pipelineStart =
-                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule shaderModule = default;
             try
             {
@@ -329,7 +327,18 @@ namespace Njulf.Rendering.Pipeline
                     Layout = _pipelineLayout,
                     BasePipelineIndex = -1
                 };
-                Result result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out _pipeline);
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId("AmbientOcclusion.Blur"),
+                        &pipelineInfo,
+                        out _pipeline)
+                    : _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out _pipeline);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create ambient occlusion blur compute pipeline", result);
                 _context.SetDebugName(_pipeline.Handle, ObjectType.Pipeline, "Ambient Occlusion Blur Compute Pipeline");
@@ -338,9 +347,6 @@ namespace Njulf.Rendering.Pipeline
             {
                 if (shaderModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
-                _pipelineCacheService?.EndPipelineCreation(
-                    "AmbientOcclusion.Blur",
-                    pipelineStart);
             }
         }
 

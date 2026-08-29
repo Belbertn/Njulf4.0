@@ -129,11 +129,13 @@ internal sealed unsafe class GiCausticFrameCoordinator : IDisposable
         in GiCausticInitializationRequest request)
     {
         ThrowIfDisposed();
+        GiCausticMode productionMode =
+            AdvancedGiActivationPolicy.NormalizeProductionMode(
+                request.RequestedMode);
         bool cpuReference =
-            request.RequestedMode == GiCausticMode.PhotonReference;
-        bool gpuRequested = request.RequestedMode is
-            GiCausticMode.WorldCacheExperiment or
-            GiCausticMode.AutoQualified;
+            productionMode == GiCausticMode.PhotonReference;
+        bool gpuRequested = productionMode ==
+            GiCausticMode.WorldCacheExperiment;
         AdvancedGiCausticCandidateDocument? candidate =
             request.CandidateAuthorized ? request.Candidate : null;
         _usesCandidateAuthorization = candidate is not null;
@@ -169,7 +171,7 @@ internal sealed unsafe class GiCausticFrameCoordinator : IDisposable
                 request.CandidateAuthorization);
             publishAdmissionContext = true;
         }
-        else if (request.RequestedMode ==
+        else if (productionMode ==
                  GiCausticMode.WorldCacheExperiment)
         {
             admissionContext = default;
@@ -236,26 +238,6 @@ internal sealed unsafe class GiCausticFrameCoordinator : IDisposable
                     ForwardGiCausticReceiverContract.ShaderSemanticVersion)
                 : ForwardGiCausticReceiverPipelineConfiguration.Disabled;
 
-        if (receiver.IsC4EffectivelyEnabled &&
-            request.HybridReflectionsEnabled)
-        {
-            const string reason =
-                "C4-and-hybrid-reflection-forward-receivers-are-mutually-exclusive";
-            plan = GiTaggedCausticCacheExperiment.InvalidateRuntimePlan(
-                plan,
-                reason,
-                GiExperimentFallbackReason.InvalidConfiguration);
-            mode = mode with
-            {
-                AdmittedMode = GiCausticMode.Off,
-                EffectiveMode = GiCausticMode.Off,
-                FallbackReason =
-                GiExperimentFallbackReason.InvalidConfiguration,
-                FallbackDetail = reason
-            };
-            receiver = ForwardGiCausticReceiverPipelineConfiguration.Disabled;
-        }
-
         _requestedConfiguration = configuration;
         Plan = plan;
         Mode = mode;
@@ -275,7 +257,8 @@ internal sealed unsafe class GiCausticFrameCoordinator : IDisposable
     public void CreateRuntime(
         AccelerationStructureManager accelerationStructureManager,
         Action waitForDescriptorReaders,
-        RenderTargetManager renderTargets)
+        RenderTargetManager renderTargets,
+        GiPipelineCacheService? pipelineCacheService = null)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(accelerationStructureManager);
@@ -293,7 +276,8 @@ internal sealed unsafe class GiCausticFrameCoordinator : IDisposable
             _bufferManager,
             accelerationStructureManager,
             waitForDescriptorReaders,
-            renderTargets);
+            renderTargets,
+            pipelineCacheService);
     }
 
     public bool TryRegisterDescriptors(

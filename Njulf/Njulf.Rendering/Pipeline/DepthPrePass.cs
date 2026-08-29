@@ -187,9 +187,10 @@ namespace Njulf.Rendering.Pipeline
             sceneData.DepthPrePassCompleted = true;
         }
 
-        private static bool CanUseSceneCompactedDepth(SceneRenderingData sceneData)
+        private bool CanUseSceneCompactedDepth(SceneRenderingData sceneData)
         {
-            if (!sceneData.SceneSubmissionGpuCompactionActive ||
+            if (!_meshPipeline.TasklessSubmissionEnabled ||
+                !sceneData.SceneSubmissionGpuCompactionActive ||
                 sceneData.SceneSubmissionFallbackReason.Length != 0)
                 return false;
 
@@ -368,7 +369,15 @@ namespace Njulf.Rendering.Pipeline
 
         private void DrawFoliageDepth(CommandBuffer cmd, SceneRenderingData sceneData)
         {
-            if (_foliagePipeline == null || sceneData.FoliageClusterCount <= 0 || sceneData.FoliageDrawBufferBytes == 0)
+            if (_foliagePipeline == null || _bufferManager == null ||
+                _foliageManager == null ||
+                sceneData.FoliageClusterCount <= 0 ||
+                sceneData.FoliageDrawBufferBytes == 0)
+                return;
+
+            FoliageRuntimeBuffers buffers = _foliageManager.GetBuffers(
+                (int)sceneData.CurrentFrameIndex);
+            if (!buffers.IndirectDispatchBuffer.IsValid)
                 return;
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _foliagePipeline.DepthPipeline);
@@ -380,7 +389,9 @@ namespace Njulf.Rendering.Pipeline
                 CameraPositionTime = new Vector4(sceneData.CameraPosition.X, sceneData.CameraPosition.Y, sceneData.CameraPosition.Z, sceneData.Time),
                 ScreenDimensions = new Vector4(sceneData.ScreenWidth, sceneData.ScreenHeight, 1.0f / Math.Max(1u, sceneData.ScreenWidth), 1.0f / Math.Max(1u, sceneData.ScreenHeight)),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                ClusterDrawCount = checked((uint)sceneData.FoliageClusterCount),
+                ClusterDrawCount = checked((uint)Math.Max(
+                    0,
+                    buffers.VisibleClusterCapacity)),
                 VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
                 Flags = 1u,
                 DebugView = sceneData.FoliageDebugView,
@@ -395,8 +406,14 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
                 &pushConstants);
 
-            sceneData.DepthTaskInvocations += sceneData.FoliageClusterCount;
-            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.FoliageClusterCount, 1, 1);
+            VkBuffer indirect = _bufferManager.GetBuffer(
+                buffers.IndirectDispatchBuffer);
+            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                cmd,
+                indirect,
+                FoliageManager.ProceduralIndirectDispatchOffset,
+                1,
+                (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
 
             DrawAuthoredFoliageDepth(cmd, sceneData);
         }
@@ -440,7 +457,7 @@ namespace Njulf.Rendering.Pipeline
                 _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
                     cmd,
                     indirect,
-                    0,
+                    FoliageManager.AuthoredIndirectDispatchOffset,
                     1,
                     (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
                 return;

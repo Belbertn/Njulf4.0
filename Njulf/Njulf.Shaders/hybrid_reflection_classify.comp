@@ -1,0 +1,193 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "hybrid_reflection_compute.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform HybridReflectionClassifyPushBlock
+{
+    uint ScreenWidth;
+    uint ScreenHeight;
+    float FullResolutionRoughness;
+    float HalfResolutionRoughness;
+    float QuarterResolutionRoughness;
+    float MaximumReuseMotionPixels;
+    uint HistoryValid;
+    uint SourceInvalidations;
+} pc;
+
+shared uint TileReceiverCount;
+shared uint TileCanReuse;
+shared uint TileTierPriority;
+shared uint TileAppendIndex;
+
+bool HybridClassifySourceInvalidated(uint source)
+{
+    if (source == HYBRID_REFLECTION_SOURCE_SSR ||
+        source == HYBRID_REFLECTION_SOURCE_RAY_QUERY)
+    {
+        return (pc.SourceInvalidations & (1u << 0u)) != 0u;
+    }
+    if (source == HYBRID_REFLECTION_SOURCE_DDGI)
+        return (pc.SourceInvalidations & (1u << 1u)) != 0u;
+    if (source == HYBRID_REFLECTION_SOURCE_LOCAL_PROBE)
+        return (pc.SourceInvalidations & (1u << 3u)) != 0u;
+    if (source == HYBRID_REFLECTION_SOURCE_ENVIRONMENT)
+        return (pc.SourceInvalidations & (1u << 4u)) != 0u;
+    return false;
+}
+
+uint HybridClassifyTierPriority(uint tier)
+{
+    if (tier == 1u)
+        return 4u;
+    if (tier == 2u)
+        return 3u;
+    if (tier == 4u)
+        return 2u;
+    return 1u;
+}
+
+void main()
+{
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        TileReceiverCount = 0u;
+        TileCanReuse = pc.HistoryValid != 0u ? 1u : 0u;
+        TileTierPriority = 0u;
+        TileAppendIndex = 0xffffffffu;
+    }
+    barrier();
+
+    uvec2 invocation = gl_WorkGroupID.xy * uvec2(8u) +
+        gl_LocalInvocationID.xy;
+    bool inBounds = invocation.x < pc.ScreenWidth &&
+        invocation.y < pc.ScreenHeight;
+    ivec2 pixel = ivec2(invocation);
+    uvec4 payload = inBounds
+        ? texelFetch(HybridReceiverPayload, pixel, 0)
+        : uvec4(0u);
+    bool receiverValid = inBounds &&
+        HybridReflectionPayloadValid(payload);
+
+    if (!receiverValid)
+    {
+        if (inBounds)
+        {
+            imageStore(HybridRawRadiance, pixel, vec4(0.0));
+            imageStore(HybridRawMetadata, pixel, uvec4(0u));
+        }
+    }
+    else
+    {
+        atomicAdd(TileReceiverCount, 1u);
+        uint tier = HybridResolveAdaptiveReflectionTier(
+            HybridReflectionPayloadSchedulingRoughness(payload),
+            HybridReflectionPayloadF0(payload),
+            HybridReflectionPayloadSpecularOcclusion(payload),
+            HybridReflectionPayloadLobeFlags(payload),
+            pc.FullResolutionRoughness,
+            pc.HalfResolutionRoughness,
+            pc.QuarterResolutionRoughness);
+        atomicMax(TileTierPriority, HybridClassifyTierPriority(tier));
+
+        uvec2 previousMetadata = imageLoad(
+            HybridMetadataPrevious, pixel).xy;
+        vec4 previousHistory = imageLoad(HybridHistoryPrevious, pixel);
+        vec2 dimensions = vec2(pc.ScreenWidth, pc.ScreenHeight);
+        vec2 motion = texelFetch(HybridMotionVectors, pixel, 0).rg;
+        float currentDepth = texelFetch(HybridSceneDepth, pixel, 0).r;
+        vec3 currentNormal = HybridReflectionTraceNormal(payload);
+        uint previousSource =
+            HybridHistoryMetadataSource(previousMetadata);
+        float depthTolerance = max(0.0005, abs(currentDepth) * 0.002);
+        bool canReuse = pc.HistoryValid != 0u &&
+            HybridFinite(motion) &&
+            length(motion * dimensions) <= pc.MaximumReuseMotionPixels &&
+            HybridHistoryMetadataValid(previousMetadata) &&
+            HybridHistoryMetadataIdentity(previousMetadata) ==
+                HybridReceiverIdentity(payload) &&
+            HybridFinite(previousHistory) &&
+            HybridFinite(currentDepth) &&
+            abs(HybridHistoryMetadataDepth(previousMetadata) -
+                currentDepth) <= depthTolerance &&
+            dot(HybridHistoryMetadataNormal(previousMetadata),
+                currentNormal) >= 0.9 &&
+            !HybridClassifySourceInvalidated(previousSource);
+        if (!canReuse)
+            atomicAnd(TileCanReuse, 0u);
+    }
+    barrier();
+
+    if (TileReceiverCount == 0u)
+        return;
+
+    if (TileCanReuse != 0u)
+    {
+        if (receiverValid)
+        {
+            uvec2 previousMetadata = imageLoad(
+                HybridMetadataPrevious, pixel).xy;
+            vec4 previousHistory = imageLoad(
+                HybridHistoryPrevious, pixel);
+            uint previousSource =
+                HybridHistoryMetadataSource(previousMetadata);
+            imageStore(HybridRawRadiance, pixel, previousHistory);
+            imageStore(HybridRawMetadata, pixel, uvec4(
+                HybridPackMetadata(previousSource, previousHistory.a,
+                    HYBRID_REFLECTION_REASON_RESOLUTION_SKIP,
+                    HybridHistoryMetadataAge(previousMetadata), true),
+                0u, 0u, 0u));
+        }
+        if (gl_LocalInvocationIndex == 0u)
+        {
+            atomicAdd(HybridTileReuseCount, 1u);
+            atomicAdd(HybridCounters[
+                HYBRID_REFLECTION_COUNTER_REUSE_TILES], 1u);
+        }
+        return;
+    }
+
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        uint tileIndex = atomicAdd(HybridTileCount, 1u);
+        if (tileIndex < HybridTileCapacity)
+        {
+            HybridTiles[tileIndex] = uvec4(
+                gl_WorkGroupID.xy, TileTierPriority, 0u);
+            atomicMax(HybridSsrIndirectGroupCountX, tileIndex + 1u);
+            atomicAdd(HybridCounters[
+                HYBRID_REFLECTION_COUNTER_ACTIVE_TILES], 1u);
+            uint tierCounter = TileTierPriority == 4u
+                ? HYBRID_REFLECTION_COUNTER_FULL_RATE_TILES
+                : TileTierPriority == 3u
+                    ? HYBRID_REFLECTION_COUNTER_HALF_RATE_TILES
+                    : TileTierPriority == 2u
+                        ? HYBRID_REFLECTION_COUNTER_QUARTER_RATE_TILES
+                        : HYBRID_REFLECTION_COUNTER_ANALYTIC_TILES;
+            atomicAdd(HybridCounters[tierCounter], 1u);
+            TileAppendIndex = tileIndex;
+        }
+        else
+        {
+            atomicAdd(HybridTileOverflow, 1u);
+            atomicAdd(HybridCounters[
+                HYBRID_REFLECTION_COUNTER_TILE_OVERFLOWS], 1u);
+        }
+    }
+    barrier();
+
+    // Capacity is provisioned for every screen tile, but retain a bounded
+    // recovery path if a future allocator deliberately admits less storage.
+    if (receiverValid && TileAppendIndex == 0xffffffffu)
+    {
+        imageStore(HybridRawRadiance, pixel, vec4(0.0));
+        imageStore(HybridRawMetadata, pixel, uvec4(
+            HybridPackMetadata(HYBRID_REFLECTION_SOURCE_NONE, 0.0,
+                HYBRID_REFLECTION_REASON_RAY_BUDGET, 0u, false),
+            HybridReceiverIdentity(payload), 0u, 0u));
+    }
+}

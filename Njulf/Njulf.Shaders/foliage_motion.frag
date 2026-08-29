@@ -13,6 +13,7 @@ layout(location = 5) flat in uint inHistoryFrameAndFlags;
 layout(location = 6) flat in uint inClusterIndex;
 layout(location = 7) flat in uint inLodBand;
 layout(location = 8) flat in uint inGeometryMode;
+layout(location = 9) flat in uint inImpostorMetadataIndex;
 layout(location = 0) out vec2 outVelocity;
 
 void main()
@@ -25,6 +26,7 @@ void main()
             inGeometryMode,
             inClusterIndex,
             inLodBand,
+            inImpostorMetadataIndex,
             gl_FragCoord.xy,
             sampledAlbedo))
         discard;

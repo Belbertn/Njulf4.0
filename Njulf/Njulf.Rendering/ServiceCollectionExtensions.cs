@@ -375,14 +375,71 @@ namespace Microsoft.Extensions.DependencyInjection
             services.TryAddSingleton<MeshManager>();
             services.TryAddSingleton<MaterialManager>();
             services.TryAddSingleton<OpacityMicromapRuntimeRegistrationStore>();
+            services.TryAddSingleton(provider =>
+                MeshletStreamingResidencyOptions.FromSettings(
+                    provider.GetRequiredService<RenderingOptions>()
+                        .InitialSettings.SceneSubmission));
+            services.TryAddSingleton(provider =>
+                provider.GetRequiredService<RenderingOptions>()
+                    .InitialSettings.SceneSubmission);
+            services.TryAddSingleton(provider =>
+            {
+                MeshletStreamingResidencyOptions residencyOptions =
+                    provider.GetRequiredService<
+                        MeshletStreamingResidencyOptions>();
+                return new MeshletPhysicalPageCacheUploader(
+                    residencyOptions.PhysicalPageCapacity);
+            });
+            services.TryAddSingleton(provider =>
+                new MeshletStreamingResidencyCoordinator(
+                    provider.GetRequiredService<
+                        MeshletPhysicalPageCacheUploader>(),
+                    provider.GetRequiredService<
+                        MeshletStreamingResidencyOptions>()));
+            services.TryAddSingleton(provider =>
+                new MeshletFrameResidencyResolver(
+                    provider.GetRequiredService<
+                        MeshletStreamingResidencyCoordinator>(),
+                    provider.GetRequiredService<
+                        MeshletPhysicalPageCacheUploader>()));
+            services.TryAddSingleton(provider =>
+                new VulkanMeshletPhysicalResidencyResources(
+                    provider.GetRequiredService<VulkanContext>(),
+                    provider.GetRequiredService<BufferManager>(),
+                    provider.GetRequiredService<StagingRing>(),
+                    provider.GetRequiredService<BindlessHeap>(),
+                    provider.GetRequiredService<
+                        MeshletPhysicalPageCacheUploader>(),
+                    provider.GetRequiredService<
+                        MeshletStreamingResidencyCoordinator>(),
+                    provider.GetRequiredService<FenceBasedDeleter>()));
             services.TryAddSingleton<RenderThreadContentUploadDispatcher>();
             services.TryAddSingleton<IContentUploadDispatcher>(provider =>
                 provider.GetRequiredService<RenderThreadContentUploadDispatcher>());
             services.TryAddSingleton<IContentUploadPump>(provider =>
                 provider.GetRequiredService<RenderThreadContentUploadDispatcher>());
-            services.TryAddSingleton<IModelRenderUploadService, ModelRenderUploadService>();
+            services.TryAddSingleton<IModelRenderUploadService>(provider =>
+                new ModelRenderUploadService(
+                    provider.GetRequiredService<MeshManager>(),
+                    provider.GetRequiredService<TextureManager>(),
+                    provider.GetRequiredService<MaterialManager>(),
+                    provider.GetRequiredService<
+                        OpacityMicromapRuntimeRegistrationStore>(),
+                    provider.GetRequiredService<
+                        MeshletStreamingResidencyCoordinator>(),
+                    provider.GetRequiredService<SceneSubmissionSettings>()));
             services.TryAddSingleton<LightManager>();
-            services.TryAddSingleton<SceneDataBuilder>();
+            services.TryAddSingleton(provider =>
+                new SceneDataBuilder(
+                    provider.GetRequiredService<VulkanContext>(),
+                    provider.GetRequiredService<MeshManager>(),
+                    provider.GetRequiredService<BufferManager>(),
+                    provider.GetRequiredService<StagingRing>(),
+                    provider.GetRequiredService<SynchronizationManager>(),
+                    provider.GetRequiredService<MaterialManager>(),
+                    provider.GetService<TextureManager>(),
+                    provider.GetRequiredService<
+                        MeshletFrameResidencyResolver>()));
             services.TryAddSingleton<RenderGraph>();
 
             services.TryAddSingleton(provider =>
@@ -410,7 +467,10 @@ namespace Microsoft.Extensions.DependencyInjection
                     provider.GetRequiredService<IModelRenderUploadService>(),
                     ownsDependencies: false,
                     initialSettings: renderingOptions.InitialSettings,
-                    startupLog: startupLog);
+                    startupLog: startupLog,
+                    meshletPhysicalResidencyResources:
+                        provider.GetRequiredService<
+                            VulkanMeshletPhysicalResidencyResources>());
 
                 ConfigureAdvancedGiStartup(
                     renderer,

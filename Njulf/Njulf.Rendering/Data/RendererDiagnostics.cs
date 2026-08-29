@@ -642,6 +642,20 @@ namespace Njulf.Rendering.Data
             ReflectionMode.Disabled;
         public ReflectionMode EffectiveReflectionMode { get; init; } =
             ReflectionMode.Disabled;
+        public ReflectionImplementationMode RequestedReflectionImplementation
+        {
+            get;
+            init;
+        } = ReflectionImplementationMode.Auto;
+        public ReflectionImplementationMode EffectiveReflectionImplementation
+        {
+            get;
+            init;
+        } = ReflectionImplementationMode.Adaptive;
+        public ReflectionImplementationFallbackReason
+            ReflectionImplementationFallbackReason { get; init; }
+        public string ReflectionImplementationFallbackDetail { get; init; } =
+            string.Empty;
         public ReflectionFallbackReason ReflectionFallbackReason { get; init; }
         public string ReflectionFallbackDetail { get; init; } = string.Empty;
         public int HybridReflectionPassEnabled { get; init; }
@@ -654,6 +668,8 @@ namespace Njulf.Rendering.Data
             get;
             init;
         }
+        public ReflectionHistorySourceInvalidation
+            HybridReflectionSourceInvalidation { get; init; }
         public ulong HybridReflectionEstimatedBytes { get; init; }
         public int HybridReflectionCountersReadbackValid { get; init; }
         public uint HybridReflectionSsrHitCount { get; init; }
@@ -665,6 +681,28 @@ namespace Njulf.Rendering.Data
         public uint HybridReflectionDdgiFallbackCount { get; init; }
         public uint HybridReflectionProbeFallbackCount { get; init; }
         public uint HybridReflectionEnvironmentFallbackCount { get; init; }
+        public uint HybridReflectionFullRateTileCount { get; init; }
+        public uint HybridReflectionHalfRateTileCount { get; init; }
+        public uint HybridReflectionQuarterRateTileCount { get; init; }
+        public uint HybridReflectionAnalyticTileCount { get; init; }
+        public uint HybridReflectionReuseTileCount { get; init; }
+        public uint HybridReflectionActiveTileCount { get; init; }
+        public uint HybridReflectionTileOverflowCount { get; init; }
+        public int AutomaticPlanarReflectionActive { get; init; }
+        public int AutomaticPlanarCandidateCount { get; init; }
+        public int AutomaticPlanarSelectedCount { get; init; }
+        public int AutomaticPlanarCaptureCount { get; init; }
+        public int AutomaticPlanarReprojectionCount { get; init; }
+        public int AutomaticPlanarRejectedCount { get; init; }
+        public AutomaticPlanarCandidateRejectionReason
+            AutomaticPlanarRejectionReason { get; init; }
+        public string AutomaticPlanarRejectionDetail { get; init; } =
+            string.Empty;
+        public uint AutomaticPlanarCaptureGeneration { get; init; }
+        public ulong AutomaticPlanarEstimatedBytes { get; init; }
+        public float AutomaticPlanarResolutionScale { get; init; }
+        public uint AutomaticPlanarMaximumCaptureAge { get; init; }
+        public long GpuAutomaticPlanarCaptureMicroseconds { get; init; }
         public int TransparentReflectionReceiverObjectCount { get; init; }
         public int TransparentReflectionReceiverMeshletCount { get; init; }
         public int TransparentSampleReflections { get; init; }
@@ -971,6 +1009,19 @@ namespace Njulf.Rendering.Data
         public int FoliageOverflowCount { get; init; }
         public int FoliageMeshletDrawOverflowCount { get; init; }
         public int FoliageFarImpostorVisibleCount { get; init; }
+        public int FoliageDensityRejectedCount { get; init; }
+        public int FoliageMissingDensityTextureCount { get; init; }
+        public int FoliageMissingImpostorCount { get; init; }
+        public int FoliageResidentCellCount { get; init; }
+        public int FoliagePendingCellCount { get; init; }
+        public int FoliageRetiringCellCount { get; init; }
+        public int FoliageNearCellCount { get; init; }
+        public int FoliageMidCellCount { get; init; }
+        public int FoliageFarCellCount { get; init; }
+        public int FoliageCellLoadsThisFrame { get; init; }
+        public int FoliageCellRetirementsThisFrame { get; init; }
+        public int FoliageCellStreamingOverflowCount { get; init; }
+        public ulong FoliageCellStreamingUploadBytes { get; init; }
         public bool FoliageIndirectMeshletDispatchEnabled { get; init; } = true;
         public ulong FoliageInstanceBufferBytes { get; init; }
         public ulong FoliageClusterBufferBytes { get; init; }
@@ -1005,6 +1056,7 @@ namespace Njulf.Rendering.Data
             string.Empty;
         public ulong FoliageDrawBufferBytes { get; init; }
         public ulong FoliageImpostorAtlasBytes { get; init; }
+        public ulong FoliageDensityTextureBytes { get; init; }
         public long CpuFoliageBuildMicroseconds { get; init; }
         public long CpuFoliageUploadMicroseconds { get; init; }
         public long GpuFoliageCullMicroseconds { get; init; }
@@ -1119,6 +1171,57 @@ namespace Njulf.Rendering.Data
         public string HiZPolicyAdaptiveStatus { get; init; } = string.Empty;
         public int GpuMeshletCountersEnabled { get; init; }
         public string GpuMeshletCountersStatus { get; init; } = "GPU meshlet counters disabled.";
+        public MeshShaderTuningMode MeshShaderRequestedMode { get; init; }
+        public MeshShaderTuningMode MeshShaderSelectedMode { get; init; }
+        public int MeshShaderTaskless { get; init; }
+        public uint MeshShaderMaximumVertices { get; init; }
+        public uint MeshShaderMaximumPrimitives { get; init; }
+        public uint MeshShaderWorkgroupSize { get; init; }
+        public string MeshShaderFallbackReason { get; init; } = string.Empty;
+        public uint DeviceMaximumMeshWorkgroupInvocations { get; init; }
+        public uint DeviceMaximumMeshOutputVertices { get; init; }
+        public uint DeviceMaximumMeshOutputPrimitives { get; init; }
+        public int DevicePrefersLocalInvocationVertexOutput { get; init; }
+        public int DevicePrefersLocalInvocationPrimitiveOutput { get; init; }
+        public int DevicePrefersCompactVertexOutput { get; init; }
+        public int DevicePrefersCompactPrimitiveOutput { get; init; }
+        public int MeshletPhysicalResidencyConfigured { get; init; }
+        public int MeshletPhysicalResidencyAvailable { get; init; }
+        public int MeshletPhysicalResidencyActive { get; init; }
+        public int MeshletPhysicalResidencyDegraded { get; init; }
+        public int MeshletPhysicalResidencyReloadRequired { get; init; }
+        public int MeshletPhysicalResidencyActivePackageCount { get; init; }
+        public int MeshletPhysicalResidencyActiveSubMeshCount { get; init; }
+        public int MeshletPhysicalResidencyFallbackPackageCount { get; init; }
+        public int MeshletPhysicalResidencyReferencedPackageCount { get; init; }
+        public int MeshletPhysicalResidencyPhysicalPageCapacity { get; init; }
+        public int MeshletPhysicalResidencyAllocatedBankCount { get; init; }
+        public int MeshletPhysicalResidencyPinnedPageCount { get; init; }
+        public int MeshletPhysicalResidencyPinnedResidentPageCount { get; init; }
+        public int MeshletPhysicalResidencyResidentPageCount { get; init; }
+        public int MeshletPhysicalResidencyQueuedPageCount { get; init; }
+        public int MeshletPhysicalResidencyReadingPageCount { get; init; }
+        public int MeshletPhysicalResidencyUploadingPageCount { get; init; }
+        public int MeshletPhysicalResidencyFailedPageCount { get; init; }
+        public int MeshletPhysicalResidencyRetiredPageCount { get; init; }
+        public ulong MeshletPhysicalResidencyCommittedBytes { get; init; }
+        public long MeshletPhysicalResidencyRequestCount { get; init; }
+        public long MeshletPhysicalResidencyDemandKeyCount { get; init; }
+        public long MeshletPhysicalResidencyRequestOverflowCount { get; init; }
+        public float MeshletPhysicalResidencyHitRate { get; init; }
+        public float MeshletPhysicalResidencyFallbackRate { get; init; }
+        public long MeshletPhysicalResidencyUploadedBytes { get; init; }
+        public ulong MeshletPhysicalResidencyLastFrameUploadBytes { get; init; }
+        public long MeshletPhysicalResidencyEvictionCount { get; init; }
+        public long MeshletPhysicalResidencyRetryCount { get; init; }
+        public long MeshletPhysicalResidencyInvalidMappingCount { get; init; }
+        public string MeshletPhysicalResidencyFallbackReasonSummary
+        {
+            get;
+            init;
+        } = string.Empty;
+        public string MeshletPhysicalResidencyLatestFailure { get; init; } =
+            string.Empty;
         public SceneSubmissionMode SceneSubmissionActiveMode { get; init; } = SceneSubmissionMode.Cpu;
         public string SceneSubmissionForwardPath { get; init; } = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
         public string SceneSubmissionForwardTaskShader { get; init; } = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
@@ -1951,7 +2054,17 @@ namespace Njulf.Rendering.Data
         public ulong GiPipelineCreationCount { get; init; }
         public long GiPipelineCreationMicroseconds { get; init; }
         public ulong GiRenderCriticalPipelineCreationCount { get; init; }
+        public ulong GiPipelineApplicationCacheHitCount { get; init; }
+        public ulong GiPipelineCompileMissCount { get; init; }
+        public ulong GiPipelineFeedbackUnavailableCount { get; init; }
+        public int GiPipelinePeakConcurrentCreationCount { get; init; }
+        public int GiPipelineBinaryCacheEnabled { get; init; }
+        public int GiGraphicsPipelineLibraryEligible { get; init; }
+        public ulong GiPipelineWritableBinaryHitCount { get; init; }
+        public ulong GiPipelineSeedBinaryHitCount { get; init; }
+        public ulong GiCapturedPipelineBinaryCount { get; init; }
         public string GiPipelineCachePath { get; init; } = string.Empty;
+        public string GiPipelineBinaryStorePath { get; init; } = string.Empty;
         public string GiPipelineCacheStatus { get; init; } = string.Empty;
         public string GiLastCreatedPipeline { get; init; } = string.Empty;
         public int DdgiVisibleFrustumProbeUpdateCount { get; init; }

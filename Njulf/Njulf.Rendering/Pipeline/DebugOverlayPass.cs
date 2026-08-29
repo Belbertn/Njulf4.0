@@ -21,6 +21,7 @@ namespace Njulf.Rendering.Pipeline
     {
         private const string EntryPoint = "main";
         private readonly RenderTargetManager _renderTargets;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private nint _entryPointName;
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
@@ -31,10 +32,12 @@ namespace Njulf.Rendering.Pipeline
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
-            RenderTargetManager renderTargets)
+            RenderTargetManager renderTargets,
+            GiPipelineCacheService? pipelineCacheService = null)
             : base("DebugOverlayPass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _pipelineCacheService = pipelineCacheService;
         }
 
         public override void Initialize()
@@ -116,7 +119,7 @@ namespace Njulf.Rendering.Pipeline
                 _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
             if (_pipelineLayout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
             _pipeline = default;
             _pipelineLayout = default;
@@ -135,9 +138,10 @@ namespace Njulf.Rendering.Pipeline
             if (_entryPointName == 0)
                 _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
-            _pipelineCache = GraphicsPipelineFactory.CreatePipelineCache(
-                _context,
-                "Debug Overlay Pipeline Cache");
+            _pipelineCache = _pipelineCacheService?.Cache ??
+                GraphicsPipelineFactory.CreatePipelineCache(
+                    _context,
+                    "Debug Overlay Pipeline Cache");
             CreatePipelineLayout();
             _pipeline = CreatePipeline();
             _initialized = true;
@@ -248,13 +252,18 @@ namespace Njulf.Rendering.Pipeline
                     PDynamicState = &dynamic,
                     Layout = _pipelineLayout
                 };
-                Result result = _context.Api.CreateGraphicsPipelines(
-                    _context.Device,
-                    _pipelineCache,
-                    1,
-                    &info,
-                    null,
-                    out VkPipeline pipeline);
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateGraphicsPipeline(
+                        new PipelineArtifactId("DebugOverlay.LightTiles"),
+                        &info,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateGraphicsPipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &info,
+                        null,
+                        out pipeline);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create debug-overlay pipeline", result);
                 _context.SetDebugName(

@@ -195,7 +195,16 @@ namespace Njulf.Rendering.Pipeline
         NearFieldTraceRasterDepth,
         // Conservative KHR fragment-shading-rate attachment. Append-only so
         // existing capture/resource identities remain stable.
-        VariableRateShading
+        VariableRateShading,
+        // Adaptive-reflection 8x8 active/reuse tile records. Append-only for
+        // capture compatibility; indirect arguments remain a separate Vulkan
+        // resource with their own execution-stage access.
+        HybridReflectionTileScheduler,
+        // Automatic planar capture color/depth images and their metadata are
+        // manager-owned because exact VMA allocation sizes participate in the
+        // reflection budget. The graph tracks their ordering as one external
+        // resource while the pass records per-image transitions explicitly.
+        AutomaticPlanarReflections
     }
 
     public enum RenderGraphResourceKind

@@ -1,0 +1,269 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "automatic_planar_reflection.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 2, binding = 0) uniform sampler2D PreviousColor;
+layout(set = 2, binding = 1) uniform sampler2D CapturedDepth;
+layout(set = 2, binding = 2, r32ui) uniform readonly uimage2D PreviousDepthHistory;
+layout(set = 2, binding = 3, r32ui) uniform uimage2D CurrentDepthHistory;
+layout(set = 2, binding = 4, rgba16f) uniform image2D CurrentColor;
+
+layout(push_constant) uniform AutomaticPlanarReprojectPushBlock
+{
+    uint FrameIndex;
+    uint Slot;
+    uint Mode;
+    uint Width;
+    uint Height;
+    uint Reserved0;
+    uint Reserved1;
+    uint Reserved2;
+} pc;
+
+const uint AUTOMATIC_PLANAR_REPROJECT_CAPTURE_DEPTH = 0u;
+const uint AUTOMATIC_PLANAR_REPROJECT_SCATTER_DEPTH = 1u;
+const uint AUTOMATIC_PLANAR_REPROJECT_RESOLVE_COLOR = 2u;
+
+bool AutomaticPlanarFinite(float value)
+{
+    return !isnan(value) && !isinf(value);
+}
+
+bool AutomaticPlanarFinite(vec3 value)
+{
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+vec4 AutomaticPlanarTransform(
+    uint matrixOffset,
+    vec4 value)
+{
+    return vec4(
+        value.x * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 0u) +
+        value.y * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 4u) +
+        value.z * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 8u) +
+        value.w * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 12u),
+        value.x * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 1u) +
+        value.y * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 5u) +
+        value.z * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 9u) +
+        value.w * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 13u),
+        value.x * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 2u) +
+        value.y * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 6u) +
+        value.z * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 10u) +
+        value.w * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 14u),
+        value.x * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 3u) +
+        value.y * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 7u) +
+        value.z * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 11u) +
+        value.w * AutomaticPlanarReadFloat(pc.FrameIndex, matrixOffset + 15u));
+}
+
+bool AutomaticPlanarUnproject(
+    uint inverseMatrixOffset,
+    vec2 uv,
+    float reverseDepth,
+    out vec3 worldPosition)
+{
+    vec4 world = AutomaticPlanarTransform(
+        inverseMatrixOffset,
+        vec4(uv * 2.0 - vec2(1.0), reverseDepth, 1.0));
+    if (!AutomaticPlanarFinite(world.w) || abs(world.w) <= 0.000001)
+    {
+        worldPosition = vec3(0.0);
+        return false;
+    }
+    worldPosition = world.xyz / world.w;
+    return AutomaticPlanarFinite(worldPosition);
+}
+
+bool AutomaticPlanarProjectToUv(
+    uint matrixOffset,
+    vec3 worldPosition,
+    out vec2 uv,
+    out float reverseDepth)
+{
+    vec4 clip = AutomaticPlanarTransform(
+        matrixOffset,
+        vec4(worldPosition, 1.0));
+    if (!AutomaticPlanarFinite(clip.w) || clip.w <= 0.000001)
+    {
+        uv = vec2(0.0);
+        reverseDepth = 0.0;
+        return false;
+    }
+    vec3 ndc = clip.xyz / clip.w;
+    uv = ndc.xy * 0.5 + vec2(0.5);
+    reverseDepth = ndc.z;
+    return AutomaticPlanarFinite(ndc) &&
+        all(greaterThanEqual(uv, vec2(0.0))) &&
+        all(lessThan(uv, vec2(1.0))) &&
+        reverseDepth > 0.0 && reverseDepth <= 1.0;
+}
+
+void AutomaticPlanarCaptureDepth(ivec2 pixel)
+{
+    float depth = texelFetch(CapturedDepth, pixel, 0).r;
+    if (!AutomaticPlanarFinite(depth) || depth <= 0.0 || depth > 1.0)
+        depth = 0.0;
+    imageStore(
+        CurrentDepthHistory,
+        pixel,
+        uvec4(floatBitsToUint(depth), 0u, 0u, 0u));
+
+    // A freshly rendered texel (including sky) has authoritative confidence.
+    vec4 color = imageLoad(CurrentColor, pixel);
+    imageStore(CurrentColor, pixel, vec4(max(color.rgb, vec3(0.0)), 1.0));
+}
+
+void AutomaticPlanarScatterDepth(ivec2 sourcePixel)
+{
+    float sourceDepth = uintBitsToFloat(
+        imageLoad(PreviousDepthHistory, sourcePixel).x);
+    if (!AutomaticPlanarFinite(sourceDepth) || sourceDepth <= 0.0 ||
+        sourceDepth > 1.0)
+    {
+        return;
+    }
+    vec2 sourceUv = (vec2(sourcePixel) + vec2(0.5)) /
+        vec2(max(pc.Width, 1u), max(pc.Height, 1u));
+    uint record = AutomaticPlanarRecordBase(pc.Slot);
+    vec3 worldPosition;
+    if (!AutomaticPlanarUnproject(
+            record + 72u,
+            sourceUv,
+            sourceDepth,
+            worldPosition))
+    {
+        return;
+    }
+    vec2 currentUv;
+    float currentDepth;
+    if (!AutomaticPlanarProjectToUv(
+            record + 24u,
+            worldPosition,
+            currentUv,
+            currentDepth))
+    {
+        return;
+    }
+
+    vec2 destination = currentUv * vec2(pc.Width, pc.Height) - vec2(0.5);
+    ivec2 basePixel = ivec2(floor(destination));
+    uint encodedDepth = floatBitsToUint(currentDepth);
+    // A conservative 2x2 forward splat substantially reduces disocclusion
+    // cracks. Reverse-Z atomic max retains the nearest reprojection.
+    for (int y = 0; y <= 1; y++)
+    {
+        for (int x = 0; x <= 1; x++)
+        {
+            ivec2 pixel = basePixel + ivec2(x, y);
+            if (all(greaterThanEqual(pixel, ivec2(0))) &&
+                all(lessThan(pixel, ivec2(pc.Width, pc.Height))))
+            {
+                imageAtomicMax(CurrentDepthHistory, pixel, encodedDepth);
+            }
+        }
+    }
+}
+
+vec4 AutomaticPlanarHoleFill(ivec2 pixel, uint record)
+{
+    vec2 uv = (vec2(pixel) + vec2(0.5)) /
+        vec2(max(pc.Width, 1u), max(pc.Height, 1u));
+    vec3 nearWorld;
+    vec3 farWorld;
+    bool nearValid = AutomaticPlanarUnproject(
+        record + 56u, uv, 1.0, nearWorld);
+    bool farValid = AutomaticPlanarUnproject(
+        record + 56u, uv, 0.0001, farWorld);
+    vec3 direction = nearValid && farValid &&
+        dot(farWorld - nearWorld, farWorld - nearWorld) > 0.000001
+        ? normalize(farWorld - nearWorld)
+        : vec3(0.0, 1.0, 0.0);
+    vec3 environment = EvaluateEnvironmentRadiance(
+        ReadEnvironmentData(),
+        direction,
+        false,
+        true,
+        true);
+    return vec4(max(environment, vec3(0.0)), 0.15);
+}
+
+void AutomaticPlanarResolveColor(ivec2 pixel)
+{
+    uint record = AutomaticPlanarRecordBase(pc.Slot);
+    float currentDepth = uintBitsToFloat(
+        imageLoad(CurrentDepthHistory, pixel).x);
+    if (!AutomaticPlanarFinite(currentDepth) || currentDepth <= 0.0 ||
+        currentDepth > 1.0)
+    {
+        imageStore(CurrentColor, pixel, AutomaticPlanarHoleFill(pixel, record));
+        return;
+    }
+
+    vec2 currentUv = (vec2(pixel) + vec2(0.5)) /
+        vec2(max(pc.Width, 1u), max(pc.Height, 1u));
+    vec3 worldPosition;
+    vec2 previousUv;
+    float expectedPreviousDepth;
+    if (!AutomaticPlanarUnproject(
+            record + 56u,
+            currentUv,
+            currentDepth,
+            worldPosition) ||
+        !AutomaticPlanarProjectToUv(
+            record + 40u,
+            worldPosition,
+            previousUv,
+            expectedPreviousDepth))
+    {
+        imageStore(CurrentColor, pixel, AutomaticPlanarHoleFill(pixel, record));
+        return;
+    }
+
+    ivec2 previousPixel = clamp(
+        ivec2(previousUv * vec2(pc.Width, pc.Height)),
+        ivec2(0),
+        ivec2(pc.Width, pc.Height) - ivec2(1));
+    float storedPreviousDepth = uintBitsToFloat(
+        imageLoad(PreviousDepthHistory, previousPixel).x);
+    float depthTolerance = max(0.0025, expectedPreviousDepth * 0.03);
+    if (!AutomaticPlanarFinite(storedPreviousDepth) ||
+        storedPreviousDepth <= 0.0 ||
+        abs(storedPreviousDepth - expectedPreviousDepth) > depthTolerance)
+    {
+        imageStore(CurrentColor, pixel, AutomaticPlanarHoleFill(pixel, record));
+        return;
+    }
+
+    vec4 previous = textureLod(PreviousColor, previousUv, 0.0);
+    if (!AutomaticPlanarFinite(previous.rgb))
+    {
+        imageStore(CurrentColor, pixel, AutomaticPlanarHoleFill(pixel, record));
+        return;
+    }
+    imageStore(
+        CurrentColor,
+        pixel,
+        vec4(max(previous.rgb, vec3(0.0)),
+            clamp(previous.a, 0.0, 1.0) * 0.9));
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, ivec2(pc.Width, pc.Height))))
+        return;
+
+    if (pc.Mode == AUTOMATIC_PLANAR_REPROJECT_CAPTURE_DEPTH)
+        AutomaticPlanarCaptureDepth(pixel);
+    else if (pc.Mode == AUTOMATIC_PLANAR_REPROJECT_SCATTER_DEPTH)
+        AutomaticPlanarScatterDepth(pixel);
+    else if (pc.Mode == AUTOMATIC_PLANAR_REPROJECT_RESOLVE_COLOR)
+        AutomaticPlanarResolveColor(pixel);
+}

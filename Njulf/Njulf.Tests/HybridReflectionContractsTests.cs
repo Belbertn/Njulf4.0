@@ -233,6 +233,58 @@ public sealed class HybridReflectionContractsTests
     }
 
     [Test]
+    public void BudgetController_UsesCompletedTimingCadenceAndOverflowReduction()
+    {
+        var controller = new HybridReflectionBudgetController();
+
+        HybridReflectionBudgetDecision firstReduction = controller.Observe(
+            new HybridReflectionBudgetSample(4_000, true, false));
+        HybridReflectionBudgetDecision overflowReduction = controller.Observe(
+            new HybridReflectionBudgetSample(4_000, true, true));
+        HybridReflectionBudgetDecision invalid = controller.Observe(
+            new HybridReflectionBudgetSample(-1, false, false));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstReduction.Changed, Is.True);
+            Assert.That(firstReduction.QualityStep,
+                Is.EqualTo(HybridReflectionQualityStep.Balanced));
+            Assert.That(overflowReduction.Changed, Is.True,
+                "A verified overflow reduces one step even inside the ordinary cadence window.");
+            Assert.That(overflowReduction.QualityStep,
+                Is.EqualTo(HybridReflectionQualityStep.Reduced));
+            Assert.That(invalid.Changed, Is.False);
+            Assert.That(invalid.QualityStep,
+                Is.EqualTo(HybridReflectionQualityStep.Reduced));
+        });
+
+        controller.Reset(HybridReflectionQualityStep.Reduced);
+        HybridReflectionBudgetDecision decision = controller.Current;
+        for (int frame = 0;
+             frame < HybridReflectionBudgetController
+                 .UnderBudgetFramesBeforeIncrease - 1;
+             frame++)
+        {
+            decision = controller.Observe(
+                new HybridReflectionBudgetSample(1_000, true, false));
+        }
+        Assert.That(decision.QualityStep,
+            Is.EqualTo(HybridReflectionQualityStep.Reduced));
+        Assert.That(decision.Changed, Is.False);
+
+        decision = controller.Observe(
+            new HybridReflectionBudgetSample(1_000, true, false));
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Changed, Is.True);
+            Assert.That(decision.QualityStep,
+                Is.EqualTo(HybridReflectionQualityStep.Balanced));
+            Assert.That(decision.EwmaGpuMilliseconds,
+                Is.EqualTo(1.0).Within(1.0e-9));
+        });
+    }
+
+    [Test]
     public void HiZPolicy_RetainsPyramidWithoutEnablingOcclusion()
     {
         var settings = new ReflectionSettings
@@ -422,6 +474,8 @@ public sealed class HybridReflectionContractsTests
 
         ReflectionHistoryResetReason reasons =
             current.ResolveResetReasons(previous, hasHistory: true);
+        ReflectionHistorySourceInvalidation sourceInvalidations =
+            current.ResolveSourceInvalidations(previous, hasHistory: true);
 
         Assert.Multiple(() =>
         {
@@ -432,19 +486,17 @@ public sealed class HybridReflectionContractsTests
             Assert.That(reasons.HasFlag(
                 ReflectionHistoryResetReason.ReceiverPayloadAbiChanged), Is.True);
             Assert.That(reasons.HasFlag(
-                ReflectionHistoryResetReason.RoughnessBandsChanged), Is.True);
-            Assert.That(reasons.HasFlag(
-                ReflectionHistoryResetReason.RaySceneChanged), Is.True);
-            Assert.That(reasons.HasFlag(
-                ReflectionHistoryResetReason.DdgiTopologyChanged), Is.True);
-            Assert.That(reasons.HasFlag(
-                ReflectionHistoryResetReason.MaterialRevisionChanged), Is.True);
-            Assert.That(reasons.HasFlag(
-                ReflectionHistoryResetReason.ProbeGenerationChanged), Is.True);
-            Assert.That(reasons.HasFlag(
-                ReflectionHistoryResetReason.EnvironmentGenerationChanged), Is.True);
-            Assert.That(reasons.HasFlag(
                 ReflectionHistoryResetReason.CameraCut), Is.True);
+            Assert.That(sourceInvalidations.HasFlag(
+                ReflectionHistorySourceInvalidation.RayScene), Is.True);
+            Assert.That(sourceInvalidations.HasFlag(
+                ReflectionHistorySourceInvalidation.Ddgi), Is.True);
+            Assert.That(sourceInvalidations.HasFlag(
+                ReflectionHistorySourceInvalidation.LocalProbe), Is.True);
+            Assert.That(sourceInvalidations.HasFlag(
+                ReflectionHistorySourceInvalidation.Environment), Is.True);
+            Assert.That(sourceInvalidations.HasFlag(
+                ReflectionHistorySourceInvalidation.Planar), Is.False);
             Assert.That(current.ResolveResetReasons(previous, hasHistory: false),
                 Is.EqualTo(ReflectionHistoryResetReason.InitialFrame));
         });
@@ -468,13 +520,13 @@ public sealed class HybridReflectionContractsTests
         {
             Assert.That(sizes[0],
                 Is.EqualTo(HybridReflectionGpuContract.MaximumPushConstantBytes));
-            Assert.That(sizes[2], Is.EqualTo(112));
+            Assert.That(sizes[2], Is.EqualTo(120));
             Assert.That(sizes, Has.All.LessThanOrEqualTo(
                 HybridReflectionGpuContract.MaximumPushConstantBytes));
             Assert.That(sizes[6], Is.EqualTo(120));
-            Assert.That(HybridReflectionGpuContract.CounterWords, Is.EqualTo(9u));
+            Assert.That(HybridReflectionGpuContract.CounterWords, Is.EqualTo(16u));
             Assert.That(HybridReflectionGpuContract.HistoryMetadataWords,
-                Is.EqualTo(4u));
+                Is.EqualTo(2u));
         });
     }
 
@@ -484,9 +536,10 @@ public sealed class HybridReflectionContractsTests
         string[] expected =
         [
             "SkyboxPass",
+            "AutomaticPlanarReflectionPass",
+            "HybridReflectionDdgiBasePass",
             "HybridReflectionSsrPass",
             "HybridReflectionRayQueryPass",
-            "HybridReflectionDdgiBasePass",
             "HybridReflectionResolvePass",
             "HybridReflectionTemporalPass",
             "HybridReflectionSpatialPass",
@@ -522,7 +575,10 @@ public sealed class HybridReflectionContractsTests
         RenderGraphResourceUsage spatialHistory =
             declarations["HybridReflectionSpatialPass"].Usages.Single(
                 usage => usage.Resource ==
-                    RenderGraphResourceId.HybridReflectionHistory);
+                    RenderGraphResourceId.HybridReflectionHistory &&
+                    usage.Access == RenderGraphResourceAccess.Read &&
+                    usage.HistoryBinding ==
+                        RenderGraphHistoryBindingSelection.Current);
         RenderGraphResourceUsage spatialRaw =
             declarations["HybridReflectionSpatialPass"].Usages.Single(
                 usage => usage.Resource ==
@@ -533,7 +589,9 @@ public sealed class HybridReflectionContractsTests
         RenderGraphResourceUsage snapshotWrite =
             declarations["OpaqueSceneColorSnapshotPass"].Usages.Single(
                 usage => usage.Resource ==
-                    RenderGraphResourceId.HybridReflectionFilterScratch);
+                    RenderGraphResourceId.HybridReflectionHistory &&
+                    usage.HistoryBinding ==
+                        RenderGraphHistoryBindingSelection.Previous);
 
         Assert.Multiple(() =>
         {
@@ -574,14 +632,18 @@ public sealed class HybridReflectionContractsTests
                 Is.EqualTo(RenderGraphResourceAccess.Write));
             Assert.That(declarations["TransparentForwardPass"].Usages.Any(
                 usage => usage.Resource ==
-                    RenderGraphResourceId.HybridReflectionFilterScratch &&
+                    RenderGraphResourceId.HybridReflectionHistory &&
                     usage.Access == RenderGraphResourceAccess.Read &&
+                    usage.HistoryBinding ==
+                        RenderGraphHistoryBindingSelection.Previous &&
                     (usage.StageMask & PipelineStageFlags2.FragmentShaderBit) != 0),
                 Is.True);
             Assert.That(declarations["WeightedTransparentPass"].Usages.Any(
                 usage => usage.Resource ==
-                    RenderGraphResourceId.HybridReflectionFilterScratch &&
+                    RenderGraphResourceId.HybridReflectionHistory &&
                     usage.Access == RenderGraphResourceAccess.Read &&
+                    usage.HistoryBinding ==
+                        RenderGraphHistoryBindingSelection.Previous &&
                     (usage.StageMask & PipelineStageFlags2.FragmentShaderBit) != 0),
                 Is.True);
         });
@@ -704,8 +766,8 @@ public sealed class HybridReflectionContractsTests
         {
             Assert.That(reset.Split("CmdUpdateBuffer",
                     StringSplitOptions.None).Length - 1,
-                Is.EqualTo(2),
-                "Task and indirect headers must each be stamped atomically.");
+                Is.EqualTo(3),
+                "Task, indirect, and classification-tile headers must each be stamped atomically.");
             Assert.That(reset.Split("CmdFillBuffer",
                     StringSplitOptions.None).Length - 1,
                 Is.EqualTo(1),
@@ -789,11 +851,12 @@ public sealed class HybridReflectionContractsTests
             Assert.That(ssr, Does.Contain("if (lane != phase)"));
             Assert.That(ssr, Does.Contain(
                 "HYBRID_REFLECTION_REASON_RAY_BUDGET"));
-            Assert.That(ssr, Does.Contain("hitConfidence >= pc.ConfidenceThreshold"));
+            Assert.That(ssr, Does.Contain(
+                "trace.Confidence >= pc.ConfidenceThreshold"));
             Assert.That(ssr, Does.Not.Contain(
                 "invocation.y * 0x9e3779b9u) ^\n        pc.TemporalSampleIndex"));
             Assert.That(ssr, Does.Contain("HYBRID_REFLECTION_REASON_DISOCCLUDED"));
-            Assert.That(ssr, Does.Contain("hitUv, 0.0"));
+            Assert.That(ssr, Does.Contain("result.HitUv = refinedUv"));
             Assert.That(ssr, Does.Not.Contain(
                 "float lod = roughness * 4.0"));
             Assert.That(ray, Does.Contain(
@@ -816,7 +879,7 @@ public sealed class HybridReflectionContractsTests
             Assert.That(ddgiBase, Does.Not.Contain(
                 "distance(referenceWorldPosition, candidateWorldPosition)"));
             Assert.That(ddgiBase, Does.Contain(
-                "HybridFilterScratch"));
+                "HybridPackDdgiCohort"));
             Assert.That(ddgiBase, Does.Contain(
                 "HybridDdgiCohorts"));
             Assert.That(ddgiBase, Does.Contain(
@@ -916,7 +979,7 @@ public sealed class HybridReflectionContractsTests
             Assert.That(temporal, Does.Contain(
                 "neighborhoodMaximum * 1.5 + vec3(0.05)"));
             Assert.That(temporal, Does.Contain(
-                "boundedPreviousMoments"));
+                "previousVariance = max(previousVariance, 0.0)"));
             Assert.That(spatial, Does.Contain(
                 "imageLoad(HybridHistoryCurrent, pixel)"));
             Assert.That(spatial, Does.Contain(
@@ -996,7 +1059,7 @@ public sealed class HybridReflectionContractsTests
                 "#if !NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT\n" +
                 "    if (reflectionDebugActive)"));
             Assert.That(forward, Does.Contain(
-                "uvec3(fragObjectIndex, fragMaterialIndex, 0u)"));
+                "uvec3(fragObjectIndex, fragMaterialIndex, fragMeshletIndex)"));
             Assert.That(forward, Does.Contain(
                 "pow(indirectAo, 1.0 + roughness)"));
             Assert.That(forward, Does.Contain(
@@ -1020,11 +1083,11 @@ public sealed class HybridReflectionContractsTests
             Assert.That(resolve, Does.Contain(
                 "vec3 fresnel = HybridFresnelSchlickRoughness"));
             Assert.That(payload, Does.Contain(
-                "NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 4u"));
+                "NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 5u"));
             Assert.That(payload, Does.Contain(
                 "NJULF_HYBRID_REFLECTION_SPECULAR_OCCLUSION_MASK = 0x3fu"));
             Assert.That(ReflectionSettings.ReceiverPayloadAbiVersion,
-                Is.EqualTo(4u));
+                Is.EqualTo(5u));
             Assert.That(runtime, Does.Contain(
                 "SynchronizePreviousHybridFrame(commandBuffer)"));
             Assert.That(runtime, Does.Contain(

@@ -265,6 +265,8 @@ GPUMeshInfo ReadMeshInfo(uint meshIndex)
     info.HierarchyNodeOffset = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 17u);
     info.HierarchyNodeCount = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 18u);
     info.HierarchyRootNode = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 19u);
+    info.StreamingRangeIndex = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 20u);
+    info.ResidencyFlags = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 21u);
     return info;
 }
 
@@ -378,7 +380,9 @@ vec4 ResolveMeshletWorldCenterRadius(GPUMeshletDrawCommand command)
 {
     return ResolveMeshletWorldCenterRadius(
         command,
-        ReadMeshlet(command.MeshletIndex));
+        ReadMeshlet(
+            command.MeshletIndex,
+            pc.Push.CurrentFrameIndex));
 }
 
 bool IsNormalConeCullEligible(GPUMeshletDrawCommand command)
@@ -693,56 +697,91 @@ uint SelectLodLevel(
 
 void SelectMeshletRange(GPUMeshInfo meshInfo, uint requestedLod, out uint firstMeshlet, out uint meshletCount, out uint effectiveLod)
 {
-    if (requestedLod == 0u && meshInfo.MeshletCount > 0u)
+    uint selectedLod = min(requestedLod, 2u);
+    uint selectedCount = selectedLod == 0u
+        ? meshInfo.MeshletCount
+        : (selectedLod == 1u
+            ? meshInfo.MeshletLod1Count
+            : meshInfo.MeshletLod2Count);
+    if (selectedCount == 0u)
+    {
+        selectedLod = meshInfo.MeshletCount > 0u
+            ? 0u
+            : (meshInfo.MeshletLod1Count > 0u ? 1u : 2u);
+    }
+
+    if ((meshInfo.ResidencyFlags &
+         MESH_RESIDENCY_MANAGED_PHYSICAL_FLAG) != 0u)
+    {
+        uint rangeIndex = meshInfo.StreamingRangeIndex + selectedLod;
+        GPUMeshletStreamingRangeData range =
+            ReadMeshletStreamingRange(rangeIndex);
+        if (range.PageCount != 0u && range.MeshletCount != 0u &&
+            MeshletStreamingRangeReady(
+                rangeIndex,
+                pc.Push.CurrentFrameIndex))
+        {
+            firstMeshlet = MESHLET_VIRTUAL_ADDRESS_BIT |
+                range.FirstVirtualMeshlet;
+            meshletCount = range.MeshletCount;
+            effectiveLod = selectedLod;
+            return;
+        }
+
+        RequestMeshletStreamingRange(
+            rangeIndex,
+            pc.Push.CurrentFrameIndex);
+        uint fallbackRangeIndex = range.FallbackRangeIndex;
+        if (fallbackRangeIndex != 0xffffffffu &&
+            MeshletStreamingRangeReady(
+                fallbackRangeIndex,
+                pc.Push.CurrentFrameIndex))
+        {
+            GPUMeshletStreamingRangeData fallback =
+                ReadMeshletStreamingRange(fallbackRangeIndex);
+            firstMeshlet = MESHLET_VIRTUAL_ADDRESS_BIT |
+                fallback.FirstVirtualMeshlet;
+            meshletCount = fallback.MeshletCount;
+            uint fallbackLod = fallbackRangeIndex >=
+                meshInfo.StreamingRangeIndex
+                ? fallbackRangeIndex - meshInfo.StreamingRangeIndex
+                : 0u;
+            effectiveLod = min(fallbackLod, 2u);
+            return;
+        }
+
+        // Publication waits for the pinned fallback to be present in both
+        // frame tables. If that invariant is ever violated, emit no partial
+        // geometry instead of reading an invalid page.
+        firstMeshlet = meshInfo.MeshletOffset;
+        meshletCount = 0u;
+        effectiveLod = selectedLod;
+        return;
+    }
+
+    effectiveLod = selectedLod;
+    if (selectedLod == 0u)
     {
         firstMeshlet = meshInfo.MeshletOffset;
         meshletCount = meshInfo.MeshletCount;
-        effectiveLod = 0u;
-        return;
     }
-
-    if (requestedLod == 1u && meshInfo.MeshletLod1Count > 0u)
+    else if (selectedLod == 1u)
     {
         firstMeshlet = meshInfo.MeshletLod1Offset;
         meshletCount = meshInfo.MeshletLod1Count;
-        effectiveLod = 1u;
-        return;
     }
-
-    if (requestedLod == 2u && meshInfo.MeshletLod2Count > 0u)
+    else
     {
         firstMeshlet = meshInfo.MeshletLod2Offset;
         meshletCount = meshInfo.MeshletLod2Count;
-        effectiveLod = 2u;
-        return;
     }
-
-    if (meshInfo.MeshletCount > 0u)
-    {
-        firstMeshlet = meshInfo.MeshletOffset;
-        meshletCount = meshInfo.MeshletCount;
-        effectiveLod = 0u;
-        return;
-    }
-
-    if (meshInfo.MeshletLod1Count > 0u)
-    {
-        firstMeshlet = meshInfo.MeshletLod1Offset;
-        meshletCount = meshInfo.MeshletLod1Count;
-        effectiveLod = 1u;
-        return;
-    }
-
-    firstMeshlet = meshInfo.MeshletLod2Offset;
-    meshletCount = meshInfo.MeshletLod2Count;
-    effectiveLod = 2u;
 }
 
 bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiveLod, uint lodBias)
 {
     effectiveLod = 0u;
-    if ((pc.Push.Flags & SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION) == 0u)
-        return true;
+    bool lodSelectionEnabled = (pc.Push.Flags &
+        SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION) != 0u;
 
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
@@ -754,6 +793,27 @@ bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiv
         : 0xffffffffu;
     if (lod0LocalIndex >= meshInfo.MeshletCount)
         return true;
+
+    if (!lodSelectionEnabled)
+    {
+        if ((meshInfo.ResidencyFlags &
+             MESH_RESIDENCY_MANAGED_PHYSICAL_FLAG) == 0u)
+        {
+            return true;
+        }
+        uint residentFirst = 0u;
+        uint residentCount = 0u;
+        SelectMeshletRange(
+            meshInfo,
+            0u,
+            residentFirst,
+            residentCount,
+            effectiveLod);
+        if (residentCount == 0u || lod0LocalIndex >= residentCount)
+            return false;
+        command.MeshletIndex = residentFirst + lod0LocalIndex;
+        return true;
+    }
 
     // Mesh metadata with no alternate ranges intentionally represents a base-only
     // mesh. Do not calculate a requested LOD or report a missing-LOD fallback for
@@ -815,8 +875,8 @@ bool ApplyConservativeDirectionalShadowLodSelection(
     // Preserve the source LOD0 command until the renderer has a mesh-level
     // remapping/deduplication path that can prove coverage equivalence.
     effectiveLod = 0u;
-    if ((pc.Push.Flags & SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION) == 0u)
-        return true;
+    bool lodSelectionEnabled = (pc.Push.Flags &
+        SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION) != 0u;
 
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
@@ -828,6 +888,27 @@ bool ApplyConservativeDirectionalShadowLodSelection(
     if (lod0LocalIndex >= meshInfo.MeshletCount ||
         (meshInfo.MeshletLod1Count == 0u && meshInfo.MeshletLod2Count == 0u))
     {
+        return true;
+    }
+
+    if (!lodSelectionEnabled)
+    {
+        if ((meshInfo.ResidencyFlags &
+             MESH_RESIDENCY_MANAGED_PHYSICAL_FLAG) == 0u)
+        {
+            return true;
+        }
+        uint residentFirst = 0u;
+        uint residentCount = 0u;
+        SelectMeshletRange(
+            meshInfo,
+            0u,
+            residentFirst,
+            residentCount,
+            effectiveLod);
+        if (residentCount == 0u || lod0LocalIndex >= residentCount)
+            return false;
+        command.MeshletIndex = residentFirst + lod0LocalIndex;
         return true;
     }
 
@@ -849,6 +930,22 @@ bool ApplyConservativeDirectionalShadowLodSelection(
             BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
                 SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_LOD_FALLBACK],
             1u);
+    }
+
+    if ((meshInfo.ResidencyFlags &
+         MESH_RESIDENCY_MANAGED_PHYSICAL_FLAG) != 0u)
+    {
+        uint firstMeshlet = 0u;
+        uint meshletCount = 0u;
+        SelectMeshletRange(
+            meshInfo,
+            requestedLod,
+            firstMeshlet,
+            meshletCount,
+            effectiveLod);
+        if (meshletCount == 0u || lod0LocalIndex >= meshletCount)
+            return false;
+        command.MeshletIndex = firstMeshlet + lod0LocalIndex;
     }
 
     return true;
@@ -1349,7 +1446,9 @@ void ProcessExpandedDirectionalShadowRange(
         vec4 worldSphere = vec4(0.0);
         if (valid)
         {
-            GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+            GPUMeshlet meshlet = ReadMeshlet(
+                command.MeshletIndex,
+                pc.Push.CurrentFrameIndex);
             worldSphere = ResolveMeshletWorldCenterRadius(command, meshlet);
         }
         bool doubleSided = IsDoubleSided(command);
@@ -1500,7 +1599,9 @@ void ProcessExpandedMeshletRange(
             ditherTarget,
             ditherThreshold);
 
-        GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+        GPUMeshlet meshlet = ReadMeshlet(
+            command.MeshletIndex,
+            pc.Push.CurrentFrameIndex);
         vec4 worldCenterRadius = ResolveMeshletWorldCenterRadius(
             command,
             meshlet);
@@ -2217,7 +2318,9 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
     if (!ApplyGpuLodSelection(command, effectiveLod, 0u))
         return;
 
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    GPUMeshlet meshlet = ReadMeshlet(
+        command.MeshletIndex,
+        pc.Push.CurrentFrameIndex);
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
         pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId *
@@ -2340,7 +2443,9 @@ void ProcessDepthCandidate(
     if (!ApplyGpuLodSelection(command, effectiveLod, 0u))
         return;
 
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    GPUMeshlet meshlet = ReadMeshlet(
+        command.MeshletIndex,
+        pc.Push.CurrentFrameIndex);
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
         pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId *
@@ -2409,7 +2514,9 @@ void ProcessDirectionalShadowCandidate(
     if (!ApplyConservativeDirectionalShadowLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias))
         return;
 
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    GPUMeshlet meshlet = ReadMeshlet(
+        command.MeshletIndex,
+        pc.Push.CurrentFrameIndex);
     vec4 worldSphere = ResolveMeshletWorldCenterRadius(command, meshlet);
     uint cascadeCount = min(pc.Push.DirectionalShadowCascadeCount, SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT);
     for (uint cascade = 0u; cascade < cascadeCount; cascade++)

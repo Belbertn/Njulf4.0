@@ -105,7 +105,9 @@ public sealed class SceneDocumentLoader
             {
                 if (!prototypes.TryGetValue(record.PrototypeId, out FoliagePrototype? prototype))
                     throw new InvalidDataException($"Foliage patch '{record.Name}' ({record.Id}) references missing prototype '{record.PrototypeId}'.");
-                scene.Add(new FoliagePatch(prototype, ToBoundingBox(record.Bounds))
+                var patch = new FoliagePatch(
+                    prototype,
+                    ToBoundingBox(record.Bounds))
                 {
                     Id = record.Id,
                     Name = record.Name,
@@ -113,9 +115,13 @@ public sealed class SceneDocumentLoader
                     InstanceScale = record.InstanceScale,
                     Density = record.Density,
                     Seed = record.Seed,
-                    DensityTexturePath = record.DensityTexturePath,
                     Visible = record.Visible
-                });
+                };
+                ApplyFoliagePlacement(
+                    patch,
+                    record,
+                    document.SchemaVersion);
+                scene.Add(patch);
             }
             foreach (SceneInstanceBatchDocument record in document.InstanceBatches)
                 LoadInstanceBatch(scene, record, modelInstances);
@@ -223,10 +229,36 @@ public sealed class SceneDocumentLoader
                 Mesh = source.Mesh,
                 Material = source.Material,
                 GeometryMode = ParseEnum<FoliageGeometryMode>(record.GeometryMode, record.Id, record.Name),
-                AuthoredMeshletStride = record.AuthoredMeshletStride,
                 CardHeight = record.CardHeight,
                 CardWidth = record.CardWidth,
-                FarImpostorEnabled = record.FarImpostorEnabled
+                FarImpostorEnabled = record.FarImpostorEnabled,
+                CastShadows = record.CastShadows,
+                TwoSided = record.TwoSided,
+                Impostor = record.Impostor == null
+                    ? null
+                    : new FoliageImpostorAsset
+                    {
+                        AlbedoOpacityAtlasPath = record.Impostor.AlbedoOpacityAtlasPath,
+                        NormalAtlasPath = record.Impostor.NormalAtlasPath,
+                        DepthAtlasPath = record.Impostor.DepthAtlasPath,
+                        ViewCount = record.Impostor.ViewCount,
+                        AtlasWidth = record.Impostor.AtlasWidth,
+                        AtlasHeight = record.Impostor.AtlasHeight,
+                        ViewDirections = record.Impostor.Views
+                            .Select(static view => ToVector3(view.Direction))
+                            .ToArray(),
+                        AtlasRectangles = record.Impostor.Views
+                            .Select(static view => new Vector4(
+                                view.AtlasRectangle.X,
+                                view.AtlasRectangle.Y,
+                                view.AtlasRectangle.Z,
+                                view.AtlasRectangle.W))
+                            .ToArray(),
+                        SourceBounds = ToBoundingBox(record.Impostor.SourceBounds),
+                        Pivot = ToVector3(record.Impostor.Pivot),
+                        Scale = record.Impostor.Scale,
+                        ContentHash = record.Impostor.ContentHash
+                    }
             }.WithSettings(record);
             prototype.AdoptResourceOwner(source);
             return prototype;
@@ -709,6 +741,72 @@ public sealed class SceneDocumentLoader
         }
     }
 
+    private static void ApplyFoliagePlacement(
+        FoliagePatch patch,
+        SceneFoliagePatchDocument record,
+        int schemaVersion)
+    {
+        patch.PlacementMode = schemaVersion >= 10
+            ? ParseEnum<FoliagePlacementMode>(
+                record.PlacementMode,
+                record.Id,
+                record.Name)
+            : patch.Prototype.GeometryMode ==
+                FoliageGeometryMode.AuthoredMeshlets
+                ? FoliagePlacementMode.SingleInstance
+                : FoliagePlacementMode.ProceduralSurface;
+
+        SceneFoliagePlacementDocument placement = record.Placement;
+        patch.Placement.Density = placement.Density;
+        patch.Placement.MinimumSpacing = placement.MinimumSpacing;
+        patch.Placement.ScaleRange = new Vector2(
+            placement.ScaleRange.X,
+            placement.ScaleRange.Y);
+        patch.Placement.YawRangeDegrees = new Vector2(
+            placement.YawRangeDegrees.X,
+            placement.YawRangeDegrees.Y);
+        patch.Placement.AlignToSurfaceNormal = placement.AlignToSurfaceNormal;
+        patch.Placement.AltitudeRange = new Vector2(
+            placement.AltitudeRange.X,
+            placement.AltitudeRange.Y);
+        patch.Placement.SlopeRangeDegrees = new Vector2(
+            placement.SlopeRangeDegrees.X,
+            placement.SlopeRangeDegrees.Y);
+        patch.Placement.BiomeMask = placement.BiomeMask;
+        patch.Placement.AllowWater = placement.AllowWater;
+        patch.Placement.AllowRoads = placement.AllowRoads;
+        patch.Placement.RespectExclusions = placement.RespectExclusions;
+        patch.Placement.Seed = placement.Seed;
+        patch.Placement.CellSize = placement.CellSize;
+
+        if (record.DensityMap != null)
+        {
+            SceneFoliageDensityMapDocument density = record.DensityMap;
+            patch.DensityMap = new FoliageDensityMapReference
+            {
+                SourcePath = density.SourcePath,
+                ContentHash = density.ContentHash,
+                Width = density.Width,
+                Height = density.Height,
+                Format = ParseEnum<FoliageDensityMapFormat>(
+                    density.Format,
+                    record.Id,
+                    record.Name),
+                WorldToUvScale = new Vector2(
+                    density.WorldToUvScale.X,
+                    density.WorldToUvScale.Y),
+                WorldToUvOffset = new Vector2(
+                    density.WorldToUvOffset.X,
+                    density.WorldToUvOffset.Y),
+                Revision = density.Revision
+            };
+        }
+        else
+        {
+            patch.DensityTexturePath = record.DensityTexturePath;
+        }
+    }
+
     private static TEnum ParseEnum<TEnum>(string value, Guid id, string name) where TEnum : struct, Enum =>
         Enum.TryParse(value, ignoreCase: true, out TEnum parsed)
             ? parsed
@@ -725,9 +823,10 @@ internal static class SceneFoliagePrototypeDocumentExtensions
 {
     public static FoliagePrototype WithSettings(this FoliagePrototype prototype, SceneFoliagePrototypeDocument source)
     {
-        prototype.Lod.Lod0Distance = source.Lod.Lod0Distance;
-        prototype.Lod.Lod1Distance = source.Lod.Lod1Distance;
-        prototype.Lod.Lod2Distance = source.Lod.Lod2Distance;
+        prototype.Lod.SetDistances(
+            source.Lod.Lod0Distance,
+            source.Lod.Lod1Distance,
+            source.Lod.Lod2Distance);
         prototype.Wind.Strength = source.Wind.Strength;
         prototype.Wind.Frequency = source.Wind.Frequency;
         prototype.Wind.Flutter = source.Wind.Flutter;

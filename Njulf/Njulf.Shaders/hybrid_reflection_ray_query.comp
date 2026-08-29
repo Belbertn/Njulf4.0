@@ -5,6 +5,7 @@
 
 #include "common.glsl"
 #include "area_lighting.glsl"
+#include "ddgi_light_tree.glsl"
 
 #define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE false
@@ -169,7 +170,103 @@ vec3 HybridEvaluatePbrLight(
     return (diffuse + specular) * incidentRadiance * nDotL;
 }
 
-vec3 HybridShadeHit(RayQuerySurfaceHit hit, vec3 incomingDirection)
+vec3 HybridEvaluateSelectedHitLight(
+    RayQuerySurfaceHit hit,
+    vec3 albedo,
+    float metallic,
+    float roughness,
+    vec3 normal,
+    vec3 viewDirection,
+    GPULight light,
+    uint sampleOrdinal)
+{
+    if (NjulfIsAreaLight(light))
+    {
+        vec3 specularF0 = mix(vec3(0.04), albedo, metallic);
+        NjulfAreaLightResult area = EvaluateNjulfAreaLightLtc(
+            light,
+            hit.Position,
+            normal,
+            viewDirection,
+            roughness,
+            albedo * (1.0 - metallic),
+            specularF0);
+        if (area.rangeAttenuation <= 0.0)
+            return vec3(0.0);
+        uint state = floatBitsToUint(hit.Position.x) ^
+            floatBitsToUint(hit.Position.y) * 0x9e3779b9u ^
+            floatBitsToUint(hit.Position.z) * 0x85ebca6bu ^
+            light.StableIdentity ^ pc.TemporalSampleIndex * 0xc2b2ae35u ^
+            sampleOrdinal * 0x27d4eb2fu;
+        state ^= state >> 16u;
+        vec3 random = vec3(
+            float(state & 0x00ffffffu) * (1.0 / 16777216.0),
+            float((state * 1664525u + 1013904223u) & 0x00ffffffu) *
+                (1.0 / 16777216.0),
+            float((state * 22695477u + 1u) & 0x00ffffffu) *
+                (1.0 / 16777216.0));
+        NjulfAreaSurfaceSample emitter = NjulfSampleAreaLightSurface(
+            light, random);
+        if (emitter.valid &&
+            (uint(light.ShadowFlags) &
+                GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) != 0u)
+        {
+            vec3 toEmitter = emitter.position - hit.Position;
+            float emitterDistance = length(toEmitter);
+            if (emitterDistance > 0.004 &&
+                !HybridVisible(hit.Position + normal * 0.004,
+                    toEmitter / emitterDistance,
+                    max(emitterDistance - 0.004, 0.002)))
+            {
+                return vec3(0.0);
+            }
+        }
+        return area.lighting;
+    }
+
+    vec3 lightDirection;
+    float attenuation = 1.0;
+    float maximumDistance = pc.CameraPositionAndMaximumDistance.w;
+    bool local = NjulfIsLocalLight(light);
+    if (local)
+    {
+        if (!NjulfIsPunctualLight(light))
+            return vec3(0.0);
+        vec3 toLight = light.Position - hit.Position;
+        maximumDistance = length(toLight);
+        if (!HybridFinite(maximumDistance) || maximumDistance <= 0.002 ||
+            maximumDistance >= light.Range || light.Range <= 0.0)
+        {
+            return vec3(0.0);
+        }
+        lightDirection = toLight / maximumDistance;
+        attenuation = EvaluateNjulfLightDistanceAttenuation(
+            light, maximumDistance);
+        attenuation *= EvaluateNjulfIesProfile(light, -lightDirection);
+        if (light.Type == GPU_LIGHT_TYPE_SPOT)
+            attenuation *= EvaluateNjulfSpotAttenuation(
+                light, lightDirection);
+    }
+    else
+    {
+        lightDirection = normalize(-light.Direction);
+    }
+    if (dot(normal, lightDirection) <= 0.0 || attenuation <= 0.0 ||
+        !HybridVisible(hit.Position + normal * 0.004,
+            lightDirection, max(maximumDistance - 0.004, 0.002)))
+    {
+        return vec3(0.0);
+    }
+    vec3 incident = max(light.Color, vec3(0.0)) *
+        max(light.Intensity, 0.0) * attenuation;
+    return HybridEvaluatePbrLight(albedo, metallic, roughness,
+        normal, viewDirection, lightDirection, incident);
+}
+
+vec3 HybridShadeHit(
+    RayQuerySurfaceHit hit,
+    vec3 incomingDirection,
+    uint sampleSeed)
 {
     vec3 normal = RayQuerySurfaceOrientedNormal(hit);
     vec3 viewDirection = normalize(-incomingDirection);
@@ -180,104 +277,82 @@ vec3 HybridShadeHit(RayQuerySurfaceHit hit, vec3 incomingDirection)
     float roughness = clamp(metallicRoughness.y, 0.04, 1.0);
     vec3 radiance = HybridSampleEmissive(hit);
 
-    uint shadedLocalLights = 0u;
-    for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)
+    uint directionalCount = min(pc.DirectionalLightCount, pc.LightCount);
+    for (uint lightIndex = 0u;
+         lightIndex < directionalCount;
+         lightIndex++)
     {
         GPULight light = ReadLight(lightIndex);
-        if (NjulfIsAreaLight(light))
+        if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL)
         {
-            if (shadedLocalLights >= pc.MaximumShadedLights)
-                continue;
-            vec3 specularF0 = mix(vec3(0.04), albedo, metallic);
-            NjulfAreaLightResult area = EvaluateNjulfAreaLightLtc(
-                light,
+            radiance += HybridEvaluateSelectedHitLight(
+                hit, albedo, metallic, roughness, normal,
+                viewDirection, light, lightIndex);
+        }
+    }
+
+    uint localSamples = min(pc.MaximumShadedLights, 4u);
+    bool sampledTree = localSamples == 0u || pc.LocalLightCount == 0u;
+    DdgiLightTreeState treeState = DdgiReadLightTreeState();
+    if (!sampledTree &&
+        (treeState.flags & DDGI_LIGHT_TREE_STATE_VALID_BIT) != 0u &&
+        treeState.paddedLeafCount != 0u &&
+        DdgiLightTreeStateMatchesCurrentLightBuffer(
+            treeState, pc.LightCount, pc.LocalLightCount))
+    {
+        sampledTree = true;
+        uvec2 stableKey = uvec2(sampleSeed, HybridHash(sampleSeed));
+        for (uint sampleOrdinal = 0u;
+             sampleOrdinal < localSamples;
+             sampleOrdinal++)
+        {
+            DdgiLightTreeSample selected = DdgiSampleLocalLightTree(
                 hit.Position,
-                normal,
-                viewDirection,
-                roughness,
-                albedo * (1.0 - metallic),
-                specularF0);
-            if (area.rangeAttenuation <= 0.0)
-                continue;
-            uint state = floatBitsToUint(hit.Position.x) ^
-                floatBitsToUint(hit.Position.y) * 0x9e3779b9u ^
-                floatBitsToUint(hit.Position.z) * 0x85ebca6bu ^
-                light.StableIdentity ^ pc.TemporalSampleIndex * 0xc2b2ae35u;
-            state ^= state >> 16u;
-            vec3 random = vec3(
-                float(state & 0x00ffffffu) * (1.0 / 16777216.0),
-                float((state * 1664525u + 1013904223u) & 0x00ffffffu) *
-                    (1.0 / 16777216.0),
-                float((state * 22695477u + 1u) & 0x00ffffffu) *
-                    (1.0 / 16777216.0));
-            NjulfAreaSurfaceSample emitter = NjulfSampleAreaLightSurface(
-                light, random);
-            float visibility = 1.0;
-            if (emitter.valid &&
-                (uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) != 0u)
+                stableKey,
+                sampleSeed,
+                pc.TemporalSampleIndex,
+                pc.TemporalSampleIndex,
+                sampleOrdinal,
+                0.05);
+            if (!selected.valid ||
+                selected.packedLightIndex >= pc.LightCount ||
+                !(selected.pdf > 0.0))
             {
-                vec3 toEmitter = emitter.position - hit.Position;
-                float emitterDistance = length(toEmitter);
-                if (emitterDistance > 0.004)
-                {
-                    vec3 emitterDirection = toEmitter / emitterDistance;
-                    visibility = HybridVisible(
-                        hit.Position + normal * 0.004,
-                        emitterDirection,
-                        max(emitterDistance - 0.004, 0.002))
-                        ? 1.0
-                        : 0.0;
-                }
+                sampledTree = false;
+                break;
             }
-            radiance += area.lighting * visibility;
-            shadedLocalLights++;
-            continue;
-        }
-        vec3 lightDirection;
-        float attenuation = 1.0;
-        float maximumDistance = pc.CameraPositionAndMaximumDistance.w;
-        bool local = NjulfIsLocalLight(light);
-        if (local)
-        {
-            if (!NjulfIsPunctualLight(light))
-                continue;
-            if (shadedLocalLights >= pc.MaximumShadedLights)
-                continue;
-            vec3 toLight = light.Position - hit.Position;
-            maximumDistance = length(toLight);
-            if (!HybridFinite(maximumDistance) || maximumDistance <= 0.002 ||
-                maximumDistance >= light.Range || light.Range <= 0.0)
+            GPULight light = ReadLight(selected.packedLightIndex);
+            if (!NjulfIsLocalLight(light) ||
+                light.StableIdentity != selected.stableLightIdentity)
             {
-                continue;
+                sampledTree = false;
+                break;
             }
-            lightDirection = toLight / maximumDistance;
-            attenuation = EvaluateNjulfLightDistanceAttenuation(
-                light, maximumDistance);
-            attenuation *= EvaluateNjulfIesProfile(light, -lightDirection);
-            if (light.Type == GPU_LIGHT_TYPE_SPOT)
-                attenuation *= EvaluateNjulfSpotAttenuation(
-                    light, lightDirection);
-            if (attenuation <= 0.0)
+            vec3 contribution = HybridEvaluateSelectedHitLight(
+                hit, albedo, metallic, roughness, normal,
+                viewDirection, light, sampleOrdinal);
+            radiance += contribution /
+                max(float(localSamples) * selected.pdf, 1.0e-6);
+        }
+    }
+
+    if (!sampledTree)
+    {
+        // Stale or incomplete hierarchy: inspect only the same bounded number
+        // of stable local entries, never the full local-light list.
+        uint accepted = 0u;
+        for (uint lightIndex = directionalCount;
+             lightIndex < pc.LightCount && accepted < localSamples;
+             lightIndex++)
+        {
+            GPULight light = ReadLight(lightIndex);
+            if (!NjulfIsLocalLight(light))
                 continue;
+            radiance += HybridEvaluateSelectedHitLight(
+                hit, albedo, metallic, roughness, normal,
+                viewDirection, light, accepted);
+            accepted++;
         }
-        else
-        {
-            lightDirection = normalize(-light.Direction);
-        }
-        if (dot(normal, lightDirection) <= 0.0 || attenuation <= 0.0)
-            continue;
-        if (local)
-            shadedLocalLights++;
-        vec3 shadowOrigin = hit.Position + normal * 0.004;
-        if (!HybridVisible(shadowOrigin, lightDirection,
-                max(maximumDistance - 0.004, 0.002)))
-        {
-            continue;
-        }
-        vec3 incident = max(light.Color, vec3(0.0)) *
-            max(light.Intensity, 0.0) * attenuation;
-        radiance += HybridEvaluatePbrLight(albedo, metallic, roughness,
-            normal, viewDirection, lightDirection, incident);
     }
 
     if (pc.DdgiEnabled != 0u)
@@ -286,6 +361,21 @@ vec3 HybridShadeHit(RayQuerySurfaceHit hit, vec3 incomingDirection)
             hit.Position, normal, viewDirection);
         radiance += max(irradiance, vec3(0.0)) *
             albedo * (1.0 - metallic) / HYBRID_REFLECTION_PI;
+    }
+
+    GPUEnvironmentData environment = ReadEnvironmentData();
+    if (environment.Enabled != 0u)
+    {
+        vec3 reflected = reflect(-viewDirection, normal);
+        float maximumLod = max(
+            float(environment.PrefilteredMipCount) - 1.0, 0.0);
+        vec3 environmentRadiance = SampleEnvironmentPrefilteredRadiance(
+            environment, reflected, roughness * maximumLod) *
+            max(environment.SpecularIntensity, 0.0);
+        float nDotV = max(dot(normal, viewDirection), 0.0);
+        vec3 f0 = mix(vec3(0.04), albedo, metallic);
+        radiance += environmentRadiance *
+            HybridFresnelSchlickRoughness(nDotV, f0, roughness);
     }
     return clamp(radiance, vec3(0.0), vec3(65504.0));
 }
@@ -300,7 +390,9 @@ void main()
     atomicAdd(HybridCounters[
         HYBRID_REFLECTION_COUNTER_RAY_QUERIES], 1u);
 
-    uvec4 task = HybridTasks[taskIndex];
+    uvec4 task = HybridTasks[taskIndex].Primary;
+    uvec2 lobeExtension =
+        HybridTasks[taskIndex].LobeExtension.xy;
     uvec2 pixel = task.xy;
     if (pixel.x >= pc.ScreenWidth || pixel.y >= pc.ScreenHeight)
     {
@@ -310,7 +402,8 @@ void main()
     }
     ivec2 coordinate = ivec2(pixel);
     uvec4 payload = texelFetch(HybridReceiverPayload, coordinate, 0);
-    uint identity = task.w & 0x00ffffffu;
+    uint identity = task.w & NJULF_HYBRID_REFLECTION_IDENTITY_MASK;
+    uint lobeId = (task.w >> 22u) & 0x1u;
     if (!HybridReflectionPayloadValid(payload) ||
         HybridReceiverIdentity(payload) != identity)
     {
@@ -331,10 +424,40 @@ void main()
         return;
     }
     vec3 geometricNormal = HybridReflectionPayloadGeometricNormal(payload);
-    vec3 shadingNormal = HybridReflectionTraceNormal(payload);
-    vec3 incident = normalize(
-        worldPosition - pc.CameraPositionAndMaximumDistance.xyz);
-    vec3 reflectionDirection = normalize(reflect(incident, shadingNormal));
+    vec3 baseNormal = HybridReflectionTraceNormal(payload);
+    vec3 clearcoatNormal;
+    float clearcoatFactor;
+    float clearcoatRoughness;
+    float anisotropyStrength;
+    vec3 tangent;
+    NjulfHybridReflectionDecodeLobeExtension(
+        lobeExtension,
+        HybridReflectionPayloadShadingNormal(payload),
+        clearcoatNormal,
+        clearcoatFactor,
+        clearcoatRoughness,
+        anisotropyStrength,
+        tangent);
+    vec3 traceNormal = lobeId == 0u ? baseNormal : clearcoatNormal;
+    float traceRoughness = lobeId == 0u
+        ? HybridReflectionPayloadPhysicalRoughness(payload)
+        : max(clearcoatRoughness, 0.02);
+    float traceAnisotropy = lobeId == 0u ? anisotropyStrength : 0.0;
+    vec3 traceTangent = lobeId == 0u
+        ? tangent
+        : NjulfHybridReflectionCanonicalTangentBasisX(traceNormal);
+    vec3 viewDirection = normalize(
+        pc.CameraPositionAndMaximumDistance.xyz - worldPosition);
+    vec3 reflectionDirection = HybridReflectionSampleDirection(
+        viewDirection,
+        traceNormal,
+        traceTangent,
+        traceRoughness,
+        traceAnisotropy,
+        identity,
+        pixel,
+        pc.TemporalSampleIndex,
+        lobeId);
     if (!HybridFinite(reflectionDirection) ||
         dot(reflectionDirection, geometricNormal) <= 0.001)
     {
@@ -350,15 +473,35 @@ void main()
             pc.CameraPositionAndMaximumDistance.w,
             hit))
     {
-        vec3 radiance = HybridShadeHit(hit, reflectionDirection);
+        vec3 radiance = HybridShadeHit(
+            hit,
+            reflectionDirection,
+            taskIndex ^ identity ^ (lobeId << 30u));
         float confidence = clamp(1.0 - hit.Distance /
             max(pc.CameraPositionAndMaximumDistance.w, 0.001), 0.65, 1.0);
-        imageStore(HybridRawRadiance, coordinate,
-            vec4(radiance, confidence));
-        imageStore(HybridRawMetadata, coordinate, uvec4(
-            HybridPackMetadata(HYBRID_REFLECTION_SOURCE_RAY_QUERY,
-                confidence, HYBRID_REFLECTION_REASON_NONE, 0u, true),
-            identity, floatBitsToUint(hit.Distance), 0u));
+        if (lobeId == 0u)
+        {
+            float auxiliary = imageLoad(
+                HybridRawRadiance, coordinate).a;
+            imageStore(HybridRawRadiance, coordinate,
+                vec4(radiance, auxiliary));
+        }
+        else
+        {
+            float auxiliary = imageLoad(
+                HybridDdgiCohorts, coordinate).a;
+            imageStore(HybridDdgiCohorts, coordinate,
+                vec4(radiance, auxiliary));
+        }
+        uvec4 metadata = imageLoad(HybridRawMetadata, coordinate);
+        uint packedMetadata = HybridPackMetadata(
+            HYBRID_REFLECTION_SOURCE_RAY_QUERY,
+            confidence, HYBRID_REFLECTION_REASON_NONE, 0u, true);
+        if (lobeId == 0u)
+            metadata.x = packedMetadata;
+        else
+            metadata.y = packedMetadata;
+        imageStore(HybridRawMetadata, coordinate, metadata);
         atomicAdd(HybridCounters[HYBRID_REFLECTION_COUNTER_RAY_HITS], 1u);
     }
     else

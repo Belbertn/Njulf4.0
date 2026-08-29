@@ -994,6 +994,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
     private SimpleDdgiGuidingSourceCacheHandshake? _configuredHandshake;
     private SimpleDdgiStoragePackingMode? _configuredStoragePackingMode;
     private SimpleDdgiGuidingBuildToken? _reservedBuild;
+    private GiPipelineCacheService? _pipelineCacheService;
     private bool _disposed;
 
     public SimpleDdgiGuidingVulkanRuntime(
@@ -1015,6 +1016,22 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
         _waitForDescriptorReaders = waitForDescriptorReaders;
         _allocator = new VulkanAllocator(bufferManager, transientBufferArena);
         Diagnostics = SimpleDdgiGuidingGpuRuntimeDiagnostics.Disabled;
+    }
+
+    internal void SetPipelineCacheService(
+        GiPipelineCacheService pipelineCacheService)
+    {
+        ArgumentNullException.ThrowIfNull(pipelineCacheService);
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_pass != null)
+            {
+                throw new InvalidOperationException(
+                    "Guiding pipelines were already created.");
+            }
+            _pipelineCacheService = pipelineCacheService;
+        }
     }
 
     public SimpleDdgiGuidingGpuRuntimeDiagnostics Diagnostics { get; private set; }
@@ -1306,7 +1323,8 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                     _context,
                     _bufferManager,
                     _allocator.DescriptorHeap,
-                    request.SourceStoragePackingMode);
+                    request.SourceStoragePackingMode,
+                    _pipelineCacheService);
             }
             catch (Exception exception)
             {

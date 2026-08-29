@@ -185,10 +185,14 @@ public static class SimpleDdgiReceiverFeedbackPlanner
                     GiExperimentFallbackReason.InvalidRequestedMode));
         }
 
+        SimpleDdgiReceiverFeedbackMode productionMode =
+            AdvancedGiActivationPolicy.NormalizeProductionMode(
+                requestedMode);
+
         // The existing packed path owns its legacy scheduler arena.  V2 must
         // neither add hidden allocations nor claim that legacy records are
         // exact compacted records.
-        if (requestedMode ==
+        if (productionMode ==
             SimpleDdgiReceiverFeedbackMode.LegacyPackedReference)
         {
             return new SimpleDdgiReceiverFeedbackPlan(
@@ -217,9 +221,10 @@ public static class SimpleDdgiReceiverFeedbackPlanner
             QualificationId: prerequisites.QualificationId);
         GiExperimentModeState<SimpleDdgiReceiverFeedbackMode> mode =
             GiExperimentModeResolver.Resolve(
-                requestedMode,
+                productionMode,
                 SimpleDdgiReceiverFeedbackMode.Off,
                 evaluation);
+        mode = mode with { RequestedMode = requestedMode };
         if (!mode.IsAdmitted)
         {
             return new SimpleDdgiReceiverFeedbackPlan(

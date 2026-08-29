@@ -108,6 +108,18 @@ public static class AsyncComputePassCatalog
     public static bool IsCorrectnessCertified(AsyncComputePath path) =>
         AsyncComputeCertificationEvidence.Get(path).CorrectnessCertified;
 
+    /// <summary>
+    /// Source-owned production authorization is distinct from optional capture
+    /// evidence. The two renderer-wide preferred paths may enter Auto whenever
+    /// their concrete queue/resource plan validates; all other candidates keep
+    /// the existing evidence gate.
+    /// </summary>
+    public static bool IsProductionActivationAuthorized(
+        AsyncComputePath path) =>
+        path is AsyncComputePath.SimpleDdgiUpdate or
+            AsyncComputePath.FarFieldClipmapBake ||
+        IsCorrectnessCertified(path);
+
     public static string GetCertificationEvidenceRevision(AsyncComputePath path) =>
         AsyncComputeCertificationEvidence.Get(path).EvidenceRevision;
 

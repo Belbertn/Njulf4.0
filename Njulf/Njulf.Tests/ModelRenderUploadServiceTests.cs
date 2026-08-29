@@ -382,7 +382,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void RequiresAlphaCoveragePreservingMips_TracksMaskedMaterialsOnly()
+        public void RequiresAlphaCoveragePreservingMips_TracksMaskedAndFoliageMaterials()
         {
             Assert.Multiple(() =>
             {
@@ -391,7 +391,7 @@ namespace Njulf.Tests
                 Assert.That(
                     ModelRenderUploadService.RequiresAlphaCoveragePreservingMips(
                         new ModelMaterial { FeatureFlags = (uint)MaterialFeatureFlags.Foliage }),
-                    Is.False);
+                    Is.True);
                 Assert.That(
                     ModelMaterialTexturePolicy.ResolveBaseColorMipPolicy(
                         new ModelMaterial { AlphaMode = ModelAlphaMode.Mask, AlphaCutoff = 0.37f }),

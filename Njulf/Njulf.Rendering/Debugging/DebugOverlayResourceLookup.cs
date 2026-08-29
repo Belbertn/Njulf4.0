@@ -12,7 +12,10 @@ internal interface IDebugOverlayResourceLookup
 
     bool TryGetMeshInfo(MeshHandle handle, out MeshInfo meshInfo);
 
-    bool TryGetMeshlet(uint index, out Meshlet meshlet);
+    bool TryGetMeshlet(
+        MeshHandle mesh,
+        uint index,
+        out Meshlet meshlet);
 }
 
 internal sealed class RendererDebugOverlayResourceLookup :
@@ -71,11 +74,14 @@ internal sealed class RendererDebugOverlayResourceLookup :
         }
     }
 
-    public bool TryGetMeshlet(uint index, out Meshlet meshlet)
+    public bool TryGetMeshlet(
+        MeshHandle mesh,
+        uint index,
+        out Meshlet meshlet)
     {
         try
         {
-            meshlet = _meshManager.GetMeshlet(index);
+            meshlet = _meshManager.GetMeshlet(mesh, index);
             return true;
         }
         catch (ArgumentException)

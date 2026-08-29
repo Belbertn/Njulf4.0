@@ -232,10 +232,17 @@ public sealed class SampleBistroQualityCaptureHarnessTests
                 diagnostics.ReflectionProbeCompletedLifecycle,
             GpuReflectionProbePublishMicroseconds =
                 diagnostics.GpuReflectionProbePublishMicroseconds,
+            RequestedReflectionImplementation =
+                ReflectionImplementationMode.Auto,
+            EffectiveReflectionImplementation =
+                ReflectionImplementationMode.Adaptive,
             HybridReflectionCountersReadbackValid = 1,
             HybridReflectionDdgiFallbackCount = 2,
             HybridReflectionProbeFallbackCount = 0,
             HybridReflectionEnvironmentFallbackCount = 3,
+            HybridReflectionActiveTileCount = 12,
+            AutomaticPlanarCandidateCount = 4,
+            AutomaticPlanarSelectedCount = 1,
             GpuHybridReflectionDdgiBaseMicroseconds = 211
         };
         var contract = new SampleBistroQualityCaptureContract(
@@ -263,9 +270,9 @@ public sealed class SampleBistroQualityCaptureHarnessTests
         Assert.Multiple(() =>
         {
             Assert.That(SampleBistroQualityCaptureContract.Schema,
-                Is.EqualTo("bistro-quality-run/v9"));
+                Is.EqualTo("bistro-quality-run/v10"));
             Assert.That(document.RootElement.GetProperty("Schema").GetString(),
-                Is.EqualTo("bistro-quality-run/v9"));
+                Is.EqualTo("bistro-quality-run/v10"));
             Assert.That(frame.ReflectionProbeCurrentLifecycle, Is.EqualTo(current));
             Assert.That(frame.ReflectionProbeCompletedLifecycle, Is.EqualTo(completed));
             Assert.That(frame.ReflectionProbeCurrentCaptureBudget, Is.EqualTo(budget));
@@ -295,6 +302,18 @@ public sealed class SampleBistroQualityCaptureHarnessTests
                 jsonFrame.GetProperty("HybridReflectionProbeFallbackCount")
                     .GetUInt32(),
                 Is.Zero);
+            Assert.That(
+                jsonFrame.GetProperty("EffectiveReflectionImplementation")
+                    .GetString(),
+                Is.EqualTo(nameof(ReflectionImplementationMode.Adaptive)));
+            Assert.That(
+                jsonFrame.GetProperty("HybridReflectionActiveTileCount")
+                    .GetUInt32(),
+                Is.EqualTo(12u));
+            Assert.That(
+                jsonFrame.GetProperty("AutomaticPlanarSelectedCount")
+                    .GetInt32(),
+                Is.EqualTo(1));
             Assert.That(
                 jsonFrame.GetProperty(
                         "GpuHybridReflectionDdgiBaseMicroseconds")

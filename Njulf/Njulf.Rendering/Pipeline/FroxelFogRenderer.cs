@@ -1393,22 +1393,19 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            long pipelineStart =
-                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-            Result result;
-            VkPipeline pipeline;
-            try
-            {
-                result = _context.Api.CreateComputePipelines(
-                    _context.Device, _pipelineCache, 1u, &info, null,
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId(
+                        $"Fog.Froxel:{shaderName}"),
+                    &info,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1u,
+                    &info,
+                    null,
                     out pipeline);
-            }
-            finally
-            {
-                _pipelineCacheService?.EndPipelineCreation(
-                    $"Fog.Froxel:{shaderName}",
-                    pipelineStart);
-            }
             if (result != Result.Success)
                 throw new VulkanException(
                     $"Failed to create froxel pipeline '{shaderName}'.", result);

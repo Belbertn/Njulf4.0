@@ -965,8 +965,77 @@ namespace Njulf.Rendering.Descriptors
         public const int SceneInstanceCandidateBufferFrame1 =
             SceneInstanceCandidateBufferBase + 1;
 
-        public const int StaticBufferCount =
+        /// <summary>Fence-safe meshlet physical page table for frame 0.</summary>
+        public const int MeshletPhysicalPageTableBufferBase =
             SceneInstanceCandidateBufferFrame1 + 1;
+
+        /// <summary>Fence-safe meshlet physical page table for frame 1.</summary>
+        public const int MeshletPhysicalPageTableBufferFrame1 =
+            MeshletPhysicalPageTableBufferBase + 1;
+
+        /// <summary>Immutable whole-LOD meshlet streaming ranges.</summary>
+        public const int MeshletStreamingRangeBuffer =
+            MeshletPhysicalPageTableBufferFrame1 + 1;
+
+        /// <summary>Fence-safe complete-range bits for frame 0.</summary>
+        public const int MeshletStreamingRangeStateBufferBase =
+            MeshletStreamingRangeBuffer + 1;
+
+        /// <summary>Fence-safe complete-range bits for frame 1.</summary>
+        public const int MeshletStreamingRangeStateBufferFrame1 =
+            MeshletStreamingRangeStateBufferBase + 1;
+
+        /// <summary>Immutable virtual-meshlet to global-page mappings.</summary>
+        public const int MeshletVirtualMappingBuffer =
+            MeshletStreamingRangeStateBufferFrame1 + 1;
+
+        /// <summary>Unique GPU range/page demands for frame 0.</summary>
+        public const int MeshletStreamingDemandBufferBase =
+            MeshletVirtualMappingBuffer + 1;
+
+        /// <summary>Unique GPU range/page demands for frame 1.</summary>
+        public const int MeshletStreamingDemandBufferFrame1 =
+            MeshletStreamingDemandBufferBase + 1;
+
+        /// <summary>Demand count, overflow, and invalid-mapping counters.</summary>
+        public const int MeshletStreamingFeedbackCounterBufferBase =
+            MeshletStreamingDemandBufferFrame1 + 1;
+
+        public const int MeshletStreamingFeedbackCounterBufferFrame1 =
+            MeshletStreamingFeedbackCounterBufferBase + 1;
+
+        /// <summary>First of sixteen stable 64 MiB physical-page banks.</summary>
+        public const int MeshletPhysicalPageBankBufferBase =
+            MeshletStreamingFeedbackCounterBufferFrame1 + 1;
+
+        public const int MeshletPhysicalPageBankBufferCount = 16;
+
+        /// <summary>Offline-baked foliage impostor atlas metadata.</summary>
+        public const int FoliageImpostorMetadataBuffer =
+            MeshletPhysicalPageBankBufferBase +
+            MeshletPhysicalPageBankBufferCount;
+
+        /// <summary>
+        /// Frame-banked automatic-planar selection, capture projection, and
+        /// dynamic texture-index metadata.
+        /// </summary>
+        public const int AutomaticPlanarReflectionBuffer =
+            FoliageImpostorMetadataBuffer + 1;
+
+        /// <summary>Exact visible authored-foliage instance commands for frame 0.</summary>
+        public const int FoliageAuthoredInstanceCommandBufferBase =
+            AutomaticPlanarReflectionBuffer + 1;
+
+        /// <summary>Exact visible authored-foliage instance commands for frame 1.</summary>
+        public const int FoliageAuthoredInstanceCommandBufferFrame1 =
+            FoliageAuthoredInstanceCommandBufferBase + 1;
+
+        /// <summary>Per-view direction and normalized atlas rectangles for foliage impostors.</summary>
+        public const int FoliageImpostorViewBuffer =
+            FoliageAuthoredInstanceCommandBufferFrame1 + 1;
+
+        public const int StaticBufferCount =
+            FoliageImpostorViewBuffer + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1034,6 +1103,19 @@ namespace Njulf.Rendering.Descriptors
                         nameof(DdgiDynamicGeometryBufferBase),
                     SceneInstanceCandidateBufferBase => nameof(SceneInstanceCandidateBufferBase),
                     SceneInstanceCandidateBufferFrame1 => nameof(SceneInstanceCandidateBufferFrame1),
+                    MeshletPhysicalPageTableBufferBase => nameof(MeshletPhysicalPageTableBufferBase),
+                    MeshletPhysicalPageTableBufferFrame1 => nameof(MeshletPhysicalPageTableBufferFrame1),
+                    MeshletStreamingRangeBuffer => nameof(MeshletStreamingRangeBuffer),
+                    MeshletStreamingRangeStateBufferBase => nameof(MeshletStreamingRangeStateBufferBase),
+                    MeshletStreamingRangeStateBufferFrame1 => nameof(MeshletStreamingRangeStateBufferFrame1),
+                    MeshletVirtualMappingBuffer => nameof(MeshletVirtualMappingBuffer),
+                    MeshletStreamingDemandBufferBase => nameof(MeshletStreamingDemandBufferBase),
+                    MeshletStreamingDemandBufferFrame1 => nameof(MeshletStreamingDemandBufferFrame1),
+                    MeshletStreamingFeedbackCounterBufferBase => nameof(MeshletStreamingFeedbackCounterBufferBase),
+                    MeshletStreamingFeedbackCounterBufferFrame1 => nameof(MeshletStreamingFeedbackCounterBufferFrame1),
+                    >= MeshletPhysicalPageBankBufferBase and < FoliageImpostorMetadataBuffer => nameof(MeshletPhysicalPageBankBufferBase),
+                    FoliageImpostorMetadataBuffer => nameof(FoliageImpostorMetadataBuffer),
+                    AutomaticPlanarReflectionBuffer => nameof(AutomaticPlanarReflectionBuffer),
                     SceneMeshMetadataBuffer => nameof(SceneMeshMetadataBuffer),
                     VertexBuffer => nameof(VertexBuffer),
                     IndexBuffer => nameof(IndexBuffer),
@@ -1139,6 +1221,9 @@ namespace Njulf.Rendering.Descriptors
                     FoliageCounterBufferFrame1 => nameof(FoliageCounterBufferFrame1),
                     FoliageIndirectDispatchBufferBase => nameof(FoliageIndirectDispatchBufferBase),
                     FoliageIndirectDispatchBufferFrame1 => nameof(FoliageIndirectDispatchBufferFrame1),
+                    FoliageAuthoredInstanceCommandBufferBase => nameof(FoliageAuthoredInstanceCommandBufferBase),
+                    FoliageAuthoredInstanceCommandBufferFrame1 => nameof(FoliageAuthoredInstanceCommandBufferFrame1),
+                    FoliageImpostorViewBuffer => nameof(FoliageImpostorViewBuffer),
                     SceneOpaqueCompactedMeshletDrawBufferBase => nameof(SceneOpaqueCompactedMeshletDrawBufferBase),
                     SceneOpaqueCompactedMeshletDrawBufferFrame1 => nameof(SceneOpaqueCompactedMeshletDrawBufferFrame1),
                     SceneSimpleOpaqueCompactedMeshletDrawBufferBase => nameof(SceneSimpleOpaqueCompactedMeshletDrawBufferBase),

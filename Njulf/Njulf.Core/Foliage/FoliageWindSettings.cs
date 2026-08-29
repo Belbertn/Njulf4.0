@@ -6,22 +6,32 @@ public sealed class FoliageWindSettings
     private float _frequency = 0.7f;
     private float _flutter = 0.15f;
 
+    public event Action? Changed;
+
     public float Strength
     {
         get => _strength;
-        set => _strength = Clamp01(value);
+        set => Set(ref _strength, Clamp01(value));
     }
 
     public float Frequency
     {
         get => _frequency;
-        set => _frequency = ClampNonNegative(value);
+        set => Set(ref _frequency, ClampNonNegative(value));
     }
 
     public float Flutter
     {
         get => _flutter;
-        set => _flutter = Clamp01(value);
+        set => Set(ref _flutter, Clamp01(value));
+    }
+
+    private void Set(ref float field, float value)
+    {
+        if (field == value)
+            return;
+        field = value;
+        Changed?.Invoke();
     }
 
     private static float Clamp01(float value)

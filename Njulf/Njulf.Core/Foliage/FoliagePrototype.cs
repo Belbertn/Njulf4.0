@@ -10,12 +10,21 @@ public sealed class FoliagePrototype :
     private object? _mesh;
     private object? _material;
     private FoliageGeometryMode _geometryMode;
-    private uint _authoredMeshletStride = 1;
     private float _cardHeight = 1.0f;
     private float _cardWidth = 0.08f;
     private bool _farImpostorEnabled;
+    private FoliageImpostorAsset? _impostor;
+    private bool _castShadows = true;
+    private bool _twoSided = true;
     private uint _revision = 1;
     private Njulf.Core.Scene.RenderObject? _resourceOwner;
+
+    public FoliagePrototype()
+    {
+        Lod.Changed += IncrementRevision;
+        Wind.Changed += IncrementRevision;
+        Lighting.Changed += IncrementRevision;
+    }
 
     public event Action<FoliagePrototype>? Changed;
 
@@ -77,20 +86,6 @@ public sealed class FoliagePrototype :
         }
     }
 
-    public uint AuthoredMeshletStride
-    {
-        get => _authoredMeshletStride;
-        set
-        {
-            uint next = System.Math.Clamp(value, 1u, 64u);
-            if (_authoredMeshletStride == next)
-                return;
-
-            _authoredMeshletStride = next;
-            IncrementRevision();
-        }
-    }
-
     public float CardHeight
     {
         get => _cardHeight;
@@ -128,6 +123,42 @@ public sealed class FoliagePrototype :
                 return;
 
             _farImpostorEnabled = value;
+            IncrementRevision();
+        }
+    }
+
+    public FoliageImpostorAsset? Impostor
+    {
+        get => _impostor;
+        set
+        {
+            if (ReferenceEquals(_impostor, value))
+                return;
+            _impostor = value;
+            IncrementRevision();
+        }
+    }
+
+    public bool CastShadows
+    {
+        get => _castShadows;
+        set
+        {
+            if (_castShadows == value)
+                return;
+            _castShadows = value;
+            IncrementRevision();
+        }
+    }
+
+    public bool TwoSided
+    {
+        get => _twoSided;
+        set
+        {
+            if (_twoSided == value)
+                return;
+            _twoSided = value;
             IncrementRevision();
         }
     }
@@ -175,6 +206,25 @@ public sealed class FoliagePrototype :
     public void MarkSettingsChanged()
     {
         IncrementRevision();
+    }
+
+    public void Validate()
+    {
+        if (!Enum.IsDefined(GeometryMode))
+            throw new InvalidOperationException("Unsupported foliage geometry mode.");
+        if (!float.IsFinite(CardHeight) || CardHeight <= 0f ||
+            !float.IsFinite(CardWidth) || CardWidth <= 0f)
+            throw new InvalidOperationException(
+                "Foliage blade/card dimensions must be finite and positive.");
+        if (Lod.Lod0Distance > Lod.Lod1Distance ||
+            Lod.Lod1Distance > Lod.Lod2Distance)
+            throw new InvalidOperationException(
+                "Foliage LOD distances must be monotonic.");
+        if (FarImpostorEnabled &&
+            GeometryMode == FoliageGeometryMode.AuthoredMeshlets &&
+            (Impostor is null || !Impostor.IsComplete))
+            throw new InvalidOperationException(
+                "An enabled authored foliage impostor requires complete offline atlas metadata.");
     }
 
     private void IncrementRevision()

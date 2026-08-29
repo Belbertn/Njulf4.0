@@ -707,7 +707,8 @@ namespace Njulf.Rendering.Pipeline
         public override bool SupportsSecondaryCommandBuffer => true;
         public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
         public override bool SupportsAsyncCompute =>
-            AsyncComputePassCatalog.IsCorrectnessCertified(AsyncComputePath.SimpleDdgiUpdate);
+            AsyncComputePassCatalog.IsProductionActivationAuthorized(
+                AsyncComputePath.SimpleDdgiUpdate);
         public override string AsyncComputeReason =>
             "Frozen Simple DDGI transport audit reads cached source/canonical storage and writes a bounded summary.";
 
@@ -1090,25 +1091,18 @@ namespace Njulf.Rendering.Pipeline
                     Layout = _pipelineLayout,
                     BasePipelineIndex = -1
                 };
-                long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-                Result result;
-                VkPipeline pipeline;
-                try
-                {
-                    result = _context.Api.CreateComputePipelines(
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId($"{Name}:{shaderName}"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateComputePipelines(
                         _context.Device,
                         _pipelineCache,
                         1,
                         &pipelineInfo,
                         null,
                         out pipeline);
-                }
-                finally
-                {
-                    _pipelineCacheService?.EndPipelineCreation(
-                        $"{Name}:{shaderName}",
-                        pipelineStart);
-                }
                 if (result != Result.Success)
                     throw new VulkanException(
                         $"Failed to create Simple DDGI transport audit pipeline from '{shaderName}'",
@@ -1163,7 +1157,8 @@ namespace Njulf.Rendering.Pipeline
         public override bool SupportsSecondaryCommandBuffer => true;
         public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
         public override bool SupportsAsyncCompute =>
-            AsyncComputePassCatalog.IsCorrectnessCertified(AsyncComputePath.SimpleDdgiUpdate);
+            AsyncComputePassCatalog.IsProductionActivationAuthorized(
+                AsyncComputePath.SimpleDdgiUpdate);
         public override string AsyncComputeReason =>
             "Simple DDGI publication consumes the GPU queue and writes canonical probe storage.";
 
@@ -1539,25 +1534,18 @@ namespace Njulf.Rendering.Pipeline
                     Layout = _pipelineLayout,
                     BasePipelineIndex = -1
                 };
-                long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-                Result result;
-                VkPipeline pipeline;
-                try
-                {
-                    result = _context.Api.CreateComputePipelines(
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId($"{Name}:{shaderName}"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateComputePipelines(
                         _context.Device,
                         _pipelineCache,
                         1,
                         &pipelineInfo,
                         null,
                         out pipeline);
-                }
-                finally
-                {
-                    _pipelineCacheService?.EndPipelineCreation(
-                        $"{Name}:{shaderName}",
-                        pipelineStart);
-                }
                 if (result != Result.Success)
                     throw new VulkanException($"Failed to create Simple DDGI publish pipeline '{shaderName}'", result);
                 return pipeline;
@@ -1696,7 +1684,8 @@ namespace Njulf.Rendering.Pipeline
         public override bool SupportsSecondaryCommandBuffer => true;
         public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
         public override bool SupportsAsyncCompute =>
-            AsyncComputePassCatalog.IsCorrectnessCertified(AsyncComputePath.SimpleDdgiUpdate);
+            AsyncComputePassCatalog.IsProductionActivationAuthorized(
+                AsyncComputePath.SimpleDdgiUpdate);
         public override string AsyncComputeReason => "Simple DDGI update work is compute-only and writes probe buffers.";
 
         public override void Initialize()
@@ -2234,19 +2223,18 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-                Result result;
-                VkPipeline pipeline;
-                try
-                {
-                    result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out pipeline);
-                }
-                finally
-                {
-                    _pipelineCacheService?.EndPipelineCreation(
-                        $"{Name}:{shaderName}",
-                        pipelineStart);
-                }
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId($"{Name}:{shaderName}"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out pipeline);
                 if (result != Result.Success)
                     throw new VulkanException(
                         $"Failed to create {Name} compute pipeline from '{shaderName}'",

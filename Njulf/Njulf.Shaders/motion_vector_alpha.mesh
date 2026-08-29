@@ -4,17 +4,24 @@
 
 #include "common.glsl"
 
+#ifndef NJULF_MESH_LOCAL_SIZE
 #ifdef MOTION_VECTOR_COMPACTED_MESH
-#define MOTION_VECTOR_MESH_LOCAL_SIZE 64
-#define MOTION_VECTOR_MESH_MAX_VERTICES 48
-#define MOTION_VECTOR_MESH_MAX_PRIMITIVES 64
+#define NJULF_MESH_LOCAL_SIZE 64
 #else
-#define MOTION_VECTOR_MESH_LOCAL_SIZE 128
-#define MOTION_VECTOR_MESH_MAX_VERTICES 64
-#define MOTION_VECTOR_MESH_MAX_PRIMITIVES 126
+#define NJULF_MESH_LOCAL_SIZE 128
 #endif
-layout(local_size_x = MOTION_VECTOR_MESH_LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
-layout(triangles, max_vertices = MOTION_VECTOR_MESH_MAX_VERTICES, max_primitives = MOTION_VECTOR_MESH_MAX_PRIMITIVES) out;
+#endif
+#ifndef NJULF_MESH_MAX_VERTICES
+#ifdef MOTION_VECTOR_COMPACTED_MESH
+#define NJULF_MESH_MAX_VERTICES 48
+#define NJULF_MESH_MAX_PRIMITIVES 64
+#else
+#define NJULF_MESH_MAX_VERTICES 64
+#define NJULF_MESH_MAX_PRIMITIVES 126
+#endif
+#endif
+layout(local_size_x = NJULF_MESH_LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = NJULF_MESH_MAX_VERTICES, max_primitives = NJULF_MESH_MAX_PRIMITIVES) out;
 
 #ifndef MOTION_VECTOR_COMPACTED_MESH
 struct MotionVectorTaskPayload
@@ -72,7 +79,16 @@ void main()
         pc.Push.MeshletDrawBufferBaseIndex,
         pc.Push.CurrentFrameIndex,
         drawCommandIndex);
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    GPUMeshlet meshlet = ReadMeshlet(
+        command.MeshletIndex,
+        pc.Push.CurrentFrameIndex);
+    if (meshlet.LocalVertexCount > uint(NJULF_MESH_MAX_VERTICES) ||
+        meshlet.LocalTriangleCount > uint(NJULF_MESH_MAX_PRIMITIVES))
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
 
@@ -93,9 +109,9 @@ void main()
          vertexSlot < meshlet.LocalVertexCount;
          vertexSlot += gl_WorkGroupSize.x)
     {
-        uint localVertexIndex = ReadStorageWord(
-            uint(MESHLET_VERTEX_INDEX_BUFFER_INDEX),
-            meshlet.LocalVertexOffset + vertexSlot);
+        uint localVertexIndex = ReadMeshletLocalVertexIndex(
+            meshlet,
+            vertexSlot);
         GPUVertex vertex = FetchRenderableVertex(
             meshlet,
             localVertexIndex,
@@ -134,10 +150,10 @@ void main()
          triangleSlot < meshlet.LocalTriangleCount;
          triangleSlot += gl_WorkGroupSize.x)
     {
-        uint triangleOffset = meshlet.LocalTriangleOffset + triangleSlot * 3u;
-        uint i0 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 0u);
-        uint i1 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 1u);
-        uint i2 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 2u);
+        uint triangleOffset = triangleSlot * 3u;
+        uint i0 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 0u);
+        uint i1 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 1u);
+        uint i2 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 2u);
         gl_PrimitiveTriangleIndicesEXT[triangleSlot] = ResolveMirroredInstanceTriangle(
             i0,
             i1,

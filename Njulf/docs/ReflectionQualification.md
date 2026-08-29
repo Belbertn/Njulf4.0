@@ -23,9 +23,9 @@ An existing capture can be reauthenticated without launching Vulkan:
   -AnalyzeExisting
 ```
 
-The capture contract is `bistro-quality-run/v9`; the authoritative scoped
+The capture contract is `bistro-quality-run/v10`; the authoritative scoped
 result is `reflection-qualification.json` with contract
-`bistro-reflection-qualification/v2`. A passing run proves all of the
+`bistro-reflection-qualification/v3`. A passing run proves all of the
 following:
 
 - the model package is format 1.4 and matches the Amazon Bistro import contract;
@@ -34,6 +34,9 @@ following:
 - the stable reflection windows cover both sorted transparency and weighted
   OIT, and each mode records useful transparent SSR and admitted ray-query
   work;
+- every valid telemetry frame executes the adaptive implementation without an
+  implementation fallback or tile overflow, while recording adaptive tile and
+  automatic-planar selection/capture diagnostics;
 - transparent SSR obeys its sample budget in every accepted frame:
   eligible equals admitted plus rejected, actual samples do not exceed the
   reservation, reservations do not exceed the configured budget, and hits do

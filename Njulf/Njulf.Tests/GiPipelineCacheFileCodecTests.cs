@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using Njulf.Rendering.Pipeline;
@@ -36,6 +37,65 @@ public sealed class GiPipelineCacheFileCodecTests
             Assert.That(legacyEnvelopeLoaded, Is.False);
             Assert.That(encoded.Length,
                 Is.EqualTo(GiPipelineCacheFileCodec.HeaderSize + payload.Length));
+        });
+    }
+
+    [Test]
+    public void StreamingRoundTrip_PreservesOpaquePayload()
+    {
+        GiPipelineCacheIdentity identity = CreateIdentity();
+        byte[] expected = Enumerable.Range(0, 8193)
+            .Select(index => unchecked((byte)(index * 17)))
+            .ToArray();
+        using var stream = new MemoryStream();
+
+        GiPipelineCacheFileCodec.Write(stream, identity, expected);
+        stream.Position = 0;
+        bool decoded = GiPipelineCacheFileCodec.TryRead(
+            stream,
+            identity,
+            out byte[] actual,
+            out bool shaderBundleChanged,
+            out bool buildConfigurationChanged,
+            out bool legacyEnvelopeLoaded,
+            out string reason);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded, Is.True, reason);
+            Assert.That(actual, Is.EqualTo(expected));
+            Assert.That(shaderBundleChanged, Is.False);
+            Assert.That(buildConfigurationChanged, Is.False);
+            Assert.That(legacyEnvelopeLoaded, Is.False);
+            Assert.That(stream.Length,
+                Is.EqualTo(GiPipelineCacheFileCodec.HeaderSize +
+                    expected.Length));
+        });
+    }
+
+    [Test]
+    public void StreamingRead_RejectsTruncatedPayload()
+    {
+        GiPipelineCacheIdentity identity = CreateIdentity();
+        using var encoded = new MemoryStream();
+        GiPipelineCacheFileCodec.Write(encoded, identity, [1, 2, 3, 4]);
+        byte[] truncated = encoded.ToArray()[..^1];
+        using var source = new MemoryStream(truncated, writable: false);
+
+        bool decoded = GiPipelineCacheFileCodec.TryRead(
+            source,
+            identity,
+            out byte[] payload,
+            out _,
+            out _,
+            out _,
+            out string reason);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded, Is.False);
+            Assert.That(payload, Is.Empty);
+            Assert.That(reason, Does.Contain("length").IgnoreCase);
         });
     }
 

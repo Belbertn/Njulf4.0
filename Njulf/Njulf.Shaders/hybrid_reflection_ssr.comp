@@ -25,6 +25,385 @@ layout(push_constant) uniform HybridReflectionSsrPushBlock
     uint RayAdmissionThreshold;
 } pc;
 
+struct HybridSsrTraceResult
+{
+    vec3 Radiance;
+    float Confidence;
+    vec2 HitUv;
+    float HitDistance;
+    bool Hit;
+    bool LeftScreen;
+};
+
+uint HybridCurrentFrameIndex()
+{
+    return (pc.HistoryValidAndCurrentFrameIndex >> 1u) & 0x3u;
+}
+
+uint HybridHiZMipCount()
+{
+    return pc.HiZMipCount & 0xffffu;
+}
+
+uint HybridColorMipCount()
+{
+    return pc.HiZMipCount >> 16u;
+}
+
+bool HybridProjectRayDistance(
+    vec3 origin,
+    vec3 direction,
+    float distanceAlongRay,
+    mat4 viewProjection,
+    out vec2 uv,
+    out float reverseZ)
+{
+    vec3 position = origin + direction * distanceAlongRay;
+    vec4 clip = MulRowMajor(vec4(position, 1.0), viewProjection);
+    if (!HybridFinite(clip) || clip.w <= 1.0e-6)
+    {
+        uv = vec2(0.0);
+        reverseZ = 0.0;
+        return false;
+    }
+    vec3 ndc = clip.xyz / clip.w;
+    uv = ndc.xy * 0.5 + vec2(0.5);
+    reverseZ = ndc.z;
+    return HybridFinite(uv) && HybridFinite(reverseZ);
+}
+
+bool HybridClipAxis(
+    float start,
+    float end,
+    inout float minimumT,
+    inout float maximumT)
+{
+    float delta = end - start;
+    if (abs(delta) <= 1.0e-8)
+        return start >= 0.0 && start <= 1.0;
+    float first = (0.0 - start) / delta;
+    float second = (1.0 - start) / delta;
+    minimumT = max(minimumT, min(first, second));
+    maximumT = min(maximumT, max(first, second));
+    return maximumT >= minimumT;
+}
+
+bool HybridClipRayToScreen(
+    vec2 startUv,
+    vec2 endUv,
+    inout float minimumDistance,
+    inout float maximumDistance)
+{
+    float minimumT = 0.0;
+    float maximumT = 1.0;
+    if (!HybridClipAxis(startUv.x, endUv.x, minimumT, maximumT) ||
+        !HybridClipAxis(startUv.y, endUv.y, minimumT, maximumT))
+    {
+        return false;
+    }
+    float range = maximumDistance - minimumDistance;
+    float clippedMinimum = minimumDistance + range * clamp(minimumT, 0.0, 1.0);
+    float clippedMaximum = minimumDistance + range * clamp(maximumT, 0.0, 1.0);
+    minimumDistance = clippedMinimum;
+    maximumDistance = clippedMaximum;
+    return maximumDistance > minimumDistance + 1.0e-5;
+}
+
+float HybridDepthDifference(
+    vec3 origin,
+    vec3 direction,
+    float distanceAlongRay,
+    mat4 viewProjection,
+    out vec2 uv,
+    out float rayDepth)
+{
+    if (!HybridProjectRayDistance(origin, direction, distanceAlongRay,
+            viewProjection, uv, rayDepth) ||
+        any(lessThan(uv, vec2(0.0))) ||
+        any(greaterThanEqual(uv, vec2(1.0))))
+    {
+        return -1.0;
+    }
+    return texture(HybridSceneDepth, uv).r - rayDepth;
+}
+
+float HybridRefineSsrCandidate(
+    vec3 origin,
+    vec3 direction,
+    float frontDistance,
+    float backDistance,
+    mat4 viewProjection,
+    out vec2 hitUv,
+    out float hitRayDepth)
+{
+    float front = max(frontDistance, 0.0);
+    float back = max(backDistance, front + 1.0e-5);
+    vec2 ignoredUv;
+    float ignoredDepth;
+    float frontDifference = HybridDepthDifference(
+        origin, direction, front, viewProjection,
+        ignoredUv, ignoredDepth);
+    float backDifference = HybridDepthDifference(
+        origin, direction, back, viewProjection,
+        hitUv, hitRayDepth);
+    for (uint iteration = 0u; iteration < 4u; iteration++)
+    {
+        float denominator = backDifference - frontDifference;
+        float candidate = abs(denominator) > 1.0e-7
+            ? (front * backDifference - back * frontDifference) /
+                denominator
+            : 0.5 * (front + back);
+        candidate = clamp(candidate,
+            front + (back - front) * 0.1,
+            back - (back - front) * 0.1);
+        vec2 candidateUv;
+        float candidateDepth;
+        float difference = HybridDepthDifference(
+            origin, direction, candidate, viewProjection,
+            candidateUv, candidateDepth);
+        if (difference >= 0.0)
+        {
+            back = candidate;
+            backDifference = difference;
+            hitUv = candidateUv;
+            hitRayDepth = candidateDepth;
+        }
+        else
+        {
+            front = candidate;
+            frontDifference = difference;
+        }
+    }
+    return back;
+}
+
+bool HybridReconstructAtUv(
+    vec2 uv,
+    float depth,
+    out vec3 worldPosition)
+{
+    vec4 world = MulRowMajor(
+        vec4(uv * 2.0 - vec2(1.0), depth, 1.0),
+        pc.InverseViewProjectionMatrix);
+    if (!HybridFinite(world) || abs(world.w) <= 1.0e-7)
+    {
+        worldPosition = vec3(0.0);
+        return false;
+    }
+    worldPosition = world.xyz / world.w;
+    return HybridFinite(worldPosition);
+}
+
+float HybridProjectedPixelWorldSize(vec2 uv, float depth)
+{
+    vec3 centre;
+    vec3 adjacent;
+    vec2 onePixel = vec2(1.0 / max(float(pc.ScreenWidth), 1.0), 0.0);
+    return HybridReconstructAtUv(uv, depth, centre) &&
+           HybridReconstructAtUv(clamp(uv + onePixel,
+               vec2(0.0), vec2(1.0)), depth, adjacent)
+        ? max(length(adjacent - centre), 1.0e-4)
+        : 0.01;
+}
+
+vec3 HybridSampleSceneColorCone(vec2 uv, float logicalLod)
+{
+    uint mipCount = min(HybridColorMipCount(),
+        uint(MAX_BLOOM_MIP_TEXTURES));
+    vec3 fullResolution = textureLod(
+        BindlessTextures[nonuniformEXT(HDR_SCENE_COLOR_TEXTURE_INDEX)],
+        uv, 0.0).rgb;
+    if (mipCount == 0u || logicalLod <= 0.0)
+        return max(fullResolution, vec3(0.0));
+
+    float tailLod = max(logicalLod - 1.0, 0.0);
+    uint lower = min(uint(floor(tailLod)), mipCount - 1u);
+    uint upper = min(lower + 1u, mipCount - 1u);
+    vec3 lowerValue = textureLod(
+        BindlessTextures[nonuniformEXT(
+            BLOOM_MIP_TEXTURE_BASE + int(lower))], uv, 0.0).rgb;
+    vec3 upperValue = textureLod(
+        BindlessTextures[nonuniformEXT(
+            BLOOM_MIP_TEXTURE_BASE + int(upper))], uv, 0.0).rgb;
+    vec3 tail = mix(lowerValue, upperValue, fract(tailLod));
+    return max(mix(fullResolution, tail,
+        clamp(logicalLod, 0.0, 1.0)), vec3(0.0));
+}
+
+HybridSsrTraceResult HybridTraceHierarchicalSsr(
+    vec3 worldPosition,
+    vec3 direction,
+    float roughness,
+    uint tier)
+{
+    HybridSsrTraceResult result;
+    result.Radiance = vec3(0.0);
+    result.Confidence = 0.0;
+    result.HitUv = vec2(0.0);
+    result.HitDistance = 0.0;
+    result.Hit = false;
+    result.LeftScreen = false;
+
+    mat4 viewProjection =
+        ReadMeshletTaskViewProjectionMatrix(HybridCurrentFrameIndex());
+    float minimumDistance = 0.02;
+    float maximumDistance = pc.CameraPositionAndMaximumDistance.w;
+    vec2 startUv;
+    vec2 endUv;
+    float ignoredDepth;
+    if (!HybridProjectRayDistance(worldPosition, direction,
+            minimumDistance, viewProjection, startUv, ignoredDepth))
+    {
+        return result;
+    }
+
+    if (!HybridProjectRayDistance(worldPosition, direction,
+            maximumDistance, viewProjection, endUv, ignoredDepth))
+    {
+        float low = minimumDistance;
+        float high = maximumDistance;
+        for (uint iteration = 0u; iteration < 8u; iteration++)
+        {
+            float middle = 0.5 * (low + high);
+            vec2 candidateUv;
+            float candidateDepth;
+            if (HybridProjectRayDistance(worldPosition, direction,
+                    middle, viewProjection, candidateUv, candidateDepth))
+            {
+                low = middle;
+                endUv = candidateUv;
+            }
+            else
+            {
+                high = middle;
+            }
+        }
+        maximumDistance = low;
+    }
+    if (!HybridClipRayToScreen(
+            startUv, endUv, minimumDistance, maximumDistance))
+    {
+        result.LeftScreen = true;
+        return result;
+    }
+
+    uint hizMipCount = max(HybridHiZMipCount(), 1u);
+    vec2 dimensions = vec2(pc.ScreenWidth, pc.ScreenHeight);
+    vec2 screenDirection = endUv - startUv;
+    float screenLength = length(screenDirection * dimensions);
+    vec2 normalizedScreenDirection = screenLength > 1.0e-5
+        ? normalize(screenDirection * dimensions)
+        : vec2(1.0, 0.0);
+    float distanceAlongRay = minimumDistance;
+    float previousDistance = minimumDistance;
+    uint maximumSteps = max(pc.MaximumSteps / max(tier, 1u), 8u);
+    uint currentMip = min(
+        uint(max(floor(log2(float(max(tier, 1u)))), 0.0)),
+        hizMipCount - 1u);
+
+    for (uint stepIndex = 0u;
+         stepIndex < maximumSteps && distanceAlongRay <= maximumDistance;
+         stepIndex++)
+    {
+        vec2 uv;
+        float rayDepth;
+        if (!HybridProjectRayDistance(worldPosition, direction,
+                distanceAlongRay, viewProjection, uv, rayDepth) ||
+            any(lessThan(uv, vec2(0.0))) ||
+            any(greaterThanEqual(uv, vec2(1.0))))
+        {
+            result.LeftScreen = true;
+            break;
+        }
+
+        float cameraDistance = length(
+            worldPosition + direction * distanceAlongRay -
+            pc.CameraPositionAndMaximumDistance.xyz);
+        float coneRadius = distanceAlongRay *
+            tan(min(roughness * roughness * 0.78539816339, 0.75));
+        float projectedFootprint = max(float(tier),
+            coneRadius * max(dimensions.x, dimensions.y) /
+                max(cameraDistance, 0.1));
+        uint footprintMip = min(
+            uint(max(floor(log2(max(projectedFootprint, 1.0))), 0.0)),
+            hizMipCount - 1u);
+        currentMip = min(currentMip, footprintMip);
+        float farthestDepth = textureLod(
+            BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)],
+            uv, float(currentMip)).r;
+        float ndcThickness = 0.0005 +
+            projectedFootprint / max(dimensions.y, 1.0) * 0.02;
+        bool possibleIntersection = farthestDepth > 0.0 &&
+            rayDepth <= farthestDepth + ndcThickness;
+        if (possibleIntersection && currentMip > 0u)
+        {
+            currentMip--;
+            continue;
+        }
+        if (possibleIntersection)
+        {
+            vec2 refinedUv = uv;
+            float refinedRayDepth = rayDepth;
+            float refinedDistance = HybridRefineSsrCandidate(
+                worldPosition,
+                direction,
+                previousDistance,
+                distanceAlongRay,
+                viewProjection,
+                refinedUv,
+                refinedRayDepth);
+            float sceneDepth = texture(HybridSceneDepth, refinedUv).r;
+            vec3 sceneWorld;
+            vec3 rayWorld = worldPosition + direction * refinedDistance;
+            float thickness = max(0.01,
+                HybridProjectedPixelWorldSize(refinedUv, sceneDepth) *
+                    (2.0 + float(tier)));
+            if (sceneDepth > 0.0 &&
+                HybridReconstructAtUv(refinedUv, sceneDepth, sceneWorld) &&
+                length(sceneWorld - rayWorld) <= thickness)
+            {
+                float edge = min(min(refinedUv.x, refinedUv.y),
+                    min(1.0 - refinedUv.x, 1.0 - refinedUv.y));
+                float edgeConfidence = smoothstep(0.0, 0.08, edge);
+                float distanceConfidence = 1.0 - clamp(
+                    refinedDistance / max(maximumDistance, 0.001),
+                    0.0, 1.0);
+                result.Confidence = clamp(edgeConfidence *
+                    mix(0.55, 1.0, distanceConfidence), 0.0, 1.0);
+                float colorLod = clamp(log2(max(projectedFootprint, 1.0)),
+                    0.0, float(max(int(HybridColorMipCount()), 0)));
+                result.Radiance = HybridSampleSceneColorCone(
+                    refinedUv, colorLod);
+                result.HitUv = refinedUv;
+                result.HitDistance = refinedDistance;
+                result.Hit = HybridFinite(result.Radiance);
+                return result;
+            }
+        }
+
+        previousDistance = distanceAlongRay;
+        float cellPixels = exp2(float(currentMip + 1u));
+        vec2 pixelPosition = uv * dimensions;
+        vec2 nextBoundary = vec2(
+            normalizedScreenDirection.x >= 0.0
+                ? (floor(pixelPosition.x / cellPixels) + 1.0) * cellPixels
+                : (ceil(pixelPosition.x / cellPixels) - 1.0) * cellPixels,
+            normalizedScreenDirection.y >= 0.0
+                ? (floor(pixelPosition.y / cellPixels) + 1.0) * cellPixels
+                : (ceil(pixelPosition.y / cellPixels) - 1.0) * cellPixels);
+        vec2 boundaryDistance = abs(nextBoundary - pixelPosition) /
+            max(abs(normalizedScreenDirection), vec2(1.0e-4));
+        float advancePixels = max(min(boundaryDistance.x,
+            boundaryDistance.y) + 0.5, 1.0);
+        float distancePerPixel = (maximumDistance - minimumDistance) /
+            max(screenLength, 1.0);
+        distanceAlongRay += max(advancePixels * distancePerPixel,
+            (maximumDistance - minimumDistance) / float(maximumSteps));
+        currentMip = min(currentMip + 1u, footprintMip);
+    }
+    return result;
+}
+
 bool IsDisoccluded(
     ivec2 pixel,
     uint identity,
@@ -42,23 +421,18 @@ bool IsDisoccluded(
     {
         return true;
     }
-    uint frameIndex = pc.HistoryValidAndCurrentFrameIndex >> 1u;
+    uint frameIndex = HybridCurrentFrameIndex();
     if (ReadMeshletTaskPreviousHiZFrameValid(frameIndex) == 0u)
         return true;
     vec4 previousClip = MulRowMajor(vec4(worldPosition, 1.0),
         ReadMeshletTaskPreviousHiZViewProjectionMatrix(frameIndex));
-    if (any(isnan(previousClip)) || any(isinf(previousClip)) ||
-        abs(previousClip.w) <= 1.0e-7)
-    {
+    if (!HybridFinite(previousClip) || abs(previousClip.w) <= 1.0e-7)
         return true;
-    }
     float expectedDepth = previousClip.z / previousClip.w;
     float depthTolerance = max(0.0005, abs(expectedDepth) * 0.002);
     if (!HybridFinite(expectedDepth))
         return true;
 
-    // Validate all four reprojection taps. Sub-pixel camera motion must not
-    // turn a same-surface history sample into a false disocclusion.
     vec2 historyPosition = previousUv * dimensions - vec2(0.5);
     ivec2 historyBase = ivec2(floor(historyPosition));
     for (int tapY = 0; tapY < 2; tapY++)
@@ -72,16 +446,17 @@ bool IsDisoccluded(
             {
                 continue;
             }
-            uvec4 previousMetadata = imageLoad(
-                HybridMetadataPrevious, previousPixel);
-            if (!HybridMetadataValid(previousMetadata.x) ||
-                previousMetadata.y != identity)
+            uvec2 previousMetadata = imageLoad(
+                HybridMetadataPrevious, previousPixel).xy;
+            if (!HybridHistoryMetadataValid(previousMetadata) ||
+                HybridHistoryMetadataIdentity(previousMetadata) != identity)
             {
                 continue;
             }
-            float previousDepth = uintBitsToFloat(previousMetadata.z);
-            vec3 previousNormal = NjulfHybridReflectionOctDecode(
-                previousMetadata.w);
+            float previousDepth =
+                HybridHistoryMetadataDepth(previousMetadata);
+            vec3 previousNormal =
+                HybridHistoryMetadataNormal(previousMetadata);
             if (HybridFinite(previousDepth) &&
                 abs(previousDepth - expectedDepth) <= depthTolerance &&
                 HybridFinite(previousNormal) &&
@@ -94,202 +469,113 @@ bool IsDisoccluded(
     return true;
 }
 
-void RejectToRecovery(
+void HybridStoreLobe(
     ivec2 pixel,
+    uint lobeId,
+    vec4 radiance,
+    uint metadata)
+{
+    if (lobeId == 0u)
+        imageStore(HybridRawRadiance, pixel, radiance);
+    else
+        imageStore(HybridDdgiCohorts, pixel, radiance);
+    uvec4 pair = imageLoad(HybridRawMetadata, pixel);
+    if (lobeId == 0u)
+        pair.x = metadata;
+    else
+        pair.y = metadata;
+    imageStore(HybridRawMetadata, pixel, pair);
+}
+
+void HybridRejectLobe(
+    ivec2 pixel,
+    uint lobeId,
     uint reason,
     uint identity,
-    uint tier)
+    uint tier,
+    uvec2 lobeExtension)
 {
-    imageStore(HybridRawRadiance, pixel, vec4(0.0));
-    imageStore(HybridRawMetadata, pixel, uvec4(
+    HybridStoreLobe(pixel, lobeId, vec4(0.0),
         HybridPackMetadata(HYBRID_REFLECTION_SOURCE_NONE, 0.0,
-            reason, 0u, false), identity, 0u, 0u));
-    // Tier zero is the analytic roughness fallback. Half/quarter tiers already
-    // reduce ray demand through their rotating sparse refresh footprint.
+            reason, 0u, false));
     if (tier != 0u && pc.RayQueriesEnabled != 0u &&
         pc.RayAdmissionThreshold != 0u &&
         !HybridAppendRayTask(uvec2(pixel), reason, identity, tier,
-            pc.TemporalSampleIndex, pc.RayAdmissionThreshold))
+            lobeId, lobeExtension, pc.TemporalSampleIndex,
+            pc.RayAdmissionThreshold))
     {
-        // A spatially distributed budget rejection is not a confirmed ray
-        // miss. Temporal reconstruction may retain validated geometric
-        // history until this pixel's rotated admission phase is selected.
-        imageStore(HybridRawMetadata, pixel, uvec4(
+        HybridStoreLobe(pixel, lobeId, vec4(0.0),
             HybridPackMetadata(HYBRID_REFLECTION_SOURCE_NONE, 0.0,
-                HYBRID_REFLECTION_REASON_RAY_BUDGET, 0u, false),
-            identity, 0u, 0u));
+                HYBRID_REFLECTION_REASON_RAY_BUDGET, 0u, false));
     }
 }
 
-void main()
+void HybridTraceLobe(
+    ivec2 pixel,
+    uvec4 payload,
+    uvec2 lobeExtension,
+    uint lobeId,
+    vec3 worldPosition,
+    vec3 geometricNormal,
+    vec3 normal,
+    vec3 tangent,
+    float schedulingRoughness,
+    float roughness,
+    float anisotropyStrength,
+    vec3 f0,
+    float specularOcclusion,
+    bool disoccluded)
 {
-    uvec2 invocation = gl_GlobalInvocationID.xy;
-    if (invocation.x >= pc.ScreenWidth || invocation.y >= pc.ScreenHeight)
-        return;
-
-    ivec2 pixel = ivec2(invocation);
-    uvec4 payload = texelFetch(HybridReceiverPayload, pixel, 0);
-    if (!HybridReflectionPayloadValid(payload))
-    {
-        imageStore(HybridRawRadiance, pixel, vec4(0.0));
-        imageStore(HybridRawMetadata, pixel, uvec4(0u));
-        return;
-    }
-
-    float schedulingRoughness =
-        HybridReflectionPayloadSchedulingRoughness(payload);
-    vec3 f0 = HybridReflectionPayloadF0(payload);
     uint tier = HybridResolveAdaptiveReflectionTier(
-        schedulingRoughness,
-        f0,
-        HybridReflectionPayloadSpecularOcclusion(payload),
-        HybridReflectionPayloadLobeFlags(payload),
+        schedulingRoughness, f0, specularOcclusion,
+        lobeId == 0u ? HybridReflectionPayloadLobeFlags(payload) : 0u,
         pc.FullResolutionRoughness,
         pc.HalfResolutionRoughness,
         pc.QuarterResolutionRoughness);
     uint identity = HybridReceiverIdentity(payload);
     if (tier == 0u)
     {
-        RejectToRecovery(pixel,
+        HybridRejectLobe(pixel, lobeId,
             HYBRID_REFLECTION_REASON_ROUGHNESS_FALLBACK,
-            identity, tier);
+            identity, tier, lobeExtension);
         return;
     }
 
-    vec3 worldPosition;
-    float receiverDepth;
-    if (!HybridReconstructWorldPosition(pixel,
-            uvec2(pc.ScreenWidth, pc.ScreenHeight),
-            pc.InverseViewProjectionMatrix,
-            worldPosition, receiverDepth))
-    {
-        RejectToRecovery(pixel,
-            HYBRID_REFLECTION_REASON_INVALID_OR_OFFSCREEN,
-            identity, tier);
-        return;
-    }
-    vec3 normal = HybridReflectionTraceNormal(payload);
-    bool disoccluded = IsDisoccluded(
-        pixel, identity, worldPosition,
-        HybridReflectionPayloadShadingNormal(payload));
-
-    // Lower-resolution bands rotate one representative through each 2x2 or
-    // 4x4 footprint. Keep that bound during camera cuts and disocclusion too;
-    // analytic fallback fills new pixels until their sparse scene sample is
-    // admitted instead of launching an unbounded full-screen trace.
-    uint phase = HybridHash(pc.TemporalSampleIndex) % (tier * tier);
-    uint lane = (invocation.y % tier) * tier + (invocation.x % tier);
+    uvec2 invocation = uvec2(pixel);
+    uint phase = HybridHash(pc.TemporalSampleIndex ^
+        (lobeId * 0x9e3779b9u)) % (tier * tier);
+    uint lane = (invocation.y % tier) * tier + invocation.x % tier;
     if (lane != phase)
     {
-        imageStore(HybridRawRadiance, pixel, vec4(0.0));
-        imageStore(HybridRawMetadata, pixel, uvec4(
+        HybridStoreLobe(pixel, lobeId, vec4(0.0),
             HybridPackMetadata(HYBRID_REFLECTION_SOURCE_NONE, 0.0,
-                HYBRID_REFLECTION_REASON_RESOLUTION_SKIP, 0u, false),
-            identity, 0u, 0u));
+                HYBRID_REFLECTION_REASON_RESOLUTION_SKIP, 0u, false));
         return;
     }
 
-    vec3 viewToReceiver = normalize(
-        worldPosition - pc.CameraPositionAndMaximumDistance.xyz);
-    vec3 reflectionDirection = normalize(reflect(viewToReceiver, normal));
+    vec3 viewDirection = normalize(
+        pc.CameraPositionAndMaximumDistance.xyz - worldPosition);
+    vec3 reflectionDirection = HybridReflectionSampleDirection(
+        viewDirection, normal, tangent, roughness, anisotropyStrength,
+        identity, invocation, pc.TemporalSampleIndex, lobeId);
     if (!HybridFinite(reflectionDirection) ||
-        dot(reflectionDirection, HybridReflectionPayloadGeometricNormal(payload)) <= 0.001)
+        dot(reflectionDirection, geometricNormal) <= 0.001)
     {
-        RejectToRecovery(pixel,
+        HybridRejectLobe(pixel, lobeId,
             HYBRID_REFLECTION_REASON_INVALID_OR_OFFSCREEN,
-            identity, tier);
+            identity, tier, lobeExtension);
         return;
     }
 
-    uint currentFrameIndex =
-        pc.HistoryValidAndCurrentFrameIndex >> 1u;
-    mat4 viewProjection =
-        ReadMeshletTaskViewProjectionMatrix(currentFrameIndex);
-    float maximumDistance = pc.CameraPositionAndMaximumDistance.w;
-    uint tierSteps = max(8u, pc.MaximumSteps / max(tier, 1u));
-    float jitter = float(HybridHash(
-        invocation.x ^ (invocation.y * 0x9e3779b9u)) & 0xffffu) /
-        65535.0;
-    bool leftScreen = false;
-    vec2 hitUv = vec2(0.0);
-    float hitConfidence = 0.0;
-    uint hitStep = tierSteps;
-
-    for (uint stepIndex = 0u; stepIndex < tierSteps; stepIndex++)
+    HybridSsrTraceResult trace = HybridTraceHierarchicalSsr(
+        worldPosition, reflectionDirection, roughness, tier);
+    if (trace.Hit && !disoccluded &&
+        trace.Confidence >= pc.ConfidenceThreshold)
     {
-        float normalizedStep = (float(stepIndex) + 0.75 + jitter * 0.5) /
-            float(tierSteps);
-        float distanceAlongRay = max(0.02,
-            normalizedStep * normalizedStep * maximumDistance);
-        vec3 samplePosition = worldPosition + reflectionDirection *
-            distanceAlongRay;
-        vec4 clip = MulRowMajor(vec4(samplePosition, 1.0), viewProjection);
-        if (!HybridFinite(clip.xyz) || clip.w <= 1.0e-6)
-            continue;
-        vec3 ndc = clip.xyz / clip.w;
-        vec2 uv = ndc.xy * 0.5 + vec2(0.5);
-        if (any(lessThan(uv, vec2(0.0))) ||
-            any(greaterThanEqual(uv, vec2(1.0))))
-        {
-            leftScreen = true;
-            break;
-        }
-
-        float footprint = max(1.0, float(tier) *
-            (1.0 + normalizedStep * 8.0));
-        float mip = clamp(log2(footprint), 0.0,
-            float(max(int(pc.HiZMipCount) - 1, 0)));
-        float sceneDepth = textureLod(
-            BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)],
-            uv, mip).r;
-        float rayDepth = ndc.z;
-        float depthError = sceneDepth - rayDepth;
-        float thickness = 0.0015 + normalizedStep * 0.006 +
-            schedulingRoughness * 0.003;
-        if (sceneDepth > 0.0 && depthError >= 0.0 &&
-            depthError <= thickness)
-        {
-            float fineDepth = textureLod(
-                BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)],
-                uv, 0.0).r;
-            float fineError = abs(fineDepth - rayDepth);
-            float edge = min(min(uv.x, uv.y),
-                min(1.0 - uv.x, 1.0 - uv.y));
-            float edgeConfidence = smoothstep(0.0, 0.08, edge);
-            float depthConfidence = 1.0 - clamp(
-                fineError / max(thickness, 1.0e-5), 0.0, 1.0);
-            float marchConfidence = 1.0 -
-                float(stepIndex) / float(max(tierSteps, 1u));
-            hitConfidence = clamp(edgeConfidence * depthConfidence *
-                mix(0.5, 1.0, marchConfidence), 0.0, 1.0);
-            hitUv = uv;
-            hitStep = stepIndex;
-            break;
-        }
-    }
-
-    if (hitStep < tierSteps && !disoccluded &&
-        hitConfidence >= pc.ConfidenceThreshold)
-    {
-        // HDR Scene Color currently has one mip. Roughness is reconstructed by
-        // the tiered trace cadence and edge-aware spatial pass, so requesting a
-        // nonexistent mip here is undefined and produced black SSR samples.
-        vec3 radiance = textureLod(
-            BindlessTextures[nonuniformEXT(HDR_SCENE_COLOR_TEXTURE_INDEX)],
-            hitUv, 0.0).rgb;
-        if (!HybridFinite(radiance))
-        {
-            RejectToRecovery(pixel,
-                HYBRID_REFLECTION_REASON_LOW_CONFIDENCE,
-                identity, tier);
-            return;
-        }
-        imageStore(HybridRawRadiance, pixel,
-            vec4(max(radiance, vec3(0.0)), hitConfidence));
-        imageStore(HybridRawMetadata, pixel, uvec4(
+        HybridStoreLobe(pixel, lobeId,
+            vec4(trace.Radiance, trace.Confidence),
             HybridPackMetadata(HYBRID_REFLECTION_SOURCE_SSR,
-                hitConfidence, HYBRID_REFLECTION_REASON_NONE, 0u, true),
-            identity, 0u, 0u));
+                trace.Confidence, HYBRID_REFLECTION_REASON_NONE, 0u, true));
         HybridAccumulateScreenCounter(
             HYBRID_REFLECTION_COUNTER_SSR_HITS, invocation);
         return;
@@ -297,8 +583,120 @@ void main()
 
     uint reason = disoccluded
         ? HYBRID_REFLECTION_REASON_DISOCCLUDED
-        : hitStep < tierSteps
+        : trace.Hit
             ? HYBRID_REFLECTION_REASON_LOW_CONFIDENCE
             : HYBRID_REFLECTION_REASON_INVALID_OR_OFFSCREEN;
-    RejectToRecovery(pixel, reason, identity, tier);
+    HybridRejectLobe(pixel, lobeId, reason,
+        identity, tier, lobeExtension);
+}
+
+void main()
+{
+    bool adaptiveDispatch =
+        (pc.HistoryValidAndCurrentFrameIndex & 0x80000000u) != 0u;
+    uvec2 invocation = adaptiveDispatch
+        ? HybridTiles[gl_WorkGroupID.x].xy * uvec2(8u) +
+            gl_LocalInvocationID.xy
+        : gl_GlobalInvocationID.xy;
+    if (invocation.x >= pc.ScreenWidth || invocation.y >= pc.ScreenHeight)
+        return;
+
+    ivec2 pixel = ivec2(invocation);
+    uvec4 payload = texelFetch(HybridReceiverPayload, pixel, 0);
+    uvec2 lobeExtension = imageLoad(HybridRawMetadata, pixel).xy;
+    imageStore(HybridRawMetadata, pixel, uvec4(0u));
+    if (!HybridReflectionPayloadValid(payload))
+    {
+        imageStore(HybridRawRadiance, pixel, vec4(0.0));
+        imageStore(HybridDdgiCohorts, pixel, vec4(0.0));
+        return;
+    }
+
+    vec3 worldPosition;
+    float receiverDepth;
+    uint identity = HybridReceiverIdentity(payload);
+    if (!HybridReconstructWorldPosition(pixel,
+            uvec2(pc.ScreenWidth, pc.ScreenHeight),
+            pc.InverseViewProjectionMatrix,
+            worldPosition, receiverDepth))
+    {
+        HybridRejectLobe(pixel, 0u,
+            HYBRID_REFLECTION_REASON_INVALID_OR_OFFSCREEN,
+            identity, 1u, lobeExtension);
+        HybridStoreLobe(pixel, 1u, vec4(0.0), 0u);
+        return;
+    }
+
+    vec3 geometricNormal =
+        HybridReflectionPayloadGeometricNormal(payload);
+    vec3 shadingNormal =
+        HybridReflectionPayloadShadingNormal(payload);
+    vec3 clearcoatNormal;
+    float clearcoatFactor;
+    float clearcoatRoughness;
+    float anisotropyStrength;
+    vec3 tangent;
+    NjulfHybridReflectionDecodeLobeExtension(
+        lobeExtension,
+        shadingNormal,
+        clearcoatNormal,
+        clearcoatFactor,
+        clearcoatRoughness,
+        anisotropyStrength,
+        tangent);
+    bool disoccluded = IsDisoccluded(
+        pixel, identity, worldPosition, shadingNormal);
+
+    HybridTraceLobe(
+        pixel,
+        payload,
+        lobeExtension,
+        0u,
+        worldPosition,
+        geometricNormal,
+        HybridReflectionTraceNormal(payload),
+        tangent,
+        HybridReflectionPayloadSchedulingRoughness(payload),
+        HybridReflectionPayloadPhysicalRoughness(payload),
+        anisotropyStrength,
+        HybridReflectionPayloadF0(payload),
+        HybridReflectionPayloadSpecularOcclusion(payload),
+        disoccluded);
+
+    bool hasClearcoat =
+        (HybridReflectionPayloadLobeFlags(payload) &
+            NJULF_HYBRID_REFLECTION_LOBE_CLEARCOAT) != 0u &&
+        clearcoatFactor > 0.0;
+    if (hasClearcoat)
+    {
+        HybridTraceLobe(
+            pixel,
+            payload,
+            lobeExtension,
+            1u,
+            worldPosition,
+            geometricNormal,
+            clearcoatNormal,
+            NjulfHybridReflectionCanonicalTangentBasisX(clearcoatNormal),
+            max(clearcoatRoughness, 0.02),
+            max(clearcoatRoughness, 0.02),
+            0.0,
+            vec3(0.04),
+            1.0,
+            disoccluded);
+    }
+    else
+    {
+        HybridStoreLobe(pixel, 1u, vec4(0.0), 0u);
+    }
+
+    // Raw FP16 alpha is transient after source confidence has been quantized
+    // into metadata. Preserve the two scalar clearcoat parameters needed by
+    // resolve without allocating another full-resolution attachment.
+    vec4 baseRaw = imageLoad(HybridRawRadiance, pixel);
+    vec4 clearcoatRaw = imageLoad(HybridDdgiCohorts, pixel);
+    baseRaw.a = hasClearcoat ? clearcoatRoughness : 0.0;
+    clearcoatRaw.a = hasClearcoat ? clearcoatFactor : 0.0;
+    imageStore(HybridRawRadiance, pixel, baseRaw);
+    imageStore(HybridDdgiCohorts, pixel, clearcoatRaw);
 }

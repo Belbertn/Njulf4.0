@@ -7,7 +7,7 @@ namespace NjulfHelloGame;
 
 public sealed record SampleBistroReflectionQualificationResult
 {
-    public const string CurrentSchema = "bistro-reflection-qualification/v2";
+    public const string CurrentSchema = "bistro-reflection-qualification/v3";
 
     public string Schema { get; init; } = CurrentSchema;
     public bool Passed { get; init; }
@@ -159,6 +159,25 @@ public static class SampleBistroReflectionQualification
                 $"Only {valid.Length} reflection telemetry frames were valid; " +
                 $"at least {MinimumValidTelemetryFrames} are required.");
         }
+        if (valid.Any(static frame =>
+                frame.EffectiveReflectionImplementation !=
+                    ReflectionImplementationMode.Adaptive))
+        {
+            failures.Add(
+                "A valid telemetry frame did not execute the adaptive reflection implementation.");
+        }
+        if (valid.Any(static frame =>
+                frame.ReflectionImplementationFallbackReason !=
+                    ReflectionImplementationFallbackReason.None))
+        {
+            failures.Add(
+                "The adaptive reflection implementation reported a runtime fallback.");
+        }
+        ulong tileOverflows = Sum(
+            valid,
+            static frame => frame.HybridReflectionTileOverflowCount);
+        if (tileOverflows != 0)
+            failures.Add($"Adaptive reflection tiles overflowed {tileOverflows} times.");
 
         SampleBistroQualityFrameTelemetry[] off = valid
             .Where(static frame =>

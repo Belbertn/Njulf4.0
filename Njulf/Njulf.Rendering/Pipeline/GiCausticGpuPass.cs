@@ -34,6 +34,7 @@ internal sealed unsafe class GiCausticGpuPass : IDisposable
     private readonly BindlessHeap _bindlessHeap;
     private readonly BufferManager _bufferManager;
     private readonly AccelerationStructureManager _accelerationStructureManager;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly nint _entryPointName;
     private DescriptorSetLayout _accelerationStructureSetLayout;
     private DescriptorPool _descriptorPool;
@@ -53,13 +54,15 @@ internal sealed unsafe class GiCausticGpuPass : IDisposable
         VulkanContext context,
         BindlessHeap bindlessHeap,
         BufferManager bufferManager,
-        AccelerationStructureManager accelerationStructureManager)
+        AccelerationStructureManager accelerationStructureManager,
+        GiPipelineCacheService? pipelineCacheService = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
         _accelerationStructureManager = accelerationStructureManager ??
             throw new ArgumentNullException(nameof(accelerationStructureManager));
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
         try
@@ -611,6 +614,12 @@ internal sealed unsafe class GiCausticGpuPass : IDisposable
 
     private void CreatePipelineCache()
     {
+        if (_pipelineCacheService != null)
+        {
+            _pipelineCache = _pipelineCacheService.Cache;
+            return;
+        }
+
         var cacheInfo = new PipelineCacheCreateInfo
         {
             SType = StructureType.PipelineCacheCreateInfo
@@ -788,13 +797,18 @@ internal sealed unsafe class GiCausticGpuPass : IDisposable
                 BasePipelineHandle = default,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device,
-                _pipelineCache,
-                1u,
-                &pipelineInfo,
-                null,
-                out VkPipeline pipeline);
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId($"GiCaustic.{shaderName}"),
+                    &pipelineInfo,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1u,
+                    &pipelineInfo,
+                    null,
+                    out pipeline);
             if (result != Result.Success)
             {
                 throw new VulkanException(
@@ -832,7 +846,7 @@ internal sealed unsafe class GiCausticGpuPass : IDisposable
                 _accelerationStructureSetLayout,
                 null);
         }
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_entryPointName != 0)
             SilkMarshal.Free(_entryPointName);

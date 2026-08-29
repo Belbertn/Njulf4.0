@@ -612,7 +612,7 @@ public sealed class TailDdgiQualificationTests
     }
 
     [Test]
-    public void ProductionDefaults_EnableCertifiedJacobiPath()
+    public void ProductionDefaults_EnableAcceleratedPathWithCertifiedFallback()
     {
         var settings = new RenderSettings();
         GlobalIlluminationSettings gi = settings.GlobalIllumination;
@@ -623,7 +623,7 @@ public sealed class TailDdgiQualificationTests
                 Is.EqualTo(SimpleDdgiSchedulerMode.GpuResident));
             Assert.That(gi.SimpleDdgiTransportV2Enabled, Is.True);
             Assert.That(gi.SimpleDdgiTransportTailCertificationEnabled, Is.True);
-            Assert.That(gi.SimpleDdgiTransportAccelerationEnabled, Is.False);
+            Assert.That(gi.SimpleDdgiTransportAccelerationEnabled, Is.True);
             Assert.That(gi.SimpleDdgiTransportAcceleratedSweepCount,
                 Is.GreaterThanOrEqualTo(2));
         });

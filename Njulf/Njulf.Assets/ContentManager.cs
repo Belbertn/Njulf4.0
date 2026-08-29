@@ -1486,7 +1486,8 @@ namespace Njulf.Assets
 
                 if (typeof(T) == typeof(MeshletMesh))
                 {
-                    var meshletBuilder = new MeshletBuilder();
+                    MeshletBuilder meshletBuilder =
+                        RendererMeshletBuildProfiles.Production.CreateBuilder();
                     var meshletMesh = meshletBuilder.BuildMeshlets(
                         modelMesh.Vertices,
                         modelMesh.Indices,

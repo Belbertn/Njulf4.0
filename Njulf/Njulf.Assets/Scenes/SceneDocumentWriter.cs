@@ -123,7 +123,39 @@ public sealed class SceneDocumentWriter
     private static SceneFoliagePrototypeDocument ToFoliagePrototype(FoliagePrototype source, Dictionary<string, string?> dependencies) => new()
     {
         Id = source.Id, Name = source.Name, Model = ToAsset(source.AssetReference, source.Id, source.Name, dependencies), GeometryMode = source.GeometryMode.ToString(),
-        AuthoredMeshletStride = source.AuthoredMeshletStride, CardHeight = source.CardHeight, CardWidth = source.CardWidth, FarImpostorEnabled = source.FarImpostorEnabled,
+        CardHeight = source.CardHeight, CardWidth = source.CardWidth,
+        FarImpostorEnabled = source.FarImpostorEnabled,
+        CastShadows = source.CastShadows, TwoSided = source.TwoSided,
+        Impostor = source.Impostor == null ? null : new SceneFoliageImpostorDocument
+        {
+            AlbedoOpacityAtlasPath = source.Impostor.AlbedoOpacityAtlasPath,
+            NormalAtlasPath = source.Impostor.NormalAtlasPath,
+            DepthAtlasPath = source.Impostor.DepthAtlasPath,
+            ViewCount = source.Impostor.ViewCount,
+            AtlasWidth = source.Impostor.AtlasWidth,
+            AtlasHeight = source.Impostor.AtlasHeight,
+            Views = Enumerable.Range(0, source.Impostor.ViewCount)
+                .Where(index =>
+                    index < source.Impostor.ViewDirections.Length &&
+                    index < source.Impostor.AtlasRectangles.Length)
+                .Select(index => new SceneFoliageImpostorViewDocument
+                {
+                    Direction = ToSceneVector(
+                        source.Impostor.ViewDirections[index]),
+                    AtlasRectangle = new SceneVector4(
+                        source.Impostor.AtlasRectangles[index].X,
+                        source.Impostor.AtlasRectangles[index].Y,
+                        source.Impostor.AtlasRectangles[index].Z,
+                        source.Impostor.AtlasRectangles[index].W)
+                })
+                .ToList(),
+            SourceBounds = new SceneBoundingBox(
+                ToSceneVector(source.Impostor.SourceBounds.Min),
+                ToSceneVector(source.Impostor.SourceBounds.Max)),
+            Pivot = ToSceneVector(source.Impostor.Pivot),
+            Scale = source.Impostor.Scale,
+            ContentHash = source.Impostor.ContentHash
+        },
         Lod = new SceneFoliageLodDocument { Lod0Distance = source.Lod.Lod0Distance, Lod1Distance = source.Lod.Lod1Distance, Lod2Distance = source.Lod.Lod2Distance },
         Wind = new SceneFoliageWindDocument { Strength = source.Wind.Strength, Frequency = source.Wind.Frequency, Flutter = source.Wind.Flutter },
         Lighting = new SceneFoliageLightingDocument { WrapDiffuse = source.Lighting.WrapDiffuse, Backlight = source.Lighting.Backlight, NormalBend = source.Lighting.NormalBend }
@@ -133,7 +165,36 @@ public sealed class SceneDocumentWriter
     {
         Id = source.Id, Name = source.Name, PrototypeId = source.Prototype.Id,
         Bounds = new SceneBoundingBox(ToSceneVector(source.Bounds.Min), ToSceneVector(source.Bounds.Max)), InstancePosition = ToSceneVector(source.InstancePosition),
-        InstanceScale = source.InstanceScale, Density = source.Density, Seed = source.Seed, DensityTexturePath = source.DensityTexturePath, Visible = source.Visible
+        InstanceScale = source.InstanceScale, Density = source.Density, Seed = source.Seed,
+        PlacementMode = source.PlacementMode.ToString(),
+        Placement = new SceneFoliagePlacementDocument
+        {
+            Density = source.Placement.Density,
+            MinimumSpacing = source.Placement.MinimumSpacing,
+            ScaleRange = new SceneVector2(source.Placement.ScaleRange.X, source.Placement.ScaleRange.Y),
+            YawRangeDegrees = new SceneVector2(source.Placement.YawRangeDegrees.X, source.Placement.YawRangeDegrees.Y),
+            AlignToSurfaceNormal = source.Placement.AlignToSurfaceNormal,
+            AltitudeRange = new SceneVector2(source.Placement.AltitudeRange.X, source.Placement.AltitudeRange.Y),
+            SlopeRangeDegrees = new SceneVector2(source.Placement.SlopeRangeDegrees.X, source.Placement.SlopeRangeDegrees.Y),
+            BiomeMask = source.Placement.BiomeMask,
+            AllowWater = source.Placement.AllowWater,
+            AllowRoads = source.Placement.AllowRoads,
+            RespectExclusions = source.Placement.RespectExclusions,
+            Seed = source.Placement.Seed,
+            CellSize = source.Placement.CellSize
+        },
+        DensityMap = source.DensityMap == null ? null : new SceneFoliageDensityMapDocument
+        {
+            SourcePath = source.DensityMap.SourcePath,
+            ContentHash = source.DensityMap.ContentHash,
+            Width = source.DensityMap.Width,
+            Height = source.DensityMap.Height,
+            Format = source.DensityMap.Format.ToString(),
+            WorldToUvScale = new SceneVector2(source.DensityMap.WorldToUvScale.X, source.DensityMap.WorldToUvScale.Y),
+            WorldToUvOffset = new SceneVector2(source.DensityMap.WorldToUvOffset.X, source.DensityMap.WorldToUvOffset.Y),
+            Revision = source.DensityMap.Revision
+        },
+        Visible = source.Visible
     };
 
     private static SceneParticleEffectDocument ToParticleEffect(ParticleEffectInstance source, Dictionary<string, string?> dependencies) => new()

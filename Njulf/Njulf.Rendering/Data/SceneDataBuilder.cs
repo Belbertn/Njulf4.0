@@ -62,6 +62,8 @@ namespace Njulf.Rendering.Data
         private readonly SynchronizationManager _sync;
         private readonly MaterialManager _materialManager;
         private readonly TextureManager? _textureManager;
+        private readonly MeshletFrameResidencyResolver?
+            _meshletResidencyResolver;
         private readonly object _lock = new object();
 
         private SceneBuffer _objectDataBuffer;
@@ -122,6 +124,12 @@ namespace Njulf.Rendering.Data
         private readonly Dictionary<RenderObject, int> _previousRenderObjectLods = new();
         private readonly Dictionary<StaticInstanceKey, int> _previousStaticInstanceLods = new();
         private readonly Dictionary<MeshHandle, MeshInfo> _meshInfoCache = new Dictionary<MeshHandle, MeshInfo>();
+        private readonly Dictionary<(uint RangeBase, int RequestedLod),
+            MeshletFrameRangeResolution> _meshletResidencyResolutionCache = [];
+        private readonly HashSet<uint> _cpuSceneResidencyDemandRanges = [];
+        private readonly HashSet<uint> _transparentResidencyDemandRanges = [];
+        private readonly HashSet<uint> _combinedResidencyDemandRanges = [];
+        private readonly List<uint> _residencyDemandScratch = [];
         private readonly bool[] _instanceUploadDirtyFrames = new bool[FramesInFlight];
         private readonly UploadState[] _instanceUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _instanceCandidateUploadStates =
@@ -281,6 +289,27 @@ namespace Njulf.Rendering.Data
             SynchronizationManager sync,
             MaterialManager materialManager,
             TextureManager? textureManager = null)
+            : this(
+                context,
+                meshManager,
+                bufferManager,
+                stagingRing,
+                sync,
+                materialManager,
+                textureManager,
+                meshletResidencyResolver: null)
+        {
+        }
+
+        internal SceneDataBuilder(
+            VulkanContext context,
+            MeshManager meshManager,
+            BufferManager bufferManager,
+            StagingRing stagingRing,
+            SynchronizationManager sync,
+            MaterialManager materialManager,
+            TextureManager? textureManager,
+            MeshletFrameResidencyResolver? meshletResidencyResolver)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
@@ -289,6 +318,7 @@ namespace Njulf.Rendering.Data
             _sync = sync ?? throw new ArgumentNullException(nameof(sync));
             _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
             _textureManager = textureManager;
+            _meshletResidencyResolver = meshletResidencyResolver;
 
             _objectDataBuffer = CreateSceneBuffer(InitialObjectCapacity, ObjectStride, "Scene Object Data Buffer");
 
@@ -495,6 +525,10 @@ namespace Njulf.Rendering.Data
                     meshletNormalConeCullingEnabled;
                 long buildStart = Stopwatch.GetTimestamp();
                 int frameIndex = _stagingRing.CurrentFrameIndex;
+                _meshletResidencyResolutionCache.Clear();
+                ulong meshletResidencyRevision =
+                    _meshletResidencyResolver
+                        ?.GetRecordedRangeStateRevision(frameIndex) ?? 0UL;
                 _lastUploadedBytes = 0;
                 _lastSceneUploadCount = 0;
                 _lastSceneUploadSkipped = 0;
@@ -561,6 +595,7 @@ namespace Njulf.Rendering.Data
                     useCpuMeshletFrustumCulling,
                     meshletNormalConeCullingEnabled,
                     buildGpuInstanceCandidates,
+                    meshletResidencyRevision,
                     gpuLod1DistanceRatio,
                     gpuLod2DistanceRatio);
                 _lastPayloadSignatureMicroseconds = ElapsedMicroseconds(signatureStart);
@@ -651,9 +686,11 @@ namespace Njulf.Rendering.Data
                     _instanceCandidateDirectionalDynamicShadowMeshletCapacity = 0;
                     _instanceCandidateNormalConeMeshletCount = 0;
                     _instanceCandidateDoubleSidedMeshletCount = 0;
+                    _cpuSceneResidencyDemandRanges.Clear();
 
                     BuildCpuScenePayload(
                         scene,
+                        frameIndex,
                         camera.Position,
                         frustum,
                         directionalShadowData,
@@ -704,9 +741,11 @@ namespace Njulf.Rendering.Data
                      transparentViewProjectionChanged);
                 if (transparentPayloadRebuilt)
                 {
+                    _transparentResidencyDemandRanges.Clear();
                     _hasCameraDependentTransparentContent =
                         BuildTransparentScenePayload(
                             scene,
+                            frameIndex,
                             camera.Position,
                             transparentFrustum,
                             geometryDecalsEnabled,
@@ -731,6 +770,7 @@ namespace Njulf.Rendering.Data
                         _lastCameraDrivenCpuDrawListRebuilt = 1;
                     }
                 }
+                RefreshCpuMeshletResidencyDemand();
                 if (cameraDependentCpuPayload)
                 {
                     _lastCameraDependentViewProjection = viewProjectionMatrix;
@@ -1150,6 +1190,7 @@ namespace Njulf.Rendering.Data
         }
 
         private void BuildCpuScenePayload(Scene scene,
+            int frameIndex,
             Vector3 cameraPosition,
             Frustum frustum,
             GPUShadowData? directionalShadowData,
@@ -1354,7 +1395,12 @@ namespace Njulf.Rendering.Data
                         gpuLod2DistanceRatio)
                     : 0;
                 _previousRenderObjectLods[renderObject] = lodLevel;
-                MeshletLodRange meshletRange = GetMeshletLodRange(meshInfo, lodLevel, out int effectiveLodLevel);
+                MeshletLodRange meshletRange = ResolveMeshletLodRange(
+                    meshInfo,
+                    lodLevel,
+                    frameIndex,
+                    _cpuSceneResidencyDemandRanges,
+                    out int effectiveLodLevel);
                 if (cameraVisible && meshInfo.MeshletCount > meshletRange.Count)
                     _meshletLodSkippedCpu += checked((int)(meshInfo.MeshletCount - meshletRange.Count));
                 bool castsDirectionalShadow = directionalShadowData.HasValue &&
@@ -1412,13 +1458,19 @@ namespace Njulf.Rendering.Data
                         useCpuMeshletFrustumCulling &&
                         !objectFullyInsideFrustum &&
                         meshletRange.Count >= CpuMeshletCullingThreshold &&
-                        !MeshletIntersectsFrustum(meshletIndex, cullingMatrix, frustum))
+                        !MeshletIntersectsFrustum(
+                            meshHandle,
+                            meshletIndex,
+                            cullingMatrix,
+                            frustum))
                     {
                         _meshletFrustumCulledCpu++;
                         meshletVisibleToCamera = false;
                     }
 
-                    Meshlet meshlet = _meshManager.GetMeshlet(meshletIndex);
+                    Meshlet meshlet = _meshManager.GetMeshlet(
+                        meshHandle,
+                        meshletIndex);
                     var command = new GPUMeshletDrawCommand
                     {
                         MeshletIndex = meshletIndex,
@@ -1701,7 +1753,12 @@ namespace Njulf.Rendering.Data
                             gpuLod2DistanceRatio)
                         : 0;
                     _previousStaticInstanceLods[staticInstanceKey] = lodLevel;
-                    MeshletLodRange meshletRange = GetMeshletLodRange(meshInfo, lodLevel, out int effectiveLodLevel);
+                    MeshletLodRange meshletRange = ResolveMeshletLodRange(
+                        meshInfo,
+                        lodLevel,
+                        frameIndex,
+                        _cpuSceneResidencyDemandRanges,
+                        out int effectiveLodLevel);
                     if (cameraVisible && meshInfo.MeshletCount > meshletRange.Count)
                         _meshletLodSkippedCpu += checked((int)(meshInfo.MeshletCount - meshletRange.Count));
 
@@ -1728,13 +1785,19 @@ namespace Njulf.Rendering.Data
                             useCpuMeshletFrustumCulling &&
                             !objectFullyInsideFrustum &&
                             meshletRange.Count >= CpuMeshletCullingThreshold &&
-                            !MeshletIntersectsFrustum(meshletIndex, worldMatrix, frustum))
+                            !MeshletIntersectsFrustum(
+                                meshHandle,
+                                meshletIndex,
+                                worldMatrix,
+                                frustum))
                         {
                             _meshletFrustumCulledCpu++;
                             meshletVisibleToCamera = false;
                         }
 
-                        Meshlet meshlet = _meshManager.GetMeshlet(meshletIndex);
+                        Meshlet meshlet = _meshManager.GetMeshlet(
+                            meshHandle,
+                            meshletIndex);
                         var command = new GPUMeshletDrawCommand
                         {
                             MeshletIndex = meshletIndex,
@@ -1840,6 +1903,7 @@ namespace Njulf.Rendering.Data
 
         private bool BuildTransparentScenePayload(
             Scene scene,
+            int frameIndex,
             Vector3 cameraPosition,
             Frustum frustum,
             bool geometryDecalsEnabled,
@@ -1914,7 +1978,9 @@ namespace Njulf.Rendering.Data
                     : -1;
                 int lodLevel = AppendTransparentInstancePayload(
                     instanceId,
+                    meshHandle,
                     meshInfo,
+                    frameIndex,
                     cullingMatrix,
                     cameraPosition,
                     frustum,
@@ -1991,7 +2057,9 @@ namespace Njulf.Rendering.Data
                         : -1;
                     int lodLevel = AppendTransparentInstancePayload(
                         instanceId,
+                        meshHandle,
                         meshInfo,
+                        frameIndex,
                         worldMatrix,
                         cameraPosition,
                         frustum,
@@ -2029,7 +2097,9 @@ namespace Njulf.Rendering.Data
 
         private int AppendTransparentInstancePayload(
             uint instanceId,
+            MeshHandle meshHandle,
             MeshInfo meshInfo,
+            int frameIndex,
             Matrix4x4 cullingMatrix,
             Vector3 cameraPosition,
             Frustum frustum,
@@ -2078,9 +2148,11 @@ namespace Njulf.Rendering.Data
                 previousLodLevel,
                 gpuLod1DistanceRatio,
                 gpuLod2DistanceRatio);
-            MeshletLodRange meshletRange = GetMeshletLodRange(
+            MeshletLodRange meshletRange = ResolveMeshletLodRange(
                 meshInfo,
                 lodLevel,
+                frameIndex,
+                _transparentResidencyDemandRanges,
                 out _);
             uint commandFlags = CreateMeshletCommandFlags(
                 metadata,
@@ -2099,6 +2171,7 @@ namespace Njulf.Rendering.Data
                 if (!objectFullyInsideFrustum &&
                     meshletRange.Count >= CpuMeshletCullingThreshold &&
                     !MeshletIntersectsFrustum(
+                        meshHandle,
                         meshletIndex,
                         cullingMatrix,
                         frustum))
@@ -2468,9 +2541,15 @@ namespace Njulf.Rendering.Data
             return true;
         }
 
-        private bool MeshletIntersectsFrustum(uint meshletIndex, Matrix4x4 worldMatrix, Frustum frustum)
+        private bool MeshletIntersectsFrustum(
+            MeshHandle meshHandle,
+            uint meshletIndex,
+            Matrix4x4 worldMatrix,
+            Frustum frustum)
         {
-            Meshlet meshlet = _meshManager.GetMeshlet(meshletIndex);
+            Meshlet meshlet = _meshManager.GetMeshlet(
+                meshHandle,
+                meshletIndex);
             Vector3 worldCenter = TransformPoint(ToCoreVector(meshlet.BoundingSphereCenter), worldMatrix);
             float worldRadius = meshlet.BoundingSphereRadius * GetMaxScale(worldMatrix);
             return IntersectsFrustum(new BoundingSphere(worldCenter, worldRadius), frustum);
@@ -2793,6 +2872,72 @@ namespace Njulf.Rendering.Data
 
             effectiveLodLevel = 2;
             return new MeshletLodRange(meshInfo.MeshletLod2Offset, meshInfo.MeshletLod2Count);
+        }
+
+        private MeshletLodRange ResolveMeshletLodRange(
+            in MeshInfo meshInfo,
+            int requestedLod,
+            int frameIndex,
+            HashSet<uint> demandRanges,
+            out int effectiveLod)
+        {
+            if (!meshInfo.UsesManagedPhysicalResidency)
+            {
+                return GetMeshletLodRange(
+                    meshInfo,
+                    requestedLod,
+                    out effectiveLod);
+            }
+
+            int normalizedLod = Math.Clamp(requestedLod, 0, 2);
+            var key = (meshInfo.StreamingRangeIndex, normalizedLod);
+            if (!_meshletResidencyResolutionCache.TryGetValue(
+                    key,
+                    out MeshletFrameRangeResolution resolution))
+            {
+                resolution = _meshletResidencyResolver?.Resolve(
+                    meshInfo,
+                    normalizedLod,
+                    frameIndex) ??
+                    MeshletFrameRangeResolution.Unavailable(
+                        checked(meshInfo.StreamingRangeIndex +
+                            (uint)normalizedLod),
+                        normalizedLod);
+                _meshletResidencyResolutionCache.Add(key, resolution);
+            }
+
+            demandRanges.Add(resolution.RequestedRangeIndex);
+            effectiveLod = resolution.EffectiveLod;
+            return resolution.IsComplete
+                ? new MeshletLodRange(
+                    resolution.FirstMeshletAddress,
+                    resolution.MeshletCount)
+                : new MeshletLodRange(0, 0);
+        }
+
+        private void RefreshCpuMeshletResidencyDemand()
+        {
+            if (_meshletResidencyResolver is null)
+                return;
+
+            _combinedResidencyDemandRanges.Clear();
+            _combinedResidencyDemandRanges.UnionWith(
+                _cpuSceneResidencyDemandRanges);
+            _combinedResidencyDemandRanges.UnionWith(
+                _transparentResidencyDemandRanges);
+            if (_combinedResidencyDemandRanges.Count == 0)
+                return;
+
+            _residencyDemandScratch.Clear();
+            _residencyDemandScratch.EnsureCapacity(
+                _combinedResidencyDemandRanges.Count);
+            foreach (uint rangeIndex in
+                     _combinedResidencyDemandRanges)
+            {
+                _residencyDemandScratch.Add(rangeIndex);
+            }
+            _meshletResidencyResolver.RequestRanges(
+                CollectionsMarshal.AsSpan(_residencyDemandScratch));
         }
 
         internal static uint CreateNearFieldStableMaterialIdentity(
@@ -4043,6 +4188,7 @@ namespace Njulf.Rendering.Data
                 bool useCpuMeshletFrustumCulling,
                 bool meshletNormalConeCullingEnabled,
                 bool buildGpuInstanceCandidates,
+                ulong meshletResidencyRevision,
                 float gpuLod1DistanceRatio,
                 float gpuLod2DistanceRatio)
             {
@@ -4068,6 +4214,7 @@ namespace Njulf.Rendering.Data
                 hash.Add(useCpuMeshletFrustumCulling);
                 hash.Add(meshletNormalConeCullingEnabled);
                 hash.Add(buildGpuInstanceCandidates);
+                hash.Add(meshletResidencyRevision);
                 if (cameraDependentCpuPayload)
                 {
                     hash.Add(gpuLod1DistanceRatio);

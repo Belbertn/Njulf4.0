@@ -25,6 +25,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private PipelineLayout _graphicsLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _cullPipeline;
+        private VkPipeline _authoredExpandPipeline;
         private VkPipeline _depthPipeline;
         private VkPipeline _forwardPipeline;
         private VkPipeline _forwardReceiverFeedbackPipeline;
@@ -52,6 +53,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _authoredShadowPipeline;
         private VkPipeline _authoredMotionVectorPipeline;
         private VkPipeline _authoredCompactedMotionVectorPipeline;
+        private VkPipeline _proceduralCompactedMotionVectorPipeline;
         private bool _pipelinesPrepared;
         private bool _disposed;
 
@@ -144,6 +146,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public PipelineLayout ComputeLayout => _computeLayout;
         public PipelineLayout GraphicsLayout => _graphicsLayout;
         public VkPipeline CullPipeline => _cullPipeline;
+        public VkPipeline AuthoredExpandPipeline => _authoredExpandPipeline;
         public VkPipeline DepthPipeline => _depthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
         public VkPipeline ForwardReceiverFeedbackPipeline =>
@@ -180,6 +183,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline AuthoredMotionVectorPipeline => _authoredMotionVectorPipeline;
         public VkPipeline AuthoredCompactedMotionVectorPipeline =>
             _authoredCompactedMotionVectorPipeline;
+        public VkPipeline ProceduralCompactedMotionVectorPipeline =>
+            _proceduralCompactedMotionVectorPipeline;
         public RenderSettings Settings { get; }
         /// <summary>
         /// Uses a separate foliage shadow mesh shader with bounded caster
@@ -389,11 +394,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _depthFormat = depthFormat;
             GpuMeshletCountersEnabled = Settings.Diagnostics.GpuMeshletCountersEnabled;
             string foliageGrassShadowMeshShader = GpuMeshletCountersEnabled
-                ? "foliage_grass_diagnostics.mesh.spv"
-                : "foliage_grass.mesh.spv";
+                ? "foliage_grass_compacted_diagnostics.mesh.spv"
+                : "foliage_grass_compacted.mesh.spv";
             string foliageMeshShadowMeshShader = GpuMeshletCountersEnabled
-                ? "foliage_mesh_diagnostics.mesh.spv"
-                : "foliage_mesh.mesh.spv";
+                ? "foliage_mesh_compacted_diagnostics.mesh.spv"
+                : "foliage_mesh_compacted.mesh.spv";
             bool materialTransportProvenanceEnabled =
                 Settings.GlobalIllumination.DebugView ==
                 GlobalIlluminationDebugView.MaterialTransportHitProvenance;
@@ -421,10 +426,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             _cullPipeline = CreateComputePipeline("foliage_cull.comp.spv");
             _context.SetDebugName(_cullPipeline.Handle, ObjectType.Pipeline, "Foliage Cull Compute Pipeline");
+            _authoredExpandPipeline = CreateComputePipeline(
+                "foliage_authored_expand.comp.spv");
+            _context.SetDebugName(
+                _authoredExpandPipeline.Handle,
+                ObjectType.Pipeline,
+                "Foliage Authored Instance Expansion Pipeline");
 
             _depthPipeline = CreateGraphicsPipeline(
-                "foliage_grass.task.spv",
-                "foliage_grass.mesh.spv",
+                null,
+                "foliage_grass_compacted.mesh.spv",
                 "foliage_depth.frag.spv",
                 colorFormat,
                 depthFormat,
@@ -433,7 +444,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_depthPipeline.Handle, ObjectType.Pipeline, "Foliage Grass Depth Pipeline");
 
             _shadowPipeline = CreateGraphicsPipeline(
-                "foliage_grass.task.spv",
+                null,
                 foliageGrassShadowMeshShader,
                 "foliage_depth.frag.spv",
                 colorFormat,
@@ -444,8 +455,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_shadowPipeline.Handle, ObjectType.Pipeline, "Foliage Grass Shadow Pipeline");
 
             _forwardPipeline = CreateGraphicsPipeline(
-                "foliage_grass.task.spv",
-                "foliage_grass.mesh.spv",
+                null,
+                "foliage_grass_compacted.mesh.spv",
                 foliageForwardFragmentShaderName,
                 colorFormat,
                 depthFormat,
@@ -456,8 +467,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Foliage Grass Forward Pipeline");
 
             _authoredDepthPipeline = CreateGraphicsPipeline(
-                "foliage_mesh.task.spv",
-                "foliage_mesh.mesh.spv",
+                null,
+                "foliage_mesh_compacted.mesh.spv",
                 "foliage_depth.frag.spv",
                 colorFormat,
                 depthFormat,
@@ -466,7 +477,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_authoredDepthPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Depth Pipeline");
 
             _authoredShadowPipeline = CreateGraphicsPipeline(
-                "foliage_mesh.task.spv",
+                null,
                 foliageMeshShadowMeshShader,
                 "foliage_depth.frag.spv",
                 colorFormat,
@@ -477,8 +488,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_authoredShadowPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Shadow Pipeline");
 
             _authoredForwardPipeline = CreateGraphicsPipeline(
-                "foliage_mesh.task.spv",
-                "foliage_mesh.mesh.spv",
+                null,
+                "foliage_mesh_compacted.mesh.spv",
                 foliageForwardFragmentShaderName,
                 colorFormat,
                 depthFormat,
@@ -495,8 +506,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     string receiverFeedbackFragmentShader =
                         $"foliage_forward_ddgi_b1{provenanceSuffix}.frag.spv";
                     _forwardReceiverFeedbackPipeline = CreateGraphicsPipeline(
-                        "foliage_grass.task.spv",
-                        "foliage_grass_b1.mesh.spv",
+                        null,
+                        "foliage_grass_b1_compacted.mesh.spv",
                         receiverFeedbackFragmentShader,
                         colorFormat,
                         depthFormat,
@@ -512,8 +523,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
                     _authoredForwardReceiverFeedbackPipeline =
                         CreateGraphicsPipeline(
-                            "foliage_mesh.task.spv",
-                            "foliage_mesh_b1.mesh.spv",
+                            null,
+                            "foliage_mesh_b1_compacted.mesh.spv",
                             receiverFeedbackFragmentShader,
                             colorFormat,
                             depthFormat,
@@ -548,15 +559,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             CreateNearFieldDirectSourcePipelines(colorFormat, depthFormat);
 
-            _authoredMotionVectorPipeline = CreateGraphicsPipeline(
-                "foliage_motion.task.spv",
-                "foliage_motion.mesh.spv",
-                "foliage_motion.frag.spv",
-                motionVectorFormat,
-                depthFormat,
-                hasColorAttachment: true,
-                depthWriteEnable: false);
-            _context.SetDebugName(_authoredMotionVectorPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Motion Vector Pipeline");
             _authoredCompactedMotionVectorPipeline = CreateGraphicsPipeline(
                 null,
                 "foliage_motion_compacted.mesh.spv",
@@ -569,6 +571,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _authoredCompactedMotionVectorPipeline.Handle,
                 ObjectType.Pipeline,
                 "Foliage Compacted Mesh-Only Motion Vector Pipeline");
+
+            _proceduralCompactedMotionVectorPipeline = CreateGraphicsPipeline(
+                null,
+                "foliage_grass_motion_compacted.mesh.spv",
+                "foliage_motion.frag.spv",
+                motionVectorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false);
+            _context.SetDebugName(
+                _proceduralCompactedMotionVectorPipeline.Handle,
+                ObjectType.Pipeline,
+                "Foliage Procedural Compacted Motion Vector Pipeline");
         }
 
         private void CreateNearFieldDirectSourcePipelines(
@@ -584,8 +599,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster)
                 {
                     _forwardNearFieldDirectSourcePipeline = CreateGraphicsPipeline(
-                        "foliage_grass.task.spv",
-                        "foliage_grass.mesh.spv",
+                        null,
+                        "foliage_grass_compacted.mesh.spv",
                         ForwardNearFieldDirectSourceContract
                             .TraceResolutionFoliageFragmentShader,
                         ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
@@ -597,8 +612,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                                 .ReceiverPayloadFormat);
                     _authoredForwardNearFieldDirectSourcePipeline =
                         CreateGraphicsPipeline(
-                            "foliage_mesh.task.spv",
-                            "foliage_mesh.mesh.spv",
+                            null,
+                            "foliage_mesh_compacted.mesh.spv",
                             ForwardNearFieldDirectSourceContract
                                 .TraceResolutionFoliageFragmentShader,
                             ForwardNearFieldDirectSourceContract
@@ -615,8 +630,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 }
 
                 _forwardNearFieldDirectSourcePipeline = CreateGraphicsPipeline(
-                    "foliage_grass.task.spv",
-                    "foliage_grass.mesh.spv",
+                    null,
+                    "foliage_grass_compacted.mesh.spv",
                     "foliage_forward_ddgi_near_field_direct_source.frag.spv",
                     colorFormat,
                     depthFormat,
@@ -628,8 +643,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
                 _authoredForwardNearFieldDirectSourcePipeline =
                     CreateGraphicsPipeline(
-                        "foliage_mesh.task.spv",
-                        "foliage_mesh.mesh.spv",
+                        null,
+                        "foliage_mesh_compacted.mesh.spv",
                         "foliage_forward_ddgi_near_field_direct_source.frag.spv",
                         colorFormat,
                         depthFormat,
@@ -644,8 +659,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 {
                     _forwardReceiverFeedbackNearFieldDirectSourcePipeline =
                         CreateGraphicsPipeline(
-                            "foliage_grass.task.spv",
-                            "foliage_grass_b1.mesh.spv",
+                            null,
+                            "foliage_grass_b1_compacted.mesh.spv",
                             "foliage_forward_ddgi_b1_near_field_direct_source.frag.spv",
                             colorFormat,
                             depthFormat,
@@ -657,8 +672,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                                 ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
                     _authoredForwardReceiverFeedbackNearFieldDirectSourcePipeline =
                         CreateGraphicsPipeline(
-                            "foliage_mesh.task.spv",
-                            "foliage_mesh_b1.mesh.spv",
+                            null,
+                            "foliage_mesh_b1_compacted.mesh.spv",
                             "foliage_forward_ddgi_b1_near_field_direct_source.frag.spv",
                             colorFormat,
                             depthFormat,
@@ -691,8 +706,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             try
             {
                 _forwardCombinedAdvancedGiPipeline = CreateGraphicsPipeline(
-                    "foliage_grass.task.spv",
-                    "foliage_grass.mesh.spv",
+                    null,
+                    "foliage_grass_compacted.mesh.spv",
                     "foliage_forward_ddgi_c4_c5.frag.spv",
                     colorFormat,
                     depthFormat,
@@ -706,8 +721,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
                 _authoredForwardCombinedAdvancedGiPipeline =
                     CreateGraphicsPipeline(
-                        "foliage_mesh.task.spv",
-                        "foliage_mesh.mesh.spv",
+                        null,
+                        "foliage_mesh_compacted.mesh.spv",
                         "foliage_forward_ddgi_c4_c5.frag.spv",
                         colorFormat,
                         depthFormat,
@@ -723,8 +738,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 {
                     _forwardReceiverFeedbackCombinedAdvancedGiPipeline =
                         CreateGraphicsPipeline(
-                            "foliage_grass.task.spv",
-                            "foliage_grass_b1.mesh.spv",
+                            null,
+                            "foliage_grass_b1_compacted.mesh.spv",
                             "foliage_forward_ddgi_b1_c4_c5.frag.spv",
                             colorFormat,
                             depthFormat,
@@ -738,8 +753,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                                 ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
                     _authoredForwardReceiverFeedbackCombinedAdvancedGiPipeline =
                         CreateGraphicsPipeline(
-                            "foliage_mesh.task.spv",
-                            "foliage_mesh_b1.mesh.spv",
+                            null,
+                            "foliage_mesh_b1_compacted.mesh.spv",
                             "foliage_forward_ddgi_b1_c4_c5.frag.spv",
                             colorFormat,
                             depthFormat,
@@ -782,12 +797,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             string fragmentShader =
                 $"foliage_forward_ddgi_{producer}hybrid_reflection.frag.spv";
             bool authored = family == 1;
-            string taskShader = authored
-                ? "foliage_mesh.task.spv"
-                : "foliage_grass.task.spv";
+            string? taskShader = null;
             string meshShader = authored
-                ? "foliage_mesh.mesh.spv"
-                : "foliage_grass.mesh.spv";
+                ? "foliage_mesh_compacted.mesh.spv"
+                : "foliage_grass_compacted.mesh.spv";
 
             Format? secondary = combination switch
             {
@@ -799,6 +812,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             };
             Format? tertiary = combination switch
             {
+                0 => ForwardHybridReflectionReceiverContract.LobeExtensionFormat,
                 1 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
                 2 => ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat,
                 3 => ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
@@ -806,12 +820,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             };
             Format? quaternary = combination switch
             {
+                1 => ForwardHybridReflectionReceiverContract.LobeExtensionFormat,
                 2 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
                 3 => ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat,
                 _ => null
             };
-            Format? quinary = combination == 3
-                ? ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat
+            Format? quinary = combination switch
+            {
+                2 => ForwardHybridReflectionReceiverContract.LobeExtensionFormat,
+                3 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
+                _ => null
+            };
+            Format? senary = combination == 3
+                ? ForwardHybridReflectionReceiverContract.LobeExtensionFormat
                 : null;
 
             try
@@ -827,7 +848,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     secondaryColorFormat: secondary,
                     tertiaryColorFormat: tertiary,
                     quaternaryColorFormat: quaternary,
-                    quinaryColorFormat: quinary);
+                    quinaryColorFormat: quinary,
+                    senaryColorFormat: senary);
                 _hybridReflectionPipelines[combination, family] = created;
                 _context.SetDebugName(created.Handle, ObjectType.Pipeline,
                     $"Hybrid Reflection Foliage Pipeline C{combination} F{family}");
@@ -868,26 +890,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     BasePipelineIndex = -1
                 };
 
-                long pipelineStart =
-                    _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-                Result result;
-                VkPipeline pipeline;
-                try
-                {
-                    result = _context.Api.CreateComputePipelines(
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId($"Foliage:{shaderName}"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateComputePipelines(
                         _context.Device,
                         _pipelineCache,
                         1,
                         &pipelineInfo,
                         null,
                         out pipeline);
-                }
-                finally
-                {
-                    _pipelineCacheService?.EndPipelineCreation(
-                        $"Foliage:{shaderName}",
-                        pipelineStart);
-                }
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create foliage compute pipeline", result);
                 return pipeline;
@@ -911,7 +925,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? materialTransportProvenanceFormat = null,
             Format? tertiaryColorFormat = null,
             Format? quaternaryColorFormat = null,
-            Format? quinaryColorFormat = null)
+            Format? quinaryColorFormat = null,
+            Format? senaryColorFormat = null)
         {
             ShaderModule taskModule = default;
             ShaderModule meshModule = default;
@@ -996,7 +1011,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     (secondaryColorFormat.HasValue ||
                      tertiaryColorFormat.HasValue ||
                      quaternaryColorFormat.HasValue ||
-                     quinaryColorFormat.HasValue))
+                     quinaryColorFormat.HasValue ||
+                     senaryColorFormat.HasValue))
                 {
                     throw new InvalidOperationException(
                         "Foliage provenance and advanced-GI MRT formats are mutually exclusive.");
@@ -1006,7 +1022,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     quaternaryColorFormat.HasValue &&
                     !tertiaryColorFormat.HasValue ||
                     quinaryColorFormat.HasValue &&
-                    !quaternaryColorFormat.HasValue)
+                    !quaternaryColorFormat.HasValue ||
+                    senaryColorFormat.HasValue &&
+                    !quinaryColorFormat.HasValue)
                 {
                     throw new InvalidOperationException(
                         "Foliage MRT formats must be contiguous.");
@@ -1017,11 +1035,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                        materialTransportProvenanceFormat.HasValue ? 1u : 0u) +
                        (tertiaryColorFormat.HasValue ? 1u : 0u) +
                        (quaternaryColorFormat.HasValue ? 1u : 0u) +
-                       (quinaryColorFormat.HasValue ? 1u : 0u)
+                       (quinaryColorFormat.HasValue ? 1u : 0u) +
+                       (senaryColorFormat.HasValue ? 1u : 0u)
                     : 0u;
                 var colorBlendAttachments =
-                    stackalloc PipelineColorBlendAttachmentState[5];
-                for (int attachment = 0; attachment < 5; attachment++)
+                    stackalloc PipelineColorBlendAttachmentState[6];
+                for (int attachment = 0; attachment < 6; attachment++)
                     colorBlendAttachments[attachment] = colorBlendAttachment;
                 var colorBlendInfo = new PipelineColorBlendStateCreateInfo
                 {
@@ -1040,7 +1059,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     DynamicStateCount = depthBiasEnable ? 3u : 2u,
                     PDynamicStates = dynamicStates
                 };
-                var renderingColorFormats = stackalloc Format[5];
+                var renderingColorFormats = stackalloc Format[6];
                 renderingColorFormats[0] = colorFormat;
                 renderingColorFormats[1] =
                     secondaryColorFormat ??
@@ -1052,6 +1071,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     quaternaryColorFormat ?? colorFormat;
                 renderingColorFormats[4] =
                     quinaryColorFormat ?? colorFormat;
+                renderingColorFormats[5] =
+                    senaryColorFormat ?? colorFormat;
                 var renderingInfo = new PipelineRenderingCreateInfo
                 {
                     SType = StructureType.PipelineRenderingCreateInfo,
@@ -1098,27 +1119,21 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     BasePipelineIndex = -1
                 };
 
-                long pipelineStart =
-                    _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-                Result result;
-                VkPipeline pipeline;
-                try
-                {
-                    result = _context.Api.CreateGraphicsPipelines(
+                string artifactName =
+                    $"Foliage:{taskShaderName}+{meshShaderName}+" +
+                    fragmentShaderName;
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateGraphicsPipeline(
+                        new PipelineArtifactId(artifactName),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateGraphicsPipelines(
                         _context.Device,
                         _pipelineCache,
                         1,
                         &pipelineInfo,
                         null,
                         out pipeline);
-                }
-                finally
-                {
-                    _pipelineCacheService?.EndPipelineCreation(
-                        $"Foliage:{taskShaderName}+{meshShaderName}+" +
-                        fragmentShaderName,
-                        pipelineStart);
-                }
                 if (result != Result.Success)
                 {
                     throw new VulkanException(
@@ -1158,6 +1173,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private void DestroyPipelines()
         {
             DestroyPipeline(ref _cullPipeline);
+            DestroyPipeline(ref _authoredExpandPipeline);
             DestroyPipeline(ref _depthPipeline);
             DestroyPipeline(ref _forwardPipeline);
             DestroyPipeline(ref _forwardReceiverFeedbackPipeline);
@@ -1170,6 +1186,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline(ref _authoredShadowPipeline);
             DestroyPipeline(ref _authoredMotionVectorPipeline);
             DestroyPipeline(ref _authoredCompactedMotionVectorPipeline);
+            DestroyPipeline(ref _proceduralCompactedMotionVectorPipeline);
             _pipelinesPrepared = false;
         }
 

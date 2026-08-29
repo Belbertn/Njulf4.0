@@ -162,7 +162,10 @@ public sealed class DebugOverlayBuilderTests
             return false;
         }
 
-        public bool TryGetMeshlet(uint index, out Meshlet meshlet)
+        public bool TryGetMeshlet(
+            MeshHandle mesh,
+            uint index,
+            out Meshlet meshlet)
         {
             meshlet = default;
             return false;

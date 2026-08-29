@@ -203,7 +203,11 @@ namespace Njulf.Rendering.Resources
             TransparentReflectionCounterBase + 14;
         public const int TransparentReflectionRayBudgetRejectedCounter =
             TransparentReflectionCounterBase + 15;
-        public const int TransparentReflectionCounterCount = 16;
+        public const int TransparentReflectionSsrAllocationCursor =
+            TransparentReflectionCounterBase + 16;
+        public const int TransparentReflectionRayAllocationCursor =
+            TransparentReflectionCounterBase + 17;
+        public const int TransparentReflectionCounterCount = 18;
         public const int SimpleDdgiReceiverCacheCounterBase =
             TransparentReflectionCounterBase +
             TransparentReflectionCounterCount;

@@ -55,7 +55,8 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
     public override bool SupportsSecondaryCommandBuffer => true;
     public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
     public override bool SupportsAsyncCompute =>
-        AsyncComputePassCatalog.IsCorrectnessCertified(AsyncComputePath.SimpleDdgiUpdate);
+        AsyncComputePassCatalog.IsProductionActivationAuthorized(
+            AsyncComputePath.SimpleDdgiUpdate);
     public override string AsyncComputeReason =>
         "Simple DDGI commit validates publication generations and exports fixed feedback.";
 
@@ -297,25 +298,18 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-            Result result;
-            VkPipeline pipeline;
-            try
-            {
-                result = _context.Api.CreateComputePipelines(
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId($"{Name}:{shaderName}"),
+                    &pipelineInfo,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
                     _context.Device,
                     _pipelineCache,
                     1,
                     &pipelineInfo,
                     null,
                     out pipeline);
-            }
-            finally
-            {
-                _pipelineCacheService?.EndPipelineCreation(
-                    $"{Name}:{shaderName}",
-                    pipelineStart);
-            }
             if (result != Result.Success)
                 throw new VulkanException($"Failed to create Simple DDGI commit pipeline '{shaderName}'", result);
             return pipeline;

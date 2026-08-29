@@ -147,6 +147,12 @@ public sealed class ProcessedMeshAssetBuilder
     {
     }
 
+    public ProcessedMeshAssetBuilder(RendererMeshletBuildProfile profile)
+        : this((profile ?? throw new ArgumentNullException(nameof(profile)))
+            .CreateBuilder())
+    {
+    }
+
     public ProcessedMeshAssetBuilder(MeshletBuilder meshletBuilder)
     {
         _meshletLodBuilder = new RendererMeshletLodBuilder(meshletBuilder ?? throw new ArgumentNullException(nameof(meshletBuilder)));

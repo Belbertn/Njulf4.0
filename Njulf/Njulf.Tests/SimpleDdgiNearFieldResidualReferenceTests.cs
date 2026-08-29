@@ -23,7 +23,8 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
         {
             AssertProfile(performance, 3.0f, 6.0f, 48, 1, 1,
                 SimpleDdgiNearFieldResidualResolutionScales.Eighth |
-                SimpleDdgiNearFieldResidualResolutionScales.Quarter);
+                SimpleDdgiNearFieldResidualResolutionScales.Quarter |
+                SimpleDdgiNearFieldResidualResolutionScales.Half);
             AssertProfile(balanced, 4.0f, 8.0f, 64, 2, 2,
                 SimpleDdgiNearFieldResidualResolutionScales.Eighth |
                 SimpleDdgiNearFieldResidualResolutionScales.Quarter |

@@ -55,7 +55,7 @@ public sealed record SampleBistroQualityFrameState(
 /// </summary>
 public sealed class SampleBistroQualityCaptureContract
 {
-    public const string Schema = "bistro-quality-run/v9";
+    public const string Schema = "bistro-quality-run/v10";
     public const int Width = 1920;
     public const int Height = 1080;
     public const int FramesPerSecond = 60;
@@ -407,6 +407,14 @@ public sealed record SampleBistroQualityFrameTelemetry(
     /// </summary>
     public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCompletedLifecycle { get; init; }
     public long GpuReflectionProbePublishMicroseconds { get; init; }
+    public ReflectionImplementationMode RequestedReflectionImplementation
+        { get; init; } = ReflectionImplementationMode.Auto;
+    public ReflectionImplementationMode EffectiveReflectionImplementation
+        { get; init; } = ReflectionImplementationMode.Adaptive;
+    public ReflectionImplementationFallbackReason
+        ReflectionImplementationFallbackReason { get; init; }
+    public string ReflectionImplementationFallbackDetail { get; init; } =
+        string.Empty;
     public int HybridReflectionCountersReadbackValid { get; init; }
     public uint HybridReflectionSsrHitCount { get; init; }
     public uint HybridReflectionRayQueryRequestCount { get; init; }
@@ -417,6 +425,26 @@ public sealed record SampleBistroQualityFrameTelemetry(
     public uint HybridReflectionDdgiFallbackCount { get; init; }
     public uint HybridReflectionProbeFallbackCount { get; init; }
     public uint HybridReflectionEnvironmentFallbackCount { get; init; }
+    public uint HybridReflectionFullRateTileCount { get; init; }
+    public uint HybridReflectionHalfRateTileCount { get; init; }
+    public uint HybridReflectionQuarterRateTileCount { get; init; }
+    public uint HybridReflectionAnalyticTileCount { get; init; }
+    public uint HybridReflectionReuseTileCount { get; init; }
+    public uint HybridReflectionActiveTileCount { get; init; }
+    public uint HybridReflectionTileOverflowCount { get; init; }
+    public int AutomaticPlanarReflectionActive { get; init; }
+    public int AutomaticPlanarCandidateCount { get; init; }
+    public int AutomaticPlanarSelectedCount { get; init; }
+    public int AutomaticPlanarCaptureCount { get; init; }
+    public int AutomaticPlanarReprojectionCount { get; init; }
+    public int AutomaticPlanarRejectedCount { get; init; }
+    public AutomaticPlanarCandidateRejectionReason
+        AutomaticPlanarRejectionReason { get; init; }
+    public uint AutomaticPlanarCaptureGeneration { get; init; }
+    public ulong AutomaticPlanarEstimatedBytes { get; init; }
+    public float AutomaticPlanarResolutionScale { get; init; }
+    public uint AutomaticPlanarMaximumCaptureAge { get; init; }
+    public long GpuAutomaticPlanarCaptureMicroseconds { get; init; }
     public long GpuHybridReflectionSsrMicroseconds { get; init; }
     public long GpuHybridReflectionRayQueryMicroseconds { get; init; }
     public long GpuHybridReflectionDdgiBaseMicroseconds { get; init; }
@@ -921,6 +949,14 @@ internal sealed class SampleBistroQualityCaptureRunner
                     diagnostics.ReflectionProbeCompletedLifecycle,
                 GpuReflectionProbePublishMicroseconds =
                     diagnostics.GpuReflectionProbePublishMicroseconds,
+                RequestedReflectionImplementation =
+                    diagnostics.RequestedReflectionImplementation,
+                EffectiveReflectionImplementation =
+                    diagnostics.EffectiveReflectionImplementation,
+                ReflectionImplementationFallbackReason =
+                    diagnostics.ReflectionImplementationFallbackReason,
+                ReflectionImplementationFallbackDetail =
+                    diagnostics.ReflectionImplementationFallbackDetail,
                 HybridReflectionCountersReadbackValid =
                     diagnostics.HybridReflectionCountersReadbackValid,
                 HybridReflectionSsrHitCount =
@@ -941,6 +977,44 @@ internal sealed class SampleBistroQualityCaptureRunner
                     diagnostics.HybridReflectionProbeFallbackCount,
                 HybridReflectionEnvironmentFallbackCount =
                     diagnostics.HybridReflectionEnvironmentFallbackCount,
+                HybridReflectionFullRateTileCount =
+                    diagnostics.HybridReflectionFullRateTileCount,
+                HybridReflectionHalfRateTileCount =
+                    diagnostics.HybridReflectionHalfRateTileCount,
+                HybridReflectionQuarterRateTileCount =
+                    diagnostics.HybridReflectionQuarterRateTileCount,
+                HybridReflectionAnalyticTileCount =
+                    diagnostics.HybridReflectionAnalyticTileCount,
+                HybridReflectionReuseTileCount =
+                    diagnostics.HybridReflectionReuseTileCount,
+                HybridReflectionActiveTileCount =
+                    diagnostics.HybridReflectionActiveTileCount,
+                HybridReflectionTileOverflowCount =
+                    diagnostics.HybridReflectionTileOverflowCount,
+                AutomaticPlanarReflectionActive =
+                    diagnostics.AutomaticPlanarReflectionActive,
+                AutomaticPlanarCandidateCount =
+                    diagnostics.AutomaticPlanarCandidateCount,
+                AutomaticPlanarSelectedCount =
+                    diagnostics.AutomaticPlanarSelectedCount,
+                AutomaticPlanarCaptureCount =
+                    diagnostics.AutomaticPlanarCaptureCount,
+                AutomaticPlanarReprojectionCount =
+                    diagnostics.AutomaticPlanarReprojectionCount,
+                AutomaticPlanarRejectedCount =
+                    diagnostics.AutomaticPlanarRejectedCount,
+                AutomaticPlanarRejectionReason =
+                    diagnostics.AutomaticPlanarRejectionReason,
+                AutomaticPlanarCaptureGeneration =
+                    diagnostics.AutomaticPlanarCaptureGeneration,
+                AutomaticPlanarEstimatedBytes =
+                    diagnostics.AutomaticPlanarEstimatedBytes,
+                AutomaticPlanarResolutionScale =
+                    diagnostics.AutomaticPlanarResolutionScale,
+                AutomaticPlanarMaximumCaptureAge =
+                    diagnostics.AutomaticPlanarMaximumCaptureAge,
+                GpuAutomaticPlanarCaptureMicroseconds =
+                    diagnostics.GpuAutomaticPlanarCaptureMicroseconds,
                 GpuHybridReflectionSsrMicroseconds =
                     diagnostics.GpuHybridReflectionSsrMicroseconds,
                 GpuHybridReflectionRayQueryMicroseconds =

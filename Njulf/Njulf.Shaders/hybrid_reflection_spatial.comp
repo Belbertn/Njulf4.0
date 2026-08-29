@@ -19,12 +19,15 @@ layout(push_constant) uniform HybridReflectionSpatialPushBlock
     float Padding0;
 } pc;
 
+shared uint HybridTileMaximumVarianceBits;
+shared uint HybridTileMaximumRoughnessBits;
+
 vec4 HybridReadSpatialInput(ivec2 pixel)
 {
     if (pc.Iteration == 0u)
         return imageLoad(HybridHistoryCurrent, pixel);
     return (pc.Iteration & 1u) != 0u
-        ? imageLoad(HybridFilterScratch, pixel)
+        ? imageLoad(HybridPreviousHistoryScratch, pixel)
         : imageLoad(HybridRawRadiance, pixel);
 }
 
@@ -50,7 +53,7 @@ void HybridWriteSpatialOutput(ivec2 pixel, vec4 value)
     // Raw radiance is dead after temporal resolve and is safe as the second
     // spatial ping-pong target.
     if ((pc.Iteration & 1u) == 0u)
-        imageStore(HybridFilterScratch, pixel, value);
+        imageStore(HybridPreviousHistoryScratch, pixel, value);
     else
         imageStore(HybridRawRadiance, pixel, value);
 }
@@ -58,10 +61,34 @@ void HybridWriteSpatialOutput(ivec2 pixel, vec4 value)
 void main()
 {
     uvec2 invocation = gl_GlobalInvocationID.xy;
-    if (invocation.x >= pc.ScreenWidth || invocation.y >= pc.ScreenHeight)
-        return;
+    bool inBounds = invocation.x < pc.ScreenWidth &&
+        invocation.y < pc.ScreenHeight;
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        HybridTileMaximumVarianceBits = 0u;
+        HybridTileMaximumRoughnessBits = 0u;
+    }
+    barrier();
     ivec2 pixel = ivec2(invocation);
-    uvec4 centerPayload = texelFetch(HybridReceiverPayload, pixel, 0);
+    uvec4 centerPayload = inBounds
+        ? texelFetch(HybridReceiverPayload, pixel, 0)
+        : uvec4(0u);
+    if (inBounds && HybridReflectionPayloadValid(centerPayload))
+    {
+        float tileVariance = max(
+            imageLoad(HybridMomentsCurrent, pixel).r, 0.0);
+        float tileRoughness = clamp(
+            HybridReflectionPayloadPhysicalRoughness(centerPayload),
+            0.0,
+            1.0);
+        atomicMax(HybridTileMaximumVarianceBits,
+            floatBitsToUint(tileVariance));
+        atomicMax(HybridTileMaximumRoughnessBits,
+            floatBitsToUint(tileRoughness));
+    }
+    barrier();
+    if (!inBounds)
+        return;
     if (!HybridReflectionPayloadValid(centerPayload))
     {
         HybridWriteSpatialOutput(pixel, vec4(0.0));
@@ -70,6 +97,23 @@ void main()
 
     float centerRoughness =
         HybridReflectionPayloadPhysicalRoughness(centerPayload);
+    float tileMaximumVariance = uintBitsToFloat(
+        HybridTileMaximumVarianceBits);
+    float tileMaximumRoughness = uintBitsToFloat(
+        HybridTileMaximumRoughnessBits);
+    float secondPassThreshold = max(pc.Padding0, 1.0e-6);
+    float iterationThreshold = pc.Iteration == 0u
+        ? secondPassThreshold * 0.35
+        : secondPassThreshold;
+    bool filterTile = tileMaximumRoughness > 0.06 &&
+        tileMaximumVariance > iterationThreshold;
+    if (!filterTile)
+    {
+        vec4 unchanged = HybridReadSpatialInput(pixel);
+        HybridWriteSpatialOutput(pixel,
+            HybridFinite(unchanged) ? unchanged : vec4(0.0));
+        return;
+    }
     vec3 centerNormal = HybridSpatialFilterNormal(
         centerPayload, centerRoughness);
     uint centerIdentity = HybridReceiverIdentity(centerPayload);
@@ -97,8 +141,9 @@ void main()
             vec4 sampleValue = HybridReadSpatialInput(samplePixel);
             uvec2 sampleMetadata = imageLoad(
                 HybridMetadataCurrent, samplePixel).xy;
-            if (!HybridMetadataValid(sampleMetadata.x) ||
-                sampleMetadata.y != centerIdentity ||
+            if (!HybridHistoryMetadataValid(sampleMetadata) ||
+                HybridHistoryMetadataIdentity(sampleMetadata) !=
+                    centerIdentity ||
                 !HybridFinite(sampleValue))
                 continue;
             float sampleRoughness =

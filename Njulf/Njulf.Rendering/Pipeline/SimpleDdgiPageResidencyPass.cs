@@ -295,25 +295,18 @@ public sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-            Result result;
-            VkPipeline pipeline;
-            try
-            {
-                result = _context.Api.CreateComputePipelines(
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId($"{Name}:{shaderName}"),
+                    &info,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
                     _context.Device,
                     _pipelineCache,
                     1,
                     &info,
                     null,
                     out pipeline);
-            }
-            finally
-            {
-                _pipelineCacheService?.EndPipelineCreation(
-                    $"{Name}:{shaderName}",
-                    pipelineStart);
-            }
             if (result != Result.Success)
                 throw new VulkanException(
                     $"Failed to create Simple-DDGI page pipeline '{shaderName}'",

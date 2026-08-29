@@ -153,8 +153,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipeline(Format colorFormat, Format depthFormat)
         {
-            long pipelineStart =
-                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule vertexModule = new ShaderModule();
             ShaderModule fragmentModule = new ShaderModule();
 
@@ -172,9 +170,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 DestroyShaderModule(fragmentModule);
                 DestroyShaderModule(vertexModule);
-                _pipelineCacheService?.EndPipelineCreation(
-                    "Skybox",
-                    pipelineStart);
             }
         }
 
@@ -274,7 +269,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 BasePipelineIndex = -1
             };
 
-            Result result = _context.Api.CreateGraphicsPipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out VkPipeline pipeline);
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateGraphicsPipeline(
+                    new PipelineArtifactId("Skybox"),
+                    &pipelineInfo,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateGraphicsPipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &pipelineInfo,
+                    null,
+                    out pipeline);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create skybox graphics pipeline", result);
 

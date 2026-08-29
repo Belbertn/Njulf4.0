@@ -184,7 +184,7 @@ public sealed class GlobalIlluminationDefaultsTests
     [TestCase(RenderQualityPreset.Low,
         SimpleDdgiNearFieldResidualMode.Off)]
     [TestCase(RenderQualityPreset.Medium,
-        SimpleDdgiNearFieldResidualMode.Off)]
+        SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
     [TestCase(RenderQualityPreset.High,
         SimpleDdgiNearFieldResidualMode.HiZAdaptive)]
     [TestCase(RenderQualityPreset.Ultra,
@@ -209,7 +209,9 @@ public sealed class GlobalIlluminationDefaultsTests
         Assert.Multiple(() =>
         {
             Assert.That(gi.SimpleDdgiReceiverFeedbackMode,
-                Is.EqualTo(SimpleDdgiReceiverFeedbackMode.ExactCompacted));
+                Is.EqualTo(productionGiProfile
+                    ? SimpleDdgiReceiverFeedbackMode.ExactCompacted
+                    : SimpleDdgiReceiverFeedbackMode.Off));
             Assert.That(gi.DdgiOpacityMicromapMode,
                 Is.EqualTo(productionGiProfile
                     ? DdgiOpacityMicromapMode.ExtFourStateExperiment
@@ -234,6 +236,80 @@ public sealed class GlobalIlluminationDefaultsTests
             Assert.That(gi.DdgiRayTracingPipelineExperimentEnabled, Is.False,
                 "C2/SER remains explicitly excluded.");
         });
+    }
+
+    [TestCase(RenderQualityPreset.Low,
+        AsyncComputePreferredPathMask.None)]
+    [TestCase(RenderQualityPreset.Medium,
+        AsyncComputeSettings.DefaultPreferredPathMask)]
+    [TestCase(RenderQualityPreset.High,
+        AsyncComputeSettings.DefaultPreferredPathMask)]
+    [TestCase(RenderQualityPreset.DdgiHigh,
+        AsyncComputeSettings.DefaultPreferredPathMask)]
+    [TestCase(RenderQualityPreset.Ultra,
+        AsyncComputeSettings.DefaultPreferredPathMask)]
+    public void QualityPresets_ActivatePreferredGiAsyncPaths(
+        RenderQualityPreset preset,
+        AsyncComputePreferredPathMask expected)
+    {
+        var settings = new RenderSettings();
+        settings.AsyncCompute.PreferredPathMask =
+            AsyncComputePreferredPathMask.None;
+
+        settings.ApplyQualityPreset(preset);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.AsyncCompute.PreferredPathMask,
+                Is.EqualTo(expected));
+            Assert.That(settings.AsyncCompute.SimpleDdgiUpdateEnabled,
+                Is.True);
+            Assert.That(settings.AsyncCompute.FarFieldClipmapBakeEnabled,
+                Is.True);
+            Assert.That(AsyncComputePassCatalog
+                    .IsProductionActivationAuthorized(
+                        AsyncComputePath.SimpleDdgiUpdate),
+                Is.True);
+            Assert.That(AsyncComputePassCatalog
+                    .IsProductionActivationAuthorized(
+                        AsyncComputePath.FarFieldClipmapBake),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void PreferredGiAsyncPaths_RoundTripAndExplicitOptOutWins()
+    {
+        string path = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"render-settings-preferred-async-{Guid.NewGuid():N}.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.AsyncCompute.PreferredPathMask =
+                AsyncComputePreferredPathMask.FarFieldClipmapBake;
+            settings.AsyncCompute.SimpleDdgiUpdateEnabled = false;
+            settings.Save(path);
+
+            RenderSettings loaded = RenderSettings.Load(path);
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.AsyncCompute.PreferredPathMask,
+                    Is.EqualTo(
+                        AsyncComputePreferredPathMask.FarFieldClipmapBake));
+                Assert.That(loaded.AsyncCompute.SimpleDdgiUpdateEnabled,
+                    Is.False);
+                Assert.That(loaded.AsyncCompute.IsEnabledBy(
+                    AsyncComputePath.SimpleDdgiUpdate), Is.False);
+                Assert.That(loaded.AsyncCompute.IsPreferred(
+                    AsyncComputePath.FarFieldClipmapBake), Is.True);
+            });
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     [Test]
@@ -298,7 +374,7 @@ public sealed class GlobalIlluminationDefaultsTests
                 missing), Is.True);
             Assert.That(AdvancedGiActivationPolicy.PrerequisitesSatisfied(
                 GiCausticMode.AutoQualified,
-                missing), Is.False);
+                missing), Is.True);
         });
     }
 
@@ -342,8 +418,7 @@ public sealed class GlobalIlluminationDefaultsTests
         var settings = new RenderSettings();
 
         settings.ApplyQualityPreset(preset);
-        bool highTier = preset is RenderQualityPreset.High or
-            RenderQualityPreset.Ultra or RenderQualityPreset.DdgiHigh;
+        bool provisionedTier = preset != RenderQualityPreset.Low;
 
         Assert.Multiple(() =>
         {
@@ -352,9 +427,9 @@ public sealed class GlobalIlluminationDefaultsTests
             Assert.That(settings.GlobalIllumination.SimpleDdgiSourceCacheLayoutMode,
                 Is.EqualTo(SimpleDdgiSourceCacheLayoutMode.Auto));
             Assert.That(settings.GlobalIllumination.SimpleDdgiRefinementBricksEnabled,
-                Is.EqualTo(highTier));
+                Is.EqualTo(provisionedTier));
             Assert.That(settings.GlobalIllumination.SimpleDdgiNearVisibilitySidecarEnabled,
-                Is.EqualTo(highTier));
+                Is.EqualTo(provisionedTier));
             Assert.That(
                 settings.GlobalIllumination.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold,
                 Is.EqualTo(1.0f));

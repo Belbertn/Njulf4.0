@@ -93,7 +93,7 @@ public sealed class HybridReflectionPayloadCodecTests
         Assert.Multiple(() =>
         {
             Assert.That(payload, Does.Contain(
-                "NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 4u"));
+                "NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 5u"));
             Assert.That(payload, Does.Contain(
                 "HybridReflectionPayloadPhysicalRoughness"));
             Assert.That(payload, Does.Contain(

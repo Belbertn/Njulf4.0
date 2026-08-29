@@ -908,6 +908,7 @@ internal sealed class DebugOverlayBuilder
                 }
 
                 if (!_resources.TryGetMeshlet(
+                        snapshot.Mesh,
                         (uint)meshletIndex,
                         out Njulf.Core.Geometry.Meshlet meshlet))
                 {

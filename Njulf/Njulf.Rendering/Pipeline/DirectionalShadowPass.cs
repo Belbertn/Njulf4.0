@@ -430,7 +430,8 @@ namespace Njulf.Rendering.Pipeline
 
         private bool CanUseSceneIndirectDispatch(SceneRenderingData sceneData, ulong indirectDispatchOffset)
         {
-            if (_bufferManager == null ||
+            if (!_meshPipeline.TasklessSubmissionEnabled ||
+                _bufferManager == null ||
                 !sceneData.SceneSubmissionIndirectMeshletDispatchEnabled ||
                 !sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer.IsValid)
             {
@@ -598,7 +599,6 @@ namespace Njulf.Rendering.Pipeline
                 checked((uint)sceneData.FoliageClusterCount),
                 shadowDensityScale: sceneData.FoliageGrassShadowDensityScale);
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, checked((uint)sceneData.FoliageClusterCount), 1, 1);
-            sceneData.DepthTaskInvocations += sceneData.FoliageClusterCount;
 
             DrawAuthoredFoliageShadow(cmd, sceneData, cascade);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
@@ -627,7 +627,7 @@ namespace Njulf.Rendering.Pipeline
                 _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
                     cmd,
                     indirect,
-                    0,
+                    FoliageManager.AuthoredIndirectDispatchOffset,
                     1,
                     (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
                 return;

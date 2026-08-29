@@ -584,7 +584,6 @@ internal sealed class SampleStressSceneBuilder
             Material = material,
             GeometryMode = FoliageGeometryMode.AuthoredMeshlets
         };
-        prototype.AuthoredMeshletStride = 1u;
         prototype.Lod.Lod0Distance = lod0;
         prototype.Lod.Lod1Distance = lod1;
         prototype.Lod.Lod2Distance = lod2;

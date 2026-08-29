@@ -20,6 +20,7 @@ namespace Njulf.Rendering.Pipeline
 
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private DescriptorSetLayout _descriptorSetLayout;
         private DescriptorPool _descriptorPool;
@@ -37,11 +38,13 @@ namespace Njulf.Rendering.Pipeline
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             RenderTargetManager renderTargets,
-            RenderSettings settings)
+            RenderSettings settings,
+            GiPipelineCacheService? pipelineCacheService = null)
             : base("BloomPass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -156,7 +159,7 @@ namespace Njulf.Rendering.Pipeline
                 _descriptorSetLayout = default;
             }
 
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
                 _pipelineCache = default;
@@ -252,6 +255,12 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
             Result result = _context.Api.CreatePipelineCache(_context.Device, &cacheInfo, null, out _pipelineCache);
             if (result != Result.Success)
@@ -308,13 +317,18 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                Result result = _context.Api.CreateComputePipelines(
-                    _context.Device,
-                    _pipelineCache,
-                    1,
-                    &pipelineInfo,
-                    null,
-                    out VkPipeline pipeline);
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId($"Bloom.{shaderName}"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out pipeline);
 
                 if (result != Result.Success)
                     throw new VulkanException($"Failed to create bloom pipeline '{debugName}'", result);

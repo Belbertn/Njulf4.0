@@ -496,8 +496,6 @@ namespace Njulf.Rendering.Pipeline
 
         private VkPipeline CreatePipeline(string fragmentShaderName, Format colorFormat, string debugName)
         {
-            long pipelineStart =
-                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule vertexModule = default;
             ShaderModule fragmentModule = default;
             try
@@ -514,16 +512,11 @@ namespace Njulf.Rendering.Pipeline
                     _context.Api.DestroyShaderModule(_context.Device, fragmentModule, null);
                 if (vertexModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, vertexModule, null);
-                _pipelineCacheService?.EndPipelineCreation(
-                    "AntiAliasing." + debugName,
-                    pipelineStart);
             }
         }
 
         private VkPipeline CreateTaaPipeline()
         {
-            long pipelineStart =
-                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule vertexModule = default;
             ShaderModule fragmentModule = default;
             try
@@ -543,9 +536,6 @@ namespace Njulf.Rendering.Pipeline
                     _context.Api.DestroyShaderModule(_context.Device, fragmentModule, null);
                 if (vertexModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, vertexModule, null);
-                _pipelineCacheService?.EndPipelineCreation(
-                    "AntiAliasing.TAA",
-                    pipelineStart);
             }
         }
 
@@ -635,7 +625,18 @@ namespace Njulf.Rendering.Pipeline
                 BasePipelineIndex = -1
             };
 
-            Result result = _context.Api.CreateGraphicsPipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out VkPipeline pipeline);
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateGraphicsPipeline(
+                    new PipelineArtifactId("AntiAliasing." + debugName),
+                    &pipelineInfo,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateGraphicsPipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &pipelineInfo,
+                    null,
+                    out pipeline);
             if (result != Result.Success)
                 throw new VulkanException($"Failed to create anti-aliasing graphics pipeline '{debugName}'", result);
 

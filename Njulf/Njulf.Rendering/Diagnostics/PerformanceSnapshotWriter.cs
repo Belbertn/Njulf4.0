@@ -433,7 +433,17 @@ namespace Njulf.Rendering.Diagnostics
         public ulong GiPipelineCreationCount { get; init; }
         public long GiPipelineCreationMicroseconds { get; init; }
         public ulong GiRenderCriticalPipelineCreationCount { get; init; }
+        public ulong GiPipelineApplicationCacheHitCount { get; init; }
+        public ulong GiPipelineCompileMissCount { get; init; }
+        public ulong GiPipelineFeedbackUnavailableCount { get; init; }
+        public int GiPipelinePeakConcurrentCreationCount { get; init; }
+        public bool GiPipelineBinaryCacheEnabled { get; init; }
+        public bool GiGraphicsPipelineLibraryEligible { get; init; }
+        public ulong GiPipelineWritableBinaryHitCount { get; init; }
+        public ulong GiPipelineSeedBinaryHitCount { get; init; }
+        public ulong GiCapturedPipelineBinaryCount { get; init; }
         public string GiPipelineCachePath { get; init; } = string.Empty;
+        public string GiPipelineBinaryStorePath { get; init; } = string.Empty;
         public string GiPipelineCacheStatus { get; init; } = string.Empty;
         public string GiLastCreatedPipeline { get; init; } = string.Empty;
         public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; init; } =
@@ -1739,7 +1749,27 @@ namespace Njulf.Rendering.Diagnostics
                 GiPipelineCreationCount = diagnostics.GiPipelineCreationCount,
                 GiPipelineCreationMicroseconds = diagnostics.GiPipelineCreationMicroseconds,
                 GiRenderCriticalPipelineCreationCount = diagnostics.GiRenderCriticalPipelineCreationCount,
+                GiPipelineApplicationCacheHitCount =
+                    diagnostics.GiPipelineApplicationCacheHitCount,
+                GiPipelineCompileMissCount =
+                    diagnostics.GiPipelineCompileMissCount,
+                GiPipelineFeedbackUnavailableCount =
+                    diagnostics.GiPipelineFeedbackUnavailableCount,
+                GiPipelinePeakConcurrentCreationCount =
+                    diagnostics.GiPipelinePeakConcurrentCreationCount,
+                GiPipelineBinaryCacheEnabled =
+                    diagnostics.GiPipelineBinaryCacheEnabled != 0,
+                GiGraphicsPipelineLibraryEligible =
+                    diagnostics.GiGraphicsPipelineLibraryEligible != 0,
+                GiPipelineWritableBinaryHitCount =
+                    diagnostics.GiPipelineWritableBinaryHitCount,
+                GiPipelineSeedBinaryHitCount =
+                    diagnostics.GiPipelineSeedBinaryHitCount,
+                GiCapturedPipelineBinaryCount =
+                    diagnostics.GiCapturedPipelineBinaryCount,
                 GiPipelineCachePath = diagnostics.GiPipelineCachePath,
+                GiPipelineBinaryStorePath =
+                    diagnostics.GiPipelineBinaryStorePath,
                 GiPipelineCacheStatus = diagnostics.GiPipelineCacheStatus,
                 GiLastCreatedPipeline = diagnostics.GiLastCreatedPipeline,
                 SimpleDdgiSchedulerMode = diagnostics.SimpleDdgiSchedulerMode,

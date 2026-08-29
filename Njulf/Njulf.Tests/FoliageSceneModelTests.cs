@@ -46,7 +46,6 @@ public sealed class FoliageSceneModelTests
         patch.InstancePosition = new Vector3(1f, 2f, 3f);
         patch.InstanceScale = 2f;
         uint placementRevision = patch.Revision;
-        prototype.AuthoredMeshletStride = 4;
         prototype.Material = new MaterialHandle(2, 1);
         prototype.FarImpostorEnabled = true;
 

@@ -95,6 +95,8 @@ namespace Njulf.Rendering.Resources
         private ulong _lastSelectionSettingsSignature;
         private bool _selectionInitialized;
         private bool _metadataDirty = true;
+        private uint _transparentSsrAdmissionThreshold = uint.MaxValue;
+        private uint _transparentRayAdmissionThreshold = uint.MaxValue;
         private bool _captureOnLoadQueued;
         private bool _descriptorDirty = true;
         private uint _cubemapArrayResourceGeneration = 1U;
@@ -197,6 +199,25 @@ namespace Njulf.Rendering.Resources
         public ImageView ScratchCaptureView => _scratchCaptureView;
         public ImageView CaptureDepthView => _captureDepthView;
         public Sampler ScratchSampler => _cubemapSampler;
+
+        public void ObserveCompletedTransparentReflectionCounters(
+            in TransparentReflectionGpuCounters counters)
+        {
+            TransparentReflectionAdmissionThresholds thresholds =
+                TransparentReflectionAdmissionPolicy.Resolve(
+                    _settings.Transparency.SceneReflectionSsrSampleBudget,
+                    _settings.Transparency.SceneReflectionRayTaskBudget,
+                    _settings.Reflections.SsrMaxSteps,
+                    counters);
+            if (thresholds.Ssr == _transparentSsrAdmissionThreshold &&
+                thresholds.Ray == _transparentRayAdmissionThreshold)
+            {
+                return;
+            }
+            _transparentSsrAdmissionThreshold = thresholds.Ssr;
+            _transparentRayAdmissionThreshold = thresholds.Ray;
+            _metadataDirty = true;
+        }
 
         private ulong CaptureDepthBytesPerPixel => _captureDepthFormat switch
         {
@@ -691,7 +712,9 @@ namespace Njulf.Rendering.Resources
                 BindlessIndex.ReflectionProbeCubemapArrayTexture,
                 BindlessIndex.ReflectionProbeDebugTexture,
                 _probeMipCount,
-                _settings.Transparency);
+                _settings.Transparency,
+                _transparentSsrAdmissionThreshold,
+                _transparentRayAdmissionThreshold);
             GpuBufferUploader.UploadHeaderAndSpanToBuffer(
                 _context,
                 _bufferManager,

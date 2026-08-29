@@ -32,6 +32,7 @@ internal sealed unsafe class SimpleDdgiReceiverFeedbackGpuPass : IDisposable
     private readonly VulkanContext _context;
     private readonly BindlessHeap _bindlessHeap;
     private readonly BufferManager _bufferManager;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly nint _entryPointName;
     private PipelineLayout _layout;
     private PipelineCache _pipelineCache;
@@ -46,11 +47,13 @@ internal sealed unsafe class SimpleDdgiReceiverFeedbackGpuPass : IDisposable
     internal SimpleDdgiReceiverFeedbackGpuPass(
         VulkanContext context,
         BindlessHeap bindlessHeap,
-        BufferManager bufferManager)
+        BufferManager bufferManager,
+        GiPipelineCacheService? pipelineCacheService = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
         try
@@ -571,6 +574,12 @@ internal sealed unsafe class SimpleDdgiReceiverFeedbackGpuPass : IDisposable
 
     private void CreatePipelineCache()
     {
+        if (_pipelineCacheService != null)
+        {
+            _pipelineCache = _pipelineCacheService.Cache;
+            return;
+        }
+
         var cacheInfo = new PipelineCacheCreateInfo
         {
             SType = StructureType.PipelineCacheCreateInfo
@@ -642,13 +651,19 @@ internal sealed unsafe class SimpleDdgiReceiverFeedbackGpuPass : IDisposable
                 BasePipelineHandle = default,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device,
-                _pipelineCache,
-                1,
-                &pipelineInfo,
-                null,
-                out VkPipeline pipeline);
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId(
+                        $"SimpleDdgi.ReceiverFeedback.{shaderName}"),
+                    &pipelineInfo,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &pipelineInfo,
+                    null,
+                    out pipeline);
             if (result != Result.Success)
             {
                 throw new VulkanException(
@@ -679,7 +694,7 @@ internal sealed unsafe class SimpleDdgiReceiverFeedbackGpuPass : IDisposable
         DestroyPipeline(_reducePipeline);
         if (_layout.Handle != 0)
             _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_entryPointName != 0)
             SilkMarshal.Free(_entryPointName);

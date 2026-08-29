@@ -212,7 +212,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         SimpleDdgiNearFieldResidualCaptureIdentifiers captureIdentifiers =
             default,
         SimpleDdgiNearFieldResidualRenderTargetGeneration? targetGeneration =
-            null)
+            null,
+        GiPipelineCacheService? pipelineCacheService = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
@@ -398,7 +399,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 _hiZ,
                 _layout,
                 _configuration,
-                _buffers);
+                _buffers,
+                pipelineCacheService);
             _recorder = recorder;
             _allocationAdapter = new BorrowedGraphAllocationAdapter(_layout);
             SimpleDdgiNearFieldResidualGpuRuntimeSnapshot snapshot =

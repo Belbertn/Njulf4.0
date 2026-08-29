@@ -846,27 +846,18 @@ public sealed class SimpleDdgiReceiverFeedbackV2Tests
     }
 
     [Test]
-    public void AutoQualifiedMode_CannotBypassEvidenceIdThroughCallerFlags()
+    public void AutoQualifiedMode_NormalizesToProductionWithoutEvidenceAuthority()
     {
-        GiExperimentModeState<GiCausticMode> state =
-            GiExperimentModeResolver.Resolve(
-                GiCausticMode.AutoQualified,
-                GiCausticMode.Off,
-                new GiExperimentModeEvaluation(
-                    Supported: true,
-                    PrerequisitesSatisfied: true,
-                    MemoryAdmitted: true,
-                    ResourcesComplete: true,
-                    RequiresQualification: false,
-                    QualificationPassed: true,
-                    QualificationId: null));
-
         Assert.Multiple(() =>
         {
-            Assert.That(state.RequestedMode, Is.EqualTo(GiCausticMode.AutoQualified));
-            Assert.That(state.EffectiveMode, Is.EqualTo(GiCausticMode.Off));
-            Assert.That(state.FallbackReason,
-                Is.EqualTo(GiExperimentFallbackReason.QualificationIdMissing));
+            Assert.That(
+                AdvancedGiActivationPolicy.NormalizeProductionMode(
+                    GiCausticMode.AutoQualified),
+                Is.EqualTo(GiCausticMode.WorldCacheExperiment));
+            Assert.That(
+                AdvancedGiActivationPolicy.RequiresQualification(
+                    GiCausticMode.AutoQualified),
+                Is.False);
         });
     }
 

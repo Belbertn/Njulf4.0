@@ -134,7 +134,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
     }
 
     [Test]
-    public void SponzaMediumMemoryProfile_UsesSsrWithoutC5()
+    public void SponzaMediumMemoryProfile_UsesSsrWithBoundedC5()
     {
         var settings = new RenderSettings();
 
@@ -148,7 +148,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
                 Is.EqualTo(RenderQualityPreset.Medium));
             Assert.That(
                 settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
-                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
             Assert.That(settings.Reflections.Enabled, Is.True);
             Assert.That(settings.Reflections.Mode,
                 Is.EqualTo(ReflectionMode.StaticProbesAndSsr));

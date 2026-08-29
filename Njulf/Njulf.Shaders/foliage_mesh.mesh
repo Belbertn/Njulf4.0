@@ -20,9 +20,34 @@
 #undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
 #undef SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE
 
-layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
-layout(triangles, max_vertices = 64, max_primitives = 126) out;
+#ifndef NJULF_FOLIAGE_MESH_LOCAL_SIZE
+#ifdef FOLIAGE_MESH_COMPACTED_MESH
+#define NJULF_FOLIAGE_MESH_LOCAL_SIZE 64
+#else
+#define NJULF_FOLIAGE_MESH_LOCAL_SIZE 128
+#endif
+#endif
+#ifndef NJULF_FOLIAGE_MESH_MAX_VERTICES
+#ifdef FOLIAGE_MESH_COMPACTED_MESH
+#define NJULF_FOLIAGE_MESH_MAX_VERTICES 48
+#else
+#define NJULF_FOLIAGE_MESH_MAX_VERTICES 64
+#endif
+#endif
+#ifndef NJULF_FOLIAGE_MESH_MAX_PRIMITIVES
+#ifdef FOLIAGE_MESH_COMPACTED_MESH
+#define NJULF_FOLIAGE_MESH_MAX_PRIMITIVES 64
+#else
+#define NJULF_FOLIAGE_MESH_MAX_PRIMITIVES 126
+#endif
+#endif
+layout(local_size_x = NJULF_FOLIAGE_MESH_LOCAL_SIZE,
+    local_size_y = 1, local_size_z = 1) in;
+layout(triangles,
+    max_vertices = NJULF_FOLIAGE_MESH_MAX_VERTICES,
+    max_primitives = NJULF_FOLIAGE_MESH_MAX_PRIMITIVES) out;
 
+#ifndef FOLIAGE_MESH_COMPACTED_MESH
 struct FoliageMeshPayload
 {
     uint DrawCommandIndex;
@@ -30,6 +55,7 @@ struct FoliageMeshPayload
 };
 
 taskPayloadSharedEXT FoliageMeshPayload foliagePayload;
+#endif
 
 layout(location = 0) out vec2 meshTexCoord[];
 layout(location = 1) flat out uint meshMaterialIndex[];
@@ -41,6 +67,7 @@ layout(location = 6) flat out uint meshGeometryMode[];
 layout(location = 7) flat out uint meshDebugMeshletIndex[];
 layout(location = 8) flat out vec4 meshColorVariation[];
 layout(location = 9) flat out vec4 meshDdgiIrradianceCoverage[];
+layout(location = 10) flat out uint meshImpostorMetadataIndex[];
 
 layout(push_constant) uniform FoliageDrawPushConstantBlock
 {
@@ -59,7 +86,7 @@ vec3 ApplyAuthoredFoliageWind(vec3 worldPosition, GPUFoliageInstance instance, G
         instance.RotationWind.y * 6.28318530718 +
         pc.Push.CameraPositionTime.w * frequency;
     float sway = sin(phase) * strength;
-    float leafFlutter = sin(phase * 3.1 + instance.RotationWind.z * 11.0) * flutter * strength;
+    float leafFlutter = sin(phase * 3.1 + instance.RotationWind.y * 17.0) * flutter * strength;
     return worldPosition + vec3(sway + leafFlutter, leafFlutter * 0.15, sway * 0.45) * 0.05;
 }
 
@@ -73,30 +100,107 @@ vec3 SafeNormalize(vec3 value, vec3 fallback)
 
 vec3 TransformFoliagePoint(vec3 localPosition, GPUFoliageInstance instance, GPUFoliagePrototype prototype)
 {
-    vec3 worldPosition = instance.PositionScale.xyz + localPosition * max(instance.PositionScale.w, 0.0001);
+    float yawSin = sin(instance.RotationWind.x);
+    float yawCos = cos(instance.RotationWind.x);
+    vec3 scaled = localPosition * max(instance.PositionScale.w, 0.0001);
+    scaled.xz = vec2(
+        scaled.x * yawCos - scaled.z * yawSin,
+        scaled.x * yawSin + scaled.z * yawCos);
+    vec3 up = vec3(0.0, 1.0, 0.0);
+    if ((instance.Flags & 1u) != 0u)
+    {
+        float normalY = sqrt(max(
+            0.0,
+            1.0 - instance.RotationWind.z * instance.RotationWind.z -
+                instance.RotationWind.w * instance.RotationWind.w));
+        up = SafeNormalize(vec3(
+            instance.RotationWind.z,
+            normalY,
+            instance.RotationWind.w), up);
+    }
+    vec3 right = SafeNormalize(
+        cross(up, vec3(0.0, 0.0, 1.0)),
+        vec3(1.0, 0.0, 0.0));
+    vec3 forward = SafeNormalize(
+        cross(right, up),
+        vec3(0.0, 0.0, 1.0));
+    vec3 worldPosition = instance.PositionScale.xyz +
+        right * scaled.x + up * scaled.y + forward * scaled.z;
     return ApplyAuthoredFoliageWind(worldPosition, instance, prototype);
+}
+
+vec3 TransformFoliageNormal(vec3 localNormal, GPUFoliageInstance instance)
+{
+    float yawSin = sin(instance.RotationWind.x);
+    float yawCos = cos(instance.RotationWind.x);
+    vec3 result = localNormal;
+    result.xz = vec2(
+        result.x * yawCos - result.z * yawSin,
+        result.x * yawSin + result.z * yawCos);
+    vec3 up = vec3(0.0, 1.0, 0.0);
+    if ((instance.Flags & 1u) != 0u)
+    {
+        float normalY = sqrt(max(
+            0.0,
+            1.0 - instance.RotationWind.z * instance.RotationWind.z -
+                instance.RotationWind.w * instance.RotationWind.w));
+        up = SafeNormalize(vec3(
+            instance.RotationWind.z,
+            normalY,
+            instance.RotationWind.w), up);
+    }
+    vec3 right = SafeNormalize(
+        cross(up, vec3(0.0, 0.0, 1.0)),
+        vec3(1.0, 0.0, 0.0));
+    vec3 forward = SafeNormalize(
+        cross(right, up),
+        vec3(0.0, 0.0, 1.0));
+    return normalize(
+        right * result.x + up * result.y + forward * result.z);
 }
 
 void main()
 {
+#ifdef FOLIAGE_MESH_COMPACTED_MESH
+    uint drawCommandIndex = gl_WorkGroupID.x + pc.Push.FirstDraw;
+    if (gl_WorkGroupID.x >= pc.Push.ClusterDrawCount)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
+#else
     if (foliagePayload.Visible == 0u)
     {
         if (gl_LocalInvocationIndex == 0u)
             SetMeshOutputsEXT(0u, 0u);
         return;
     }
+    uint drawCommandIndex = foliagePayload.DrawCommandIndex;
+#endif
 
     GPUFoliageMeshletDrawCommand command = ReadFoliageMeshletDrawCommand(
         pc.Push.CurrentFrameIndex,
-        foliagePayload.DrawCommandIndex);
+        drawCommandIndex);
     if (command.MeshletIndex == 0xffffffffu)
     {
         if (gl_LocalInvocationIndex == 0u)
             SetMeshOutputsEXT(0u, 0u);
         return;
     }
+    if (!SphereIntersectsRowMajorFrustum(
+            command.WorldCenterRadius.xyz,
+            command.WorldCenterRadius.w,
+            pc.Push.ViewProjectionMatrix))
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
 
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    GPUMeshlet meshlet = ReadMeshlet(
+        command.MeshletIndex,
+        pc.Push.CurrentFrameIndex);
     GPUFoliageInstance instance = ReadFoliageInstance(pc.Push.CurrentFrameIndex, command.InstanceIndex);
     GPUFoliagePrototype prototype = ReadFoliagePrototype(command.PrototypeIndex);
 #if NJULF_GPU_DIAGNOSTIC_COUNTERS
@@ -163,9 +267,9 @@ void main()
          vertexSlot < meshlet.LocalVertexCount;
          vertexSlot += gl_WorkGroupSize.x)
     {
-        uint localVertexIndex = ReadStorageWord(
-            uint(MESHLET_VERTEX_INDEX_BUFFER_INDEX),
-            meshlet.LocalVertexOffset + vertexSlot);
+        uint localVertexIndex = ReadMeshletLocalVertexIndex(
+            meshlet,
+            vertexSlot);
         GPUVertex vertex = ReadSplitVertex(meshlet.VertexOffset + localVertexIndex);
         vec3 worldPosition = TransformFoliagePoint(vertex.Position, instance, prototype);
 
@@ -173,23 +277,29 @@ void main()
         meshTexCoord[vertexSlot] = vertex.TexCoord;
         meshMaterialIndex[vertexSlot] = command.MaterialIndex;
         meshWorldPosition[vertexSlot] = worldPosition;
-        meshNormal[vertexSlot] = normalize(vertex.Normal);
+        meshNormal[vertexSlot] = TransformFoliageNormal(
+            vertex.Normal,
+            instance);
         meshClusterIndex[vertexSlot] = command.ClusterIndex;
-        meshLodBand[vertexSlot] = command.LodLevel;
+        meshLodBand[vertexSlot] =
+            PackFoliageCoverageStateFromCommand(
+                command.LodLevel,
+                command.Flags);
         meshGeometryMode[vertexSlot] = 1u;
         meshDebugMeshletIndex[vertexSlot] = command.MeshletIndex;
         meshColorVariation[vertexSlot] = instance.ColorVariation;
         meshDdgiIrradianceCoverage[vertexSlot] = meshletDdgiIrradianceCoverage;
+        meshImpostorMetadataIndex[vertexSlot] = 0xffffffffu;
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;
          triangleSlot < meshlet.LocalTriangleCount;
          triangleSlot += gl_WorkGroupSize.x)
     {
-        uint triangleOffset = meshlet.LocalTriangleOffset + triangleSlot * 3u;
-        uint i0 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 0u);
-        uint i1 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 1u);
-        uint i2 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 2u);
+        uint triangleOffset = triangleSlot * 3u;
+        uint i0 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 0u);
+        uint i1 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 1u);
+        uint i2 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 2u);
         gl_PrimitiveTriangleIndicesEXT[triangleSlot] = uvec3(i0, i1, i2);
     }
 }

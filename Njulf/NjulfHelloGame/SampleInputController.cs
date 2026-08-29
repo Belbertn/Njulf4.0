@@ -2805,7 +2805,7 @@ internal sealed class SampleInputController
             diagnostics.FoliageDrawBufferBytes +
             diagnostics.FoliageImpostorAtlasBytes;
         Console.WriteLine(
-            $"{prefix}: enabled={(foliage.Enabled ? "on" : "off")}, gpuDriven={(foliage.GpuDrivenEnabled ? "on" : "off")}, " +
+            $"{prefix}: enabled={(foliage.Enabled ? "on" : "off")}, gpuDriven=taskless-production, " +
             $"hiz={(foliage.HiZCullingEnabled ? "on" : "off")}, indirect={(foliage.IndirectMeshletDispatchEnabled ? "on" : "off")}, " +
             $"farImpostors={(foliage.FarImpostorsEnabled ? "on" : "off")}, debug={foliage.DebugView}, " +
             $"density={foliage.DensityScale:F2}, drawDistance={foliage.MaxDrawDistance:F1}, shadows={(foliage.CastShadows ? "on" : "off")}:{foliage.GrassShadowDistance:F1}m@{foliage.GrassShadowDensityScale:F2}, " +

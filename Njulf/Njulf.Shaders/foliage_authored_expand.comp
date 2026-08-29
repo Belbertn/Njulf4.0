@@ -1,0 +1,205 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform FoliageAuthoredExpandPushConstantBlock
+{
+    GPUFoliageCullPushConstants Push;
+} pc;
+
+uint CounterBufferIndex()
+{
+    return uint(FOLIAGE_COUNTER_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+}
+
+uint MeshletDrawBufferIndex()
+{
+    return uint(FOLIAGE_MESHLET_DRAW_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+}
+
+uint IndirectDispatchBufferIndex()
+{
+    return pc.Push.IndirectDispatchBufferBaseIndex +
+        pc.Push.CurrentFrameIndex;
+}
+
+bool TryAllocateMeshletDraw(out uint drawIndex)
+{
+    uint bufferIndex = IndirectDispatchBufferIndex();
+    uint observed = BindlessStorageBuffers[
+        nonuniformEXT(bufferIndex)].Words[4];
+    while (observed < pc.Push.MeshletDrawCapacity)
+    {
+        uint previous = atomicCompSwap(
+            BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[4],
+            observed,
+            observed + 1u);
+        if (previous == observed)
+        {
+            drawIndex = observed;
+            return true;
+        }
+        observed = previous;
+    }
+    drawIndex = 0u;
+    atomicAdd(BindlessStorageBuffers[
+        nonuniformEXT(CounterBufferIndex())].Words[8], 1u);
+    return false;
+}
+
+void WriteFoliageMeshletDrawCommand(
+    uint drawIndex,
+    uint meshletIndex,
+    uint instanceIndex,
+    uint prototypeIndex,
+    uint materialIndex,
+    vec4 worldCenterRadius,
+    uint flags,
+    uint lod,
+    uint clusterIndex)
+{
+    uint baseWord = drawIndex * uint(
+        SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND / 4);
+    uint bufferIndex = MeshletDrawBufferIndex();
+    WriteStorageWord(bufferIndex, baseWord + 0u, meshletIndex);
+    WriteStorageWord(bufferIndex, baseWord + 1u, instanceIndex);
+    WriteStorageWord(bufferIndex, baseWord + 2u, prototypeIndex);
+    WriteStorageWord(bufferIndex, baseWord + 3u, materialIndex);
+    WriteStorageVec4(bufferIndex, baseWord + 4u, worldCenterRadius);
+    WriteStorageWord(bufferIndex, baseWord + 8u, flags);
+    WriteStorageWord(bufferIndex, baseWord + 9u, lod);
+    WriteStorageWord(bufferIndex, baseWord + 10u, clusterIndex);
+    WriteStorageWord(bufferIndex, baseWord + 11u, 0u);
+}
+
+vec4 ResolveWorldMeshletSphere(
+    GPUMeshlet meshlet,
+    GPUFoliageInstance instance,
+    GPUFoliagePrototype prototype)
+{
+    vec3 instancePosition = instance.PositionScale.xyz;
+    float instanceScale = max(instance.PositionScale.w, 0.0001);
+    float yawSin = sin(instance.RotationWind.x);
+    float yawCos = cos(instance.RotationWind.x);
+    vec3 localCenter = meshlet.BoundingSphereCenter * instanceScale;
+    localCenter.xz = vec2(
+        localCenter.x * yawCos - localCenter.z * yawSin,
+        localCenter.x * yawSin + localCenter.z * yawCos);
+    vec3 up = vec3(0.0, 1.0, 0.0);
+    if ((instance.Flags & 1u) != 0u)
+    {
+        float normalY = sqrt(max(
+            0.0,
+            1.0 - instance.RotationWind.z * instance.RotationWind.z -
+                instance.RotationWind.w * instance.RotationWind.w));
+        up = normalize(vec3(
+            instance.RotationWind.z,
+            normalY,
+            instance.RotationWind.w));
+    }
+    vec3 right = cross(up, vec3(0.0, 0.0, 1.0));
+    right = dot(right, right) > 0.000001
+        ? normalize(right)
+        : vec3(1.0, 0.0, 0.0);
+    vec3 forward = normalize(cross(right, up));
+    vec3 orientedCenter = right * localCenter.x +
+        up * localCenter.y + forward * localCenter.z;
+    float windExpansion = abs(prototype.WindParams.x) *
+        (1.0 + abs(prototype.WindParams.z)) * 0.075;
+    return vec4(
+        instancePosition + orientedCenter,
+        meshlet.BoundingSphereRadius * instanceScale + windExpansion);
+}
+
+void ExpandRange(
+    GPUFoliageAuthoredInstanceCommand command,
+    GPUFoliageInstance instance,
+    GPUFoliagePrototype prototype,
+    uint firstMeshlet,
+    uint meshletCount,
+    uint lod,
+    uint flags)
+{
+    for (uint meshletSlot = gl_LocalInvocationIndex;
+         meshletSlot < meshletCount;
+         meshletSlot += gl_WorkGroupSize.x)
+    {
+        uint meshletIndex = firstMeshlet + meshletSlot;
+        GPUMeshlet meshlet = ReadMeshlet(
+            meshletIndex,
+            pc.Push.CurrentFrameIndex);
+        if (meshlet.LocalTriangleCount == 0u)
+            continue;
+        uint drawIndex;
+        if (!TryAllocateMeshletDraw(drawIndex))
+            continue;
+        WriteFoliageMeshletDrawCommand(
+            drawIndex,
+            meshletIndex,
+            command.InstanceIndex,
+            command.PrototypeIndex,
+            prototype.MaterialIndex,
+            ResolveWorldMeshletSphere(meshlet, instance, prototype),
+            flags,
+            lod,
+            command.ClusterIndex);
+        atomicAdd(BindlessStorageBuffers[
+            nonuniformEXT(CounterBufferIndex())].Words[7], 1u);
+    }
+}
+
+void main()
+{
+    uint commandIndex = gl_WorkGroupID.x;
+    uint exactCommandCount = BindlessStorageBuffers[
+        nonuniformEXT(IndirectDispatchBufferIndex())].Words[8];
+    if (commandIndex >= exactCommandCount)
+        return;
+    GPUFoliageAuthoredInstanceCommand command =
+        ReadFoliageAuthoredInstanceCommand(
+            pc.Push.CurrentFrameIndex,
+            commandIndex);
+    if (command.InstanceIndex == 0xffffffffu ||
+        command.PrototypeIndex == 0xffffffffu ||
+        command.MeshletCount == 0u)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+        {
+            atomicAdd(BindlessStorageBuffers[
+                nonuniformEXT(CounterBufferIndex())].Words[11], 1u);
+        }
+        return;
+    }
+
+    GPUFoliageInstance instance = ReadFoliageInstance(
+        pc.Push.CurrentFrameIndex,
+        command.InstanceIndex);
+    GPUFoliagePrototype prototype = ReadFoliagePrototype(
+        command.PrototypeIndex);
+    ExpandRange(
+        command,
+        instance,
+        prototype,
+        command.FirstMeshlet,
+        command.MeshletCount,
+        command.LodLevel,
+        command.Flags);
+    if (command.TargetMeshletCount != 0u)
+    {
+        ExpandRange(
+            command,
+            instance,
+            prototype,
+            command.TargetFirstMeshlet,
+            command.TargetMeshletCount,
+            min(command.LodLevel + 1u, 2u),
+            command.Flags |
+                MESHLET_COMMAND_FLAG_LOD_DITHER_TARGET);
+    }
+}

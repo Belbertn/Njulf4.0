@@ -340,10 +340,24 @@ namespace Njulf.Rendering.Data
         public int FoliageOverflowCount { get; set; }
         public int FoliageMeshletDrawOverflowCount { get; set; }
         public int FoliageFarImpostorVisibleCount { get; set; }
+        public int FoliageDensityRejectedCount { get; set; }
+        public int FoliageMissingDensityTextureCount { get; set; }
+        public int FoliageMissingImpostorCount { get; set; }
+        public int FoliageResidentCellCount { get; set; }
+        public int FoliagePendingCellCount { get; set; }
+        public int FoliageRetiringCellCount { get; set; }
+        public int FoliageNearCellCount { get; set; }
+        public int FoliageMidCellCount { get; set; }
+        public int FoliageFarCellCount { get; set; }
+        public int FoliageCellLoadsThisFrame { get; set; }
+        public int FoliageCellRetirementsThisFrame { get; set; }
+        public int FoliageCellStreamingOverflowCount { get; set; }
+        public ulong FoliageCellStreamingUploadBytes { get; set; }
         public uint FoliageDebugView { get; set; }
         public bool FoliageIndirectMeshletDispatchEnabled { get; set; } = true;
         public bool FoliageCastShadows { get; set; } = true;
         public bool FoliageMotionVectorsEnabled { get; set; }
+        public bool FoliageHiZCullingEnabled { get; set; } = true;
         public bool FoliageLocalShadowsEnabled { get; set; }
         public float FoliageGrassShadowDensityScale { get; set; } = 0.5f;
         public int FoliageMaxLocalShadowedSpotLights { get; set; } = 1;
@@ -383,6 +397,7 @@ namespace Njulf.Rendering.Data
             string.Empty;
         public ulong FoliageDrawBufferBytes { get; set; }
         public ulong FoliageImpostorAtlasBytes { get; set; }
+        public ulong FoliageDensityTextureBytes { get; set; }
         public long CpuFoliageBuildMicroseconds { get; set; }
         public long CpuFoliageUploadMicroseconds { get; set; }
         public long GpuFoliageCullMicroseconds { get; set; }
@@ -834,6 +849,20 @@ namespace Njulf.Rendering.Data
         public ReflectionMode ReflectionMode { get; set; } = ReflectionMode.Disabled;
         public ReflectionMode RequestedReflectionMode { get; set; } = ReflectionMode.Disabled;
         public ReflectionMode EffectiveReflectionMode { get; set; } = ReflectionMode.Disabled;
+        public ReflectionImplementationMode RequestedReflectionImplementation
+        {
+            get;
+            set;
+        } = ReflectionImplementationMode.Auto;
+        public ReflectionImplementationMode EffectiveReflectionImplementation
+        {
+            get;
+            set;
+        } = ReflectionImplementationMode.Adaptive;
+        public ReflectionImplementationFallbackReason
+            ReflectionImplementationFallbackReason { get; set; }
+        public string ReflectionImplementationFallbackDetail { get; set; } =
+            string.Empty;
         public ReflectionFallbackReason ReflectionFallbackReason { get; set; }
         public string ReflectionFallbackDetail { get; set; } = string.Empty;
         public ReflectionDebugView ReflectionDebugView { get; set; } = ReflectionDebugView.None;
@@ -857,12 +886,29 @@ namespace Njulf.Rendering.Data
         public long GpuReflectionProbePrefilterMicroseconds { get; set; }
         public long GpuReflectionProbePublishMicroseconds { get; set; }
         public ulong HybridReflectionEstimatedBytes { get; set; }
+        public bool AutomaticPlanarReflectionActive { get; set; }
+        public int AutomaticPlanarCandidateCount { get; set; }
+        public int AutomaticPlanarSelectedCount { get; set; }
+        public int AutomaticPlanarCaptureCount { get; set; }
+        public int AutomaticPlanarReprojectionCount { get; set; }
+        public int AutomaticPlanarRejectedCount { get; set; }
+        public AutomaticPlanarCandidateRejectionReason
+            AutomaticPlanarRejectionReason { get; set; }
+        public string AutomaticPlanarRejectionDetail { get; set; } =
+            string.Empty;
+        public uint AutomaticPlanarCaptureGeneration { get; set; }
+        public ulong AutomaticPlanarEstimatedBytes { get; set; }
+        public float AutomaticPlanarResolutionScale { get; set; }
+        public uint AutomaticPlanarMaximumCaptureAge { get; set; }
+        public long GpuAutomaticPlanarCaptureMicroseconds { get; set; }
         public bool HybridReflectionPassEnabled { get; set; }
         public uint HybridReflectionWidth { get; set; }
         public uint HybridReflectionHeight { get; set; }
         public uint HybridReflectionRayQueryCapacity { get; set; }
         public int HybridReflectionHistoryValid { get; set; }
         public ReflectionHistoryResetReason HybridReflectionHistoryResetReason { get; set; }
+        public ReflectionHistorySourceInvalidation
+            HybridReflectionSourceInvalidation { get; set; }
         public ulong ReflectionProbeContentRevision { get; set; }
         public uint ReflectionEnvironmentGeneration { get; set; }
         public uint HybridReflectionSsrHitCount { get; set; }
@@ -875,6 +921,13 @@ namespace Njulf.Rendering.Data
         public uint HybridReflectionDdgiFallbackCount { get; set; }
         public uint HybridReflectionProbeFallbackCount { get; set; }
         public uint HybridReflectionEnvironmentFallbackCount { get; set; }
+        public uint HybridReflectionFullRateTileCount { get; set; }
+        public uint HybridReflectionHalfRateTileCount { get; set; }
+        public uint HybridReflectionQuarterRateTileCount { get; set; }
+        public uint HybridReflectionAnalyticTileCount { get; set; }
+        public uint HybridReflectionReuseTileCount { get; set; }
+        public uint HybridReflectionActiveTileCount { get; set; }
+        public uint HybridReflectionTileOverflowCount { get; set; }
         public uint TransparentReflectionRayRequestCount { get; set; }
         public uint TransparentReflectionEstimatedSsrHitCount { get; set; }
         public uint TransparentReflectionEstimatedRayHitCount { get; set; }
@@ -1982,10 +2035,24 @@ namespace Njulf.Rendering.Data
             FoliageOverflowCount = 0;
             FoliageMeshletDrawOverflowCount = 0;
             FoliageFarImpostorVisibleCount = 0;
+            FoliageDensityRejectedCount = 0;
+            FoliageMissingDensityTextureCount = 0;
+            FoliageMissingImpostorCount = 0;
+            FoliageResidentCellCount = 0;
+            FoliagePendingCellCount = 0;
+            FoliageRetiringCellCount = 0;
+            FoliageNearCellCount = 0;
+            FoliageMidCellCount = 0;
+            FoliageFarCellCount = 0;
+            FoliageCellLoadsThisFrame = 0;
+            FoliageCellRetirementsThisFrame = 0;
+            FoliageCellStreamingOverflowCount = 0;
+            FoliageCellStreamingUploadBytes = 0;
             FoliageDebugView = 0;
             FoliageIndirectMeshletDispatchEnabled = true;
             FoliageCastShadows = true;
             FoliageMotionVectorsEnabled = false;
+            FoliageHiZCullingEnabled = true;
             FoliageLocalShadowsEnabled = false;
             FoliageGrassShadowDensityScale = 0.5f;
             FoliageMaxLocalShadowedSpotLights = 1;
@@ -2024,6 +2091,7 @@ namespace Njulf.Rendering.Data
             DdgiFoliageProxyFallbackReason = string.Empty;
             FoliageDrawBufferBytes = 0;
             FoliageImpostorAtlasBytes = 0;
+            FoliageDensityTextureBytes = 0;
             CpuFoliageBuildMicroseconds = 0;
             CpuFoliageUploadMicroseconds = 0;
             GpuFoliageCullMicroseconds = 0;
@@ -2529,6 +2597,13 @@ namespace Njulf.Rendering.Data
             ReflectionMode = ReflectionMode.Disabled;
             RequestedReflectionMode = ReflectionMode.Disabled;
             EffectiveReflectionMode = ReflectionMode.Disabled;
+            RequestedReflectionImplementation =
+                ReflectionImplementationMode.Auto;
+            EffectiveReflectionImplementation =
+                ReflectionImplementationMode.Adaptive;
+            ReflectionImplementationFallbackReason =
+                ReflectionImplementationFallbackReason.None;
+            ReflectionImplementationFallbackDetail = string.Empty;
             ReflectionFallbackReason = ReflectionFallbackReason.None;
             ReflectionFallbackDetail = string.Empty;
             ReflectionDebugView = ReflectionDebugView.None;
@@ -2552,6 +2627,20 @@ namespace Njulf.Rendering.Data
             GpuReflectionProbePrefilterMicroseconds = 0;
             GpuReflectionProbePublishMicroseconds = 0;
             HybridReflectionEstimatedBytes = 0;
+            AutomaticPlanarReflectionActive = false;
+            AutomaticPlanarCandidateCount = 0;
+            AutomaticPlanarSelectedCount = 0;
+            AutomaticPlanarCaptureCount = 0;
+            AutomaticPlanarReprojectionCount = 0;
+            AutomaticPlanarRejectedCount = 0;
+            AutomaticPlanarRejectionReason =
+                AutomaticPlanarCandidateRejectionReason.None;
+            AutomaticPlanarRejectionDetail = string.Empty;
+            AutomaticPlanarCaptureGeneration = 0;
+            AutomaticPlanarEstimatedBytes = 0;
+            AutomaticPlanarResolutionScale = 0;
+            AutomaticPlanarMaximumCaptureAge = 0;
+            GpuAutomaticPlanarCaptureMicroseconds = 0;
             HybridReflectionPassEnabled = false;
             HybridReflectionWidth = 0;
             HybridReflectionHeight = 0;
@@ -2559,6 +2648,8 @@ namespace Njulf.Rendering.Data
             HybridReflectionHistoryValid = 0;
             HybridReflectionHistoryResetReason =
                 ReflectionHistoryResetReason.None;
+            HybridReflectionSourceInvalidation =
+                ReflectionHistorySourceInvalidation.None;
             ReflectionProbeContentRevision = 0;
             ReflectionEnvironmentGeneration = 0;
             HybridReflectionSsrHitCount = 0;
@@ -2571,6 +2662,13 @@ namespace Njulf.Rendering.Data
             HybridReflectionDdgiFallbackCount = 0;
             HybridReflectionProbeFallbackCount = 0;
             HybridReflectionEnvironmentFallbackCount = 0;
+            HybridReflectionFullRateTileCount = 0;
+            HybridReflectionHalfRateTileCount = 0;
+            HybridReflectionQuarterRateTileCount = 0;
+            HybridReflectionAnalyticTileCount = 0;
+            HybridReflectionReuseTileCount = 0;
+            HybridReflectionActiveTileCount = 0;
+            HybridReflectionTileOverflowCount = 0;
             TransparentReflectionRayRequestCount = 0;
             TransparentReflectionEstimatedSsrHitCount = 0;
             TransparentReflectionEstimatedRayHitCount = 0;

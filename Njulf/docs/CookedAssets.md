@@ -12,6 +12,13 @@ dotnet run --project Njulf.AssetTool -- cook changed NjulfHelloGame --out NjulfH
 dotnet run --project Njulf.AssetTool -- clean-stale --out NjulfHelloGame/Cooked
 ```
 
+The default meshlet build profile is `portable-48v-64t`. Controlled recooks can
+select `portable-flex-48v-32-64t-cone025-split2`,
+`portable-flex-48v-32-64t-cone050-split2`, or `connected-64v-126t` with
+`--meshlet-build-profile <id>`. The selected ID and parameters participate in
+cook identity and compatibility hashing, so profiles are never silently mixed
+within one cooked mesh.
+
 `Cooked/` is generated output and is intentionally not version-controlled. After
 a fresh clone, run the folder cook before starting the normal cooked-only runtime
 or producing a Release build or publish.
@@ -110,6 +117,25 @@ material into foliage shading:
 shading only. Alpha-coverage-preserving mipmaps are controlled separately by
 standard glTF `alphaMode: "MASK"`; opaque foliage such as a tree trunk uses
 ordinary mipmaps.
+
+## Offline foliage impostors
+
+Capture equal-sized source views offline as albedo/opacity, normal, and
+conservative depth/thickness RGBA images, then pack them deterministically:
+
+```powershell
+dotnet run --project Njulf.AssetTool -- foliage-impostor bake tree-views.json --out Assets/Foliage/Impostors --name oak
+```
+
+The manifest supplies `name`, `sourceBounds`, `pivot`, `scale`, and 1–64 views;
+each view contains a non-zero `direction` plus `albedoOpacity`, `normal`, and
+`depth` image paths. The command validates dimensions and bounds, packs all
+three atlases into the same bounded grid, writes content-addressed PNGs
+atomically, and emits `<name>.foliage-impostor.json` with normalized atlas
+rectangles and a canonical SHA-256. That metadata matches the scene foliage
+impostor contract and is authored onto the prototype. Runtime baking is never
+performed; missing or invalid metadata falls back to the complete coarsest
+authored LOD.
 
 ## Runtime policy
 

@@ -35,6 +35,376 @@ public enum GiPrimitiveEmissiveTriangleFlags : uint
     PackageRecordCapTruncated = 1u << 3
 }
 
+public enum GiPrimitivePlanarEvidenceRejectionReason : uint
+{
+    None = 0,
+    NotAnalyzed = 1,
+    DeformingGeometry = 2,
+    MissingOrMalformedGeometry = 3,
+    NonFiniteGeometry = 4,
+    NoPositiveArea = 5,
+    TriangleNormalDivergence = 6,
+    VertexPlaneDeviation = 7
+}
+
+/// <summary>
+/// Deterministic local-space evidence that a rigid primitive is one planar
+/// receiver. Bounds are expressed in the stored tangent/bitangent frame about
+/// <see cref="LocalOrigin"/> and the plane follows dot(n, p) + w = 0.
+/// </summary>
+public sealed record GiPrimitivePlanarEvidence
+{
+    public const float MinimumTriangleNormalDot = 0.9995f;
+    public const double MinimumPlaneToleranceMeters = 0.0005;
+    public const double RelativePlaneTolerance = 1.0e-4;
+
+    public bool IsValid { get; init; }
+    public Vector4 LocalPlane { get; init; } =
+        new(Vector3.UnitZ, 0.0f);
+    public Vector3 LocalOrigin { get; init; }
+    public Vector3 LocalTangent { get; init; } = Vector3.UnitX;
+    public Vector3 LocalBitangent { get; init; } = Vector3.UnitY;
+    public Vector2 ProjectedBoundsMin { get; init; }
+    public Vector2 ProjectedBoundsMax { get; init; }
+    public double SurfaceArea { get; init; }
+    public double MaximumDeviation { get; init; }
+    public double PlaneTolerance { get; init; } =
+        MinimumPlaneToleranceMeters;
+    public GiPrimitivePlanarEvidenceRejectionReason RejectionReason
+    {
+        get;
+        init;
+    } = GiPrimitivePlanarEvidenceRejectionReason.NotAnalyzed;
+    public string Detail { get; init; } = "Planar evidence was not analyzed.";
+
+    public static GiPrimitivePlanarEvidence NotAnalyzed { get; } = new();
+
+    public IReadOnlyList<string> Validate()
+    {
+        var errors = new List<string>();
+        bool finite = float.IsFinite(LocalPlane.X) &&
+            float.IsFinite(LocalPlane.Y) &&
+            float.IsFinite(LocalPlane.Z) &&
+            float.IsFinite(LocalPlane.W) &&
+            IsFinite(LocalOrigin) && IsFinite(LocalTangent) &&
+            IsFinite(LocalBitangent) &&
+            float.IsFinite(ProjectedBoundsMin.X) &&
+            float.IsFinite(ProjectedBoundsMin.Y) &&
+            float.IsFinite(ProjectedBoundsMax.X) &&
+            float.IsFinite(ProjectedBoundsMax.Y) &&
+            double.IsFinite(SurfaceArea) &&
+            double.IsFinite(MaximumDeviation) &&
+            double.IsFinite(PlaneTolerance);
+        if (!finite)
+            errors.Add("Primitive planar evidence contains non-finite data.");
+        if (!Enum.IsDefined(RejectionReason))
+            errors.Add("Primitive planar evidence has an unknown rejection reason.");
+        if (!IsValid)
+        {
+            if (RejectionReason == GiPrimitivePlanarEvidenceRejectionReason.None)
+                errors.Add("Rejected primitive planar evidence requires a reason.");
+            return errors;
+        }
+
+        if (RejectionReason != GiPrimitivePlanarEvidenceRejectionReason.None)
+            errors.Add("Valid primitive planar evidence cannot have a rejection reason.");
+        if (SurfaceArea <= 0.0 || PlaneTolerance <= 0.0 ||
+            MaximumDeviation < 0.0 || MaximumDeviation > PlaneTolerance)
+        {
+            errors.Add("Valid primitive planar evidence has invalid area/deviation bounds.");
+        }
+        Vector3 normal = new(LocalPlane.X, LocalPlane.Y, LocalPlane.Z);
+        if (Math.Abs(normal.LengthSquared() - 1.0f) > 1.0e-4f ||
+            Math.Abs(LocalTangent.LengthSquared() - 1.0f) > 1.0e-4f ||
+            Math.Abs(LocalBitangent.LengthSquared() - 1.0f) > 1.0e-4f ||
+            Math.Abs(Vector3.Dot(normal, LocalTangent)) > 1.0e-4f ||
+            Math.Abs(Vector3.Dot(normal, LocalBitangent)) > 1.0e-4f ||
+            Math.Abs(Vector3.Dot(LocalTangent, LocalBitangent)) > 1.0e-4f)
+        {
+            errors.Add("Primitive planar evidence basis is not orthonormal.");
+        }
+        if (ProjectedBoundsMin.X > ProjectedBoundsMax.X ||
+            ProjectedBoundsMin.Y > ProjectedBoundsMax.Y)
+        {
+            errors.Add("Primitive planar evidence projected bounds are inverted.");
+        }
+        return errors;
+    }
+
+    private static bool IsFinite(Vector3 value) =>
+        float.IsFinite(value.X) && float.IsFinite(value.Y) &&
+        float.IsFinite(value.Z);
+}
+
+/// <summary>Shared cooker/runtime deterministic planar analyzer.</summary>
+public static class GiPrimitivePlanarEvidenceAnalyzer
+{
+    public static GiPrimitivePlanarEvidence Analyze(ModelSubMesh subMesh)
+    {
+        ArgumentNullException.ThrowIfNull(subMesh);
+        bool deforming = subMesh.SkinIndex >= 0 ||
+            subMesh.JointIndices0.Length != 0 ||
+            subMesh.JointWeights0.Length != 0;
+        return Analyze(subMesh.Vertices, subMesh.Indices, deforming);
+    }
+
+    public static GiPrimitivePlanarEvidence Analyze(
+        ReadOnlySpan<Vector3> positions,
+        ReadOnlySpan<uint> indices,
+        bool deforming)
+    {
+        if (deforming)
+        {
+            return Reject(
+                GiPrimitivePlanarEvidenceRejectionReason.DeformingGeometry,
+                "Skinned or otherwise deforming geometry cannot own a stable planar capture.");
+        }
+        if (positions.Length == 0 || indices.Length == 0 ||
+            indices.Length % 3 != 0)
+        {
+            return Reject(
+                GiPrimitivePlanarEvidenceRejectionReason.MissingOrMalformedGeometry,
+                "Planar evidence requires a non-empty triangle list.");
+        }
+
+        Vector3 minimum = new(float.PositiveInfinity);
+        Vector3 maximum = new(float.NegativeInfinity);
+        foreach (Vector3 position in positions)
+        {
+            if (!IsFinite(position))
+            {
+                return Reject(
+                    GiPrimitivePlanarEvidenceRejectionReason.NonFiniteGeometry,
+                    "Planar evidence encountered a non-finite position.");
+            }
+            minimum = Vector3.Min(minimum, position);
+            maximum = Vector3.Max(maximum, position);
+        }
+        double diagonal = (maximum - minimum).Length();
+        double tolerance = Math.Max(
+            GiPrimitivePlanarEvidence.MinimumPlaneToleranceMeters,
+            diagonal * GiPrimitivePlanarEvidence.RelativePlaneTolerance);
+
+        Vector3 referenceNormal = Vector3.Zero;
+        Vector3 weightedNormal = Vector3.Zero;
+        Vector3 weightedCentroid = Vector3.Zero;
+        double totalArea = 0.0;
+        for (int index = 0; index < indices.Length; index += 3)
+        {
+            if (!TryReadTriangle(
+                    positions,
+                    indices,
+                    index,
+                    out Vector3 p0,
+                    out Vector3 p1,
+                    out Vector3 p2))
+            {
+                return Reject(
+                    GiPrimitivePlanarEvidenceRejectionReason.MissingOrMalformedGeometry,
+                    "Planar evidence contains an out-of-range triangle index.",
+                    tolerance);
+            }
+            Vector3 cross = Vector3.Cross(p1 - p0, p2 - p0);
+            double twiceArea = cross.Length();
+            if (!double.IsFinite(twiceArea))
+            {
+                return Reject(
+                    GiPrimitivePlanarEvidenceRejectionReason.NonFiniteGeometry,
+                    "Planar evidence produced a non-finite triangle area.",
+                    tolerance);
+            }
+            if (twiceArea <= 2.0e-20)
+                continue;
+            double area = 0.5 * twiceArea;
+            Vector3 normal = cross / (float)twiceArea;
+            if (referenceNormal.LengthSquared() <= 1.0e-12f)
+                referenceNormal = normal;
+            if (Vector3.Dot(normal, referenceNormal) < 0.0f)
+                normal = -normal;
+            weightedNormal += normal * (float)area;
+            weightedCentroid += ((p0 + p1 + p2) / 3.0f) * (float)area;
+            totalArea += area;
+        }
+        if (totalArea <= 0.0 || weightedNormal.LengthSquared() <= 1.0e-12f)
+        {
+            return Reject(
+                GiPrimitivePlanarEvidenceRejectionReason.NoPositiveArea,
+                "Planar evidence contains no positive-area triangle.",
+                tolerance);
+        }
+
+        Vector3 fittedNormal = weightedNormal.Normalized();
+        fittedNormal = OrientDeterministically(fittedNormal);
+        Vector3 origin = weightedCentroid / (float)totalArea;
+        float planeOffset = -Vector3.Dot(fittedNormal, origin);
+        Vector3 tangent = CreateTangent(fittedNormal);
+        Vector3 bitangent = Vector3.Cross(fittedNormal, tangent).Normalized();
+        Vector2 projectedMinimum = new(float.PositiveInfinity);
+        Vector2 projectedMaximum = new(float.NegativeInfinity);
+        double maximumDeviation = 0.0;
+
+        for (int index = 0; index < indices.Length; index += 3)
+        {
+            _ = TryReadTriangle(
+                positions,
+                indices,
+                index,
+                out Vector3 p0,
+                out Vector3 p1,
+                out Vector3 p2);
+            Vector3 cross = Vector3.Cross(p1 - p0, p2 - p0);
+            float crossLength = cross.Length();
+            if (crossLength <= 2.0e-20f)
+                continue;
+            Vector3 triangleNormal = cross / crossLength;
+            float alignment = MathF.Abs(Vector3.Dot(
+                triangleNormal,
+                fittedNormal));
+            if (alignment <
+                GiPrimitivePlanarEvidence.MinimumTriangleNormalDot)
+            {
+                return Reject(
+                    GiPrimitivePlanarEvidenceRejectionReason.TriangleNormalDivergence,
+                    $"Triangle {index / 3} normal alignment {alignment:R} is below 0.9995.",
+                    tolerance,
+                    totalArea);
+            }
+            double deviation0 = Math.Abs(
+                Vector3.Dot(fittedNormal, p0) + planeOffset);
+            double deviation1 = Math.Abs(
+                Vector3.Dot(fittedNormal, p1) + planeOffset);
+            double deviation2 = Math.Abs(
+                Vector3.Dot(fittedNormal, p2) + planeOffset);
+            double triangleMaximumDeviation = Math.Max(
+                deviation0,
+                Math.Max(deviation1, deviation2));
+            maximumDeviation = Math.Max(
+                maximumDeviation,
+                triangleMaximumDeviation);
+            if (triangleMaximumDeviation > tolerance)
+            {
+                return Reject(
+                    GiPrimitivePlanarEvidenceRejectionReason.VertexPlaneDeviation,
+                    $"Triangle {index / 3} exceeds planar tolerance {tolerance:R} m.",
+                    tolerance,
+                    totalArea,
+                    maximumDeviation);
+            }
+            IncludeProjected(p0, origin, tangent, bitangent,
+                ref projectedMinimum, ref projectedMaximum);
+            IncludeProjected(p1, origin, tangent, bitangent,
+                ref projectedMinimum, ref projectedMaximum);
+            IncludeProjected(p2, origin, tangent, bitangent,
+                ref projectedMinimum, ref projectedMaximum);
+        }
+
+        return new GiPrimitivePlanarEvidence
+        {
+            IsValid = true,
+            LocalPlane = new Vector4(fittedNormal, planeOffset),
+            LocalOrigin = origin,
+            LocalTangent = tangent,
+            LocalBitangent = bitangent,
+            ProjectedBoundsMin = projectedMinimum,
+            ProjectedBoundsMax = projectedMaximum,
+            SurfaceArea = totalArea,
+            MaximumDeviation = maximumDeviation,
+            PlaneTolerance = tolerance,
+            RejectionReason = GiPrimitivePlanarEvidenceRejectionReason.None,
+            Detail = "Rigid primitive satisfies deterministic planar evidence."
+        };
+    }
+
+    private static GiPrimitivePlanarEvidence Reject(
+        GiPrimitivePlanarEvidenceRejectionReason reason,
+        string detail,
+        double tolerance =
+            GiPrimitivePlanarEvidence.MinimumPlaneToleranceMeters,
+        double area = 0.0,
+        double maximumDeviation = 0.0) => new()
+    {
+        IsValid = false,
+        RejectionReason = reason,
+        Detail = detail,
+        PlaneTolerance = tolerance,
+        SurfaceArea = area,
+        MaximumDeviation = maximumDeviation
+    };
+
+    private static bool TryReadTriangle(
+        ReadOnlySpan<Vector3> positions,
+        ReadOnlySpan<uint> indices,
+        int index,
+        out Vector3 p0,
+        out Vector3 p1,
+        out Vector3 p2)
+    {
+        uint i0 = indices[index];
+        uint i1 = indices[index + 1];
+        uint i2 = indices[index + 2];
+        if (i0 >= positions.Length || i1 >= positions.Length ||
+            i2 >= positions.Length)
+        {
+            p0 = p1 = p2 = default;
+            return false;
+        }
+        p0 = positions[(int)i0];
+        p1 = positions[(int)i1];
+        p2 = positions[(int)i2];
+        return true;
+    }
+
+    private static Vector3 OrientDeterministically(Vector3 normal)
+    {
+        float x = MathF.Abs(normal.X);
+        float y = MathF.Abs(normal.Y);
+        float z = MathF.Abs(normal.Z);
+        float largest = x >= y && x >= z
+            ? normal.X
+            : y >= z
+                ? normal.Y
+                : normal.Z;
+        return largest < 0.0f ? -normal : normal;
+    }
+
+    private static void IncludeProjected(
+        Vector3 position,
+        Vector3 origin,
+        Vector3 tangent,
+        Vector3 bitangent,
+        ref Vector2 minimum,
+        ref Vector2 maximum)
+    {
+        Vector3 relative = position - origin;
+        Vector2 projected = new(
+            Vector3.Dot(relative, tangent),
+            Vector3.Dot(relative, bitangent));
+        minimum = new Vector2(
+            Math.Min(minimum.X, projected.X),
+            Math.Min(minimum.Y, projected.Y));
+        maximum = new Vector2(
+            Math.Max(maximum.X, projected.X),
+            Math.Max(maximum.Y, projected.Y));
+    }
+
+    private static Vector3 CreateTangent(Vector3 normal)
+    {
+        float x = MathF.Abs(normal.X);
+        float y = MathF.Abs(normal.Y);
+        float z = MathF.Abs(normal.Z);
+        Vector3 reference = x <= y && x <= z
+            ? Vector3.UnitX
+            : y <= z
+                ? Vector3.UnitY
+                : Vector3.UnitZ;
+        return Vector3.Cross(reference, normal).Normalized();
+    }
+
+    private static bool IsFinite(Vector3 value) =>
+        float.IsFinite(value.X) && float.IsFinite(value.Y) &&
+        float.IsFinite(value.Z);
+}
+
 /// <summary>
 /// Cooked, factor-neutral emissive transport for one source triangle.
 /// <see cref="CoveredMeanEmissiveTexture"/> is conditional on the authored
@@ -85,8 +455,8 @@ public sealed record GiPrimitiveTextureBindingSnapshot
 /// </summary>
 public sealed record GiPrimitiveTransportProfile
 {
-    public const int CurrentSchemaVersion = 5;
-    public const uint CurrentAlgorithmVersion = 6;
+    public const int CurrentSchemaVersion = 6;
+    public const uint CurrentAlgorithmVersion = 7;
     // For Schlick Fresnel, the cosine-weighted hemispherical average of
     // 1 - F(NdotL) is (20 / 21) * (1 - F0).
     public const double SchlickCosineWeightedTransmission = 20.0 / 21.0;
@@ -152,6 +522,8 @@ public sealed record GiPrimitiveTransportProfile
     public bool CookedEmissionEligible { get; init; }
     public GiPrimitiveTextureBindingSnapshot BaseColorSamplingBinding { get; init; } = new();
     public GiPrimitiveTextureBindingSnapshot EmissiveSamplingBinding { get; init; } = new();
+    public GiPrimitivePlanarEvidence PlanarEvidence { get; init; } =
+        GiPrimitivePlanarEvidence.NotAnalyzed;
 
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsComplete => (Validity & CompleteValidity) == CompleteValidity;
@@ -217,6 +589,11 @@ public sealed record GiPrimitiveTransportProfile
         }
         if (!string.Equals(SampleRule, SampleRuleName, StringComparison.Ordinal))
             errors.Add($"Primitive-profile sample rule '{SampleRule}' is unsupported.");
+        if (PlanarEvidence is null)
+            errors.Add("Primitive-profile planar evidence cannot be null.");
+        else
+            foreach (string error in PlanarEvidence.Validate())
+                errors.Add(error);
         if ((!IsComplete || Quality == GiPrimitiveTransportProfileQuality.Invalid) &&
             string.IsNullOrWhiteSpace(InvalidReason))
         {
@@ -483,6 +860,8 @@ public static class GiPrimitiveTransportProfileGenerator
                 "Primitive transport alpha cutoff must be finite and non-negative.");
         }
         textures ??= new GiPrimitiveTextureInputs();
+        GiPrimitivePlanarEvidence planarEvidence =
+            GiPrimitivePlanarEvidenceAnalyzer.Analyze(subMesh);
 
         GiPrimitiveTransportProfileValidity validity =
             GiPrimitiveTransportProfileValidity.Geometry |
@@ -603,6 +982,7 @@ public static class GiPrimitiveTransportProfileGenerator
                 TriangleCount = triangles,
                 DegenerateTriangleCount = degenerateTriangles,
                 SampleCount = sampleCount,
+                PlanarEvidence = planarEvidence,
                 InvalidReason = "Primitive contains no finite, non-degenerate triangle area."
             };
             return ApplyEmissiveTriangleData(invalid, emissiveTriangleData);
@@ -654,6 +1034,7 @@ public static class GiPrimitiveTransportProfileGenerator
             MeanRoughness = result.Roughness,
             NormalVariance = result.NormalVariance,
             EstimatedIntegrationError = error,
+            PlanarEvidence = planarEvidence,
             InvalidReason = GetInvalidReason(validity)
         };
         return ApplyEmissiveTriangleData(profile, emissiveTriangleData);
@@ -1293,6 +1674,7 @@ public static class GiPrimitiveTransportProfileGenerator
         hash.Add(subMeshIndex);
         hash.Add(subMesh.Name);
         hash.Add(subMesh.MaterialIndex);
+        hash.Add(subMesh.SkinIndex);
         foreach (Vector3 value in subMesh.Vertices)
         {
             hash.Add(value.X);

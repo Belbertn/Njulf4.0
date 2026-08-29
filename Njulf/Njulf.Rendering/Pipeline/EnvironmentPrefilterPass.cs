@@ -352,8 +352,6 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
 
     private VkPipeline CreatePipeline(string shaderName)
     {
-        long pipelineStart =
-            _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
         ShaderModule shader = default;
         try
         {
@@ -372,13 +370,19 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device,
-                _pipelineCache,
-                1,
-                &info,
-                null,
-                out VkPipeline pipeline);
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId(
+                        "EnvironmentPrefilter." + shaderName),
+                    &info,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &info,
+                    null,
+                    out pipeline);
             if (result != Result.Success)
                 throw new VulkanException($"Failed to create {shaderName} pipeline.", result);
             return pipeline;
@@ -387,9 +391,6 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
         {
             if (shader.Handle != 0)
                 _context.Api.DestroyShaderModule(_context.Device, shader, null);
-            _pipelineCacheService?.EndPipelineCreation(
-                "EnvironmentPrefilter." + shaderName,
-                pipelineStart);
         }
     }
 

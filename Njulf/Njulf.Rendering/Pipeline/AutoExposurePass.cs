@@ -296,8 +296,6 @@ namespace Njulf.Rendering.Pipeline
 
         private VkPipeline CreatePipeline()
         {
-            long pipelineStart =
-                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule shaderModule = default;
             try
             {
@@ -320,13 +318,18 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                Result result = _context.Api.CreateComputePipelines(
-                    _context.Device,
-                    _pipelineCache,
-                    1,
-                    &pipelineInfo,
-                    null,
-                    out VkPipeline pipeline);
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId("AutoExposure"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out pipeline);
 
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create auto exposure pipeline", result);
@@ -337,9 +340,6 @@ namespace Njulf.Rendering.Pipeline
             {
                 if (shaderModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
-                _pipelineCacheService?.EndPipelineCreation(
-                    "AutoExposure",
-                    pipelineStart);
             }
         }
     }

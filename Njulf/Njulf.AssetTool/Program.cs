@@ -33,6 +33,7 @@ internal static class Program
                 "material-gi-test-matrix" => MaterialGiTestMatrixCommand.Run(args[1..]),
                 "material-gi-evidence" => MaterialGiEvidenceCommand.Run(args[1..]),
                 "advanced-gi" => AdvancedGiQualificationCommand.Run(args[1..]),
+                "foliage-impostor" => FoliageImpostorBakerCommand.Run(args[1..]),
                 "--child-import" => await RunChildImport(args[1..]).ConfigureAwait(false),
                 _ => UnknownCommand(args[0])
             };
@@ -218,6 +219,8 @@ internal static class Program
         AssetCookTerminalProgressDetail progressDetail = AssetCookTerminalProgressDetail.Items;
         int jobs = 1;
         long maxInflightBytes = 512L * 1024L * 1024L;
+        RendererMeshletBuildProfile meshletBuildProfile =
+            RendererMeshletBuildProfiles.Production;
         for (int i = 2; i < args.Length; i++)
         {
             switch (args[i])
@@ -310,6 +313,10 @@ internal static class Program
                             "Maximum in-flight bytes must be positive.");
                     }
                     break;
+                case "--meshlet-build-profile":
+                    meshletBuildProfile = RendererMeshletBuildProfiles.Resolve(
+                        RequireValue(args, ref i, "--meshlet-build-profile"));
+                    break;
                 case "--policy":
                 case "--timeout-ms":
                     _ = RequireValue(args, ref i, args[i]); // Accepted for parity with validation/import automation.
@@ -390,7 +397,7 @@ internal static class Program
                 MaxInflightBytes = maxInflightBytes
             });
 
-            using var cooker = new ModelAssetCooker();
+            using var cooker = new ModelAssetCooker(meshletBuildProfile);
             if (mode == "model")
             {
                 AssetCookResult result = cooker.CookModel(
@@ -670,8 +677,8 @@ internal static class Program
         Console.WriteLine("  Njulf.AssetTool validate <path-or-folder> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>] [--timeout-ms <ms>] [--max-bytes <bytes>] [--high-texture-bytes <bytes>] [--child-process-all]");
         Console.WriteLine("  Njulf.AssetTool import <path> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>]");
         Console.WriteLine("  Njulf.AssetTool report <path-or-folder> --json <output> [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>]");
-        Console.WriteLine("  Njulf.AssetTool cook model <source> --out <folder> [--platform <rid>] [--texture-format <autoBc|rgba8|bc7|bc5|bc4|bc6h>] [--signing-key <pem>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--max-texture-dimension <pixels>] [--max-sampler-anisotropy <1..16>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--omm-bridge <native-library> --omm-provenance <json> --omm-subdivision <0..12> --omm-max-subdivision <1..12> --omm-max-workload <count> --omm-max-array-bytes <bytes>]");
-        Console.WriteLine("  Njulf.AssetTool cook folder|changed <source-folder> --out <folder> [--platform <rid>] [--texture-format <format>] [--signing-key <pem>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--jobs <count|auto>] [--max-inflight-bytes <bytes>] [--omm-bridge <native-library> --omm-provenance <json>]");
+        Console.WriteLine("  Njulf.AssetTool cook model <source> --out <folder> [--platform <rid>] [--texture-format <autoBc|rgba8|bc7|bc5|bc4|bc6h>] [--meshlet-build-profile <id>] [--signing-key <pem>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--max-texture-dimension <pixels>] [--max-sampler-anisotropy <1..16>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--omm-bridge <native-library> --omm-provenance <json> --omm-subdivision <0..12> --omm-max-subdivision <1..12> --omm-max-workload <count> --omm-max-array-bytes <bytes>]");
+        Console.WriteLine("  Njulf.AssetTool cook folder|changed <source-folder> --out <folder> [--platform <rid>] [--texture-format <format>] [--meshlet-build-profile <id>] [--signing-key <pem>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--jobs <count|auto>] [--max-inflight-bytes <bytes>] [--omm-bridge <native-library> --omm-provenance <json>]");
         Console.WriteLine("  Njulf.AssetTool clean-stale --out <folder> [--platform <rid>]");
         Console.WriteLine("  Njulf.AssetTool migrate <cooked-folder> [--out <folder>] [--signing-key <pem>]");
         Console.WriteLine("  Njulf.AssetTool keygen --private <pem> --public <pem>");
@@ -687,5 +694,6 @@ internal static class Program
         Console.WriteLine("  Njulf.AssetTool advanced-gi verify-startup --profile <json> [--build-commit <sha> --shader-bundle-sha256 <sha256>]");
         Console.WriteLine("  Njulf.AssetTool advanced-gi verify-qualification --manifest <json>");
         Console.WriteLine("  Njulf.AssetTool advanced-gi verify-c1-model --model <cooked.njmodel>");
+        Console.WriteLine("  Njulf.AssetTool foliage-impostor bake <manifest.json> --out <folder> [--name <asset-name>]");
     }
 }

@@ -613,7 +613,6 @@ internal sealed class SampleSceneLoader
             };
             prototype.CardHeight = 0.26f;
             prototype.CardWidth = 0.18f;
-            prototype.AuthoredMeshletStride = 1u;
             prototype.Lod.Lod0Distance = 5f;
             prototype.Lod.Lod1Distance = 10f;
             prototype.Lod.Lod2Distance = 180f;

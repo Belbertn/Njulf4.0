@@ -117,7 +117,7 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(24));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(26));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));
@@ -445,7 +445,8 @@ public sealed class RenderSettingsFileIoTests
                     Is.EqualTo(GtaoQualityPreset.High));
                 Assert.That(loaded.GlobalIllumination
                         .SimpleDdgiReceiverCacheMode,
-                    Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
+                    Is.EqualTo(GlobalIlluminationSettings
+                        .DefaultSimpleDdgiReceiverCacheMode));
                 Assert.That(loaded.GlobalIllumination
                         .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled,
                     Is.True);

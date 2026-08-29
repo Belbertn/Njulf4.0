@@ -30,6 +30,21 @@ namespace Njulf.Rendering.Data
         GpuParticles = 6
     }
 
+    [Flags]
+    public enum AsyncComputePreferredPathMask : uint
+    {
+        None = 0,
+        SimpleDdgiUpdate = 1u << (int)AsyncComputePath.SimpleDdgiUpdate,
+        FarFieldClipmapBake = 1u << (int)AsyncComputePath.FarFieldClipmapBake,
+        AmbientOcclusionBlur = 1u << (int)AsyncComputePath.AmbientOcclusionBlur,
+        HiZBuild = 1u << (int)AsyncComputePath.HiZBuild,
+        Fog = 1u << (int)AsyncComputePath.Fog,
+        Bloom = 1u << (int)AsyncComputePath.Bloom,
+        GpuParticles = 1u << (int)AsyncComputePath.GpuParticles,
+        All = SimpleDdgiUpdate | FarFieldClipmapBake |
+            AmbientOcclusionBlur | HiZBuild | Fog | Bloom | GpuParticles
+    }
+
     /// <summary>
     /// Explains the effective state of an async path for the current frame.  These values are
     /// intentionally separate from the requested mode so telemetry cannot confuse a candidate
@@ -94,6 +109,16 @@ namespace Njulf.Rendering.Data
                 AsyncComputePath.GpuParticles => settings.GpuParticlesEnabled,
                 _ => false
             };
+        }
+
+        public static bool IsPreferred(
+            this AsyncComputeSettings settings,
+            AsyncComputePath path)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+            uint bit = 1u << (int)path;
+            return ((uint)settings.PreferredPathMask & bit) != 0u;
         }
     }
 }

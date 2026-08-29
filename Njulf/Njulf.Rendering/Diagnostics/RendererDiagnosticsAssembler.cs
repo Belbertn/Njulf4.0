@@ -96,6 +96,8 @@ internal sealed class RendererDiagnosticsAssembler
             input.Resources.ReflectionProbeManager;
         var _forwardPlusPass = input.Resources.ForwardPlusPass;
         var _meshPipeline = input.Resources.MeshPipeline;
+        var _meshletPhysicalResidencyResources =
+            input.Resources.MeshletPhysicalResidencyResources;
         var _dynamicResolutionScaleController =
             input.Resources.DynamicResolutionScaleController;
         var _simpleDdgiVolumeManager =
@@ -233,6 +235,56 @@ internal sealed class RendererDiagnosticsAssembler
         GpuCompletionRetirementSnapshot reflectionRetirement = _reflectionProbeManager?.ResourceRetirementSnapshot ??
             default;
         MaterialManagerDiagnostics materialDiagnostics = _materialManager.Diagnostics;
+        MeshletStreamingCoordinatorSnapshot? meshletResidency =
+            _meshletPhysicalResidencyResources?.Coordinator.CreateSnapshot();
+        MeshletPhysicalPageCacheSnapshot? meshletPageCache =
+            _meshletPhysicalResidencyResources?.Uploader.CreateSnapshot();
+        VulkanMeshletPhysicalResidencySnapshot? meshletVulkanResidency =
+            _meshletPhysicalResidencyResources?.CreateSnapshot();
+        SceneSubmissionSettings sceneSubmissionSettings =
+            Settings.SceneSubmission;
+        MeshletStreamingResidencyOptions? residencyOptions =
+            _meshletPhysicalResidencyResources?.Coordinator.Options;
+        bool meshletResidencyReloadRequired =
+            meshletResidency?.Active == true &&
+            (residencyOptions is null ||
+             !sceneSubmissionSettings.GpuMeshletStreamingEnabled ||
+             sceneSubmissionSettings
+                 .GpuMeshletStreamingPhysicalPageCount !=
+                residencyOptions.PhysicalPageCapacity ||
+             checked(sceneSubmissionSettings
+                 .GpuMeshletStreamingUploadBudgetMiB * 1024 * 1024) !=
+                residencyOptions.MaximumUploadBytesPerTick ||
+             sceneSubmissionSettings
+                 .GpuMeshletStreamingMaximumRequestsPerFrame !=
+                residencyOptions.MaximumRequestsPerSerial ||
+             sceneSubmissionSettings.GpuMeshletStreamingConcurrentReads !=
+                residencyOptions.MaximumConcurrentReads);
+        long residencyResolvedRequests = meshletResidency is null
+            ? 0
+            : meshletResidency.ResidentHitCount +
+              meshletResidency.FallbackHitCount;
+        float meshletResidencyHitRate = residencyResolvedRequests <= 0
+            ? 0.0f
+            : meshletResidency!.ResidentHitCount /
+              (float)residencyResolvedRequests;
+        float meshletResidencyFallbackRate = residencyResolvedRequests <= 0
+            ? 0.0f
+            : meshletResidency!.FallbackHitCount /
+              (float)residencyResolvedRequests;
+        string meshletResidencyFallbackSummary = meshletResidency is null
+            ? string.Empty
+            : string.Join(
+                ", ",
+                meshletResidency.FallbackReasons
+                    .OrderByDescending(static pair => pair.Value)
+                    .ThenBy(static pair => pair.Key,
+                        StringComparer.Ordinal)
+                    .Select(static pair => $"{pair.Key}={pair.Value}"));
+        string meshletResidencyLatestFailure =
+            meshletResidency?.LastFailure?.Detail ??
+            meshletVulkanResidency?.LatestFailure ??
+            string.Empty;
         MaterialGiRolloutEvaluation materialGiRollout =
             giSettings.EvaluateMaterialGiRollout();
         GiPipelineCacheTelemetry giPipelineCacheTelemetry =
@@ -515,6 +567,14 @@ internal sealed class RendererDiagnosticsAssembler
                 : 0u,
             RequestedReflectionMode = sceneData.RequestedReflectionMode,
             EffectiveReflectionMode = sceneData.EffectiveReflectionMode,
+            RequestedReflectionImplementation =
+                sceneData.RequestedReflectionImplementation,
+            EffectiveReflectionImplementation =
+                sceneData.EffectiveReflectionImplementation,
+            ReflectionImplementationFallbackReason =
+                sceneData.ReflectionImplementationFallbackReason,
+            ReflectionImplementationFallbackDetail =
+                sceneData.ReflectionImplementationFallbackDetail,
             ReflectionFallbackReason = sceneData.ReflectionFallbackReason,
             ReflectionFallbackDetail = sceneData.ReflectionFallbackDetail,
             HybridReflectionPassEnabled =
@@ -527,6 +587,8 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.HybridReflectionHistoryValid,
             HybridReflectionHistoryResetReason =
                 sceneData.HybridReflectionHistoryResetReason,
+            HybridReflectionSourceInvalidation =
+                sceneData.HybridReflectionSourceInvalidation,
             HybridReflectionEstimatedBytes =
                 sceneData.HybridReflectionEstimatedBytes,
             HybridReflectionCountersReadbackValid =
@@ -549,6 +611,46 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.HybridReflectionProbeFallbackCount,
             HybridReflectionEnvironmentFallbackCount =
                 sceneData.HybridReflectionEnvironmentFallbackCount,
+            HybridReflectionFullRateTileCount =
+                sceneData.HybridReflectionFullRateTileCount,
+            HybridReflectionHalfRateTileCount =
+                sceneData.HybridReflectionHalfRateTileCount,
+            HybridReflectionQuarterRateTileCount =
+                sceneData.HybridReflectionQuarterRateTileCount,
+            HybridReflectionAnalyticTileCount =
+                sceneData.HybridReflectionAnalyticTileCount,
+            HybridReflectionReuseTileCount =
+                sceneData.HybridReflectionReuseTileCount,
+            HybridReflectionActiveTileCount =
+                sceneData.HybridReflectionActiveTileCount,
+            HybridReflectionTileOverflowCount =
+                sceneData.HybridReflectionTileOverflowCount,
+            AutomaticPlanarReflectionActive =
+                sceneData.AutomaticPlanarReflectionActive ? 1 : 0,
+            AutomaticPlanarCandidateCount =
+                sceneData.AutomaticPlanarCandidateCount,
+            AutomaticPlanarSelectedCount =
+                sceneData.AutomaticPlanarSelectedCount,
+            AutomaticPlanarCaptureCount =
+                sceneData.AutomaticPlanarCaptureCount,
+            AutomaticPlanarReprojectionCount =
+                sceneData.AutomaticPlanarReprojectionCount,
+            AutomaticPlanarRejectedCount =
+                sceneData.AutomaticPlanarRejectedCount,
+            AutomaticPlanarRejectionReason =
+                sceneData.AutomaticPlanarRejectionReason,
+            AutomaticPlanarRejectionDetail =
+                sceneData.AutomaticPlanarRejectionDetail,
+            AutomaticPlanarCaptureGeneration =
+                sceneData.AutomaticPlanarCaptureGeneration,
+            AutomaticPlanarEstimatedBytes =
+                sceneData.AutomaticPlanarEstimatedBytes,
+            AutomaticPlanarResolutionScale =
+                sceneData.AutomaticPlanarResolutionScale,
+            AutomaticPlanarMaximumCaptureAge =
+                sceneData.AutomaticPlanarMaximumCaptureAge,
+            GpuAutomaticPlanarCaptureMicroseconds =
+                sceneData.GpuAutomaticPlanarCaptureMicroseconds,
             TransparentReflectionReceiverObjectCount =
                 sceneData.TransparentReflectionReceiverObjectCount,
             TransparentReflectionReceiverMeshletCount =
@@ -1545,7 +1647,27 @@ internal sealed class RendererDiagnosticsAssembler
                 giPipelineCacheTelemetry.PipelineCreationMicroseconds,
             GiRenderCriticalPipelineCreationCount =
                 giPipelineCacheTelemetry.RenderCriticalPipelineCreationCount,
+            GiPipelineApplicationCacheHitCount =
+                giPipelineCacheTelemetry.ApplicationCacheHitCount,
+            GiPipelineCompileMissCount =
+                giPipelineCacheTelemetry.PipelineCompileMissCount,
+            GiPipelineFeedbackUnavailableCount =
+                giPipelineCacheTelemetry.PipelineFeedbackUnavailableCount,
+            GiPipelinePeakConcurrentCreationCount =
+                giPipelineCacheTelemetry.PeakConcurrentPipelineCreationCount,
+            GiPipelineBinaryCacheEnabled =
+                giPipelineCacheTelemetry.PipelineBinaryCacheEnabled ? 1 : 0,
+            GiGraphicsPipelineLibraryEligible =
+                giPipelineCacheTelemetry.GraphicsPipelineLibraryEligible ? 1 : 0,
+            GiPipelineWritableBinaryHitCount =
+                giPipelineCacheTelemetry.WritableBinaryHitCount,
+            GiPipelineSeedBinaryHitCount =
+                giPipelineCacheTelemetry.SeedBinaryHitCount,
+            GiCapturedPipelineBinaryCount =
+                giPipelineCacheTelemetry.CapturedPipelineBinaryCount,
             GiPipelineCachePath = giPipelineCacheTelemetry.CachePath,
+            GiPipelineBinaryStorePath =
+                giPipelineCacheTelemetry.PipelineBinaryStorePath,
             GiPipelineCacheStatus = giPipelineCacheTelemetry.LoadStatus,
             GiLastCreatedPipeline = giPipelineCacheTelemetry.LastCreatedPipeline,
             DdgiVisibleFrustumProbeUpdateCount = giUsesDdgi ? sceneData.DdgiVisibleFrustumProbeUpdateCount : 0,
@@ -2015,6 +2137,25 @@ internal sealed class RendererDiagnosticsAssembler
             FoliageOverflowCount = sceneData.FoliageOverflowCount,
             FoliageMeshletDrawOverflowCount = sceneData.FoliageMeshletDrawOverflowCount,
             FoliageFarImpostorVisibleCount = sceneData.FoliageFarImpostorVisibleCount,
+            FoliageDensityRejectedCount = sceneData.FoliageDensityRejectedCount,
+            FoliageMissingDensityTextureCount =
+                sceneData.FoliageMissingDensityTextureCount,
+            FoliageMissingImpostorCount =
+                sceneData.FoliageMissingImpostorCount,
+            FoliageResidentCellCount = sceneData.FoliageResidentCellCount,
+            FoliagePendingCellCount = sceneData.FoliagePendingCellCount,
+            FoliageRetiringCellCount = sceneData.FoliageRetiringCellCount,
+            FoliageNearCellCount = sceneData.FoliageNearCellCount,
+            FoliageMidCellCount = sceneData.FoliageMidCellCount,
+            FoliageFarCellCount = sceneData.FoliageFarCellCount,
+            FoliageCellLoadsThisFrame =
+                sceneData.FoliageCellLoadsThisFrame,
+            FoliageCellRetirementsThisFrame =
+                sceneData.FoliageCellRetirementsThisFrame,
+            FoliageCellStreamingOverflowCount =
+                sceneData.FoliageCellStreamingOverflowCount,
+            FoliageCellStreamingUploadBytes =
+                sceneData.FoliageCellStreamingUploadBytes,
             FoliageIndirectMeshletDispatchEnabled = sceneData.FoliageIndirectMeshletDispatchEnabled,
             FoliageInstanceBufferBytes = sceneData.FoliageInstanceBufferBytes,
             FoliageClusterBufferBytes = sceneData.FoliageClusterBufferBytes,
@@ -2075,6 +2216,7 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.DdgiFoliageProxyFallbackReason,
             FoliageDrawBufferBytes = sceneData.FoliageDrawBufferBytes,
             FoliageImpostorAtlasBytes = sceneData.FoliageImpostorAtlasBytes,
+            FoliageDensityTextureBytes = sceneData.FoliageDensityTextureBytes,
             CpuFoliageBuildMicroseconds = sceneData.CpuFoliageBuildMicroseconds,
             CpuFoliageUploadMicroseconds = sceneData.CpuFoliageUploadMicroseconds,
             GpuFoliageCullMicroseconds = sceneData.GpuFoliageCullMicroseconds,
@@ -2196,6 +2338,110 @@ internal sealed class RendererDiagnosticsAssembler
             HiZPolicyAdaptiveStatus = sceneData.HiZPolicyAdaptiveStatus,
             GpuMeshletCountersEnabled = gpuMeshletCountersEnabled ? 1 : 0,
             GpuMeshletCountersStatus = gpuMeshletCountersStatus,
+            MeshShaderRequestedMode =
+                _meshPipeline.MeshShaderSelection.RequestedMode,
+            MeshShaderSelectedMode =
+                _meshPipeline.MeshShaderSelection.Permutation.Mode,
+            MeshShaderTaskless =
+                _meshPipeline.TasklessSubmissionEnabled ? 1 : 0,
+            MeshShaderMaximumVertices =
+                _meshPipeline.MeshShaderSelection.Permutation.MaximumVertices,
+            MeshShaderMaximumPrimitives =
+                _meshPipeline.MeshShaderSelection.Permutation.MaximumPrimitives,
+            MeshShaderWorkgroupSize =
+                _meshPipeline.MeshShaderSelection.Permutation.WorkgroupSize,
+            MeshShaderFallbackReason =
+                _meshPipeline.MeshShaderSelection.FallbackReason,
+            DeviceMaximumMeshWorkgroupInvocations =
+                _context.MeshShaderDeviceProperties
+                    .MaximumMeshWorkGroupInvocations,
+            DeviceMaximumMeshOutputVertices =
+                _context.MeshShaderDeviceProperties.MaximumMeshOutputVertices,
+            DeviceMaximumMeshOutputPrimitives =
+                _context.MeshShaderDeviceProperties.MaximumMeshOutputPrimitives,
+            DevicePrefersLocalInvocationVertexOutput =
+                _context.MeshShaderDeviceProperties
+                    .PrefersLocalInvocationVertexOutput ? 1 : 0,
+            DevicePrefersLocalInvocationPrimitiveOutput =
+                _context.MeshShaderDeviceProperties
+                    .PrefersLocalInvocationPrimitiveOutput ? 1 : 0,
+            DevicePrefersCompactVertexOutput =
+                _context.MeshShaderDeviceProperties
+                    .PrefersCompactVertexOutput ? 1 : 0,
+            DevicePrefersCompactPrimitiveOutput =
+                _context.MeshShaderDeviceProperties
+                    .PrefersCompactPrimitiveOutput ? 1 : 0,
+            MeshletPhysicalResidencyConfigured =
+                sceneSubmissionSettings.GpuMeshletStreamingEnabled ? 1 : 0,
+            MeshletPhysicalResidencyAvailable =
+                meshletResidency?.Available == true &&
+                meshletVulkanResidency?.Initialized == true ? 1 : 0,
+            MeshletPhysicalResidencyActive =
+                meshletResidency?.Active == true ? 1 : 0,
+            MeshletPhysicalResidencyDegraded =
+                meshletResidency?.Degraded == true ||
+                meshletResidencyReloadRequired ||
+                meshletVulkanResidency?.FailedPageRecordCount > 0 ||
+                meshletVulkanResidency?.InvalidShaderMappingCount > 0
+                    ? 1
+                    : 0,
+            MeshletPhysicalResidencyReloadRequired =
+                meshletResidencyReloadRequired ? 1 : 0,
+            MeshletPhysicalResidencyActivePackageCount =
+                meshletResidency?.PackageCount ?? 0,
+            MeshletPhysicalResidencyActiveSubMeshCount =
+                meshletResidency?.ActiveSubMeshCount ?? 0,
+            MeshletPhysicalResidencyFallbackPackageCount =
+                meshletResidency?.FallbackReasons.Values.Sum() ?? 0,
+            MeshletPhysicalResidencyReferencedPackageCount =
+                meshletResidency?.ReferencedPackageCount ?? 0,
+            MeshletPhysicalResidencyPhysicalPageCapacity =
+                meshletResidency?.PhysicalPageCapacity ?? 0,
+            MeshletPhysicalResidencyAllocatedBankCount =
+                meshletVulkanResidency?.AllocatedBankCount ?? 0,
+            MeshletPhysicalResidencyPinnedPageCount =
+                meshletResidency?.PinnedPageCount ?? 0,
+            MeshletPhysicalResidencyPinnedResidentPageCount =
+                meshletResidency?.PinnedResidentPageCount ?? 0,
+            MeshletPhysicalResidencyResidentPageCount =
+                meshletResidency?.ResidentPageCount ?? 0,
+            MeshletPhysicalResidencyQueuedPageCount =
+                meshletResidency?.QueuedPageCount ?? 0,
+            MeshletPhysicalResidencyReadingPageCount =
+                meshletResidency?.ReadingPageCount ?? 0,
+            MeshletPhysicalResidencyUploadingPageCount =
+                meshletResidency?.UploadingPageCount ?? 0,
+            MeshletPhysicalResidencyFailedPageCount =
+                meshletResidency?.FailedPageCount ?? 0,
+            MeshletPhysicalResidencyRetiredPageCount =
+                meshletResidency?.RetiredPhysicalPageCount ?? 0,
+            MeshletPhysicalResidencyCommittedBytes =
+                meshletVulkanResidency?.AllocatedBankBytes ?? 0UL,
+            MeshletPhysicalResidencyRequestCount =
+                meshletResidency?.RequestCount ?? 0L,
+            MeshletPhysicalResidencyDemandKeyCount =
+                meshletVulkanResidency?.CompletedDemandKeyCount ?? 0L,
+            MeshletPhysicalResidencyRequestOverflowCount =
+                (meshletResidency?.RequestOverflowCount ?? 0L) +
+                (meshletVulkanResidency?.DemandOverflowCount ?? 0L),
+            MeshletPhysicalResidencyHitRate = meshletResidencyHitRate,
+            MeshletPhysicalResidencyFallbackRate =
+                meshletResidencyFallbackRate,
+            MeshletPhysicalResidencyUploadedBytes =
+                meshletResidency?.UploadedBytes ?? 0L,
+            MeshletPhysicalResidencyLastFrameUploadBytes =
+                meshletVulkanResidency?.LastRecordedUploadBytes ?? 0UL,
+            MeshletPhysicalResidencyEvictionCount =
+                meshletResidency?.EvictionCount ?? 0L,
+            MeshletPhysicalResidencyRetryCount =
+                meshletResidency?.RetryCount ?? 0L,
+            MeshletPhysicalResidencyInvalidMappingCount =
+                (meshletPageCache?.InvalidMappingCount ?? 0L) +
+                (meshletVulkanResidency?.InvalidShaderMappingCount ?? 0L),
+            MeshletPhysicalResidencyFallbackReasonSummary =
+                meshletResidencyFallbackSummary,
+            MeshletPhysicalResidencyLatestFailure =
+                meshletResidencyLatestFailure,
             SceneSubmissionActiveMode = sceneSubmissionActiveMode,
             SceneSubmissionForwardPath = sceneData.SceneSubmissionForwardPath,
             SceneSubmissionForwardTaskShader = sceneData.SceneSubmissionForwardTaskShader,
@@ -2897,6 +3143,7 @@ internal sealed class RendererDiagnosticsAssembler
             sceneData.GpuReflectionProbeCaptureMicroseconds +
             sceneData.GpuReflectionProbePrefilterMicroseconds +
             sceneData.GpuReflectionProbePublishMicroseconds +
+            sceneData.GpuAutomaticPlanarCaptureMicroseconds +
             sceneData.GpuHybridReflectionSsrMicroseconds +
             sceneData.GpuHybridReflectionRayQueryMicroseconds +
             sceneData.GpuHybridReflectionDdgiBaseMicroseconds +

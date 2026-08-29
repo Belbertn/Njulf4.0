@@ -104,7 +104,6 @@ internal static class SimpleDdgiWarmStartIdentityBuilder
             AppendResourceIdentity(sceneHash, prototype.Mesh);
             AppendResourceIdentity(sceneHash, prototype.Material);
             Append(sceneHash, (uint)prototype.GeometryMode);
-            Append(sceneHash, prototype.AuthoredMeshletStride);
             Append(sceneHash, prototype.CardHeight);
             Append(sceneHash, prototype.CardWidth);
             Append(sceneHash, prototype.FarImpostorEnabled);
@@ -121,6 +120,8 @@ internal static class SimpleDdgiWarmStartIdentityBuilder
             Append(sceneHash, patch.Density);
             Append(sceneHash, patch.Seed);
             Append(sceneHash, patch.DensityTexturePath ?? string.Empty);
+            Append(sceneHash, (uint)patch.PlacementMode);
+            Append(sceneHash, patch.Placement.Revision);
             Append(transformHash, patch.Bounds);
             Append(transformHash, patch.InstancePosition);
             Append(transformHash, patch.InstanceScale);

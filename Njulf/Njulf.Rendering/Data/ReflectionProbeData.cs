@@ -113,7 +113,9 @@ namespace Njulf.Rendering.Data
             int probeCubemapArrayTextureIndex,
             int debugTextureIndex,
             uint mipCount,
-            TransparencySettings? transparencySettings = null)
+            TransparencySettings? transparencySettings = null,
+            uint transparentSsrAdmissionThreshold = uint.MaxValue,
+            uint transparentRayAdmissionThreshold = uint.MaxValue)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
@@ -155,7 +157,9 @@ namespace Njulf.Rendering.Data
                 SceneReflectionSsrSampleBudget = checked((uint)Math.Max(
                     0,
                     transparencySettings?.SceneReflectionSsrSampleBudget ??
-                    0))
+                    0)),
+                Padding1 = transparentSsrAdmissionThreshold,
+                Padding2 = transparentRayAdmissionThreshold
             };
         }
 

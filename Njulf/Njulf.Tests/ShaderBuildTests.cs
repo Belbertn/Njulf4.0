@@ -22,6 +22,9 @@ public sealed class ShaderBuildTests
         "hybrid_reflection_temporal.comp",
         "hybrid_reflection_spatial.comp",
         "hybrid_reflection_composite.comp",
+        "automatic_planar_reproject.comp",
+        "automatic_planar_prefilter.comp",
+        "foliage_authored_expand.comp",
         "opaque_scene_color_snapshot.comp",
         "area_ray_shadow.comp",
         "forward.frag",
@@ -69,11 +72,18 @@ public sealed class ShaderBuildTests
         "motion_vector_alpha.mesh",
         "motion_vector_alpha.frag",
         "motion_vector_compacted.mesh",
+        "motion_vector_compacted_48v64p_128t.mesh",
+        "motion_vector_compacted_64v126p_64t.mesh",
+        "motion_vector_compacted_64v126p_128t.mesh",
         "motion_vector_alpha_compacted.mesh",
         "foliage_motion_compacted.mesh",
         "depth_compacted.mesh",
         "depth_alpha_compacted.mesh",
-        "shadow_depth_alpha_compacted.mesh"
+        "shadow_depth_alpha_compacted.mesh",
+        "forward_compacted.mesh",
+        "forward_compacted_48v64p_128t.mesh",
+        "forward_compacted_64v126p_64t.mesh",
+        "forward_compacted_64v126p_128t.mesh"
     ];
 
     [Test]
@@ -91,7 +101,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(365));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(399));
 
         foreach (string shaderName in RequiredShaders)
         {

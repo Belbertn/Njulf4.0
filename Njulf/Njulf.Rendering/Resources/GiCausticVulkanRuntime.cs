@@ -742,6 +742,7 @@ public sealed unsafe class GiCausticVulkanRuntime : IDisposable
     private readonly AccelerationStructureManager _accelerationStructureManager;
     private readonly RenderTargetManager? _renderTargets;
     private readonly Action? _waitForDescriptorReaders;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly GiCausticGpuResourceManager _resourceManager = new();
     private readonly VulkanAllocator _allocator;
     private readonly PendingReadback?[] _pendingReadbacks =
@@ -766,7 +767,8 @@ public sealed unsafe class GiCausticVulkanRuntime : IDisposable
         BufferManager bufferManager,
         AccelerationStructureManager accelerationStructureManager,
         Action? waitForDescriptorReaders = null,
-        RenderTargetManager? renderTargets = null)
+        RenderTargetManager? renderTargets = null,
+        GiPipelineCacheService? pipelineCacheService = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
@@ -774,6 +776,7 @@ public sealed unsafe class GiCausticVulkanRuntime : IDisposable
             throw new ArgumentNullException(nameof(accelerationStructureManager));
         _renderTargets = renderTargets;
         _waitForDescriptorReaders = waitForDescriptorReaders;
+        _pipelineCacheService = pipelineCacheService;
         _allocator = new VulkanAllocator(bufferManager);
         Diagnostics = GiCausticVulkanRuntimeDiagnostics.Disabled;
     }
@@ -991,7 +994,8 @@ public sealed unsafe class GiCausticVulkanRuntime : IDisposable
                     _context,
                     _allocator.BindlessHeap!,
                     _bufferManager,
-                    _accelerationStructureManager);
+                    _accelerationStructureManager,
+                    _pipelineCacheService);
             }
             catch (Exception exception)
             {
@@ -1071,7 +1075,8 @@ public sealed unsafe class GiCausticVulkanRuntime : IDisposable
                     _bufferManager,
                     _renderTargets,
                     request.Layout.ScreenResolve,
-                    nativeAllocation.FrameConstantBuffers);
+                    nativeAllocation.FrameConstantBuffers,
+                    _pipelineCacheService);
             }
             catch (Exception exception)
             {
@@ -2253,7 +2258,8 @@ public sealed unsafe class GiCausticVulkanRuntime : IDisposable
                     _bufferManager,
                     _renderTargets,
                     layout.ScreenResolve,
-                    nativeAllocation.FrameConstantBuffers);
+                    nativeAllocation.FrameConstantBuffers,
+                    _pipelineCacheService);
                 reason = "caustic-screen-pass-recreated";
                 return true;
             }

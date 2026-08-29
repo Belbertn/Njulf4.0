@@ -175,7 +175,7 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.TransparentReflectionTaskCounter,
                     Is.EqualTo(RendererDiagnosticsBuffer.TransparentReflectionCounterBase));
                 Assert.That(RendererDiagnosticsBuffer.TransparentReflectionCounterCount,
-                    Is.EqualTo(16));
+                    Is.EqualTo(18));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterCount,
                     Is.EqualTo(17));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
@@ -600,9 +600,9 @@ namespace Njulf.Tests
                 Assert.That(authoredMesh, Does.Contain(
                     "DIRECTIONAL_SHADOW_CASTER_CLASS_FOLIAGE"));
                 Assert.That(foliagePipeline, Does.Contain(
-                    "foliage_grass_diagnostics.mesh.spv"));
+                    "foliage_grass_compacted_diagnostics.mesh.spv"));
                 Assert.That(foliagePipeline, Does.Contain(
-                    "foliage_mesh_diagnostics.mesh.spv"));
+                    "foliage_mesh_compacted_diagnostics.mesh.spv"));
             });
         }
 
@@ -808,7 +808,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.True);
                 Assert.That(
                     settings.GlobalIllumination.EffectiveSimpleDdgiGlossyTransportMode,
-                    Is.EqualTo(SimpleDdgiGlossyTransportMode.ReceiverOnly));
+                    Is.EqualTo(SimpleDdgiGlossyTransportMode.RecursiveCertified));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiReducedBlendEnabled, Is.False);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.True);

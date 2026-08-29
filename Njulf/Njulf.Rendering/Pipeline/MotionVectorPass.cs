@@ -30,6 +30,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly RenderSettings _settings;
         private readonly Func<SurfaceHistoryConsumer>? _historyConsumers;
         private Matrix4x4 _previousViewProjectionMatrix = Matrix4x4.Identity;
+        private Vector3 _previousCameraPosition = Vector3.Zero;
         private float _previousTime;
         private bool _hasPreviousViewProjectionMatrix;
         private ulong _previousSceneContentRevision = ulong.MaxValue;
@@ -241,6 +242,7 @@ namespace Njulf.Rendering.Pipeline
 
             _renderTargets.MotionVectors.TransitionToShaderRead(cmd);
             _previousViewProjectionMatrix = sceneData.ViewProjectionMatrix;
+            _previousCameraPosition = sceneData.CameraPosition;
             _previousTime = sceneData.Time;
             _previousSceneContentRevision = sceneData.SceneContentRevision;
             _previousCameraCutSerial = sceneData.CaptureCameraCutSerial;
@@ -291,7 +293,8 @@ namespace Njulf.Rendering.Pipeline
         private bool CanUseSceneCompactedMotionVectors(
             SceneRenderingData sceneData)
         {
-            if (_bufferManager == null ||
+            if (!_meshPipeline.TasklessSubmissionEnabled ||
+                _bufferManager == null ||
                 !sceneData.SceneSubmissionGpuCompactionActive ||
                 !sceneData.SceneSubmissionIndirectMeshletDispatchEnabled ||
                 sceneData.SceneSubmissionFallbackReason.Length != 0 ||
@@ -450,20 +453,16 @@ namespace Njulf.Rendering.Pipeline
             }
 
             FoliageRuntimeBuffers buffers = _foliageManager.GetBuffers((int)sceneData.CurrentFrameIndex);
-            if (!buffers.IndirectDispatchBuffer.IsValid || buffers.MeshletDrawCapacity <= 0)
+            if (!buffers.IndirectDispatchBuffer.IsValid ||
+                (buffers.VisibleClusterCapacity <= 0 &&
+                 buffers.MeshletDrawCapacity <= 0))
                 return;
 
-            bool useCompactedMeshOnly =
-                sceneData.FoliageIndirectMeshletDispatchEnabled;
-            _context.Api.CmdBindPipeline(
-                cmd,
-                PipelineBindPoint.Graphics,
-                useCompactedMeshOnly
-                    ? _foliagePipeline.AuthoredCompactedMotionVectorPipeline
-                    : _foliagePipeline.AuthoredMotionVectorPipeline);
             BindFoliageDescriptorSets(cmd);
-
-            var pushConstants = new GPUMotionVectorPushConstants
+            Vector3 previousCameraPosition = previousFrameValid
+                ? _previousCameraPosition
+                : sceneData.CameraPosition;
+            var commonPushConstants = new GPUMotionVectorPushConstants
             {
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
                 PreviousViewProjectionMatrix = previousViewProjection,
@@ -473,8 +472,66 @@ namespace Njulf.Rendering.Pipeline
                 MeshletDrawBufferBaseIndex = (uint)BindlessIndex.FoliageMeshletDrawBufferBase,
                 PreviousFrameValid = PackHistoryFlags(previousFrameValid, sceneData),
                 Time = sceneData.Time,
-                PreviousTime = previousTime
+                PreviousTime = previousTime,
+                CameraPosition = new Vector4(sceneData.CameraPosition, 1f),
+                PreviousCameraPosition = new Vector4(previousCameraPosition, 1f)
             };
+
+            VkBuffer indirect = _bufferManager.GetBuffer(
+                buffers.IndirectDispatchBuffer);
+
+            if (buffers.VisibleClusterCapacity > 0)
+            {
+                _context.Api.CmdBindPipeline(
+                    cmd,
+                    PipelineBindPoint.Graphics,
+                    _foliagePipeline.ProceduralCompactedMotionVectorPipeline);
+                GPUMotionVectorPushConstants proceduralPushConstants =
+                    commonPushConstants;
+                proceduralPushConstants.MeshletDrawCount = checked(
+                    (uint)buffers.VisibleClusterCapacity);
+                proceduralPushConstants.MeshletDrawBufferBaseIndex =
+                    (uint)BindlessIndex.FoliageVisibleClusterBufferBase;
+                _context.Api.CmdPushConstants(
+                    cmd,
+                    _foliagePipeline.GraphicsLayout,
+                    MeshPipelinePushConstantStages,
+                    0,
+                    (uint)Marshal.SizeOf<GPUMotionVectorPushConstants>(),
+                    &proceduralPushConstants);
+
+                if (sceneData.FoliageIndirectMeshletDispatchEnabled)
+                {
+                    _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                        cmd,
+                        indirect,
+                        FoliageManager.ProceduralIndirectDispatchOffset,
+                        1,
+                        (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+                }
+                else
+                {
+                    _context.ExtMeshShader.CmdDrawMeshTask(
+                        cmd,
+                        checked((uint)buffers.VisibleClusterCapacity),
+                        1,
+                        1);
+                }
+            }
+
+            if (buffers.MeshletDrawCapacity <= 0)
+                return;
+
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _foliagePipeline.AuthoredCompactedMotionVectorPipeline);
+            GPUMotionVectorPushConstants authoredPushConstants =
+                commonPushConstants;
+            authoredPushConstants.MeshletDrawCount = checked(
+                (uint)buffers.MeshletDrawCapacity);
+            authoredPushConstants.MeshletDrawBufferBaseIndex =
+                (uint)BindlessIndex.FoliageMeshletDrawBufferBase;
 
             _context.Api.CmdPushConstants(
                 cmd,
@@ -482,15 +539,14 @@ namespace Njulf.Rendering.Pipeline
                 MeshPipelinePushConstantStages,
                 0,
                 (uint)Marshal.SizeOf<GPUMotionVectorPushConstants>(),
-                &pushConstants);
+                &authoredPushConstants);
 
-            if (useCompactedMeshOnly)
+            if (sceneData.FoliageIndirectMeshletDispatchEnabled)
             {
-                VkBuffer indirect = _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer);
                 _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
                     cmd,
                     indirect,
-                    0,
+                    FoliageManager.AuthoredIndirectDispatchOffset,
                     1,
                     (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
                 return;
@@ -533,6 +589,7 @@ namespace Njulf.Rendering.Pipeline
         public override void OnSwapchainRecreated()
         {
             _hasPreviousViewProjectionMatrix = false;
+            _previousCameraPosition = Vector3.Zero;
             _previousSceneContentRevision = ulong.MaxValue;
             _previousCameraCutSerial = ulong.MaxValue;
         }

@@ -6,7 +6,7 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 10;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -230,10 +230,12 @@ public sealed class SceneFoliagePrototypeDocument
     public string Name { get; init; } = "FoliagePrototype";
     public required SceneAssetReferenceDocument Model { get; init; }
     public string GeometryMode { get; init; } = "Mesh";
-    public uint AuthoredMeshletStride { get; init; } = 1;
     public float CardHeight { get; init; } = 1f;
     public float CardWidth { get; init; } = 0.08f;
     public bool FarImpostorEnabled { get; init; }
+    public bool CastShadows { get; init; } = true;
+    public bool TwoSided { get; init; } = true;
+    public SceneFoliageImpostorDocument? Impostor { get; init; }
     public SceneFoliageLodDocument Lod { get; init; } = new();
     public SceneFoliageWindDocument Wind { get; init; } = new();
     public SceneFoliageLightingDocument Lighting { get; init; } = new();
@@ -249,8 +251,64 @@ public sealed class SceneFoliagePatchDocument
     public float InstanceScale { get; init; } = 1f;
     public float Density { get; init; } = 1f;
     public uint Seed { get; init; } = 1;
+    public string PlacementMode { get; init; } = "ProceduralSurface";
+    public SceneFoliagePlacementDocument Placement { get; init; } = new();
+    public SceneFoliageDensityMapDocument? DensityMap { get; init; }
+    /// <summary>Schema 9 compatibility path. Schema 10 writes DensityMap.</summary>
     public string? DensityTexturePath { get; init; }
     public bool Visible { get; init; } = true;
+}
+
+public sealed class SceneFoliagePlacementDocument
+{
+    public float Density { get; init; } = 1f;
+    public float MinimumSpacing { get; init; } = 1f;
+    public SceneVector2 ScaleRange { get; init; } = new(0.85f, 1.15f);
+    public SceneVector2 YawRangeDegrees { get; init; } = new(0f, 360f);
+    public bool AlignToSurfaceNormal { get; init; }
+    public SceneVector2 AltitudeRange { get; init; } = new(-100_000f, 100_000f);
+    public SceneVector2 SlopeRangeDegrees { get; init; } = new(0f, 90f);
+    public uint BiomeMask { get; init; } = uint.MaxValue;
+    public bool AllowWater { get; init; }
+    public bool AllowRoads { get; init; }
+    public bool RespectExclusions { get; init; } = true;
+    public uint Seed { get; init; } = 1;
+    public float CellSize { get; init; } = 16f;
+}
+
+public sealed class SceneFoliageDensityMapDocument
+{
+    public string SourcePath { get; init; } = string.Empty;
+    public string? ContentHash { get; init; }
+    public int Width { get; init; }
+    public int Height { get; init; }
+    public string Format { get; init; } = "R8UNorm";
+    public SceneVector2 WorldToUvScale { get; init; } = new(1f, 1f);
+    public SceneVector2 WorldToUvOffset { get; init; }
+    public uint Revision { get; init; } = 1;
+}
+
+public sealed class SceneFoliageImpostorDocument
+{
+    public string AlbedoOpacityAtlasPath { get; init; } = string.Empty;
+    public string NormalAtlasPath { get; init; } = string.Empty;
+    public string DepthAtlasPath { get; init; } = string.Empty;
+    public int ViewCount { get; init; }
+    public int AtlasWidth { get; init; }
+    public int AtlasHeight { get; init; }
+    public List<SceneFoliageImpostorViewDocument> Views { get; init; } = [];
+    public SceneBoundingBox SourceBounds { get; init; } =
+        new(new SceneVector3(), new SceneVector3());
+    public SceneVector3 Pivot { get; init; }
+    public float Scale { get; init; } = 1f;
+    public string? ContentHash { get; init; }
+}
+
+public sealed class SceneFoliageImpostorViewDocument
+{
+    public SceneVector3 Direction { get; init; }
+    /// <summary>Normalized atlas X, Y, width, and height.</summary>
+    public SceneVector4 AtlasRectangle { get; init; }
 }
 
 public sealed class SceneParticleEffectDocument
@@ -285,6 +343,7 @@ public readonly record struct SceneVector3(float X, float Y, float Z)
 {
     public static SceneVector3 One { get; } = new(1f, 1f, 1f);
 }
+public readonly record struct SceneVector4(float X, float Y, float Z, float W);
 public readonly record struct SceneQuaternion(float X, float Y, float Z, float W)
 {
     public static SceneQuaternion Identity { get; } = new(0f, 0f, 0f, 1f);

@@ -7,8 +7,10 @@ namespace Njulf.Rendering.Pipeline;
 /// <summary>Frozen forward MRT contract for deferred reflection receivers.</summary>
 public static class ForwardHybridReflectionReceiverContract
 {
-    public const uint ShaderSemanticVersion = 1u;
+    public const uint ShaderSemanticVersion = 2u;
     public const Format ReceiverPayloadFormat = Format.R32G32B32A32Uint;
+    public const Format LobeExtensionFormat = Format.R32G32Uint;
+    public const uint ColorAttachmentCount = 2u;
 
     public static string ResolveFragmentShader(
         bool simple,
@@ -61,10 +63,15 @@ public static class ForwardHybridReflectionReceiverContract
         }
 
         RenderTarget target = binding.ReceiverPayload;
+        RenderTarget lobeExtension = binding.LobeExtension;
         ImageUsageFlags required = ImageUsageFlags.ColorAttachmentBit |
             ImageUsageFlags.SampledBit;
         if (ReferenceEquals(target, sceneColor) ||
-            target.Image.Handle == sceneColor.Image.Handle)
+            target.Image.Handle == sceneColor.Image.Handle ||
+            ReferenceEquals(lobeExtension, sceneColor) ||
+            lobeExtension.Image.Handle == sceneColor.Image.Handle ||
+            ReferenceEquals(target, lobeExtension) ||
+            target.Image.Handle == lobeExtension.Image.Handle)
         {
             failure = "hybrid-reflection-receiver-must-not-alias-scene-color";
             return false;
@@ -76,6 +83,16 @@ public static class ForwardHybridReflectionReceiverContract
             target.Extent.Height != expectedExtent.Height)
         {
             failure = "hybrid-reflection-receiver-attachment-mismatch";
+            return false;
+        }
+        if (lobeExtension.Format != LobeExtensionFormat ||
+            (lobeExtension.Usage & required) != required ||
+            lobeExtension.Image.Handle == 0 ||
+            lobeExtension.View.Handle == 0 ||
+            lobeExtension.Extent.Width != expectedExtent.Width ||
+            lobeExtension.Extent.Height != expectedExtent.Height)
+        {
+            failure = "hybrid-reflection-lobe-extension-attachment-mismatch";
             return false;
         }
 
@@ -99,13 +116,17 @@ public sealed class ForwardHybridReflectionReceiverAttachmentBinding
 {
     public ForwardHybridReflectionReceiverAttachmentBinding(
         RenderTarget receiverPayload,
+        RenderTarget lobeExtension,
         in ForwardHybridReflectionReceiverPipelineConfiguration configuration)
     {
         ReceiverPayload = receiverPayload ??
             throw new ArgumentNullException(nameof(receiverPayload));
+        LobeExtension = lobeExtension ??
+            throw new ArgumentNullException(nameof(lobeExtension));
         Configuration = configuration;
     }
 
     public RenderTarget ReceiverPayload { get; }
+    public RenderTarget LobeExtension { get; }
     public ForwardHybridReflectionReceiverPipelineConfiguration Configuration { get; }
 }

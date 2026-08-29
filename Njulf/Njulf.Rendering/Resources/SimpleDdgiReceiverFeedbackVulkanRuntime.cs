@@ -327,6 +327,7 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
         new PendingOwnedCapture?[RenderingConstants.FramesInFlight];
 
     private SimpleDdgiReceiverFeedbackGpuPass? _pass;
+    private GiPipelineCacheService? _pipelineCacheService;
     private SimpleDdgiReceiverFeedbackGpuSortLayout _activeGpuLayout;
     private GPUSimpleDdgiReceiverFeedbackBankHeaderV2? _publishedHeader;
     private SimpleDdgiReceiverFeedbackRefinementWitness?
@@ -356,6 +357,22 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
     }
 
     public SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics Diagnostics { get; private set; }
+
+    internal void SetPipelineCacheService(
+        GiPipelineCacheService pipelineCacheService)
+    {
+        ArgumentNullException.ThrowIfNull(pipelineCacheService);
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_pass != null)
+            {
+                throw new InvalidOperationException(
+                    "Receiver-feedback pipelines were already created.");
+            }
+            _pipelineCacheService = pipelineCacheService;
+        }
+    }
 
     /// <summary>
     /// True only after the owned candidate source, exact sort pipelines, and
@@ -606,7 +623,8 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
                 _pass ??= new SimpleDdgiReceiverFeedbackGpuPass(
                     _context,
                     _allocator.BindlessHeap!,
-                    _bufferManager);
+                    _bufferManager,
+                    _pipelineCacheService);
             }
             catch (Exception exception)
             {

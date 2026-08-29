@@ -35,6 +35,16 @@ namespace Njulf.Rendering.Core
             "VK_KHR_ray_tracing_pipeline";
         internal const string RayTracingInvocationReorderExtensionName =
             "VK_EXT_ray_tracing_invocation_reorder";
+        internal const string PipelineCreationFeedbackExtensionName =
+            "VK_EXT_pipeline_creation_feedback";
+        internal const string PipelineBinaryExtensionName =
+            "VK_KHR_pipeline_binary";
+        internal const string Maintenance5ExtensionName =
+            "VK_KHR_maintenance5";
+        internal const string GraphicsPipelineLibraryExtensionName =
+            "VK_EXT_graphics_pipeline_library";
+        internal const string PipelineLibraryExtensionName =
+            "VK_KHR_pipeline_library";
         private const int MaxMemoryHeaps = 16;
 
         private static readonly string[] RequiredDeviceExtensions =
@@ -96,6 +106,11 @@ namespace Njulf.Rendering.Core
         private bool _shaderStorageImageArrayNonUniformIndexingSupported;
         private GiHardwareResearchCapabilities _giHardwareResearchCapabilities =
             GiHardwareResearchCapabilities.None;
+        private MeshShaderDeviceProperties _meshShaderDeviceProperties;
+        private PipelineOptimizationDeviceSupport
+            _pipelineOptimizationPhysicalSupport;
+        private PipelineOptimizationDeviceSupport
+            _pipelineOptimizationDeviceSupport;
         private uint _memoryHeapCount;
         private readonly MemoryHeapFlags[] _memoryHeapFlags = new MemoryHeapFlags[MaxMemoryHeaps];
 
@@ -108,6 +123,7 @@ namespace Njulf.Rendering.Core
         private KhrFragmentShadingRate? _khrFragmentShadingRate;
         private KhrAccelerationStructure? _khrAccelerationStructure;
         private KhrDeferredHostOperations? _khrDeferredHostOps;
+        private KhrPipelineBinary? _khrPipelineBinary;
         private ExtOpacityMicromap? _extOpacityMicromap;
         private SilkNetExtOpacityMicromapCommandApi? _opacityMicromapCommandApi;
         private bool _opacityMicromapBlasAttachmentIntegrated;
@@ -181,6 +197,15 @@ namespace Njulf.Rendering.Core
             _shaderStorageImageArrayNonUniformIndexingSupported;
         public GiHardwareResearchCapabilities GiHardwareResearchCapabilities =>
             _giHardwareResearchCapabilities;
+        public MeshShaderDeviceProperties MeshShaderDeviceProperties =>
+            _meshShaderDeviceProperties;
+        public PipelineOptimizationDeviceSupport PipelineOptimizationSupport =>
+            _pipelineOptimizationDeviceSupport;
+        public bool PipelineCreationFeedbackEnabled =>
+            _pipelineOptimizationDeviceSupport.PipelineCreationFeedback;
+        public bool PipelineCreationCacheControlEnabled =>
+            _pipelineOptimizationDeviceSupport.PipelineCreationCacheControl;
+        public KhrPipelineBinary? KhrPipelineBinary => _khrPipelineBinary;
         public KhrSurface KhrSurface => _khrSurface;
         public KhrSwapchain KhrSwapchain => _khrSwapchain;
         public ExtMeshShader ExtMeshShader => _extMeshShader;
@@ -623,6 +648,10 @@ namespace Njulf.Rendering.Core
                 QueryFragmentShadingRateDeviceSupport(_physicalDevice);
             _giHardwareResearchCapabilities =
                 QueryGiHardwareResearchCapabilities(_physicalDevice);
+            _meshShaderDeviceProperties =
+                QueryMeshShaderDeviceProperties(_physicalDevice);
+            _pipelineOptimizationPhysicalSupport =
+                QueryPipelineOptimizationDeviceSupport(_physicalDevice);
 
             var selectedProperties = new PhysicalDeviceProperties();
             _vk.GetPhysicalDeviceProperties(_physicalDevice, &selectedProperties);
@@ -1080,6 +1109,157 @@ namespace Njulf.Rendering.Core
                 fragmentShadingRateProperties.MaxFragmentSize);
         }
 
+        private MeshShaderDeviceProperties QueryMeshShaderDeviceProperties(
+            PhysicalDevice device)
+        {
+            var properties2 = new PhysicalDeviceProperties2
+            {
+                SType = StructureType.PhysicalDeviceProperties2
+            };
+            var meshProperties = new PhysicalDeviceMeshShaderPropertiesEXT
+            {
+                SType = StructureType.PhysicalDeviceMeshShaderPropertiesExt
+            };
+            properties2.PNext = &meshProperties;
+            _vk.GetPhysicalDeviceProperties2(device, &properties2);
+
+            return new MeshShaderDeviceProperties(
+                meshProperties.MaxTaskWorkGroupInvocations,
+                meshProperties.MaxTaskWorkGroupSize[0],
+                meshProperties.MaxTaskPayloadSize,
+                meshProperties.MaxTaskSharedMemorySize,
+                meshProperties.MaxMeshWorkGroupInvocations,
+                meshProperties.MaxMeshWorkGroupSize[0],
+                meshProperties.MaxMeshSharedMemorySize,
+                meshProperties.MaxMeshOutputMemorySize,
+                meshProperties.MaxMeshPayloadAndOutputMemorySize,
+                meshProperties.MaxMeshOutputComponents,
+                meshProperties.MaxMeshOutputVertices,
+                meshProperties.MaxMeshOutputPrimitives,
+                meshProperties.MeshOutputPerVertexGranularity,
+                meshProperties.MeshOutputPerPrimitiveGranularity,
+                meshProperties.MaxPreferredTaskWorkGroupInvocations,
+                meshProperties.MaxPreferredMeshWorkGroupInvocations,
+                meshProperties.PrefersLocalInvocationVertexOutput,
+                meshProperties.PrefersLocalInvocationPrimitiveOutput,
+                meshProperties.PrefersCompactVertexOutput,
+                meshProperties.PrefersCompactPrimitiveOutput);
+        }
+
+        private PipelineOptimizationDeviceSupport
+            QueryPipelineOptimizationDeviceSupport(PhysicalDevice device)
+        {
+            HashSet<string> extensions = GetDeviceExtensionNames(device);
+            bool feedback = extensions.Contains(
+                PipelineCreationFeedbackExtensionName);
+            bool pipelineBinaryExtension = extensions.Contains(
+                PipelineBinaryExtensionName);
+            bool maintenance5Extension = extensions.Contains(
+                Maintenance5ExtensionName);
+            bool pipelineBinary = pipelineBinaryExtension &&
+                maintenance5Extension;
+            bool graphicsLibrary =
+                extensions.Contains(GraphicsPipelineLibraryExtensionName) &&
+                extensions.Contains(PipelineLibraryExtensionName);
+
+            var features2 = new PhysicalDeviceFeatures2
+            {
+                SType = StructureType.PhysicalDeviceFeatures2
+            };
+            var vulkan13Features = new PhysicalDeviceVulkan13Features
+            {
+                SType = StructureType.PhysicalDeviceVulkan13Features
+            };
+            var binaryFeatures = new PhysicalDevicePipelineBinaryFeaturesKHR
+            {
+                SType = StructureType
+                    .PhysicalDevicePipelineBinaryFeaturesKhr
+            };
+            var maintenance5Features =
+                new PhysicalDeviceMaintenance5FeaturesKHR
+                {
+                    SType = StructureType
+                        .PhysicalDeviceMaintenance5FeaturesKhr
+                };
+            var graphicsLibraryFeatures =
+                new PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT
+                {
+                    SType = StructureType
+                        .PhysicalDeviceGraphicsPipelineLibraryFeaturesExt
+                };
+            void* featureHead = &vulkan13Features;
+            if (pipelineBinary)
+            {
+                binaryFeatures.PNext = featureHead;
+                featureHead = &binaryFeatures;
+                maintenance5Features.PNext = featureHead;
+                featureHead = &maintenance5Features;
+            }
+            if (graphicsLibrary)
+            {
+                graphicsLibraryFeatures.PNext = featureHead;
+                featureHead = &graphicsLibraryFeatures;
+            }
+            features2.PNext = featureHead;
+            _vk.GetPhysicalDeviceFeatures2(device, &features2);
+
+            var properties2 = new PhysicalDeviceProperties2
+            {
+                SType = StructureType.PhysicalDeviceProperties2
+            };
+            var binaryProperties =
+                new PhysicalDevicePipelineBinaryPropertiesKHR
+                {
+                    SType = StructureType
+                        .PhysicalDevicePipelineBinaryPropertiesKhr
+                };
+            var graphicsLibraryProperties =
+                new PhysicalDeviceGraphicsPipelineLibraryPropertiesEXT
+                {
+                    SType = StructureType
+                        .PhysicalDeviceGraphicsPipelineLibraryPropertiesExt
+                };
+            void* propertyHead = null;
+            if (pipelineBinary)
+            {
+                binaryProperties.PNext = propertyHead;
+                propertyHead = &binaryProperties;
+            }
+            if (graphicsLibrary)
+            {
+                graphicsLibraryProperties.PNext = propertyHead;
+                propertyHead = &graphicsLibraryProperties;
+            }
+            properties2.PNext = propertyHead;
+            if (propertyHead != null)
+                _vk.GetPhysicalDeviceProperties2(device, &properties2);
+
+            bool maintenance5Feature = pipelineBinary &&
+                maintenance5Features.Maintenance5;
+            bool binaryFeature = pipelineBinary &&
+                maintenance5Feature && binaryFeatures.PipelineBinaries;
+            bool graphicsLibraryFeature = graphicsLibrary &&
+                graphicsLibraryFeatures.GraphicsPipelineLibrary;
+            return new PipelineOptimizationDeviceSupport(
+                feedback,
+                vulkan13Features.PipelineCreationCacheControl,
+                binaryFeature,
+                binaryFeature && maintenance5Feature,
+                binaryFeature && binaryProperties.PipelineBinaryInternalCache,
+                binaryFeature && binaryProperties
+                    .PipelineBinaryInternalCacheControl,
+                binaryFeature && binaryProperties
+                    .PipelineBinaryPrefersInternalCache,
+                binaryFeature && binaryProperties
+                    .PipelineBinaryPrecompiledInternalCache,
+                binaryFeature && binaryProperties.PipelineBinaryCompressedData,
+                graphicsLibraryFeature,
+                graphicsLibraryFeature && graphicsLibraryProperties
+                    .GraphicsPipelineLibraryFastLinking,
+                graphicsLibraryFeature && graphicsLibraryProperties
+                    .GraphicsPipelineLibraryIndependentInterpolationDecoration);
+        }
+
         private readonly record struct FragmentShadingRateDeviceSupport(
             bool ExtensionAdvertised,
             bool PipelineFeatureSupported,
@@ -1293,13 +1473,18 @@ namespace Njulf.Rendering.Core
                 TimelineSemaphore = true
             };
 
+            bool enablePipelineCreationCacheControl =
+                _pipelineOptimizationPhysicalSupport
+                    .PipelineCreationCacheControl;
             var vulkan13Features = new PhysicalDeviceVulkan13Features
             {
                 SType = StructureType.PhysicalDeviceVulkan13Features,
                 DynamicRendering = true,
                 Synchronization2 = true,
                 Maintenance4 = true,
-                ShaderDemoteToHelperInvocation = true
+                ShaderDemoteToHelperInvocation = true,
+                PipelineCreationCacheControl =
+                    enablePipelineCreationCacheControl
             };
 
             var imageCompressionControlFeatures = new PhysicalDeviceImageCompressionControlFeaturesEXT
@@ -1345,6 +1530,37 @@ namespace Njulf.Rendering.Core
                     Micromap = enableOpacityMicromapExt
                 };
 
+            bool enablePipelineBinary =
+                _pipelineOptimizationPhysicalSupport.PipelineBinary;
+            bool enablePipelineBinaryMaintenance5 =
+                enablePipelineBinary &&
+                _pipelineOptimizationPhysicalSupport
+                    .PipelineBinaryMaintenance5;
+            bool enableGraphicsPipelineLibrary =
+                _pipelineOptimizationPhysicalSupport
+                    .GraphicsPipelineLibrary;
+            var pipelineBinaryFeatures =
+                new PhysicalDevicePipelineBinaryFeaturesKHR
+                {
+                    SType = StructureType
+                        .PhysicalDevicePipelineBinaryFeaturesKhr,
+                    PipelineBinaries = enablePipelineBinary
+                };
+            var pipelineBinaryMaintenance5Features =
+                new PhysicalDeviceMaintenance5FeaturesKHR
+                {
+                    SType = StructureType
+                        .PhysicalDeviceMaintenance5FeaturesKhr,
+                    Maintenance5 = enablePipelineBinaryMaintenance5
+                };
+            var graphicsPipelineLibraryFeatures =
+                new PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT
+                {
+                    SType = StructureType
+                        .PhysicalDeviceGraphicsPipelineLibraryFeaturesExt,
+                    GraphicsPipelineLibrary = enableGraphicsPipelineLibrary
+                };
+
             // Chain: features2 -> Vulkan 1.3 -> Vulkan 1.2 -> mesh shader ->
             // optional, non-promoted extension features.
             vulkan13Features.PNext = &vulkan12Features;
@@ -1373,6 +1589,25 @@ namespace Njulf.Rendering.Core
                 opacityMicromapFeatures.PNext = meshShaderFeatures.PNext;
                 meshShaderFeatures.PNext = &opacityMicromapFeatures;
             }
+            if (enablePipelineBinary)
+            {
+                pipelineBinaryFeatures.PNext = meshShaderFeatures.PNext;
+                meshShaderFeatures.PNext = &pipelineBinaryFeatures;
+            }
+            if (enablePipelineBinaryMaintenance5)
+            {
+                pipelineBinaryMaintenance5Features.PNext =
+                    meshShaderFeatures.PNext;
+                meshShaderFeatures.PNext =
+                    &pipelineBinaryMaintenance5Features;
+            }
+            if (enableGraphicsPipelineLibrary)
+            {
+                graphicsPipelineLibraryFeatures.PNext =
+                    meshShaderFeatures.PNext;
+                meshShaderFeatures.PNext =
+                    &graphicsPipelineLibraryFeatures;
+            }
             deviceFeatures2.PNext = &vulkan13Features;
 
             if (!TryGetDeviceRequirements(_physicalDevice, out DeviceRequirements requirements) || !requirements.IsSupported)
@@ -1397,11 +1632,37 @@ namespace Njulf.Rendering.Core
                 deviceExtensions.Add(OpacityMicromapExtensionName);
             if (enableFragmentShadingRate)
                 deviceExtensions.Add(FragmentShadingRateExtensionName);
+            if (_pipelineOptimizationPhysicalSupport
+                .PipelineCreationFeedback)
+            {
+                deviceExtensions.Add(PipelineCreationFeedbackExtensionName);
+            }
+            if (enablePipelineBinary)
+            {
+                deviceExtensions.Add(PipelineBinaryExtensionName);
+                deviceExtensions.Add(Maintenance5ExtensionName);
+            }
+            if (enableGraphicsPipelineLibrary)
+            {
+                deviceExtensions.Add(GraphicsPipelineLibraryExtensionName);
+                deviceExtensions.Add(PipelineLibraryExtensionName);
+            }
 
             _opacityMicromapExtensionEnabled = enableOpacityMicromapExt;
             _opacityMicromapFeatureEnabled = enableOpacityMicromapExt;
             _fragmentShadingRateExtensionEnabled =
                 enableFragmentShadingRate;
+            _pipelineOptimizationDeviceSupport =
+                _pipelineOptimizationPhysicalSupport with
+                {
+                    PipelineCreationCacheControl =
+                        enablePipelineCreationCacheControl,
+                    PipelineBinary = enablePipelineBinary,
+                    PipelineBinaryMaintenance5 =
+                        enablePipelineBinaryMaintenance5,
+                    GraphicsPipelineLibrary =
+                        enableGraphicsPipelineLibrary
+                };
 
             var deviceCreateInfo = new DeviceCreateInfo
             {
@@ -1620,6 +1881,28 @@ namespace Njulf.Rendering.Core
             }
 
             _vk.TryGetDeviceExtension(_instance, _device, out _khrDeferredHostOps);
+
+            if (_pipelineOptimizationDeviceSupport.PipelineBinary &&
+                !_vk.TryGetDeviceExtension(
+                    _instance,
+                    _device,
+                    out _khrPipelineBinary))
+            {
+                _pipelineOptimizationDeviceSupport =
+                    _pipelineOptimizationDeviceSupport with
+                    {
+                        PipelineBinary = false,
+                        PipelineBinaryMaintenance5 = false,
+                        PipelineBinaryInternalCache = false,
+                        PipelineBinaryInternalCacheControl = false,
+                        PipelineBinaryPrefersInternalCache = false,
+                        PipelineBinaryPrecompiledInternalCache = false,
+                        PipelineBinaryCompressedData = false
+                    };
+                System.Diagnostics.Debug.WriteLine(
+                    "VK_KHR_pipeline_binary was enabled but its dispatch " +
+                    "could not be loaded; pipeline binaries are disabled.");
+            }
 
             // VK_KHR_fragment_shading_rate mixes instance- and device-dispatched
             // commands. Silk rejects this device extension in

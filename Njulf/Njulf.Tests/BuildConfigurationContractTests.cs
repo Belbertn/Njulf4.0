@@ -44,6 +44,31 @@ public sealed class BuildConfigurationContractTests
             Is.EqualTo((RendererStartupLatencyGateMode)expected));
     }
 
+    [TestCase(null, 0)]
+    [TestCase("auto", 0)]
+    [TestCase("off", 1)]
+    [TestCase("disabled", 1)]
+    [TestCase("require", 2)]
+    [TestCase("verify", 2)]
+    public void PipelineBinaryCacheModeSupportsDeploymentAndVerification(
+        string? requested,
+        int expected)
+    {
+        Assert.That(
+            RendererBuildConfiguration.ResolvePipelineBinaryCacheMode(
+                requested),
+            Is.EqualTo((RendererPipelineBinaryCacheMode)expected));
+    }
+
+    [Test]
+    public void InvalidPipelineBinaryCacheMode_IsRejected()
+    {
+        Assert.That(
+            () => RendererBuildConfiguration.ResolvePipelineBinaryCacheMode(
+                "sometimes"),
+            Throws.InvalidOperationException);
+    }
+
     [Test]
     public void PerformanceCaptureReportsTheActualBuildTier()
     {
@@ -138,6 +163,8 @@ public sealed class BuildConfigurationContractTests
                 Does.Contain("TryEnsureRayWeightedOitTransparentPipeline()"));
             Assert.That(weightedPass,
                 Does.Contain("TryEnsureWeightedOitReceiverFeedbackPipeline()"));
+            Assert.That(meshPipeline,
+                Does.Contain("PrepareScenePipelineManifest("));
         });
     }
 
@@ -217,6 +244,43 @@ public sealed class BuildConfigurationContractTests
             Assert.That(
                 (string?)editorReference.Attribute("Condition"),
                 Is.EqualTo("'$(CookedAssetsOnly)' != 'true'"));
+        });
+    }
+
+    [Test]
+    public void Vulkan13PipelineCacheControlUsesOnlyTheCoreFeatureCarrier()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "Njulf.Rendering",
+            "Core",
+            "VulkanContext.cs"));
+        string querySupport = SliceBetween(
+            source,
+            "QueryPipelineOptimizationDeviceSupport(PhysicalDevice device)",
+            "private readonly record struct FragmentShadingRateDeviceSupport");
+        string createDevice = SliceBetween(
+            source,
+            "private void CreateLogicalDevice()",
+            "private void CreateAllocator()");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(querySupport,
+                Does.Contain("new PhysicalDeviceVulkan13Features"));
+            Assert.That(querySupport,
+                Does.Contain("vulkan13Features.PipelineCreationCacheControl"));
+            Assert.That(createDevice,
+                Does.Match(
+                    "PhysicalDeviceVulkan13Features[\\s\\S]*?" +
+                    "PipelineCreationCacheControl\\s*=\\s*" +
+                    "enablePipelineCreationCacheControl"));
+            Assert.That(source,
+                Does.Not.Contain(
+                    "PhysicalDevicePipelineCreationCacheControlFeatures"));
+            Assert.That(source,
+                Does.Not.Contain(
+                    "PipelineCreationCacheControlExtensionName"));
         });
     }
 

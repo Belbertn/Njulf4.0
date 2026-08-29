@@ -160,18 +160,26 @@ foreach ($moduleName in $receiverModuleNames) {
     # and one B1 interpolation-mass accumulation each. Transparent receivers
     # append sparse source estimates plus exact SSR admission, reservation,
     # sampling, and hit-budget evidence without changing the DDGI receiver
-    # protocol itself.
-    $expectedAtomicAdds = if (
+    # protocol itself. Universal transparent programs also retain one bounded
+    # invalid physical-page mapping feedback add.
+    $expectedAtomicAdds = if ($moduleName -eq
+        'foliage_mesh.mesh.spv') {
+        # Physical meshlet residency contributes eight bounded range-demand
+        # bookkeeping adds in addition to the unchanged receiver protocol.
+        22
+    } elseif (
         $transparentReflectionTelemetryModuleNames -contains $moduleName) {
-        26
+        27
     } else {
         14
     }
     if ($functionalAtomicAdds -ne $expectedAtomicAdds) {
         $violations.Add("${moduleName}: found $functionalAtomicAdds OpAtomicIAdd instruction(s), expected $expectedAtomicAdds")
     }
-    if ($functionalAtomicOrs -ne 3) {
-        $violations.Add("${moduleName}: found $functionalAtomicOrs OpAtomicOr instruction(s), expected 3")
+    $expectedAtomicOrs = if ($moduleName -eq
+        'foliage_mesh.mesh.spv') { 4 } else { 3 }
+    if ($functionalAtomicOrs -ne $expectedAtomicOrs) {
+        $violations.Add("${moduleName}: found $functionalAtomicOrs OpAtomicOr instruction(s), expected $expectedAtomicOrs")
     }
     if ($functionalAtomicExchanges -ne 3) {
         $violations.Add("${moduleName}: found $functionalAtomicExchanges OpAtomicExchange instruction(s), expected 3")

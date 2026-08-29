@@ -8,7 +8,7 @@ namespace Njulf.Tests;
 public sealed class RendererMeshletBuildProfileTests
 {
     [TestCaseSource(nameof(FlexibleProfiles))]
-    public void FlexibleProfile_BuildsWithinRtxOutputLimits(
+    public void FlexibleProfile_BuildsWithinPortableOutputLimits(
         RendererMeshletBuildProfile profile)
     {
         const int size = 18;
@@ -44,35 +44,28 @@ public sealed class RendererMeshletBuildProfileTests
     }
 
     [Test]
-    public void Qualification_RequiresQualityAndThreePercentP95Win()
+    public void ProfileIds_AreVendorNeutralAndExplicitlyResolvable()
     {
-        RendererMeshletBuildProfile baseline =
-            RendererMeshletBuildProfiles.Rtx3060Baseline;
-        RendererMeshletBuildProfile winner =
-            RendererMeshletProfileQualification.SelectProductionCandidate(
-            [
-                new(baseline, 10.0, true),
-                new(RendererMeshletBuildProfiles.Rtx3060FlexCone025, 9.75, true),
-                new(RendererMeshletBuildProfiles.Rtx3060FlexCone050, 9.6, false)
-            ],
-            baseline);
-        Assert.That(winner, Is.SameAs(baseline));
-
-        winner = RendererMeshletProfileQualification.SelectProductionCandidate(
-        [
-            new(baseline, 10.0, true),
-            new(RendererMeshletBuildProfiles.Rtx3060FlexCone025, 9.69, true),
-            new(RendererMeshletBuildProfiles.Rtx3060FlexCone050, 9.5, false)
-        ],
-        baseline);
-        Assert.That(
-            winner,
-            Is.SameAs(RendererMeshletBuildProfiles.Rtx3060FlexCone025));
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                RendererMeshletBuildProfiles.Production,
+                Is.SameAs(RendererMeshletBuildProfiles.Portable48V64T));
+            Assert.That(
+                RendererMeshletBuildProfiles.Resolve("CONNECTED-64V-126T"),
+                Is.SameAs(RendererMeshletBuildProfiles.Connected64V126T));
+            Assert.That(
+                RendererMeshletBuildProfiles.AvailableProfiles.All(
+                    profile => !profile.Id.Contains(
+                        "rtx",
+                        StringComparison.OrdinalIgnoreCase)),
+                Is.True);
+        });
     }
 
     private static IEnumerable<RendererMeshletBuildProfile> FlexibleProfiles()
     {
-        yield return RendererMeshletBuildProfiles.Rtx3060FlexCone025;
-        yield return RendererMeshletBuildProfiles.Rtx3060FlexCone050;
+        yield return RendererMeshletBuildProfiles.PortableFlexCone025;
+        yield return RendererMeshletBuildProfiles.PortableFlexCone050;
     }
 }

@@ -274,7 +274,9 @@ void main()
 
     if ((command.Flags & MESHLET_DRAW_FLAG_NORMAL_CONE_CULL_ELIGIBLE) != 0u)
     {
-        GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+        GPUMeshlet meshlet = ReadMeshlet(
+            command.MeshletIndex,
+            pc.Push.CurrentFrameIndex);
         uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
             pc.Push.CurrentFrameIndex;
         uint objectWordOffset = command.InstanceId *

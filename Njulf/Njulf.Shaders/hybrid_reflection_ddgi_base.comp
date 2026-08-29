@@ -634,7 +634,7 @@ void HybridReconstructDdgiBase()
     float depth;
     if (!HybridDdgiReceiver(pixel, payload, worldPosition, depth))
     {
-        imageStore(HybridFilterScratch, pixel, vec4(0.0));
+        imageStore(HybridHistoryCurrent, pixel, vec4(0.0));
         return;
     }
 
@@ -657,7 +657,7 @@ void HybridReconstructDdgiBase()
             payload, worldPosition, radiance, confidence);
     }
 
-    imageStore(HybridFilterScratch, pixel,
+    imageStore(HybridHistoryCurrent, pixel,
         valid ? vec4(max(radiance, vec3(0.0)), confidence) : vec4(0.0));
 }
 

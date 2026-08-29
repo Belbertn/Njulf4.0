@@ -29,6 +29,7 @@ internal sealed unsafe class GiCausticScreenGpuPass : IDisposable
     private readonly RenderTargetManager _targets;
     private readonly GiCausticScreenResolveLayout _screenLayout;
     private readonly BufferHandle[] _frameConstantBuffers;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly DescriptorSet[] _descriptorSets =
         new DescriptorSet[RenderingConstants.FramesInFlight];
     private readonly nint _entryPointName;
@@ -49,7 +50,8 @@ internal sealed unsafe class GiCausticScreenGpuPass : IDisposable
         BufferManager bufferManager,
         RenderTargetManager targets,
         in GiCausticScreenResolveLayout screenLayout,
-        BufferHandle[] frameConstantBuffers)
+        BufferHandle[] frameConstantBuffers,
+        GiPipelineCacheService? pipelineCacheService = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bindlessHeap = bindlessHeap ??
@@ -60,6 +62,7 @@ internal sealed unsafe class GiCausticScreenGpuPass : IDisposable
         _screenLayout = screenLayout;
         _frameConstantBuffers = frameConstantBuffers ??
             throw new ArgumentNullException(nameof(frameConstantBuffers));
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr("main");
 
         try
@@ -517,6 +520,12 @@ internal sealed unsafe class GiCausticScreenGpuPass : IDisposable
 
     private void CreatePipelineCache()
     {
+        if (_pipelineCacheService != null)
+        {
+            _pipelineCache = _pipelineCacheService.Cache;
+            return;
+        }
+
         var info = new PipelineCacheCreateInfo
         {
             SType = StructureType.PipelineCacheCreateInfo
@@ -578,9 +587,18 @@ internal sealed unsafe class GiCausticScreenGpuPass : IDisposable
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device, _pipelineCache, 1u, &info, null,
-                out VkPipeline pipeline);
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId($"GiCaustic.Screen.{shaderName}"),
+                    &info,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1u,
+                    &info,
+                    null,
+                    out pipeline);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create " + debugName + ".", result);
             _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, debugName);
@@ -804,7 +822,7 @@ internal sealed unsafe class GiCausticScreenGpuPass : IDisposable
         if (_screenSetLayout.Handle != 0)
             _context.Api.DestroyDescriptorSetLayout(
                 _context.Device, _screenSetLayout, null);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(
                 _context.Device, _pipelineCache, null);
         if (_entryPointName != 0)

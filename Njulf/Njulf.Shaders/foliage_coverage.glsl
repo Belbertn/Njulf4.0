@@ -13,8 +13,26 @@ bool IsInsideFoliageLeafCard(vec2 uv)
     return abs(centered.x) <= halfWidth && abs(centered.y) <= 0.98;
 }
 
-vec4 SampleFoliageAlbedo(GPUMaterialData material, vec2 uv)
+bool HasFoliageImpostor(uint impostorMetadataIndex)
 {
+    return impostorMetadataIndex != 0xffffffffu;
+}
+
+vec4 SampleFoliageAlbedo(
+    GPUMaterialData material,
+    vec2 uv,
+    uint impostorMetadataIndex)
+{
+    if (HasFoliageImpostor(impostorMetadataIndex))
+    {
+        GPUFoliageImpostor impostor = ReadFoliageImpostor(
+            impostorMetadataIndex);
+        return texture(
+            BindlessTextures[nonuniformEXT(
+                impostor.AlbedoOpacityTextureIndex)],
+            uv);
+    }
+
     bool valid = material.AlbedoTextureIndex >= FIRST_TEXTURE_INDEX &&
         material.AlbedoTextureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES;
     return valid ? texture(BindlessTextures[nonuniformEXT(material.AlbedoTextureIndex)], uv) : vec4(1.0);
@@ -36,13 +54,32 @@ float StableFoliageCoverageDither(vec2 pixel, uint stableId)
     return HashFoliageCoverage01(stableId ^ (p.x * 1973u) ^ (p.y * 9277u));
 }
 
-float FoliageLodCoverage(uint lodBand)
+float FoliageLodCoverage(uint packedLodBand)
 {
+    uint lodBand = packedLodBand & FOLIAGE_COVERAGE_LOD_MASK;
     if (lodBand == 0u)
         return 1.0;
     if (lodBand == 1u)
         return 0.88;
     return 0.72;
+}
+
+bool FoliageLodTransitionSurvives(
+    uint packedLodBand,
+    vec2 pixel,
+    uint stableId)
+{
+    if ((packedLodBand & FOLIAGE_COVERAGE_TRANSITION_ACTIVE) == 0u)
+        return true;
+    float transition = float(
+        (packedLodBand & FOLIAGE_COVERAGE_TRANSITION_MASK) >>
+        FOLIAGE_COVERAGE_TRANSITION_SHIFT) / 255.0;
+    bool target = (packedLodBand &
+        FOLIAGE_COVERAGE_TRANSITION_TARGET) != 0u;
+    float sampleValue = StableFoliageCoverageDither(
+        pixel,
+        stableId ^ 0xc2b2ae35u);
+    return target ? sampleValue < transition : sampleValue >= transition;
 }
 
 bool FoliageCoverageSurvives(
@@ -51,10 +88,14 @@ bool FoliageCoverageSurvives(
     uint geometryMode,
     uint clusterIndex,
     uint lodBand,
+    uint impostorMetadataIndex,
     vec2 pixel,
     out vec4 sampledAlbedo)
 {
-    sampledAlbedo = SampleFoliageAlbedo(material, uv);
+    sampledAlbedo = SampleFoliageAlbedo(
+        material,
+        uv,
+        impostorMetadataIndex);
 
     if (geometryMode == 0u)
     {
@@ -64,8 +105,20 @@ bool FoliageCoverageSurvives(
     }
     else if (geometryMode == 2u)
     {
-        if (!IsInsideFoliageLeafCard(uv) || sampledAlbedo.a < 0.05)
+        bool impostor = HasFoliageImpostor(impostorMetadataIndex);
+        if ((!impostor && !IsInsideFoliageLeafCard(uv)) ||
+            sampledAlbedo.a < 0.05)
             return false;
+        if (impostor)
+        {
+            GPUFoliageImpostor metadata = ReadFoliageImpostor(
+                impostorMetadataIndex);
+            float conservativeDepth = texture(
+                BindlessTextures[nonuniformEXT(metadata.DepthTextureIndex)],
+                uv).r;
+            if (isnan(conservativeDepth) || isinf(conservativeDepth))
+                return false;
+        }
     }
     else if (!MaterialAlphaSurvivesRasterCoverage(
                  material.Albedo.a * sampledAlbedo.a,
@@ -75,8 +128,16 @@ bool FoliageCoverageSurvives(
         return false;
     }
 
-    uint stableId = clusterIndex ^ (lodBand * 0x9e3779b9u);
-    return StableFoliageCoverageDither(pixel, stableId) <= FoliageLodCoverage(lodBand);
+    uint lod = lodBand & FOLIAGE_COVERAGE_LOD_MASK;
+    bool transitionActive = (lodBand &
+        FOLIAGE_COVERAGE_TRANSITION_ACTIVE) != 0u;
+    uint stableId = transitionActive
+        ? clusterIndex
+        : clusterIndex ^ (lod * 0x9e3779b9u);
+    return FoliageLodTransitionSurvives(
+        lodBand,
+        pixel,
+        stableId);
 }
 
 #endif // NJULF_FOLIAGE_COVERAGE_GLSL

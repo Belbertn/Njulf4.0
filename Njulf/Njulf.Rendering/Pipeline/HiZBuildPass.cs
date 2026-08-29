@@ -21,6 +21,7 @@ namespace Njulf.Rendering.Pipeline
         private static readonly uint PushConstantSize = checked((uint)Marshal.SizeOf<GPUHiZBuildPushConstants>());
         private readonly HiZDepthPyramid _pyramid;
         private readonly RenderTargetManager _renderTargets;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private DescriptorSetLayout _descriptorSetLayout;
         private DescriptorPool _descriptorPool;
@@ -35,11 +36,13 @@ namespace Njulf.Rendering.Pipeline
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             HiZDepthPyramid pyramid,
-            RenderTargetManager renderTargets)
+            RenderTargetManager renderTargets,
+            GiPipelineCacheService? pipelineCacheService = null)
             : base("HiZBuildPass", context, swapchain, bindlessHeap)
         {
             _pyramid = pyramid ?? throw new ArgumentNullException(nameof(pyramid));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -155,7 +158,7 @@ namespace Njulf.Rendering.Pipeline
                 _descriptorSetLayout = default;
             }
 
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
                 _pipelineCache = default;
@@ -202,6 +205,12 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo
             {
                 SType = StructureType.PipelineCacheCreateInfo
@@ -269,13 +278,18 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                Result result = _context.Api.CreateComputePipelines(
-                    _context.Device,
-                    _pipelineCache,
-                    1,
-                    &pipelineInfo,
-                    null,
-                    out _pipeline);
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId("HiZ.Build"),
+                        &pipelineInfo,
+                        out _pipeline)
+                    : _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out _pipeline);
 
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create Hi-Z compute pipeline", result);

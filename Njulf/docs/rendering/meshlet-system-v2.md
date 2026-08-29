@@ -8,13 +8,13 @@ work introduced at the Model/Mesh 2.0 hard-recook boundary.
 | Area | Production contract |
 |---|---|
 | Cooking | Absolute object-space simplification errors, appearance-aware simplification, locked-border preservation, tight conservative spheres, and conservative normal cones. |
-| Profiles | The qualified 48-vertex/64-triangle baseline remains the production default. Two explicit 32–64-triangle flexible cone-clustering candidates remain behind the measured 3% p95 adoption gate and within the packed GPU ABI. |
+| Profiles | The portable 48-vertex/64-triangle baseline is the production default. Two explicit 32–64-triangle cone-clustering candidates and one connected 64-vertex/126-triangle candidate remain selectable without vendor checks. |
 | GPU ABI | `GPUPackedMeshlet` ABI v2 is 36 bytes. Cooked data stays lossless; runtime upload validates and conservatively quantizes cones. |
-| Submission | A 16-byte instance candidate is expanded on GPU into bucketed meshlet work. Opaque, motion, foliage, depth, and shadow paths share the same culling contracts. |
+| Submission | Exact compute-compacted streams dispatch taskless mesh shaders for opaque, transparent, motion, foliage, depth, and shadow work. Task shaders remain an explicit compatibility/validation mode only. |
 | LOD | Screen-space absolute error, 15% hysteresis, and deterministic eight-frame temporal dithering. Directional shadows use matching source/target cuts; transparent draws rebuild and sort from the current camera. |
 | Hierarchy | Bottom-up clusters use leaf groups of 16, fanout 8, maximum depth 12, target ratio 0.5, and stuck threshold 0.85. Runtime traversal is a bounded DFS with a proven 96-entry shared stack and a flat-LOD fallback. |
-| Streaming | Independently authenticated 64 KiB pages, 4 KiB disk alignment, per-page Zstd fallback, content-addressed sidecars, complete multipage coarse cuts, bounded parallel reads, 8 MiB/frame upload admission, 4096-page physical budget, retry backoff, priority/LRU selection, and frame-safe retirement. |
-| Animation | Every skinned page is pinned. Static LOD0/LOD1 pages are streamable; static LOD2 and hierarchy geometry are pinned. |
+| Streaming | Renderer-wide software-managed physical residency uses authenticated 64 KiB pages, lazily committed 64 MiB GPU banks, complete coarse cuts, bounded parallel reads, 8 MiB/frame uploads, a 4096-page default budget, retry backoff, global priority/LRU selection, and frame-safe retirement. It does not require Vulkan sparse binding. |
+| Animation | Eligible static meshes may page LOD0/LOD1 while LOD2 and hierarchy fallback data remain pinned. Skinned, runtime-imported, small, corrupt, or non-beneficial meshes remain fully resident. |
 | Ray queries | Static BLAS input may use the conservative LOD2 triangle proxy. Skinned geometry remains resident and exact. Proxy use is explicitly tagged in ray-scene diagnostics. |
 | Failure behavior | A missing, corrupt, incompatible, or over-budget page sidecar fails closed to the ordinary full-resident cooked payload. A page is never published before its transfer completion serial. |
 
@@ -41,15 +41,22 @@ its error and hierarchy semantics cannot be reconstructed; it must be recooked.
 
 The main package deliberately retains the full-resident streams. They are the
 correctness fallback and allow older rendering backends to consume v2 content.
-Backends that support paging open a `MeshletStreamingResidencySession`, provide
-an `IMeshletStreamingPageUploader`, and drive `TickAsync` with submission and
-completed GPU serials. Failure to open the session is a reported fallback, not
-a model-load failure.
+The renderer preflights eligible static submeshes as a package cohort, admits a
+paged session only when pinned/coarse data fits and exact committed bytes are
+lower than the full-resident upload, then shares physical slots and I/O budgets
+through one global coordinator. Activated submeshes do not also upload duplicate
+full meshlet/local-index streams. Any preflight or bootstrap failure rolls the
+cohort back transactionally to the ordinary full-resident upload.
+
+Paging is adaptive, not a hardware-qualified feature switch. Existing schema-1
+`.pages` sidecars are sufficient and do not require recooking. Missing, corrupt,
+skinned, over-budget, or savings-negative content reports its concrete fallback
+reason and remains fully resident.
 
 ## Residency invariants
 
-- Pinned page count must fit the configured physical cache before a session is
-  admitted.
+- Global pinned pages plus the largest selectable fine range must fit the
+  configured physical cache before a session is admitted.
 - A static fine page is usable only when it is resident. Otherwise the entire
   pinned coarsest LOD page group must be resident; partial coarse geometry is
   never returned as a valid resolution.
@@ -70,34 +77,29 @@ Default controls live under `RenderSettings.SceneSubmission`:
 - `GpuMeshletStreamingMaximumRequestsPerFrame = 4096`
 - `GpuMeshletStreamingConcurrentReads = 4`
 
-Settings schema 24 persists these controls. Applying any quality preset
+`RenderSettings.Raster.MeshShaderTuningMode = Auto` selects taskless
+48v/64p/64-thread shaders by default and widens only when loaded content needs
+the 64v/126p contract. All four taskless size/workgroup permutations and the
+task-stage compatibility path remain explicit test modes on every device whose
+reported Vulkan limits satisfy the selected contract.
+
+Settings schema 26 persists these controls and the combined renderer activation
+contracts. Applying any quality preset
 restores the complete production meshlet feature set before its tier-specific
 pixel-error budget is selected. Pre-24 files promote hierarchy, streaming
 policy, and eight-frame dithering; pre-23 files also promote screen-space error
 LOD because Model/Mesh 1.x content is no longer accepted by the v2 runtime.
 
-## Qualification gate
+## Validation and profiling
 
-`MeshletSystemQualificationContract` is the release gate, not a benchmark
-suggestion. Evidence must come from a clean release build, pin a commit and
-artifact SHA-256, include at least three independent runs of 1000 measured
-frames, and prove all correctness counters are zero. Visual/reference, shadow,
-transparent-order, dither, skinned-residency, ray-proxy, and full-resident
-fallback checks are mandatory.
-
-The performance-qualified target is **NVIDIA GeForce RTX 3060 Laptop GPU**.
-Its candidate p95 CPU and GPU frame times may regress by no more than 2%, warm
-page-cache hit rate must be at least 90%, peak physical pages must remain within
-256 MiB, and page uploads must remain within 8 MiB per frame.
-
-AMD integrated GPUs run the identical correctness gate but return
-`CorrectnessOnly`; they cannot produce a production-performance qualification.
-Other devices are outside this frozen qualification matrix until a separately
-reviewed device rule is added.
+Taskless submission and adaptive physical residency are enabled without a
+vendor qualification manifest. Runtime Vulkan limits, allocation limits,
+resource validity, and content correctness remain authoritative fallbacks.
+Optional clean Release captures can still compare the selectable clustering
+and workgroup candidates; changing the production cooking profile should retain
+the existing 3% p95 improvement and 2% regression gates.
 
 Automated tests validate serialization, hierarchy coverage and boundedness,
 packed ABI layout, shader permutations, multipage coarse fallback completeness,
 sidecar corruption handling, retry/eviction/retirement, settings migration,
-and qualification classification. Hardware performance status must still be
-backed by captured device evidence; a passing unit suite does not manufacture
-that evidence.
+global-bank admission, adaptive byte accounting, and full-resident rollback.

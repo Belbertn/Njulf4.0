@@ -9,6 +9,7 @@ layout(location = 1) flat in uint fragMaterialIndex;
 layout(location = 4) flat in uint fragClusterIndex;
 layout(location = 5) flat in uint fragLodBand;
 layout(location = 6) flat in uint fragGeometryMode;
+layout(location = 10) flat in uint fragImpostorMetadataIndex;
 
 void main()
 {
@@ -20,6 +21,7 @@ void main()
             fragGeometryMode,
             fragClusterIndex,
             fragLodBand,
+            fragImpostorMetadataIndex,
             gl_FragCoord.xy,
             sampledAlbedo))
         discard;

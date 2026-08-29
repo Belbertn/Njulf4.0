@@ -15,12 +15,23 @@ internal enum RendererStartupLatencyGateMode
     Enforce
 }
 
+internal enum RendererPipelineBinaryCacheMode
+{
+    Auto,
+    Off,
+    Require
+}
+
 internal static class RendererBuildConfiguration
 {
     internal const string PipelineStartupModeEnvironmentVariable =
         "NJULF_PIPELINE_STARTUP_MODE";
     internal const string StartupLatencyGateEnvironmentVariable =
         "NJULF_STARTUP_LATENCY_GATE";
+    internal const string PipelineBinaryCacheEnvironmentVariable =
+        "NJULF_PIPELINE_BINARY_CACHE";
+    internal const string PipelineCacheVerifyEnvironmentVariable =
+        "NJULF_PIPELINE_CACHE_VERIFY";
 
     internal static RendererPipelineStartupMode PipelineStartupMode { get; } =
         ResolvePipelineStartupMode();
@@ -35,6 +46,17 @@ internal static class RendererBuildConfiguration
             Environment.GetEnvironmentVariable(
                 StartupLatencyGateEnvironmentVariable),
             EnforceStartupLatencyByDefault);
+
+    internal static RendererPipelineBinaryCacheMode PipelineBinaryCacheMode
+        { get; } = ResolvePipelineBinaryCacheMode(
+            Environment.GetEnvironmentVariable(
+                PipelineBinaryCacheEnvironmentVariable));
+
+    internal static bool VerifyPipelineCacheCompleteness { get; } =
+        ResolveBooleanSwitch(
+            PipelineCacheVerifyEnvironmentVariable,
+            "--pipeline-cache-verify") ||
+        PipelineBinaryCacheMode == RendererPipelineBinaryCacheMode.Require;
 
     // Interactive launches must remain usable under transient system load.
     // Hardware qualification opts into fatal enforcement explicitly.
@@ -111,5 +133,50 @@ internal static class RendererBuildConfiguration
         throw new InvalidOperationException(
             $"Unsupported startup latency gate mode '{requested}'. Use " +
             "'off', 'timing', or 'enforce'.");
+    }
+
+    internal static RendererPipelineBinaryCacheMode
+        ResolvePipelineBinaryCacheMode(string? requested)
+    {
+        if (string.IsNullOrWhiteSpace(requested) ||
+            requested.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return RendererPipelineBinaryCacheMode.Auto;
+        }
+        if (requested.Equals("off", StringComparison.OrdinalIgnoreCase) ||
+            requested.Equals("disabled", StringComparison.OrdinalIgnoreCase))
+        {
+            return RendererPipelineBinaryCacheMode.Off;
+        }
+        if (requested.Equals("require", StringComparison.OrdinalIgnoreCase) ||
+            requested.Equals("verify", StringComparison.OrdinalIgnoreCase))
+        {
+            return RendererPipelineBinaryCacheMode.Require;
+        }
+
+        throw new InvalidOperationException(
+            $"Unsupported pipeline binary cache mode '{requested}'. Use " +
+            "'auto', 'off', or 'require'.");
+    }
+
+    private static bool ResolveBooleanSwitch(
+        string environmentVariable,
+        string commandLineSwitch)
+    {
+        if (Environment.GetCommandLineArgs().Any(argument =>
+                argument.Equals(
+                    commandLineSwitch,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        string? configured = Environment.GetEnvironmentVariable(
+            environmentVariable);
+        return configured != null &&
+               (configured.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                configured.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                configured.Equals("on", StringComparison.OrdinalIgnoreCase) ||
+                configured.Equals("yes", StringComparison.OrdinalIgnoreCase));
     }
 }

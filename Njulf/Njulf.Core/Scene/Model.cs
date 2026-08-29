@@ -14,6 +14,8 @@ namespace Njulf.Core.Scene
         private readonly List<AnimationClip> _animationClips = new();
         private readonly List<ModelLightDefinition> _lights = new();
         private readonly List<Action> _disposeActions = new();
+        private readonly List<SharedDisposeAction> _sharedDisposeActions =
+            new();
         private readonly ReadOnlyCollection<RenderObject> _readOnlyRenderObjects;
         private readonly ReadOnlyCollection<Skeleton> _readOnlySkeletons;
         private readonly ReadOnlyCollection<Skin> _readOnlySkins;
@@ -59,6 +61,14 @@ namespace Njulf.Core.Scene
 
             try
             {
+                instance._sharedDisposeActions.EnsureCapacity(
+                    _sharedDisposeActions.Count);
+                foreach (SharedDisposeAction shared in
+                         _sharedDisposeActions)
+                {
+                    shared.Retain();
+                    instance._sharedDisposeActions.Add(shared);
+                }
                 for (int i = 0; i < _renderObjects.Count; i++)
                     instance.Add(CreateRenderObjectInstance(i));
 
@@ -266,6 +276,21 @@ namespace Njulf.Core.Scene
             _disposeActions.Add(disposeAction);
         }
 
+        /// <summary>
+        /// Adds a reference-counted lifetime shared by this model and every
+        /// instance created from it. The action runs after the final model
+        /// lease is disposed, which keeps package-level renderer resources
+        /// alive while cached templates or live instances still use them.
+        /// </summary>
+        public void AddSharedDisposeAction(Action disposeAction)
+        {
+            if (disposeAction == null)
+                throw new ArgumentNullException(nameof(disposeAction));
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _sharedDisposeActions.Add(
+                new SharedDisposeAction(disposeAction));
+        }
+
         public void Update(float deltaTime)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -292,6 +317,21 @@ namespace Njulf.Core.Scene
                 {
                     _disposeActions[index]();
                     _disposeActions.RemoveAt(index);
+                }
+                catch (Exception disposeFailure)
+                {
+                    (failures ??= new List<Exception>())
+                        .Add(disposeFailure);
+                }
+            }
+            for (int index = _sharedDisposeActions.Count - 1;
+                 index >= 0;
+                 index--)
+            {
+                try
+                {
+                    _sharedDisposeActions[index].Release();
+                    _sharedDisposeActions.RemoveAt(index);
                 }
                 catch (Exception disposeFailure)
                 {
@@ -334,6 +374,47 @@ namespace Njulf.Core.Scene
             }
 
             return failures;
+        }
+
+        private sealed class SharedDisposeAction
+        {
+            private readonly Action _action;
+            private readonly object _lock = new();
+            private int _referenceCount = 1;
+
+            public SharedDisposeAction(Action action)
+            {
+                _action = action;
+            }
+
+            public void Retain()
+            {
+                lock (_lock)
+                {
+                    if (_referenceCount <= 0)
+                    {
+                        throw new ObjectDisposedException(
+                            nameof(SharedDisposeAction));
+                    }
+                    _referenceCount = checked(_referenceCount + 1);
+                }
+            }
+
+            public void Release()
+            {
+                lock (_lock)
+                {
+                    if (_referenceCount <= 0)
+                        return;
+                    if (_referenceCount > 1)
+                    {
+                        _referenceCount--;
+                        return;
+                    }
+                    _action();
+                    _referenceCount = 0;
+                }
+            }
         }
     }
 }

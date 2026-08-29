@@ -4,6 +4,7 @@
 
 #include "common.glsl"
 #include "hybrid_reflection_compute.glsl"
+#include "automatic_planar_reflection.glsl"
 
 const uint REFLECTION_BOX_PROJECTION_ENABLED_FLAG = 1u << 1u;
 const uint REFLECTION_PROBE_BLENDING_ENABLED_FLAG = 1u << 2u;
@@ -25,6 +26,8 @@ layout(push_constant) uniform HybridReflectionResolvePushBlock
     float AnalyticTransitionStartRoughness;
     float AnalyticTransitionEndRoughness;
     uint DdgiBaseAvailable;
+    uint CurrentFrameIndex;
+    uint EffectiveReflectionMode;
 } pc;
 
 vec3 HybridTransformProbePoint(GPUReflectionProbe probe, vec3 position)
@@ -214,8 +217,31 @@ void main()
 
     uvec2 metadata = imageLoad(HybridRawMetadata, pixel).xy;
     vec4 raw = imageLoad(HybridRawRadiance, pixel);
+    vec4 clearcoatRaw = imageLoad(HybridDdgiCohorts, pixel);
+    bool planarOnly = pc.EffectiveReflectionMode == 4u;
+    bool planarEnabled = planarOnly || pc.EffectiveReflectionMode == 5u;
+    if (planarOnly)
+    {
+        // StaticProbesAndPlanar intentionally submits no SSR/ray/DDGI work.
+        // Ignore all prior contents and rebuild the exact planar -> probe ->
+        // environment chain for every current receiver.
+        metadata = uvec2(0u);
+        raw = vec4(0.0);
+        clearcoatRaw = vec4(0.0);
+    }
     uint source = HybridMetadataSource(metadata.x);
     float confidence = HybridMetadataConfidence(metadata.x);
+    if (!planarEnabled &&
+        HybridMetadataValid(metadata.x) &&
+        HybridMetadataReason(metadata.x) ==
+            HYBRID_REFLECTION_REASON_RESOLUTION_SKIP)
+    {
+        // Classification copied an already shaded, validated temporal value.
+        // Do not apply the BRDF a second time during the cheap carry path.
+        imageStore(HybridRawRadiance, pixel,
+            vec4(max(raw.rgb, vec3(0.0)), confidence));
+        return;
+    }
     vec3 incidentRadiance = max(raw.rgb, vec3(0.0));
     float roughness = HybridReflectionPayloadPhysicalRoughness(payload);
     vec3 normal = HybridReflectionPayloadShadingNormal(payload);
@@ -227,10 +253,32 @@ void main()
     GPUEnvironmentData environment = ReadEnvironmentData();
     GPUReflectionProbeHeader probeHeader = ReadReflectionProbeHeader();
     vec4 ddgiBase = pc.DdgiBaseAvailable != 0u
-        ? imageLoad(HybridFilterScratch, pixel)
+        ? imageLoad(HybridHistoryCurrent, pixel)
         : vec4(0.0);
     bool ddgiBaseValid = HybridFinite(ddgiBase) &&
         ddgiBase.a > 0.0;
+    vec3 planarRadiance;
+    float planarConfidence;
+    bool planarValid = planarEnabled && AutomaticPlanarTrySample(
+        pc.CurrentFrameIndex,
+        HybridReceiverIdentity(payload),
+        worldPosition,
+        HybridReflectionPayloadGeometricNormal(payload),
+        roughness,
+        planarRadiance,
+        planarConfidence);
+    if (planarValid)
+    {
+        incidentRadiance = planarRadiance;
+        confidence = planarConfidence;
+        source = HYBRID_REFLECTION_SOURCE_PLANAR;
+        metadata.x = HybridPackMetadata(
+            source,
+            confidence,
+            HYBRID_REFLECTION_REASON_NONE,
+            0u,
+            true);
+    }
     if (pc.ReflectionDebugView == 11u)
     {
         imageStore(HybridRawRadiance, pixel,
@@ -242,7 +290,7 @@ void main()
                 HYBRID_REFLECTION_REASON_NONE,
                 0u,
                 ddgiBaseValid),
-            HybridReceiverIdentity(payload), metadata.y, 0u));
+            metadata.y, 0u, 0u));
         return;
     }
     float incidentRadianceScale =
@@ -290,6 +338,7 @@ void main()
     // scale. Complete only the unresolved part of a broad lobe analytically;
     // sharp glass, mirrors, and polished metal remain entirely scene-derived.
     bool geometricSource =
+        source == HYBRID_REFLECTION_SOURCE_PLANAR ||
         source == HYBRID_REFLECTION_SOURCE_SSR ||
         source == HYBRID_REFLECTION_SOURCE_RAY_QUERY;
     float transitionStart = clamp(
@@ -391,10 +440,99 @@ void main()
         specularOcclusion * max(pc.CameraPositionAndIntensity.w, 0.0);
     contribution = HybridLimitReflectionRadiance(contribution,
         HybridMaximumComponent(scaledIncidentRadiance));
+
+    float clearcoatRoughness = clamp(raw.a, 0.02, 1.0);
+    float clearcoatFactor = clamp(clearcoatRaw.a, 0.0, 1.0);
+    uint clearcoatSource = HybridMetadataSource(metadata.y);
+    float clearcoatConfidence = HybridMetadataConfidence(metadata.y);
+    bool clearcoatEnabled = clearcoatFactor > 0.0 &&
+        (HybridReflectionPayloadLobeFlags(payload) &
+            NJULF_HYBRID_REFLECTION_LOBE_CLEARCOAT) != 0u;
+    if (clearcoatEnabled)
+    {
+        vec3 clearcoatNormal = normal;
+        vec3 clearcoatDirection = normalize(
+            reflect(-viewDirection, clearcoatNormal));
+        vec3 clearcoatIncident = max(clearcoatRaw.rgb, vec3(0.0));
+        float clearcoatScale = 1.0;
+        vec3 clearcoatPlanarRadiance;
+        float clearcoatPlanarConfidence;
+        bool clearcoatPlanarValid = planarEnabled &&
+            AutomaticPlanarTrySample(
+                pc.CurrentFrameIndex,
+                HybridReceiverIdentity(payload),
+                worldPosition,
+                HybridReflectionPayloadGeometricNormal(payload),
+                clearcoatRoughness,
+                clearcoatPlanarRadiance,
+                clearcoatPlanarConfidence);
+        if (clearcoatPlanarValid)
+        {
+            clearcoatIncident = clearcoatPlanarRadiance;
+            clearcoatConfidence = clearcoatPlanarConfidence;
+            clearcoatSource = HYBRID_REFLECTION_SOURCE_PLANAR;
+        }
+        else if (!HybridMetadataValid(metadata.y))
+        {
+            if (ddgiBaseValid)
+            {
+                clearcoatIncident = max(ddgiBase.rgb, vec3(0.0));
+                clearcoatConfidence = clamp(ddgiBase.a, 0.0, 1.0);
+                clearcoatSource = HYBRID_REFLECTION_SOURCE_DDGI;
+            }
+            else
+            {
+                HybridSampleAnalyticFallback(
+                    worldPosition,
+                    clearcoatDirection,
+                    clearcoatRoughness,
+                    environment,
+                    probeHeader,
+                    clearcoatIncident,
+                    clearcoatConfidence,
+                    clearcoatSource);
+                clearcoatScale =
+                    clearcoatSource ==
+                        HYBRID_REFLECTION_SOURCE_ENVIRONMENT
+                    ? max(environment.SpecularIntensity, 0.0)
+                    : 1.0;
+            }
+        }
+        float clearcoatNdotV = max(
+            dot(clearcoatNormal, viewDirection), 0.0);
+        vec3 clearcoatFresnel = HybridFresnelSchlickRoughness(
+            clearcoatNdotV, vec3(0.04), clearcoatRoughness);
+        vec2 clearcoatBrdf = environment.BrdfLutTextureIndex >= 0
+            ? texture(BindlessTextures[nonuniformEXT(
+                environment.BrdfLutTextureIndex)],
+                vec2(clearcoatNdotV, clearcoatRoughness)).rg
+            : vec2(1.0, 0.0);
+        vec3 clearcoatContribution = clearcoatIncident * clearcoatScale *
+            (clearcoatFresnel * clearcoatBrdf.x + clearcoatBrdf.y) *
+            clearcoatFactor *
+            max(pc.CameraPositionAndIntensity.w, 0.0);
+        // glTF clearcoat is a dielectric layer above the base. Attenuating the
+        // base by the same Fresnel energy that is added by the coat keeps the
+        // combined white-furnace response bounded.
+        float layerTransmission = clamp(1.0 - clearcoatFactor *
+            HybridMaximumComponent(clearcoatFresnel), 0.0, 1.0);
+        contribution = contribution * layerTransmission +
+            HybridLimitReflectionRadiance(clearcoatContribution,
+                HybridMaximumComponent(clearcoatIncident));
+        if (clearcoatConfidence * clearcoatFactor > confidence)
+            source = clearcoatSource;
+        confidence = max(confidence,
+            clearcoatConfidence * clearcoatFactor);
+    }
     imageStore(HybridRawRadiance, pixel,
         vec4(contribution, confidence));
     imageStore(HybridRawMetadata, pixel, uvec4(
         HybridPackMetadata(source, confidence,
             HybridMetadataReason(metadata.x), 0u, true),
-        HybridReceiverIdentity(payload), metadata.y, 0u));
+        clearcoatEnabled
+            ? HybridPackMetadata(clearcoatSource, clearcoatConfidence,
+                HybridMetadataReason(metadata.y), 0u, true)
+            : 0u,
+        0u,
+        0u));
 }

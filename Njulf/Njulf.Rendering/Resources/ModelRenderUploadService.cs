@@ -29,6 +29,9 @@ namespace Njulf.Rendering.Resources
         private readonly RuntimePrimitiveTransportProfileBuilder _runtimePrimitiveProfiles;
         private readonly OpacityMicromapRuntimeRegistrationStore
             _opacityMicromapRegistrations;
+        private readonly MeshletStreamingResidencyCoordinator?
+            _meshletResidencyCoordinator;
+        private readonly SceneSubmissionSettings? _sceneSubmissionSettings;
         private readonly Action<MeshHandle> _releaseMeshHandle;
         private readonly Action<object> _retainMeshResource;
         private readonly Action<object> _releaseMeshResource;
@@ -74,6 +77,26 @@ namespace Njulf.Rendering.Resources
         {
         }
 
+        public ModelRenderUploadService(
+            MeshManager meshManager,
+            TextureManager textureManager,
+            MaterialManager materialManager,
+            OpacityMicromapRuntimeRegistrationStore
+                opacityMicromapRegistrations,
+            MeshletStreamingResidencyCoordinator
+                meshletResidencyCoordinator,
+            SceneSubmissionSettings sceneSubmissionSettings)
+            : this(
+                new ModelRenderUploadBackend(
+                    meshManager,
+                    textureManager,
+                    materialManager),
+                opacityMicromapRegistrations,
+                meshletResidencyCoordinator,
+                sceneSubmissionSettings)
+        {
+        }
+
         internal ModelRenderUploadService(IModelRenderUploadBackend backend)
             : this(backend, new OpacityMicromapRuntimeRegistrationStore())
         {
@@ -83,12 +106,30 @@ namespace Njulf.Rendering.Resources
             IModelRenderUploadBackend backend,
             OpacityMicromapRuntimeRegistrationStore
                 opacityMicromapRegistrations)
+            : this(
+                backend,
+                opacityMicromapRegistrations,
+                meshletResidencyCoordinator: null,
+                sceneSubmissionSettings: null)
+        {
+        }
+
+        internal ModelRenderUploadService(
+            IModelRenderUploadBackend backend,
+            OpacityMicromapRuntimeRegistrationStore
+                opacityMicromapRegistrations,
+            MeshletStreamingResidencyCoordinator?
+                meshletResidencyCoordinator,
+            SceneSubmissionSettings? sceneSubmissionSettings)
         {
             _backend = backend ?? throw new ArgumentNullException(nameof(backend));
             _opacityMicromapRegistrations =
                 opacityMicromapRegistrations ??
                 throw new ArgumentNullException(
                     nameof(opacityMicromapRegistrations));
+            _meshletResidencyCoordinator =
+                meshletResidencyCoordinator;
+            _sceneSubmissionSettings = sceneSubmissionSettings;
             _runtimePrimitiveProfiles = new RuntimePrimitiveTransportProfileBuilder();
             _releaseMeshHandle = ReleaseMeshHandle;
             _retainMeshResource = resource =>
@@ -478,6 +519,8 @@ namespace Njulf.Rendering.Resources
                     rollback,
                     out GiPrimitiveTransportProfile?[] primitiveProfiles,
                     out IReadOnlyList<string> profileAuthenticationDiagnostics);
+                var uploadProfileDiagnostics =
+                    new List<string>(profileAuthenticationDiagnostics);
                 var registrations = new MeshManager.MeshRegistrationData[payload.SubMeshes.Count];
                 for (int i = 0; i < payload.SubMeshes.Count; i++)
                 {
@@ -522,9 +565,68 @@ namespace Njulf.Rendering.Resources
                         coarseRayProxyIndices);
                 }
 
+                MeshletPhysicalResidencySession? residencySession = null;
+                if (_meshletResidencyCoordinator is { } coordinator &&
+                    _sceneSubmissionSettings is { } submissionSettings)
+                {
+                    MeshletPhysicalResidencySessionOpenResult result =
+                        MeshletPhysicalResidencySession.TryOpenAsync(
+                                cooked,
+                                coordinator,
+                                submissionSettings
+                                    .GpuMeshletStreamingEnabled)
+                            .AsTask()
+                            .GetAwaiter()
+                            .GetResult();
+                    if (result.Active && result.Session is { } session)
+                    {
+                        residencySession = session;
+                        model.AddSharedDisposeAction(session.Dispose);
+                        foreach (MeshletStreamingSubMeshActivation activation in
+                                 result.ActivationPlan.SubMeshes)
+                        {
+                            if (!activation.Active)
+                                continue;
+                            registrations[activation.SubMeshIndex]
+                                .EnableManagedPhysicalResidency(
+                                    session.Package.GetSubMeshGpuBinding(
+                                        activation.SubMeshIndex));
+                        }
+                        uploadProfileDiagnostics.Add(
+                            $"Managed meshlet residency active for " +
+                            $"{result.ActivationPlan.ActiveSubMeshCount} submeshes; " +
+                            $"estimated VRAM avoided=" +
+                            $"{result.ActivationPlan.EstimatedBytesAvoided} bytes.");
+                    }
+                    else if (!string.IsNullOrWhiteSpace(
+                                 result.FallbackReason))
+                    {
+                        uploadProfileDiagnostics.Add(
+                            "Managed meshlet residency retained full-resident storage: " +
+                            result.FallbackReason);
+                    }
+                }
+
                 MeshHandle[] lifetimeMeshes =
                     _backend.RegisterMeshes(registrations);
                 rollback.TrackMeshes(lifetimeMeshes);
+                if (residencySession is not null)
+                {
+                    for (int index = 0;
+                         index < registrations.Length;
+                         index++)
+                    {
+                        if (registrations[index].ManagedResidencyBinding is null)
+                            continue;
+                        uint vertexOffset = registrations[index]
+                            .RegisteredVertexOffset ??
+                            throw new InvalidOperationException(
+                                "A managed mesh registration did not publish its global vertex offset.");
+                        residencySession.FinalizeSubMeshVertexOffset(
+                            index,
+                            vertexOffset);
+                    }
+                }
                 opacityMicromapRuntimeRegistrationCount =
                     RegisterCookedOpacityMicromaps(
                         cooked,
@@ -589,7 +691,7 @@ namespace Njulf.Rendering.Resources
                             0)),
                     string.Join(
                         " | ",
-                        profileAuthenticationDiagnostics),
+                        uploadProfileDiagnostics),
                     opacityMicromapPayloadAcceptedCount,
                     opacityMicromapRuntimeRegistrationCount,
                     opacityMicromapRuntimeDetail);
@@ -3856,6 +3958,9 @@ namespace Njulf.Rendering.Resources
             private IModelMeshUpload? _pendingMeshUpload;
             private Task<MeshManager.MeshRegistrationData[]>?
                 _registrationPreparation;
+            private Task<MeshletPhysicalResidencySessionOpenResult>?
+                _residencyPreparation;
+            private MeshletPhysicalResidencySession? _residencySession;
             private MeshManager.MeshRegistrationData[]? _registrations;
             private MeshHandle[]? _meshes;
             private Model? _result;
@@ -3927,6 +4032,19 @@ namespace Njulf.Rendering.Resources
                     _profileDiagnostics.AddRange(
                         diagnostics.Messages.Take(16));
                 }
+                if (cooked is not null &&
+                    owner._meshletResidencyCoordinator is { } coordinator &&
+                    owner._sceneSubmissionSettings is { } submissionSettings)
+                {
+                    _residencyPreparation =
+                        MeshletPhysicalResidencySession.TryOpenAsync(
+                                cooked,
+                                coordinator,
+                                submissionSettings
+                                    .GpuMeshletStreamingEnabled,
+                                _preparationCancellation.Token)
+                            .AsTask();
+                }
                 _phaseStartedTimestamp = _uploadStartedTimestamp;
             }
 
@@ -3974,6 +4092,8 @@ namespace Njulf.Rendering.Resources
                                 ExecuteRegistrationPreparationStepLocked(),
                             CookedModelUploadPhase.RegisteringMeshes =>
                                 ExecuteMeshRegistrationStepLocked(budget),
+                            CookedModelUploadPhase.AwaitingResidencyBootstrap =>
+                                ExecuteResidencyBootstrapStepLocked(),
                             CookedModelUploadPhase.AttachingRenderObjects =>
                                 ExecuteRenderObjectStepLocked(budget),
                             CookedModelUploadPhase.Finalizing =>
@@ -4407,8 +4527,48 @@ namespace Njulf.Rendering.Resources
                         "finalizing persistent mesh upload streams in the background");
                 }
 
+                if (_residencyPreparation is { IsCompleted: false })
+                {
+                    return Yield(
+                        ContentLoadStage.Preparing,
+                        0.79,
+                        "authenticating pinned meshlet pages in the background");
+                }
+
                 _registrations = task.GetAwaiter().GetResult();
                 _registrationPreparation = null;
+                if (_residencyPreparation is { } residencyPreparation)
+                {
+                    MeshletPhysicalResidencySessionOpenResult result =
+                        residencyPreparation.GetAwaiter().GetResult();
+                    _residencyPreparation = null;
+                    if (result.Active && result.Session is { } session)
+                    {
+                        _residencySession = session;
+                        foreach (MeshletStreamingSubMeshActivation activation in
+                                 result.ActivationPlan.SubMeshes)
+                        {
+                            if (!activation.Active)
+                                continue;
+                            _registrations[activation.SubMeshIndex]
+                                .EnableManagedPhysicalResidency(
+                                    session.Package.GetSubMeshGpuBinding(
+                                        activation.SubMeshIndex));
+                        }
+                        _profileDiagnostics.Add(
+                            $"Managed meshlet residency active for " +
+                            $"{result.ActivationPlan.ActiveSubMeshCount} submeshes; " +
+                            $"estimated VRAM avoided=" +
+                            $"{result.ActivationPlan.EstimatedBytesAvoided} bytes.");
+                    }
+                    else if (!string.IsNullOrWhiteSpace(
+                                 result.FallbackReason))
+                    {
+                        _profileDiagnostics.Add(
+                            "Managed meshlet residency retained full-resident storage: " +
+                            result.FallbackReason);
+                    }
+                }
                 _phase = CookedModelUploadPhase.RegisteringMeshes;
                 BeginProfiledPhase(CookedModelUploadPhase.RegisteringMeshes);
                 return Yield(
@@ -4548,12 +4708,61 @@ namespace Njulf.Rendering.Resources
                 }
                 _owner.UploadPublicationFaultInjector?.Invoke(
                     ModelUploadPublicationStage.AfterMeshRegistration);
+                if (_residencySession is { } residencySession)
+                {
+                    for (int index = 0;
+                         index < registrations.Length;
+                         index++)
+                    {
+                        if (registrations[index].ManagedResidencyBinding is null)
+                            continue;
+                        uint vertexOffset = registrations[index]
+                            .RegisteredVertexOffset ??
+                            throw new InvalidOperationException(
+                                "A managed mesh registration did not publish its global vertex offset.");
+                        residencySession.FinalizeSubMeshVertexOffset(
+                            index,
+                            vertexOffset);
+                    }
+                    _phase =
+                        CookedModelUploadPhase.AwaitingResidencyBootstrap;
+                    BeginProfiledPhase(
+                        CookedModelUploadPhase.AwaitingResidencyBootstrap);
+                    return Yield(
+                        ContentLoadStage.AwaitingGpu,
+                        0.90,
+                        "waiting for fence-safe pinned meshlet residency");
+                }
+
                 _phase = CookedModelUploadPhase.AttachingRenderObjects;
                 BeginProfiledPhase(CookedModelUploadPhase.AttachingRenderObjects);
                 return Yield(
                     ContentLoadStage.AwaitingGpu,
                     0.90,
                     "mesh upload submitted; publishing render objects");
+            }
+
+            private ContentUploadStepResult
+                ExecuteResidencyBootstrapStepLocked()
+            {
+                MeshletPhysicalResidencySession session =
+                    _residencySession ??
+                    throw new InvalidOperationException(
+                        "The managed residency bootstrap session is unavailable.");
+                if (!session.IsReadyForPublication)
+                {
+                    return Yield(
+                        ContentLoadStage.AwaitingGpu,
+                        0.90,
+                        "pinned meshlet pages are uploading through the frame budget");
+                }
+                _phase = CookedModelUploadPhase.AttachingRenderObjects;
+                BeginProfiledPhase(
+                    CookedModelUploadPhase.AttachingRenderObjects);
+                return Yield(
+                    ContentLoadStage.AwaitingGpu,
+                    0.90,
+                    "pinned meshlet residency is fence-safe; publishing render objects");
             }
 
             private static void ReportMeshUploadHostHitch(
@@ -4725,6 +4934,12 @@ namespace Njulf.Rendering.Resources
                 _owner.RegisterModelMaterialLifetime(
                     _cpu.Model,
                     _materials);
+                if (_residencySession is { } residencySession)
+                {
+                    _cpu.Model.AddSharedDisposeAction(
+                        residencySession.Dispose);
+                    _residencySession = null;
+                }
                 _rollback!.TransferBaseMaterialsToModel();
                 _owner.UploadPublicationFaultInjector?.Invoke(
                     ModelUploadPublicationStage.AfterBaseMaterialTransfer);
@@ -4979,8 +5194,42 @@ namespace Njulf.Rendering.Resources
                     TryObserveCancelledPreparation(
                         ref _registrationPreparation,
                         ref failures);
+                bool residencyDrained =
+                    TryObserveCancelledResidencyPreparation(
+                        ref failures);
                 return materialsDrained &&
-                       registrationsDrained;
+                       registrationsDrained &&
+                       residencyDrained;
+            }
+
+            private bool TryObserveCancelledResidencyPreparation(
+                ref List<Exception>? failures)
+            {
+                Task<MeshletPhysicalResidencySessionOpenResult>? task =
+                    _residencyPreparation;
+                if (task == null)
+                {
+                    _residencySession?.Dispose();
+                    _residencySession = null;
+                    return true;
+                }
+                if (!task.IsCompleted)
+                    return false;
+                try
+                {
+                    task.GetAwaiter().GetResult().Session?.Dispose();
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception failure)
+                {
+                    (failures ??= []).Add(failure);
+                }
+                _residencyPreparation = null;
+                _residencySession?.Dispose();
+                _residencySession = null;
+                return true;
             }
 
             private static bool TryObserveCancelledPreparation<T>(
@@ -5106,6 +5355,20 @@ namespace Njulf.Rendering.Resources
                 }
 
                 ObserveFailedPreparation(ref _registrationPreparation);
+                if (_residencyPreparation is { } residencyPreparation)
+                {
+                    try
+                    {
+                        residencyPreparation.GetAwaiter().GetResult()
+                            .Session?.Dispose();
+                    }
+                    catch
+                    {
+                    }
+                    _residencyPreparation = null;
+                }
+                _residencySession?.Dispose();
+                _residencySession = null;
             }
 
             private static void ObserveFailedPreparation<T>(
@@ -5197,6 +5460,7 @@ namespace Njulf.Rendering.Resources
             PrimitiveMaterials,
             PreparingRegistrations,
             RegisteringMeshes,
+            AwaitingResidencyBootstrap,
             AttachingRenderObjects,
             Finalizing,
             Completed,

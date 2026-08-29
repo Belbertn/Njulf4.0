@@ -129,7 +129,7 @@ public sealed class DdgiContentDependentContractsTests
             Assert.That(settings.EffectiveSimpleDdgiDirectionalRadianceMode,
                 Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
             Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,
-                Is.EqualTo(SimpleDdgiGlossyTransportMode.ReceiverOnly));
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.RecursiveCertified));
         });
 
         // One-bounce publication remains independently qualified; without it
@@ -154,7 +154,7 @@ public sealed class DdgiContentDependentContractsTests
     }
 
     [Test]
-    public void UltraPreset_RetainsDirectionalOneBounceTransport()
+    public void UltraPreset_RequestsCertifiedRecursiveDirectionalTransport()
     {
         var settings = new GlobalIlluminationSettings();
         settings.ApplyDdgiQualityTier(DdgiQualityTier.DdgiUltra);
@@ -164,7 +164,7 @@ public sealed class DdgiContentDependentContractsTests
             Assert.That(settings.EffectiveSimpleDdgiDirectionalRadianceMode,
                 Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
             Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,
-                Is.EqualTo(SimpleDdgiGlossyTransportMode.OneBounce));
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.RecursiveCertified));
         });
     }
 

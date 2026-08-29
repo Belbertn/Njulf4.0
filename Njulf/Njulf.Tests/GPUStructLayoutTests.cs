@@ -61,10 +61,14 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_PACKED_MESHLET_DRAW_COMMAND"] = Marshal.SizeOf<GPUPackedMeshletDrawCommand>(),
                 ["SIZEOF_GPU_MESHLET_TASK_FRAME_DATA"] = Marshal.SizeOf<GPUMeshletTaskFrameData>(),
                 ["SIZEOF_GPU_FOLIAGE_PROTOTYPE"] = Marshal.SizeOf<GPUFoliagePrototype>(),
+                ["SIZEOF_GPU_FOLIAGE_IMPOSTOR"] = Marshal.SizeOf<GPUFoliageImpostor>(),
+                ["SIZEOF_GPU_FOLIAGE_IMPOSTOR_VIEW"] = Marshal.SizeOf<GPUFoliageImpostorView>(),
                 ["SIZEOF_GPU_FOLIAGE_PATCH"] = Marshal.SizeOf<GPUFoliagePatch>(),
                 ["SIZEOF_GPU_FOLIAGE_CLUSTER"] = Marshal.SizeOf<GPUFoliageCluster>(),
                 ["SIZEOF_GPU_FOLIAGE_INSTANCE"] = Marshal.SizeOf<GPUFoliageInstance>(),
                 ["SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND"] = Marshal.SizeOf<GPUFoliageMeshletDrawCommand>(),
+                ["SIZEOF_GPU_FOLIAGE_PROCEDURAL_DRAW_COMMAND"] = Marshal.SizeOf<GPUFoliageProceduralDrawCommand>(),
+                ["SIZEOF_GPU_FOLIAGE_AUTHORED_INSTANCE_COMMAND"] = Marshal.SizeOf<GPUFoliageAuthoredInstanceCommand>(),
                 ["SIZEOF_GPU_FOLIAGE_COUNTERS"] = Marshal.SizeOf<GPUFoliageCounters>(),
                 ["SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS"] = Marshal.SizeOf<GPUFoliageDispatchArgs>(),
                 ["SIZEOF_GPU_DDGI_FOLIAGE_PROXY_PATCH"] = Marshal.SizeOf<GPUDdgiFoliageProxyPatch>(),
@@ -122,7 +126,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUVertexPositionStream>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUVertexNormalTangentStream>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUVertexUvColorStream>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(88));
                 Assert.That(Marshal.SizeOf<GPUVertexSkinningData>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningDispatch>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningPushConstants>(), Is.EqualTo(16));
@@ -167,23 +171,25 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSceneLodTransitionState>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUPackedMeshletDrawCommand>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMeshletTaskFrameData>(), Is.EqualTo(376));
-                Assert.That(Marshal.SizeOf<GPUFoliagePrototype>(), Is.EqualTo(96));
-                Assert.That(Marshal.SizeOf<GPUFoliagePatch>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUFoliagePrototype>(), Is.EqualTo(104));
+                Assert.That(Marshal.SizeOf<GPUFoliageImpostor>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUFoliageImpostorView>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUFoliagePatch>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUFoliageCluster>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUFoliageInstance>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUFoliageMeshletDrawCommand>(), Is.EqualTo(48));
-                Assert.That(Marshal.SizeOf<GPUFoliageCounters>(), Is.EqualTo(40));
+                Assert.That(Marshal.SizeOf<GPUFoliageCounters>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUDdgiFoliageProxyPatch>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUDdgiFoliageProxyGenerationPushConstants>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUFoliageCullPushConstants>(), Is.EqualTo(52));
-                Assert.That(Marshal.SizeOf<GPUFoliageDrawPushConstants>(), Is.EqualTo(128));
+                Assert.That(Marshal.SizeOf<GPUFoliageCullPushConstants>(), Is.EqualTo(88));
+                Assert.That(Marshal.SizeOf<GPUFoliageDrawPushConstants>(), Is.EqualTo(132));
                 Assert.That(Marshal.SizeOf<GPUTiledLightHeader>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPULightIndex>(), Is.EqualTo(4));
                 Assert.That(Marshal.SizeOf<GPUScreenToViewParams>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPULightCullingParams>(), Is.EqualTo(192));
                 Assert.That(Marshal.SizeOf<GPUDepthPushConstants>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUForwardPushConstants>(), Is.EqualTo(256));
-                Assert.That(Marshal.SizeOf<GPUMotionVectorPushConstants>(), Is.EqualTo(164));
+                Assert.That(Marshal.SizeOf<GPUMotionVectorPushConstants>(), Is.EqualTo(208));
                 Assert.That(Marshal.SizeOf<GPULightCullPushConstants>(), Is.EqualTo(208));
                 Assert.That(Marshal.SizeOf<GPUShadowData>(), Is.EqualTo(320));
                 Assert.That(Marshal.SizeOf<GPUDirectionalShadowParameters>(), Is.EqualTo(112));
@@ -505,7 +511,8 @@ namespace Njulf.Tests
             uint foliageFlags = GPUFoliageDrawPushConstants.PackFlags(
                 materialTransportProvenanceEnabled: true,
                 reflectionFeedbackEnabled: true,
-                reflectionCaptureLayer: 731);
+                reflectionCaptureLayer: 731,
+                reflectionCaptureEnabled: true);
 
             Assert.Multiple(() =>
             {
@@ -519,12 +526,14 @@ namespace Njulf.Tests
                     Is.EqualTo(731u));
                 Assert.That(foliageFlags & (1u << 3),
                     Is.EqualTo(1u << 3));
+                Assert.That(foliageFlags & (1u << 4),
+                    Is.EqualTo(1u << 4));
                 Assert.That(foliageFlags & (1u << 2),
                     Is.EqualTo(1u << 2));
                 Assert.That(Marshal.SizeOf<GPUForwardPushConstants>(),
                     Is.EqualTo(256));
                 Assert.That(Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
-                    Is.EqualTo(128));
+                    Is.EqualTo(132));
                 Assert.That(
                     () => GPUForwardPushConstants.PackCaptureFlags(
                         true,
@@ -576,10 +585,14 @@ namespace Njulf.Tests
                 typeof(GPUPackedMeshletDrawCommand),
                 typeof(GPUMeshletTaskFrameData),
                 typeof(GPUFoliagePrototype),
+                typeof(GPUFoliageImpostor),
+                typeof(GPUFoliageImpostorView),
                 typeof(GPUFoliagePatch),
                 typeof(GPUFoliageCluster),
                 typeof(GPUFoliageInstance),
                 typeof(GPUFoliageMeshletDrawCommand),
+                typeof(GPUFoliageProceduralDrawCommand),
+                typeof(GPUFoliageAuthoredInstanceCommand),
                 typeof(GPUFoliageCounters),
                 typeof(GPUFoliageDispatchArgs),
                 typeof(GPUFoliageCullPushConstants),
@@ -682,11 +695,25 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUFoliagePrototype>(nameof(GPUFoliagePrototype.MaterialIndex), "OFFSET_GPU_FOLIAGE_PROTOTYPE_MATERIAL_INDEX");
                 AssertFieldOffset<GPUFoliagePrototype>(nameof(GPUFoliagePrototype.GeometryMode), "OFFSET_GPU_FOLIAGE_PROTOTYPE_GEOMETRY_MODE");
                 AssertFieldOffset<GPUFoliagePrototype>(nameof(GPUFoliagePrototype.Flags), "OFFSET_GPU_FOLIAGE_PROTOTYPE_FLAGS");
+                AssertFieldOffset<GPUFoliagePrototype>(nameof(GPUFoliagePrototype.ImpostorMetadataIndex), "OFFSET_GPU_FOLIAGE_PROTOTYPE_IMPOSTOR_METADATA_INDEX");
+                AssertFieldOffset<GPUFoliagePrototype>(nameof(GPUFoliagePrototype.MeshletOutputClass), "OFFSET_GPU_FOLIAGE_PROTOTYPE_MESHLET_OUTPUT_CLASS");
                 AssertFieldOffset<GPUFoliagePrototype>(nameof(GPUFoliagePrototype.BladeHeight), "OFFSET_GPU_FOLIAGE_PROTOTYPE_BLADE_HEIGHT");
                 AssertFieldOffset<GPUFoliagePrototype>(nameof(GPUFoliagePrototype.BladeWidth), "OFFSET_GPU_FOLIAGE_PROTOTYPE_BLADE_WIDTH");
                 AssertFieldOffset<GPUFoliagePrototype>(nameof(GPUFoliagePrototype.LodDistances), "OFFSET_GPU_FOLIAGE_PROTOTYPE_LOD_DISTANCES");
                 AssertFieldOffset<GPUFoliagePrototype>(nameof(GPUFoliagePrototype.WindParams), "OFFSET_GPU_FOLIAGE_PROTOTYPE_WIND_PARAMS");
                 AssertFieldOffset<GPUFoliagePrototype>(nameof(GPUFoliagePrototype.LightingParams), "OFFSET_GPU_FOLIAGE_PROTOTYPE_LIGHTING_PARAMS");
+
+                AssertFieldOffset<GPUFoliageImpostor>(nameof(GPUFoliageImpostor.AlbedoOpacityTextureIndex), "OFFSET_GPU_FOLIAGE_IMPOSTOR_ALBEDO_OPACITY_TEXTURE_INDEX");
+                AssertFieldOffset<GPUFoliageImpostor>(nameof(GPUFoliageImpostor.NormalTextureIndex), "OFFSET_GPU_FOLIAGE_IMPOSTOR_NORMAL_TEXTURE_INDEX");
+                AssertFieldOffset<GPUFoliageImpostor>(nameof(GPUFoliageImpostor.DepthTextureIndex), "OFFSET_GPU_FOLIAGE_IMPOSTOR_DEPTH_TEXTURE_INDEX");
+                AssertFieldOffset<GPUFoliageImpostor>(nameof(GPUFoliageImpostor.ViewCount), "OFFSET_GPU_FOLIAGE_IMPOSTOR_VIEW_COUNT");
+                AssertFieldOffset<GPUFoliageImpostor>(nameof(GPUFoliageImpostor.SourceBoundsMinScale), "OFFSET_GPU_FOLIAGE_IMPOSTOR_SOURCE_BOUNDS_MIN_SCALE");
+                AssertFieldOffset<GPUFoliageImpostor>(nameof(GPUFoliageImpostor.SourceBoundsMax), "OFFSET_GPU_FOLIAGE_IMPOSTOR_SOURCE_BOUNDS_MAX");
+                AssertFieldOffset<GPUFoliageImpostor>(nameof(GPUFoliageImpostor.Pivot), "OFFSET_GPU_FOLIAGE_IMPOSTOR_PIVOT");
+                AssertFieldOffset<GPUFoliageImpostor>(nameof(GPUFoliageImpostor.ViewDataOffset), "OFFSET_GPU_FOLIAGE_IMPOSTOR_VIEW_DATA_OFFSET");
+
+                AssertFieldOffset<GPUFoliageImpostorView>(nameof(GPUFoliageImpostorView.Direction), "OFFSET_GPU_FOLIAGE_IMPOSTOR_VIEW_DIRECTION");
+                AssertFieldOffset<GPUFoliageImpostorView>(nameof(GPUFoliageImpostorView.AtlasRectangle), "OFFSET_GPU_FOLIAGE_IMPOSTOR_VIEW_ATLAS_RECTANGLE");
 
                 AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.BoundsMinDensity), "OFFSET_GPU_FOLIAGE_PATCH_BOUNDS_MIN_DENSITY");
                 AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.BoundsMaxSeed), "OFFSET_GPU_FOLIAGE_PATCH_BOUNDS_MAX_SEED");
@@ -698,6 +725,11 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.Flags), "OFFSET_GPU_FOLIAGE_PATCH_FLAGS");
                 AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.NearFieldStableMaterialId), "OFFSET_GPU_FOLIAGE_PATCH_NEAR_FIELD_STABLE_MATERIAL_ID");
                 AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.NearFieldPackedObjectMaterialRevisions), "OFFSET_GPU_FOLIAGE_PATCH_NEAR_FIELD_PACKED_OBJECT_MATERIAL_REVISIONS");
+                AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.DensityTextureIndex), "OFFSET_GPU_FOLIAGE_PATCH_DENSITY_TEXTURE_INDEX");
+                AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.TerrainDescriptorIndex), "OFFSET_GPU_FOLIAGE_PATCH_TERRAIN_DESCRIPTOR_INDEX");
+                AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.PlacementMode), "OFFSET_GPU_FOLIAGE_PATCH_PLACEMENT_MODE");
+                AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.ContentRevision), "OFFSET_GPU_FOLIAGE_PATCH_CONTENT_REVISION");
+                AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.DensityUvScaleOffset), "OFFSET_GPU_FOLIAGE_PATCH_DENSITY_UV_SCALE_OFFSET");
 
                 AssertFieldOffset<GPUFoliageCluster>(nameof(GPUFoliageCluster.WorldCenterRadius), "OFFSET_GPU_FOLIAGE_CLUSTER_WORLD_CENTER_RADIUS");
                 AssertFieldOffset<GPUFoliageCluster>(nameof(GPUFoliageCluster.BoundsMinDensity), "OFFSET_GPU_FOLIAGE_CLUSTER_BOUNDS_MIN_DENSITY");
@@ -724,6 +756,15 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUFoliageMeshletDrawCommand>(nameof(GPUFoliageMeshletDrawCommand.LodLevel), "OFFSET_GPU_FOLIAGE_MESHLET_DRAW_COMMAND_LOD_LEVEL");
                 AssertFieldOffset<GPUFoliageMeshletDrawCommand>(nameof(GPUFoliageMeshletDrawCommand.ClusterIndex), "OFFSET_GPU_FOLIAGE_MESHLET_DRAW_COMMAND_CLUSTER_INDEX");
 
+                AssertFieldOffset<GPUFoliageProceduralDrawCommand>(nameof(GPUFoliageProceduralDrawCommand.ClusterIndex), "OFFSET_GPU_FOLIAGE_PROCEDURAL_DRAW_COMMAND_CLUSTER_INDEX");
+                AssertFieldOffset<GPUFoliageProceduralDrawCommand>(nameof(GPUFoliageProceduralDrawCommand.LodBand), "OFFSET_GPU_FOLIAGE_PROCEDURAL_DRAW_COMMAND_LOD_BAND");
+                AssertFieldOffset<GPUFoliageProceduralDrawCommand>(nameof(GPUFoliageProceduralDrawCommand.CandidateCount), "OFFSET_GPU_FOLIAGE_PROCEDURAL_DRAW_COMMAND_CANDIDATE_COUNT");
+                AssertFieldOffset<GPUFoliageProceduralDrawCommand>(nameof(GPUFoliageProceduralDrawCommand.ActiveCount), "OFFSET_GPU_FOLIAGE_PROCEDURAL_DRAW_COMMAND_ACTIVE_COUNT");
+                AssertFieldOffset<GPUFoliageProceduralDrawCommand>(nameof(GPUFoliageProceduralDrawCommand.DensityFraction), "OFFSET_GPU_FOLIAGE_PROCEDURAL_DRAW_COMMAND_DENSITY_FRACTION");
+                AssertFieldOffset<GPUFoliageProceduralDrawCommand>(nameof(GPUFoliageProceduralDrawCommand.TransitionFraction), "OFFSET_GPU_FOLIAGE_PROCEDURAL_DRAW_COMMAND_TRANSITION_FRACTION");
+                AssertFieldOffset<GPUFoliageProceduralDrawCommand>(nameof(GPUFoliageProceduralDrawCommand.WidthCompensation), "OFFSET_GPU_FOLIAGE_PROCEDURAL_DRAW_COMMAND_WIDTH_COMPENSATION");
+                AssertFieldOffset<GPUFoliageProceduralDrawCommand>(nameof(GPUFoliageProceduralDrawCommand.Flags), "OFFSET_GPU_FOLIAGE_PROCEDURAL_DRAW_COMMAND_FLAGS");
+
                 AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.VisibleClusterCount), "OFFSET_GPU_FOLIAGE_COUNTERS_VISIBLE_CLUSTER_COUNT");
                 AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.CulledClusterCount), "OFFSET_GPU_FOLIAGE_COUNTERS_CULLED_CLUSTER_COUNT");
                 AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.Lod0VisibleCount), "OFFSET_GPU_FOLIAGE_COUNTERS_LOD0_VISIBLE_COUNT");
@@ -734,6 +775,8 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.VisibleMeshletDrawCount), "OFFSET_GPU_FOLIAGE_COUNTERS_VISIBLE_MESHLET_DRAW_COUNT");
                 AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.MeshletDrawOverflowCount), "OFFSET_GPU_FOLIAGE_COUNTERS_MESHLET_DRAW_OVERFLOW_COUNT");
                 AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.FarImpostorVisibleCount), "OFFSET_GPU_FOLIAGE_COUNTERS_FAR_IMPOSTOR_VISIBLE_COUNT");
+                AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.DensityRejectedCount), "OFFSET_GPU_FOLIAGE_COUNTERS_DENSITY_REJECTED_COUNT");
+                AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.InvalidCommandCount), "OFFSET_GPU_FOLIAGE_COUNTERS_INVALID_COMMAND_COUNT");
 
                 AssertFieldOffset<GPUFoliageDispatchArgs>(nameof(GPUFoliageDispatchArgs.GroupCountX), "OFFSET_GPU_FOLIAGE_DISPATCH_ARGS_GROUP_COUNT_X");
                 AssertFieldOffset<GPUFoliageDispatchArgs>(nameof(GPUFoliageDispatchArgs.GroupCountY), "OFFSET_GPU_FOLIAGE_DISPATCH_ARGS_GROUP_COUNT_Y");
@@ -750,6 +793,13 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.AuthoredMeshletWorkItemCount), "OFFSET_GPU_FOLIAGE_CULL_PUSH_AUTHORED_MESHLET_WORK_ITEM_COUNT");
                 AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.FirstAuthoredClusterIndex), "OFFSET_GPU_FOLIAGE_CULL_PUSH_FIRST_AUTHORED_CLUSTER_INDEX");
                 AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.AuthoredClusterCount), "OFFSET_GPU_FOLIAGE_CULL_PUSH_AUTHORED_CLUSTER_COUNT");
+                AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.ScreenDimensions), "OFFSET_GPU_FOLIAGE_CULL_PUSH_SCREEN_DIMENSIONS");
+                AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.HiZTextureIndex), "OFFSET_GPU_FOLIAGE_CULL_PUSH_HIZ_TEXTURE_INDEX");
+                AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.HiZMipCount), "OFFSET_GPU_FOLIAGE_CULL_PUSH_HIZ_MIP_COUNT");
+                AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.OcclusionCullingEnabled), "OFFSET_GPU_FOLIAGE_CULL_PUSH_OCCLUSION_CULLING_ENABLED");
+                AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.OcclusionBias), "OFFSET_GPU_FOLIAGE_CULL_PUSH_OCCLUSION_BIAS");
+                AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.PreviousHiZFrameValid), "OFFSET_GPU_FOLIAGE_CULL_PUSH_PREVIOUS_HIZ_FRAME_VALID");
+                AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.PreviousFrameUvPaddingPixels), "OFFSET_GPU_FOLIAGE_CULL_PUSH_PREVIOUS_FRAME_UV_PADDING_PIXELS");
 
                 AssertFieldOffset<GPUFoliageDrawPushConstants>(nameof(GPUFoliageDrawPushConstants.ViewProjectionMatrix), "OFFSET_GPU_FOLIAGE_DRAW_PUSH_VIEW_PROJECTION_MATRIX");
                 AssertFieldOffset<GPUFoliageDrawPushConstants>(nameof(GPUFoliageDrawPushConstants.CameraPositionTime), "OFFSET_GPU_FOLIAGE_DRAW_PUSH_CAMERA_POSITION_TIME");
@@ -760,6 +810,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUFoliageDrawPushConstants>(nameof(GPUFoliageDrawPushConstants.Flags), "OFFSET_GPU_FOLIAGE_DRAW_PUSH_FLAGS");
                 AssertFieldOffset<GPUFoliageDrawPushConstants>(nameof(GPUFoliageDrawPushConstants.DebugView), "OFFSET_GPU_FOLIAGE_DRAW_PUSH_DEBUG_VIEW");
                 AssertFieldOffset<GPUFoliageDrawPushConstants>(nameof(GPUFoliageDrawPushConstants.ShadowDensityScale), "OFFSET_GPU_FOLIAGE_DRAW_PUSH_SHADOW_DENSITY_SCALE");
+                AssertFieldOffset<GPUFoliageDrawPushConstants>(nameof(GPUFoliageDrawPushConstants.FirstDraw), "OFFSET_GPU_FOLIAGE_DRAW_PUSH_FIRST_DRAW");
             });
         }
 
@@ -917,6 +968,8 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.Time), "OFFSET_GPU_MOTION_VECTOR_PUSH_TIME");
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.PreviousTime), "OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_TIME");
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.FirstDraw), "OFFSET_GPU_MOTION_VECTOR_PUSH_FIRST_DRAW");
+                AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.CameraPosition), "OFFSET_GPU_MOTION_VECTOR_PUSH_CAMERA_POSITION");
+                AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.PreviousCameraPosition), "OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_CAMERA_POSITION");
                 AssertFieldOffset<GPUParticleFrameData>(nameof(GPUParticleFrameData.ViewProjectionMatrix), "OFFSET_GPU_PARTICLE_FRAME_DATA_VIEW_PROJECTION_MATRIX");
                 AssertFieldOffset<GPUParticleFrameData>(nameof(GPUParticleFrameData.InverseViewMatrix), "OFFSET_GPU_PARTICLE_FRAME_DATA_INVERSE_VIEW_MATRIX");
                 AssertFieldOffset<GPUParticleFrameData>(nameof(GPUParticleFrameData.InverseProjectionMatrix), "OFFSET_GPU_PARTICLE_FRAME_DATA_INVERSE_PROJECTION_MATRIX");

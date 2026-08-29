@@ -29,6 +29,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly BindlessHeap _bindlessHeap;
         private readonly BufferManager _bufferManager;
         private readonly GpuParticleRuntimeManager _runtimeManager;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private PipelineLayout _layout;
         private PipelineCache _pipelineCache;
@@ -39,12 +40,14 @@ namespace Njulf.Rendering.Pipeline
             VulkanContext context,
             BindlessHeap bindlessHeap,
             BufferManager bufferManager,
-            GpuParticleRuntimeManager runtimeManager)
+            GpuParticleRuntimeManager runtimeManager,
+            GiPipelineCacheService? pipelineCacheService = null)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _runtimeManager = runtimeManager ?? throw new ArgumentNullException(nameof(runtimeManager));
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Marshal.SizeOf<GPUParticleSimulatePushConstants>());
@@ -270,6 +273,12 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo
             {
                 SType = StructureType.PipelineCacheCreateInfo
@@ -334,13 +343,18 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                Result result = _context.Api.CreateComputePipelines(
-                    _context.Device,
-                    _pipelineCache,
-                    1,
-                    &pipelineInfo,
-                    null,
-                    out _pipeline);
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId("GpuParticle.Simulate"),
+                        &pipelineInfo,
+                        out _pipeline)
+                    : _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out _pipeline);
 
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create GPU particle simulation compute pipeline", result);
@@ -363,7 +377,7 @@ namespace Njulf.Rendering.Pipeline
                 _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);

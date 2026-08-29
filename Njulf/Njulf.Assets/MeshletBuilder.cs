@@ -526,7 +526,8 @@ namespace Njulf.Assets
 
         public static MeshletMesh BuildSimpleMeshlets(Vector3[] vertices, uint[] indices, string? name = null)
         {
-            var builder = new MeshletBuilder();
+            MeshletBuilder builder =
+                RendererMeshletBuildProfiles.Production.CreateBuilder();
             return builder.BuildMeshlets(vertices, indices, null, null, null, null, name);
         }
     }

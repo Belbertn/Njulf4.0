@@ -55,7 +55,10 @@ public sealed class AlphaCorrectMotionVectorTests
             Assert.That(source, Does.Contain("MaskedMotionVectorPipeline => _maskedMotionVectorPipeline"));
             Assert.That(source, Does.Contain("\"motion_vector_alpha.mesh.spv\""));
             Assert.That(source, Does.Contain("\"motion_vector_alpha.frag.spv\""));
-            Assert.That(source, Does.Contain("motion_vector_alpha_compacted.mesh.spv"));
+            Assert.That(source, Does.Contain(
+                "_compactedMotionVectorAlphaMeshShaderName"));
+            Assert.That(source, Does.Contain(
+                "\"motion_vector_alpha_compacted\""));
             Assert.That(source, Does.Contain("CompactedMaskedMotionVectorPipeline"));
             Assert.That(Count(source, "cullMode: CullModeFlags.None"), Is.GreaterThanOrEqualTo(2));
             Assert.That(Count(source, "DestroyPipeline(_context.Device, _maskedMotionVectorPipeline"), Is.EqualTo(1));
@@ -136,7 +139,10 @@ public sealed class AlphaCorrectMotionVectorTests
         Assert.Multiple(() =>
         {
             Assert.That(mesh, Does.Contain("meshClusterIndex[vertexSlot] = command.ClusterIndex;"));
-            Assert.That(mesh, Does.Contain("meshLodBand[vertexSlot] = command.LodLevel;"));
+            Assert.That(mesh, Does.Contain(
+                "PackFoliageCoverageStateFromCommand("));
+            Assert.That(mesh, Does.Contain("command.LodLevel,"));
+            Assert.That(mesh, Does.Contain("command.Flags);"));
             Assert.That(mesh, Does.Contain("meshGeometryMode[vertexSlot] = 1u;"));
             Assert.That(fragment, Does.Contain("#include \"foliage_coverage.glsl\""));
             Assert.That(fragment, Does.Contain("FoliageCoverageSurvives("));

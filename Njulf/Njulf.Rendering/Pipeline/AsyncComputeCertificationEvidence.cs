@@ -154,7 +154,7 @@ public static class AsyncComputeCertificationEvidence
             "PENDING: no valid graphics/async linear-HDR or far-field buffer oracle exists until the pipeline-layout failure is fixed and the path completes a clean run.",
             false,
             "NOT EVALUATED: profitability evidence is prohibited until correctness is established.",
-            "Keep graphics/CPU fallback. Re-run after the mesh/skybox descriptor-set layout mismatch is fixed."),
+            "External capture evidence remains pending. Production activation is independently authorized for this preferred path and still requires a complete concrete queue/resource plan; any runtime validation failure retains the graphics/CPU fallback."),
 
         new(
             AsyncComputePath.SimpleDdgiUpdate,
@@ -174,7 +174,7 @@ public static class AsyncComputeCertificationEvidence
             "PENDING: no valid linear-HDR/buffer equivalence pair for an active Simple-DDGI async segment.",
             false,
             "NOT EVALUATED: profitability evidence is prohibited until correctness is established.",
-            "Keep graphics/CPU fallback until the sampled-atlas ownership contract and an active isolated scenario are available.")
+            "External capture evidence remains pending. Production activation is independently authorized for this preferred path and still requires complete sampled-atlas/resource ownership validation; any failure retains the graphics fallback.")
     ];
 
     public static IReadOnlyList<AsyncComputePathCertificationEvidence> All => Entries;

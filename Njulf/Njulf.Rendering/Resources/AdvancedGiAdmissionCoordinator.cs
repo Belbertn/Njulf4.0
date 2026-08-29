@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Security.Cryptography;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Pipeline;
@@ -282,34 +283,39 @@ internal sealed class AdvancedGiAdmissionCoordinator
         string? resourceFailureDetail = null)
         where TMode : struct, Enum
     {
-        bool isAutoQualified =
-            AdvancedGiActivationPolicy.RequiresQualification(requestedMode);
+        TMode productionMode =
+            AdvancedGiActivationPolicy.NormalizeProductionMode(requestedMode);
+        bool isAutoQualified = !EqualityComparer<TMode>.Default.Equals(
+            productionMode,
+            requestedMode);
         bool prerequisitesSatisfied =
             AdvancedGiActivationPolicy.PrerequisitesSatisfied(
                 requestedMode,
                 prerequisiteGate);
-        string qualificationId = isAutoQualified
-            ? configuredQualificationId?.Trim() ?? string.Empty
-            : string.IsNullOrWhiteSpace(configuredQualificationId)
+        string qualificationId = string.IsNullOrWhiteSpace(
+                configuredQualificationId)
                 ? prerequisiteGate.QualificationId
                 : configuredQualificationId.Trim();
-        return GiExperimentModeResolver.Resolve(
-            requestedMode,
+        GiExperimentModeState<TMode> resolved =
+            GiExperimentModeResolver.Resolve(
+            productionMode,
             offMode,
             new GiExperimentModeEvaluation(
                 Supported: supported,
                 PrerequisitesSatisfied: prerequisitesSatisfied,
                 MemoryAdmitted: prerequisitesSatisfied,
                 ResourcesComplete: resourcesComplete,
-                RequiresQualification: isAutoQualified,
-                QualificationPassed:
-                    !isAutoQualified || qualificationGate.Passed,
+                RequiresQualification: false,
+                QualificationPassed: true,
                 QualificationId: qualificationId,
-                FailureDetail: isAutoQualified && !prerequisiteGate.Passed
-                    ? prerequisiteGate.FailureDetail
-                    : isAutoQualified && !qualificationGate.Passed
-                        ? qualificationGate.FailureDetail
-                        : resourceFailureDetail));
+                FailureDetail: resourceFailureDetail));
+        return resolved with
+        {
+            RequestedMode = requestedMode,
+            FallbackDetail = isAutoQualified && resolved.IsEffective
+                ? "active; AutoQualified normalized to ordinary production mode"
+                : resolved.FallbackDetail
+        };
     }
 
     private static bool HashTextEquals(string? left, string? right)

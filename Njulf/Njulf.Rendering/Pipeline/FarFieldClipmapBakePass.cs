@@ -407,19 +407,19 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-                Result result;
-                VkPipeline pipeline;
-                try
-                {
-                    result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out pipeline);
-                }
-                finally
-                {
-                    _pipelineCacheService?.EndPipelineCreation(
-                        $"{Name}:farfield_voxelize.comp.spv",
-                        pipelineStart);
-                }
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId(
+                            $"{Name}:farfield_voxelize.comp.spv"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out pipeline);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create far-field bake compute pipeline", result);
                 return pipeline;
@@ -453,19 +453,19 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-                Result result;
-                VkPipeline pipeline;
-                try
-                {
-                    result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out pipeline);
-                }
-                finally
-                {
-                    _pipelineCacheService?.EndPipelineCreation(
-                        $"{Name}:farfield_jumpflood.comp.spv",
-                        pipelineStart);
-                }
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId(
+                            $"{Name}:farfield_jumpflood.comp.spv"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out pipeline);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create far-field jump-flood compute pipeline", result);
                 return pipeline;

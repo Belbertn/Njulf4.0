@@ -43,6 +43,8 @@ internal readonly record struct RendererDiagnosticsResourceInput(
     ReflectionProbeManager? ReflectionProbeManager,
     ForwardPlusPass? ForwardPlusPass,
     MeshPipeline MeshPipeline,
+    VulkanMeshletPhysicalResidencyResources?
+        MeshletPhysicalResidencyResources,
     DynamicResolutionScaleController DynamicResolutionScaleController);
 
 internal readonly record struct RendererDiagnosticsExecutionInput(

@@ -319,25 +319,18 @@ public sealed unsafe partial class ForwardPlusPass
                 Layout = _adaptiveReceiverPipelineLayout,
                 BasePipelineIndex = -1
             };
-            long start = _giPipelineCacheService?.BeginPipelineCreation() ?? 0L;
-            Result result;
-            VkPipeline pipeline;
-            try
-            {
-                result = _context.Api.CreateComputePipelines(
+            Result result = _giPipelineCacheService != null
+                ? _giPipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId($"{Name}:{artifact}"),
+                    &info,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
                     _context.Device,
                     _simpleDdgiReceiverCachePipelineCache,
                     1,
                     &info,
                     null,
                     out pipeline);
-            }
-            finally
-            {
-                _giPipelineCacheService?.EndPipelineCreation(
-                    $"{Name}:{artifact}",
-                    start);
-            }
             if (result != Result.Success)
                 throw new VulkanException($"Failed to create {debugName}", result);
             _context.SetDebugName(

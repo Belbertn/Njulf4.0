@@ -41,6 +41,7 @@ public sealed class ModelAssetCooker : IDisposable
     private readonly ProcessedMeshAssetBuilder _meshBuilder;
     private readonly ITextureCooker _textureCooker;
     private readonly bool _usesDefaultWorkerServices;
+    private readonly RendererMeshletBuildProfile? _meshletBuildProfile;
     private bool _disposed;
 
     private sealed class CookProgressContext
@@ -413,16 +414,29 @@ public sealed class ModelAssetCooker : IDisposable
     }
 
     public ModelAssetCooker()
+        : this(RendererMeshletBuildProfiles.Production)
+    {
+    }
+
+    public ModelAssetCooker(RendererMeshletBuildProfile meshletBuildProfile)
         : this(
             new ModelImporter(),
-            new ProcessedMeshAssetBuilder(),
+            new ProcessedMeshAssetBuilder(
+                meshletBuildProfile ??
+                throw new ArgumentNullException(nameof(meshletBuildProfile))),
             new TextureCooker(),
-            usesDefaultWorkerServices: true)
+            usesDefaultWorkerServices: true,
+            meshletBuildProfile)
     {
     }
 
     public ModelAssetCooker(ModelImporter importer, ProcessedMeshAssetBuilder meshBuilder, ITextureCooker textureCooker)
-        : this(importer, meshBuilder, textureCooker, usesDefaultWorkerServices: false)
+        : this(
+            importer,
+            meshBuilder,
+            textureCooker,
+            usesDefaultWorkerServices: false,
+            meshletBuildProfile: null)
     {
     }
 
@@ -430,12 +444,14 @@ public sealed class ModelAssetCooker : IDisposable
         ModelImporter importer,
         ProcessedMeshAssetBuilder meshBuilder,
         ITextureCooker textureCooker,
-        bool usesDefaultWorkerServices)
+        bool usesDefaultWorkerServices,
+        RendererMeshletBuildProfile? meshletBuildProfile)
     {
         _importer = importer ?? throw new ArgumentNullException(nameof(importer));
         _meshBuilder = meshBuilder ?? throw new ArgumentNullException(nameof(meshBuilder));
         _textureCooker = textureCooker ?? throw new ArgumentNullException(nameof(textureCooker));
         _usesDefaultWorkerServices = usesDefaultWorkerServices;
+        _meshletBuildProfile = meshletBuildProfile;
     }
 
     public AssetCookResult CookModel(
@@ -1076,7 +1092,9 @@ public sealed class ModelAssetCooker : IDisposable
             {
                 ModelAssetCooker worker = capturedWorkerIndex == 0
                     ? this
-                    : new ModelAssetCooker();
+                    : new ModelAssetCooker(
+                        _meshletBuildProfile ??
+                        RendererMeshletBuildProfiles.Production);
                 bool ownsWorker = !ReferenceEquals(worker, this);
                 try
                 {

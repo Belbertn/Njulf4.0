@@ -10,14 +10,20 @@ layout(rgba16f, set = 3, binding = 1) uniform image2D HybridRawRadiance;
 layout(rg32ui, set = 3, binding = 2) uniform uimage2D HybridRawMetadata;
 layout(rgba16f, set = 3, binding = 3) uniform image2D HybridHistoryPrevious;
 layout(rgba16f, set = 3, binding = 4) uniform image2D HybridHistoryCurrent;
-layout(rg16f, set = 3, binding = 5) uniform image2D HybridMomentsPrevious;
-layout(rg16f, set = 3, binding = 6) uniform image2D HybridMomentsCurrent;
-layout(rgba32ui, set = 3, binding = 7) uniform uimage2D HybridMetadataPrevious;
-layout(rgba32ui, set = 3, binding = 8) uniform uimage2D HybridMetadataCurrent;
-layout(rgba16f, set = 3, binding = 9) uniform image2D HybridFilterScratch;
+layout(r16f, set = 3, binding = 5) uniform image2D HybridMomentsPrevious;
+layout(r16f, set = 3, binding = 6) uniform image2D HybridMomentsCurrent;
+layout(rg32ui, set = 3, binding = 7) uniform uimage2D HybridMetadataPrevious;
+layout(rg32ui, set = 3, binding = 8) uniform uimage2D HybridMetadataCurrent;
+layout(rgba16f, set = 3, binding = 9) uniform image2D HybridPreviousHistoryScratch;
 layout(rgba16f, set = 3, binding = 10) uniform image2D HybridSceneColor;
 layout(set = 3, binding = 11) uniform sampler2D HybridMotionVectors;
 layout(set = 3, binding = 12) uniform sampler2D HybridSceneDepth;
+
+struct HybridReflectionTaskRecord
+{
+    uvec4 Primary;
+    uvec4 LobeExtension;
+};
 
 layout(std430, set = 3, binding = 13) buffer HybridReflectionTaskBuffer
 {
@@ -25,7 +31,7 @@ layout(std430, set = 3, binding = 13) buffer HybridReflectionTaskBuffer
     uint HybridTaskCapacity;
     uint HybridTaskOverflow;
     uint HybridTaskReserved;
-    uvec4 HybridTasks[];
+    HybridReflectionTaskRecord HybridTasks[];
 };
 
 layout(std430, set = 3, binding = 14) buffer HybridReflectionCounterBuffer
@@ -38,11 +44,23 @@ layout(std430, set = 3, binding = 15) buffer HybridReflectionIndirectBuffer
     uint HybridIndirectGroupCountX;
     uint HybridIndirectGroupCountY;
     uint HybridIndirectGroupCountZ;
+    uint HybridSsrIndirectGroupCountX;
+    uint HybridSsrIndirectGroupCountY;
+    uint HybridSsrIndirectGroupCountZ;
 };
 
 // Sparse records written at the first two pixels of each DDGI receiver tile.
 // The full-resolution reconstruction pass is the only consumer.
 layout(rgba16f, set = 3, binding = 16) uniform image2D HybridDdgiCohorts;
+
+layout(std430, set = 3, binding = 17) buffer HybridReflectionTileBuffer
+{
+    uint HybridTileCount;
+    uint HybridTileCapacity;
+    uint HybridTileOverflow;
+    uint HybridTileReuseCount;
+    uvec4 HybridTiles[];
+};
 
 const uint HYBRID_REFLECTION_SOURCE_NONE = 0u;
 const uint HYBRID_REFLECTION_SOURCE_SSR = 1u;
@@ -50,6 +68,7 @@ const uint HYBRID_REFLECTION_SOURCE_RAY_QUERY = 2u;
 const uint HYBRID_REFLECTION_SOURCE_DDGI = 3u;
 const uint HYBRID_REFLECTION_SOURCE_LOCAL_PROBE = 4u;
 const uint HYBRID_REFLECTION_SOURCE_ENVIRONMENT = 5u;
+const uint HYBRID_REFLECTION_SOURCE_PLANAR = 6u;
 
 const uint HYBRID_REFLECTION_REASON_NONE = 0u;
 const uint HYBRID_REFLECTION_REASON_DISOCCLUDED = 1u;
@@ -74,6 +93,13 @@ const uint HYBRID_REFLECTION_COUNTER_RAY_MISSES = 5u;
 const uint HYBRID_REFLECTION_COUNTER_DDGI_FALLBACKS = 6u;
 const uint HYBRID_REFLECTION_COUNTER_PROBE_FALLBACKS = 7u;
 const uint HYBRID_REFLECTION_COUNTER_ENVIRONMENT_FALLBACKS = 8u;
+const uint HYBRID_REFLECTION_COUNTER_FULL_RATE_TILES = 9u;
+const uint HYBRID_REFLECTION_COUNTER_HALF_RATE_TILES = 10u;
+const uint HYBRID_REFLECTION_COUNTER_QUARTER_RATE_TILES = 11u;
+const uint HYBRID_REFLECTION_COUNTER_ANALYTIC_TILES = 12u;
+const uint HYBRID_REFLECTION_COUNTER_REUSE_TILES = 13u;
+const uint HYBRID_REFLECTION_COUNTER_ACTIVE_TILES = 14u;
+const uint HYBRID_REFLECTION_COUNTER_TILE_OVERFLOWS = 15u;
 const float HYBRID_REFLECTION_PI = 3.14159265359;
 const float HYBRID_REFLECTION_MINIMUM_RADIANCE_LIMIT = 32.0;
 const float HYBRID_REFLECTION_RADIANCE_LIMIT_SCALE = 4.0;
@@ -303,9 +329,89 @@ uint HybridMetadataAge(uint metadata)
     return (metadata >> HYBRID_REFLECTION_METADATA_AGE_SHIFT) & 0x7fu;
 }
 
+const uint HYBRID_REFLECTION_HISTORY_IDENTITY_MASK = 0x003fffffu;
+const uint HYBRID_REFLECTION_HISTORY_SPARSE_NONE = 0u;
+const uint HYBRID_REFLECTION_HISTORY_SPARSE_RESOLUTION = 1u;
+const uint HYBRID_REFLECTION_HISTORY_SPARSE_RAY_BUDGET = 2u;
+const uint HYBRID_REFLECTION_HISTORY_SPARSE_RESERVED = 3u;
+
+uvec2 HybridPackHistoryMetadata(
+    uint identity,
+    float depth,
+    vec3 normal,
+    uint source,
+    uint age,
+    uint sparseState,
+    bool valid)
+{
+    if (!valid)
+        return uvec2(0u);
+    uint depth16 = packHalf2x16(vec2(clamp(depth, 0.0, 1.0), 0.0)) &
+        0xffffu;
+    uint normal16 = packSnorm4x8(vec4(
+        NjulfHybridReflectionOctEncode(normal), 0.0, 0.0)) & 0xffffu;
+    uint word0 = (identity & HYBRID_REFLECTION_HISTORY_IDENTITY_MASK) |
+        ((depth16 & 0x03ffu) << 22u);
+    uint word1 = ((depth16 >> 10u) & 0x003fu) |
+        (normal16 << 6u) |
+        ((source & 0x7u) << 22u) |
+        ((min(age, 31u) & 0x1fu) << 25u) |
+        ((sparseState & 0x3u) << 30u);
+    return uvec2(word0, word1);
+}
+
+uint HybridHistoryMetadataIdentity(uvec2 metadata)
+{
+    return metadata.x & HYBRID_REFLECTION_HISTORY_IDENTITY_MASK;
+}
+
+float HybridHistoryMetadataDepth(uvec2 metadata)
+{
+    uint packed = ((metadata.x >> 22u) & 0x03ffu) |
+        ((metadata.y & 0x003fu) << 10u);
+    return unpackHalf2x16(packed).x;
+}
+
+vec3 HybridHistoryMetadataNormal(uvec2 metadata)
+{
+    uint packed = (metadata.y >> 6u) & 0xffffu;
+    vec2 encoded = unpackSnorm4x8(packed).xy;
+    vec3 normal = vec3(
+        encoded,
+        1.0 - abs(encoded.x) - abs(encoded.y));
+    if (normal.z < 0.0)
+    {
+        normal.xy = (vec2(1.0) - abs(normal.yx)) *
+            vec2(normal.x >= 0.0 ? 1.0 : -1.0,
+                 normal.y >= 0.0 ? 1.0 : -1.0);
+    }
+    return normalize(normal);
+}
+
+uint HybridHistoryMetadataSource(uvec2 metadata)
+{
+    return (metadata.y >> 22u) & 0x7u;
+}
+
+uint HybridHistoryMetadataAge(uvec2 metadata)
+{
+    return (metadata.y >> 25u) & 0x1fu;
+}
+
+uint HybridHistoryMetadataSparseState(uvec2 metadata)
+{
+    return metadata.y >> 30u;
+}
+
+bool HybridHistoryMetadataValid(uvec2 metadata)
+{
+    return HybridHistoryMetadataSource(metadata) !=
+        HYBRID_REFLECTION_SOURCE_NONE;
+}
+
 uint HybridReceiverIdentity(uvec4 payload)
 {
-    return payload.w & 0x007fffffu;
+    return payload.w & NJULF_HYBRID_REFLECTION_IDENTITY_MASK;
 }
 
 bool HybridReconstructWorldPosition(
@@ -403,11 +509,101 @@ float HybridGeometrySmith(float nDotV, float nDotL, float roughness)
         HybridGeometrySchlick(nDotL, roughness);
 }
 
+void HybridReflectionAnisotropicAxes(
+    float roughness,
+    float anisotropyStrength,
+    out float alphaX,
+    out float alphaY)
+{
+    float alpha = max(roughness * roughness, 0.001);
+    float aspect = sqrt(max(1.0 -
+        0.9 * clamp(anisotropyStrength, 0.0, 1.0), 0.1));
+    alphaX = max(alpha / aspect, 0.001);
+    alphaY = max(alpha * aspect, 0.001);
+}
+
+vec2 HybridReflectionRandom2(uint seed)
+{
+    uint first = HybridHash(seed);
+    uint second = HybridHash(first ^ 0x68bc21ebu);
+    return vec2(first & 0x00ffffffu, second & 0x00ffffffu) *
+        (1.0 / 16777216.0);
+}
+
+vec3 HybridReflectionSampleDirection(
+    vec3 viewDirection,
+    vec3 normal,
+    vec3 tangent,
+    float roughness,
+    float anisotropyStrength,
+    uint receiverIdentity,
+    uvec2 pixel,
+    uint temporalSampleIndex,
+    uint lobeId)
+{
+    vec3 n = normalize(normal);
+    if (roughness <= 0.06)
+        return normalize(reflect(-viewDirection, n));
+
+    vec3 t = tangent - n * dot(tangent, n);
+    if (dot(t, t) <= 1.0e-12)
+        t = NjulfHybridReflectionCanonicalTangentBasisX(n);
+    else
+        t = normalize(t);
+    vec3 b = normalize(cross(n, t));
+    float alphaX;
+    float alphaY;
+    HybridReflectionAnisotropicAxes(
+        roughness, anisotropyStrength, alphaX, alphaY);
+
+    vec3 localView = vec3(
+        dot(viewDirection, t),
+        dot(viewDirection, b),
+        max(dot(viewDirection, n), 1.0e-5));
+    vec3 stretchedView = normalize(vec3(
+        alphaX * localView.x,
+        alphaY * localView.y,
+        localView.z));
+    float lensq = dot(stretchedView.xy, stretchedView.xy);
+    vec3 basis1 = lensq > 1.0e-10
+        ? vec3(-stretchedView.y, stretchedView.x, 0.0) /
+            sqrt(lensq)
+        : vec3(1.0, 0.0, 0.0);
+    vec3 basis2 = cross(stretchedView, basis1);
+    uint seed = receiverIdentity ^ pixel.x * 0x9e3779b9u ^
+        pixel.y * 0x85ebca6bu ^
+        temporalSampleIndex * 0xc2b2ae35u ^
+        lobeId * 0x27d4eb2fu;
+    vec2 random = HybridReflectionRandom2(seed);
+    float radius = sqrt(random.x);
+    float phi = 2.0 * HYBRID_REFLECTION_PI * random.y;
+    float diskX = radius * cos(phi);
+    float diskY = radius * sin(phi);
+    float blend = 0.5 * (1.0 + stretchedView.z);
+    diskY = mix(sqrt(max(0.0, 1.0 - diskX * diskX)),
+        diskY, blend);
+    vec3 visibleNormal = diskX * basis1 + diskY * basis2 +
+        sqrt(max(0.0, 1.0 - diskX * diskX - diskY * diskY)) *
+            stretchedView;
+    vec3 localHalf = normalize(vec3(
+        alphaX * visibleNormal.x,
+        alphaY * visibleNormal.y,
+        max(visibleNormal.z, 0.0)));
+    vec3 halfVector = normalize(
+        t * localHalf.x + b * localHalf.y + n * localHalf.z);
+    vec3 direction = normalize(reflect(-viewDirection, halfVector));
+    return dot(direction, n) > 0.0
+        ? direction
+        : normalize(reflect(-viewDirection, n));
+}
+
 bool HybridAppendRayTask(
     uvec2 pixel,
     uint reason,
     uint identity,
     uint tier,
+    uint lobeId,
+    uvec2 lobeExtension,
     uint temporalSampleIndex,
     uint admissionThreshold)
 {
@@ -423,8 +619,12 @@ bool HybridAppendRayTask(
     uint taskIndex = atomicAdd(HybridTaskCount, 1u);
     if (taskIndex < HybridTaskCapacity)
     {
-        HybridTasks[taskIndex] = uvec4(pixel, reason,
-            (identity & 0x00ffffffu) | ((tier & 0xffu) << 24u));
+        HybridTasks[taskIndex].Primary = uvec4(pixel, reason,
+            (identity & NJULF_HYBRID_REFLECTION_IDENTITY_MASK) |
+            ((lobeId & 0x1u) << 22u) |
+            ((tier & 0xffu) << 24u));
+        HybridTasks[taskIndex].LobeExtension =
+            uvec4(lobeExtension, 0u, 0u);
         atomicMax(HybridIndirectGroupCountX, taskIndex / 64u + 1u);
         return true;
     }
@@ -446,6 +646,8 @@ vec3 HybridSourceDebugColor(uint source)
         return vec3(1.0, 0.85, 0.0);
     if (source == HYBRID_REFLECTION_SOURCE_ENVIRONMENT)
         return vec3(0.1, 0.3, 1.0);
+    if (source == HYBRID_REFLECTION_SOURCE_PLANAR)
+        return vec3(1.0, 0.35, 0.05);
     return vec3(0.0);
 }
 

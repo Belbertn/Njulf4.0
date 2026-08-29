@@ -49,7 +49,8 @@ internal static class ForwardDynamicRenderingContract
                     : giCausticReceiverEnabled
                         ? GiCausticReceiverColorAttachmentCount
                         : SceneColorAttachmentCount;
-            return producerCount + 1u;
+            return producerCount +
+                HybridReflectionReceiverColorAttachmentCount;
         }
 
         if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)

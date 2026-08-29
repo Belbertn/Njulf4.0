@@ -12,8 +12,9 @@ public readonly record struct ModelTextureMipPolicy(
 
 /// <summary>
 /// Defines the material semantics that affect texture cooking and runtime
-/// texture authentication. Foliage shading is intentionally independent from
-/// alpha coverage: only alpha-tested materials need coverage-preserving mips.
+/// texture authentication. Explicit foliage assets retain source alpha
+/// coverage even when an importer reported the material as opaque; foliage
+/// rasterization owns its own card/leaf coverage contract.
 /// </summary>
 public static class ModelMaterialTexturePolicy
 {
@@ -22,14 +23,16 @@ public static class ModelMaterialTexturePolicy
     {
         ArgumentNullException.ThrowIfNull(material);
 
-        if (material.AlphaMode != ModelAlphaMode.Mask)
+        bool explicitFoliage =
+            (material.FeatureFlags & ModelMaterialFeatureBits.Foliage) != 0;
+        if (material.AlphaMode != ModelAlphaMode.Mask && !explicitFoliage)
             return ModelTextureMipPolicy.Standard;
 
         if (!float.IsFinite(material.AlphaCutoff) || material.AlphaCutoff < 0f)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(material),
-                "Masked material alpha cutoff must be finite and non-negative.");
+                "Masked or foliage material alpha cutoff must be finite and non-negative.");
         }
 
         return new ModelTextureMipPolicy(

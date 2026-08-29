@@ -93,10 +93,29 @@ public sealed class RendererStartupLatencyPolicyTests
                 (exact with { LegacyEnvelopeLoaded = true }).WarmEligible,
                 Is.False);
             Assert.That(
+                (exact with { PipelineCompileMissCount = 1 }).WarmEligible,
+                Is.False);
+            Assert.That(
                 (exact with
                 {
                     RuntimeCacheLoaded = false,
                     SeedCacheLoaded = true
+                }).WarmEligible,
+                Is.False);
+            Assert.That(
+                (exact with
+                {
+                    RuntimeCacheLoaded = false,
+                    PipelineCreationCount = 3,
+                    WritableBinaryHitCount = 3
+                }).WarmEligible,
+                Is.True);
+            Assert.That(
+                (exact with
+                {
+                    RuntimeCacheLoaded = false,
+                    PipelineCreationCount = 3,
+                    WritableBinaryHitCount = 2
                 }).WarmEligible,
                 Is.False);
         });

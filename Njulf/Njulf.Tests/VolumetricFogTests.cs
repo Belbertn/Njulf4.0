@@ -476,7 +476,7 @@ public sealed class VolumetricFogTests
             Assert.That(settings.EffectiveSimpleDdgiDirectionalRadianceMode,
                 Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
             Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,
-                Is.EqualTo(SimpleDdgiGlossyTransportMode.ReceiverOnly));
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.RecursiveCertified));
         });
     }
 

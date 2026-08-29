@@ -6,22 +6,32 @@ public sealed class FoliageLightingSettings
     private float _backlight = 0.25f;
     private float _normalBend = 0.5f;
 
+    public event Action? Changed;
+
     public float WrapDiffuse
     {
         get => _wrapDiffuse;
-        set => _wrapDiffuse = Clamp01(value);
+        set => Set(ref _wrapDiffuse, Clamp01(value));
     }
 
     public float Backlight
     {
         get => _backlight;
-        set => _backlight = Clamp01(value);
+        set => Set(ref _backlight, Clamp01(value));
     }
 
     public float NormalBend
     {
         get => _normalBend;
-        set => _normalBend = Clamp01(value);
+        set => Set(ref _normalBend, Clamp01(value));
+    }
+
+    private void Set(ref float field, float value)
+    {
+        if (field == value)
+            return;
+        field = value;
+        Changed?.Invoke();
     }
 
     private static float Clamp01(float value)

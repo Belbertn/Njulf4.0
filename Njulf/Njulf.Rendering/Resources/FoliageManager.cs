@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Njulf.Assets.Cooked;
 using Njulf.Core.Foliage;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
@@ -13,6 +14,7 @@ using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Utilities;
 using Silk.NET.Vulkan;
+using StbImageSharp;
 using static Njulf.Rendering.RenderingConstants;
 using VkBuffer = Silk.NET.Vulkan.Buffer;
 
@@ -22,7 +24,13 @@ public sealed class FoliageManager : IDisposable
 {
     public const int DefaultDebugFallbackMaxInstancesPerPatch = 512;
 
-    private const uint InstancesPerCluster = 64;
+    public const uint InstancesPerCluster = 16;
+    public const ulong ProceduralIndirectDispatchOffset = 0;
+    public static readonly ulong AuthoredIndirectDispatchOffset =
+        (ulong)Marshal.SizeOf<GPUFoliageDispatchArgs>();
+    public static readonly ulong AuthoredExpandIndirectDispatchOffset =
+        2UL * (ulong)Marshal.SizeOf<GPUFoliageDispatchArgs>();
+    private const uint IndirectDispatchCommandCount = 3;
     private const uint PatchFlagVisible = 1u << 0;
     private const uint PrototypeFlagCastShadows = 1u << 0;
     private const uint PrototypeFlagFarImpostor = 1u << 1;
@@ -37,18 +45,35 @@ public sealed class FoliageManager : IDisposable
     private readonly StagingRing? _stagingRing;
     private readonly MeshManager? _meshManager;
     private readonly MaterialManager? _materialManager;
+    private readonly TextureManager? _textureManager;
+    private readonly Dictionary<string, DensityMapRuntime> _densityMaps =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _densityMapsUsedThisBuild =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ImpostorRuntime> _impostors =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _impostorsUsedThisBuild =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly FoliageStreamingManager _streamingManager = new();
     private readonly object _lock = new();
     private readonly List<StaticInstanceBatch> _debugFallbackBatches = new();
     private readonly List<FoliagePrototype> _prototypeScratch = new();
     private readonly List<GPUFoliagePrototype> _gpuPrototypeScratch = new();
+    private readonly List<GPUFoliageImpostor> _gpuImpostorScratch = new();
+    private readonly List<GPUFoliageImpostorView> _gpuImpostorViewScratch =
+        new();
     private readonly List<GPUFoliagePatch> _gpuPatchScratch = new();
     private readonly List<GPUFoliageCluster> _gpuClusterScratch = new();
     private readonly List<GPUFoliageInstance> _gpuInstanceScratch = new();
     private RuntimeBuffer _prototypeBuffer;
+    private RuntimeBuffer _impostorBuffer;
+    private RuntimeBuffer _impostorViewBuffer;
     private RuntimeBuffer _patchBuffer;
     private RuntimeBuffer _clusterBuffer;
     private readonly RuntimeBuffer[] _instanceBuffers = new RuntimeBuffer[FramesInFlight];
     private readonly RuntimeBuffer[] _visibleClusterBuffers = new RuntimeBuffer[FramesInFlight];
+    private readonly RuntimeBuffer[] _authoredInstanceCommandBuffers =
+        new RuntimeBuffer[FramesInFlight];
     private readonly RuntimeBuffer[] _meshletDrawBuffers = new RuntimeBuffer[FramesInFlight];
     private readonly RuntimeBuffer[] _counterBuffers = new RuntimeBuffer[FramesInFlight];
     private readonly RuntimeBuffer[] _indirectDispatchBuffers = new RuntimeBuffer[FramesInFlight];
@@ -76,6 +101,12 @@ public sealed class FoliageManager : IDisposable
     private int _lastAuthoredClusterCount;
     private int _lastAuthoredMeshletWorkItemCount;
     private uint _lastFirstAuthoredClusterIndex = uint.MaxValue;
+    private int _lastMissingDensityTextureCount;
+    private ulong _lastDensityTextureBytes;
+    private int _lastMissingImpostorCount;
+    private ulong _lastImpostorAtlasBytes;
+    private ulong _streamingFrameSerial;
+    private FoliageStreamingSnapshot _lastStreamingSnapshot;
 
     public FoliageManager()
     {
@@ -86,13 +117,15 @@ public sealed class FoliageManager : IDisposable
         BufferManager bufferManager,
         StagingRing stagingRing,
         MeshManager meshManager,
-        MaterialManager materialManager)
+        MaterialManager materialManager,
+        TextureManager textureManager)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
         _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
         _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
         _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
+        _textureManager = textureManager ?? throw new ArgumentNullException(nameof(textureManager));
     }
 
     public FoliageSceneRegistrationSnapshot LastSnapshot => _lastSnapshot;
@@ -134,7 +167,31 @@ public sealed class FoliageManager : IDisposable
             _lastContentChanged = false;
 
             FoliageSceneRegistrationSnapshot snapshot = RegisterScene(scene);
+            if (settings.Enabled)
+            {
+                _streamingFrameSerial++;
+                if (_streamingFrameSerial == 0UL)
+                    _streamingFrameSerial = 1UL;
+                _lastStreamingSnapshot = _streamingManager.Update(
+                    scene.FoliagePatches,
+                    sceneData.CameraPosition,
+                    _streamingFrameSerial,
+                    FoliageStreamingOptions.ForDrawDistance(
+                        settings.MaxDrawDistance));
+            }
+            else
+            {
+                _streamingManager.Clear();
+                _lastStreamingSnapshot = default;
+            }
             ulong signature = ComputeContentSignature(scene, settings);
+            signature = Hash(
+                signature,
+                checked((uint)_lastStreamingSnapshot.ResidencyGeneration));
+            signature = Hash(
+                signature,
+                checked((uint)(_lastStreamingSnapshot
+                    .ResidencyGeneration >> 32)));
             bool contentChanged = !_hasContentSignature || signature != _lastContentSignature;
             _lastContentChanged = contentChanged;
 
@@ -209,15 +266,21 @@ public sealed class FoliageManager : IDisposable
                 _clusterBuffer.Handle,
                 _instanceBuffers[frameIndex].Handle,
                 _visibleClusterBuffers[frameIndex].Handle,
+                _authoredInstanceCommandBuffers[frameIndex].Handle,
                 _meshletDrawBuffers[frameIndex].Handle,
                 _counterBuffers[frameIndex].Handle,
                 _indirectDispatchBuffers[frameIndex].Handle,
                 _visibleClusterBuffers[frameIndex].ByteSize,
+                _authoredInstanceCommandBuffers[frameIndex].ByteSize,
                 _meshletDrawBuffers[frameIndex].ByteSize,
                 _counterBuffers[frameIndex].ByteSize,
                 _indirectDispatchBuffers[frameIndex].ByteSize,
                 _lastGpuBuildSnapshot.ClusterCount,
                 (int)Math.Min(_visibleClusterBuffers[frameIndex].ElementCapacity, int.MaxValue),
+                (int)Math.Min(
+                    _authoredInstanceCommandBuffers[frameIndex]
+                        .ElementCapacity,
+                    int.MaxValue),
                 (int)Math.Min(_meshletDrawBuffers[frameIndex].ElementCapacity, int.MaxValue),
                 _lastAuthoredMeshletWorkItemCount,
                 _lastFirstAuthoredClusterIndex,
@@ -374,6 +437,8 @@ public sealed class FoliageManager : IDisposable
     {
         _prototypeScratch.Clear();
         _gpuPrototypeScratch.Clear();
+        _gpuImpostorScratch.Clear();
+        _gpuImpostorViewScratch.Clear();
         _gpuPatchScratch.Clear();
         _gpuClusterScratch.Clear();
         _gpuInstanceScratch.Clear();
@@ -383,6 +448,12 @@ public sealed class FoliageManager : IDisposable
         _lastAuthoredClusterCount = 0;
         _lastAuthoredMeshletWorkItemCount = 0;
         _lastFirstAuthoredClusterIndex = uint.MaxValue;
+        _lastMissingDensityTextureCount = 0;
+        _lastDensityTextureBytes = 0;
+        _densityMapsUsedThisBuild.Clear();
+        _lastMissingImpostorCount = 0;
+        _lastImpostorAtlasBytes = 0;
+        _impostorsUsedThisBuild.Clear();
 
         foreach (FoliagePrototype prototype in scene.FoliagePrototypes)
             AddPrototypeIfMissing(_prototypeScratch, prototype);
@@ -390,13 +461,47 @@ public sealed class FoliageManager : IDisposable
             AddPrototypeIfMissing(_prototypeScratch, patch.Prototype);
 
         foreach (FoliagePrototype prototype in _prototypeScratch)
-            _gpuPrototypeScratch.Add(CreateGpuPrototype(prototype, settings));
+        {
+            ImpostorRuntime? impostor = ResolveImpostor(prototype, settings);
+            uint impostorMetadataIndex = uint.MaxValue;
+            if (impostor is { IsValid: true })
+            {
+                impostorMetadataIndex = checked((uint)_gpuImpostorScratch.Count);
+                GPUFoliageImpostor metadata = impostor.Metadata;
+                metadata.ViewDataOffset = checked(
+                    (uint)_gpuImpostorViewScratch.Count);
+                _gpuImpostorScratch.Add(metadata);
+                _gpuImpostorViewScratch.AddRange(impostor.Views);
+            }
+
+            _gpuPrototypeScratch.Add(CreateGpuPrototype(
+                prototype,
+                settings,
+                impostorMetadataIndex));
+        }
 
         uint logicalFirstInstance = 0;
         uint clusterBudget = settings.MaxVisibleClusters <= 0 ? 0u : (uint)settings.MaxVisibleClusters;
-        for (int patchIndex = 0; patchIndex < scene.FoliagePatches.Count; patchIndex++)
+        for (int patchIndex = 0;
+             patchIndex < scene.FoliagePatches.Count;
+             patchIndex++)
+        {
+            _gpuPatchScratch.Add(default);
+        }
+
+        // Procedural inputs precede authored instance candidates. This gives
+        // the GPU authored expansion an O(1) cluster mapping and removes the
+        // old work-item scan across unrelated clusters.
+        for (int authoredPass = 0; authoredPass < 2; authoredPass++)
+        for (int patchIndex = 0;
+             patchIndex < scene.FoliagePatches.Count;
+             patchIndex++)
         {
             FoliagePatch patch = scene.FoliagePatches[patchIndex];
+            bool authored = patch.Prototype.GeometryMode ==
+                FoliageGeometryMode.AuthoredMeshlets;
+            if (authored != (authoredPass == 1))
+                continue;
             uint prototypeIndex = (uint)GetPrototypeIndex(_prototypeScratch, patch.Prototype);
             GPUFoliagePrototype gpuPrototype =
                 _gpuPrototypeScratch[checked((int)prototypeIndex)];
@@ -407,10 +512,18 @@ public sealed class FoliageManager : IDisposable
                 : _materialManager.GetMaterialContentRevision(
                     checked((int)gpuPrototype.MaterialIndex));
             uint clusterOffset = (uint)_gpuClusterScratch.Count;
-            GeneratePatchClusters(patch, prototypeIndex, (uint)patchIndex, settings, ref logicalFirstInstance, ref clusterBudget);
+            DensityMapRuntime? densityMap = ResolveDensityMap(patch.DensityMap);
+            GeneratePatchClusters(
+                patch,
+                prototypeIndex,
+                (uint)patchIndex,
+                settings,
+                densityMap,
+                ref logicalFirstInstance,
+                ref clusterBudget);
             uint clusterCount = (uint)_gpuClusterScratch.Count - clusterOffset;
 
-            _gpuPatchScratch.Add(new GPUFoliagePatch
+            _gpuPatchScratch[patchIndex] = new GPUFoliagePatch
             {
                 BoundsMinDensity = new Vector4(
                     patch.Bounds.Min.X,
@@ -434,8 +547,19 @@ public sealed class FoliageManager : IDisposable
                 NearFieldPackedObjectMaterialRevisions = SceneDataBuilder
                     .PackNearFieldRevisions(
                         patch.ContentRevision,
-                        nearFieldMaterialRevision)
-            });
+                        nearFieldMaterialRevision),
+                DensityTextureIndex = densityMap?.BindlessIndex ?? uint.MaxValue,
+                TerrainDescriptorIndex = uint.MaxValue,
+                PlacementMode = (uint)patch.PlacementMode,
+                ContentRevision = patch.ContentRevision,
+                DensityUvScaleOffset = patch.DensityMap is { IsValid: true } densityReference
+                    ? new Vector4(
+                        densityReference.WorldToUvScale.X,
+                        densityReference.WorldToUvScale.Y,
+                        densityReference.WorldToUvOffset.X,
+                        densityReference.WorldToUvOffset.Y)
+                    : new Vector4(1f, 1f, 0f, 0f)
+            };
         }
 
         _lastGpuBuildSnapshot = new FoliageGpuBuildSnapshot(
@@ -448,7 +572,10 @@ public sealed class FoliageManager : IDisposable
             ComputeClusterSignature());
     }
 
-    private GPUFoliagePrototype CreateGpuPrototype(FoliagePrototype prototype, FoliageSettings settings)
+    private GPUFoliagePrototype CreateGpuPrototype(
+        FoliagePrototype prototype,
+        FoliageSettings settings,
+        uint impostorMetadataIndex)
     {
         MeshInfo meshInfo = default;
         if (prototype.Mesh is MeshHandle meshHandle && meshHandle.IsValid && _meshManager != null)
@@ -474,11 +601,14 @@ public sealed class FoliageManager : IDisposable
             MeshletLod2Count = meshInfo.MeshletLod2Count,
             MaterialIndex = ResolveMaterialIndex(prototype),
             GeometryMode = (uint)prototype.GeometryMode,
-            Flags = ResolvePrototypeFlags(prototype, settings),
+            Flags = ResolvePrototypeFlags(
+                prototype,
+                settings,
+                impostorMetadataIndex != uint.MaxValue),
+            ImpostorMetadataIndex = impostorMetadataIndex,
+            MeshletOutputClass = 0u,
             BladeHeight = prototype.CardHeight,
-            BladeWidth = prototype.GeometryMode == FoliageGeometryMode.AuthoredMeshlets
-                ? Math.Max(1u, prototype.AuthoredMeshletStride)
-                : prototype.CardWidth,
+            BladeWidth = prototype.CardWidth,
             LodDistances = new Vector4(
                 prototype.Lod.Lod0Distance,
                 prototype.Lod.Lod1Distance,
@@ -497,11 +627,17 @@ public sealed class FoliageManager : IDisposable
         };
     }
 
-    private static uint ResolvePrototypeFlags(FoliagePrototype prototype, FoliageSettings settings)
+    private static uint ResolvePrototypeFlags(
+        FoliagePrototype prototype,
+        FoliageSettings settings,
+        bool impostorRuntimeReady)
     {
-        uint flags = settings.CastShadows ? PrototypeFlagCastShadows : 0u;
+        uint flags = settings.CastShadows && prototype.CastShadows
+            ? PrototypeFlagCastShadows
+            : 0u;
         if (settings.FarImpostorsEnabled &&
             prototype.FarImpostorEnabled &&
+            impostorRuntimeReady &&
             prototype.GeometryMode == FoliageGeometryMode.AuthoredMeshlets)
         {
             flags |= PrototypeFlagFarImpostor;
@@ -546,12 +682,20 @@ public sealed class FoliageManager : IDisposable
         uint prototypeIndex,
         uint patchIndex,
         FoliageSettings settings,
+        DensityMapRuntime? densityMap,
         ref uint logicalFirstInstance,
         ref uint remainingClusterBudget)
     {
         if (patch.Prototype.GeometryMode == FoliageGeometryMode.AuthoredMeshlets)
         {
-            GenerateAuthoredMeshletCluster(patch, prototypeIndex, patchIndex, ref logicalFirstInstance, ref remainingClusterBudget);
+            GenerateAuthoredMeshletClusters(
+                patch,
+                prototypeIndex,
+                patchIndex,
+                settings,
+                densityMap,
+                ref logicalFirstInstance,
+                ref remainingClusterBudget);
             return;
         }
 
@@ -597,6 +741,12 @@ public sealed class FoliageManager : IDisposable
                 (minX + maxX) * 0.5f,
                 (patch.Bounds.Min.Y + patch.Bounds.Max.Y) * 0.5f,
                 (minZ + maxZ) * 0.5f);
+            if (!_streamingManager.IsResident(
+                    FoliageCellKey.FromWorld(patch, center)))
+            {
+                remainingClusterBudget++;
+                continue;
+            }
             float radius = MathF.Sqrt(cellX * cellX + height * height + cellZ * cellZ) * 0.5f;
 
             _gpuClusterScratch.Add(new GPUFoliageCluster
@@ -664,6 +814,12 @@ public sealed class FoliageManager : IDisposable
                 (minX + maxX) * 0.5f,
                 (minY + maxY) * 0.5f,
                 (patch.Bounds.Min.Z + patch.Bounds.Max.Z) * 0.5f);
+            if (!_streamingManager.IsResident(
+                    FoliageCellKey.FromWorld(patch, center)))
+            {
+                remainingClusterBudget++;
+                continue;
+            }
             float radius = MathF.Sqrt(cellX * cellX + cellY * cellY + depth * depth) * 0.5f;
 
             _gpuClusterScratch.Add(new GPUFoliageCluster
@@ -682,65 +838,145 @@ public sealed class FoliageManager : IDisposable
         }
     }
 
-    private void GenerateAuthoredMeshletCluster(
+    private void GenerateAuthoredMeshletClusters(
         FoliagePatch patch,
         uint prototypeIndex,
         uint patchIndex,
+        FoliageSettings settings,
+        DensityMapRuntime? densityMap,
         ref uint logicalFirstInstance,
         ref uint remainingClusterBudget)
     {
-        if (!patch.Visible || remainingClusterBudget == 0)
-        {
-            _lastOverflowCount++;
-            return;
-        }
-
         GPUFoliagePrototype prototype = _gpuPrototypeScratch[(int)prototypeIndex];
         if (prototype.MeshletCount == 0)
             return;
+        IReadOnlyList<FoliagePlacementCandidate> placements =
+            FoliagePlacementBuilder.Build(
+                patch,
+                settings.DensityScale,
+                densityMap == null
+                    ? null
+                    : worldPosition => densityMap.SampleWorld(
+                        worldPosition,
+                        patch.DensityMap!));
+        if (!patch.Visible || placements.Count == 0)
+            return;
+        int emittedCount = checked((int)Math.Min(
+            (uint)placements.Count,
+            remainingClusterBudget));
+        _lastOverflowCount += placements.Count - emittedCount;
 
-        Vector3 center = (patch.Bounds.Min + patch.Bounds.Max) * 0.5f;
-        Vector3 size = patch.Bounds.Size;
-        float radius = size.Length() * 0.5f;
-        uint instanceIndex = logicalFirstInstance++;
-        uint clusterIndex = (uint)_gpuClusterScratch.Count;
-        if (_lastFirstAuthoredClusterIndex == uint.MaxValue)
-            _lastFirstAuthoredClusterIndex = clusterIndex;
-        _lastAuthoredClusterCount++;
-
-        _gpuInstanceScratch.Add(new GPUFoliageInstance
+        Vector3 localMin = patch.Bounds.Min - patch.InstancePosition;
+        Vector3 localMax = patch.Bounds.Max - patch.InstancePosition;
+        if (patch.Prototype.Mesh is MeshHandle meshHandle &&
+            meshHandle.IsValid && _meshManager != null)
         {
-            PositionScale = new Vector4(
-                patch.InstancePosition.X,
-                patch.InstancePosition.Y,
-                patch.InstancePosition.Z,
-                Math.Max(0.0001f, patch.InstanceScale)),
-            RotationWind = new Vector4(0f, 0f, 0f, patch.Prototype.Wind.Strength),
-            ColorVariation = new Vector4(1f, 1f, 1f, 1f),
-            PrototypeIndex = prototypeIndex,
-            PatchIndex = patchIndex,
-            ClusterIndex = clusterIndex,
-            Flags = 0u
-        });
+            try
+            {
+                MeshInfo meshInfo = _meshManager.GetMeshInfo(meshHandle);
+                localMin = new Vector3(
+                    meshInfo.BoundingBoxMin.X,
+                    meshInfo.BoundingBoxMin.Y,
+                    meshInfo.BoundingBoxMin.Z);
+                localMax = new Vector3(
+                    meshInfo.BoundingBoxMax.X,
+                    meshInfo.BoundingBoxMax.Y,
+                    meshInfo.BoundingBoxMax.Z);
+            }
+            catch (InvalidOperationException)
+            {
+                // Preserve the authored patch bounds as the conservative
+                // fallback when a mesh lease is concurrently unavailable.
+            }
+        }
+        Vector3 localCenter = (localMin + localMax) * 0.5f;
+        float localRadius = (localMax - localMin).Length() * 0.5f;
+        float windExpansion = patch.Prototype.Wind.Strength *
+            (1f + patch.Prototype.Wind.Flutter) * 0.075f;
+        uint transitionSafeMeshletCount = checked(
+            prototype.MeshletCount +
+            prototype.MeshletLod1Count +
+            prototype.MeshletLod2Count);
 
-        _gpuClusterScratch.Add(new GPUFoliageCluster
+        for (int placementIndex = 0;
+             placementIndex < emittedCount;
+             placementIndex++)
         {
-            WorldCenterRadius = new Vector4(center.X, center.Y, center.Z, radius),
-            BoundsMinDensity = new Vector4(patch.Bounds.Min.X, patch.Bounds.Min.Y, patch.Bounds.Min.Z, patch.Density),
-            BoundsMaxLod = new Vector4(patch.Bounds.Max.X, patch.Bounds.Max.Y, patch.Bounds.Max.Z, patch.Prototype.Lod.Lod2Distance),
-            PatchIndex = patchIndex,
-            FirstInstance = instanceIndex,
-            InstanceCount = 1u,
-            RandomSeed = Hash(patch.Seed, prototypeIndex)
-        });
+            FoliagePlacementCandidate placement = placements[placementIndex];
+            if (!_streamingManager.IsResident(
+                    FoliageCellKey.FromWorld(
+                        patch,
+                        placement.Position)))
+            {
+                remainingClusterBudget++;
+                continue;
+            }
+            uint instanceIndex = logicalFirstInstance++;
+            uint clusterIndex = (uint)_gpuClusterScratch.Count;
+            if (_lastFirstAuthoredClusterIndex == uint.MaxValue)
+                _lastFirstAuthoredClusterIndex = clusterIndex;
+            _lastAuthoredClusterCount++;
+            float scale = Math.Max(0.0001f, placement.Scale);
+            // Root-centred bounds remain conservative under arbitrary yaw and
+            // optional terrain-normal alignment.
+            Vector3 worldCenter = placement.Position;
+            float radius = (localRadius + localCenter.Length()) * scale +
+                windExpansion;
+            Vector3 surfaceNormal = placement.SurfaceNormal.LengthSquared() >
+                0.000001f
+                    ? placement.SurfaceNormal.Normalized()
+                    : Vector3.UnitY;
 
-        remainingClusterBudget--;
-        uint maxLodMeshletCount = Math.Max(
-            prototype.MeshletCount,
-            Math.Max(prototype.MeshletLod1Count, prototype.MeshletLod2Count));
-        uint meshletStride = Math.Max(1u, (uint)MathF.Round(prototype.BladeWidth));
-        uint maxSubmittedMeshletCount = DivideRoundUp(maxLodMeshletCount, meshletStride);
-        _lastAuthoredMeshletDrawCapacity = checked(_lastAuthoredMeshletDrawCapacity + (int)maxSubmittedMeshletCount);
+            _gpuInstanceScratch.Add(new GPUFoliageInstance
+            {
+                PositionScale = new Vector4(
+                    placement.Position.X,
+                    placement.Position.Y,
+                    placement.Position.Z,
+                    scale),
+                RotationWind = new Vector4(
+                    placement.YawRadians,
+                    (placement.StableIdentity & 0xffffu) / 65535f,
+                    patch.Placement.AlignToSurfaceNormal
+                        ? surfaceNormal.X
+                        : 0f,
+                    patch.Placement.AlignToSurfaceNormal
+                        ? surfaceNormal.Z
+                        : 0f),
+                ColorVariation = new Vector4(1f, 1f, 1f, 1f),
+                PrototypeIndex = prototypeIndex,
+                PatchIndex = patchIndex,
+                ClusterIndex = clusterIndex,
+                Flags = patch.Placement.AlignToSurfaceNormal ? 1u : 0u
+            });
+
+            _gpuClusterScratch.Add(new GPUFoliageCluster
+            {
+                WorldCenterRadius = new Vector4(
+                    worldCenter.X,
+                    worldCenter.Y,
+                    worldCenter.Z,
+                    radius),
+                BoundsMinDensity = new Vector4(
+                    worldCenter.X - radius,
+                    worldCenter.Y - radius,
+                    worldCenter.Z - radius,
+                    patch.Density),
+                BoundsMaxLod = new Vector4(
+                    worldCenter.X + radius,
+                    worldCenter.Y + radius,
+                    worldCenter.Z + radius,
+                    patch.Prototype.Lod.Lod2Distance),
+                PatchIndex = patchIndex,
+                FirstInstance = instanceIndex,
+                InstanceCount = 1u,
+                RandomSeed = placement.StableIdentity
+            });
+            _lastAuthoredMeshletDrawCapacity = checked(
+                _lastAuthoredMeshletDrawCapacity +
+                (int)transitionSafeMeshletCount);
+        }
+        remainingClusterBudget -= checked((uint)emittedCount);
     }
 
     private void PopulateSceneData(SceneRenderingData sceneData)
@@ -753,7 +989,28 @@ public sealed class FoliageManager : IDisposable
         sceneData.FoliageInstanceBufferBytes = MaxByteSize(_instanceBuffers);
         sceneData.FoliageClusterBufferBytes = _clusterBuffer.ByteSize;
         sceneData.FoliageDrawBufferBytes = MaxByteSize(_meshletDrawBuffers);
-        sceneData.FoliageImpostorAtlasBytes = 0;
+        sceneData.FoliageImpostorAtlasBytes = _lastImpostorAtlasBytes;
+        sceneData.FoliageMissingImpostorCount = _lastMissingImpostorCount;
+        sceneData.FoliageDensityTextureBytes = _lastDensityTextureBytes;
+        sceneData.FoliageMissingDensityTextureCount =
+            _lastMissingDensityTextureCount;
+        sceneData.FoliageResidentCellCount =
+            _lastStreamingSnapshot.ResidentCellCount;
+        sceneData.FoliagePendingCellCount =
+            _lastStreamingSnapshot.PendingCellCount;
+        sceneData.FoliageRetiringCellCount =
+            _lastStreamingSnapshot.RetiringCellCount;
+        sceneData.FoliageNearCellCount = _lastStreamingSnapshot.NearCellCount;
+        sceneData.FoliageMidCellCount = _lastStreamingSnapshot.MidCellCount;
+        sceneData.FoliageFarCellCount = _lastStreamingSnapshot.FarCellCount;
+        sceneData.FoliageCellLoadsThisFrame =
+            _lastStreamingSnapshot.LoadedThisFrame;
+        sceneData.FoliageCellRetirementsThisFrame =
+            _lastStreamingSnapshot.RetiredThisFrame;
+        sceneData.FoliageCellStreamingUploadBytes =
+            _lastStreamingSnapshot.ScheduledUploadBytes;
+        sceneData.FoliageCellStreamingOverflowCount =
+            _lastStreamingSnapshot.CandidateOverflowCount;
         sceneData.CpuFoliageBuildMicroseconds = _lastBuildMicroseconds;
         sceneData.CpuFoliageUploadMicroseconds = _lastUploadMicroseconds;
     }
@@ -769,6 +1026,8 @@ public sealed class FoliageManager : IDisposable
     private void EnsureGpuBuffers(FoliageSettings settings)
     {
         EnsureCapacity(ref _prototypeBuffer, CheckedCount(_gpuPrototypeScratch.Count), (ulong)Marshal.SizeOf<GPUFoliagePrototype>(), "Foliage.PrototypeBuffer");
+        EnsureCapacity(ref _impostorBuffer, CheckedCount(_gpuImpostorScratch.Count), (ulong)Marshal.SizeOf<GPUFoliageImpostor>(), "Foliage.ImpostorMetadataBuffer");
+        EnsureCapacity(ref _impostorViewBuffer, CheckedCount(_gpuImpostorViewScratch.Count), (ulong)Marshal.SizeOf<GPUFoliageImpostorView>(), "Foliage.ImpostorViewBuffer");
         EnsureCapacity(ref _patchBuffer, CheckedCount(_gpuPatchScratch.Count), (ulong)Marshal.SizeOf<GPUFoliagePatch>(), "Foliage.PatchBuffer");
         EnsureCapacity(ref _clusterBuffer, CheckedCount(_gpuClusterScratch.Count), (ulong)Marshal.SizeOf<GPUFoliageCluster>(), "Foliage.ClusterBuffer");
 
@@ -776,16 +1035,19 @@ public sealed class FoliageManager : IDisposable
         uint instanceCapacity = CheckedCount(_gpuInstanceScratch.Count);
         int requestedDrawCapacity = Math.Max(_gpuClusterScratch.Count, _lastAuthoredMeshletDrawCapacity);
         uint drawCapacity = CheckedCount(Math.Min(Math.Max(1, settings.MaxVisibleMeshletDraws), Math.Max(1, requestedDrawCapacity)));
-        _lastAuthoredMeshletWorkItemCount = _lastAuthoredMeshletDrawCapacity <= 0
-            ? 0
-            : Math.Min(_lastAuthoredMeshletDrawCapacity, (int)Math.Min(drawCapacity, int.MaxValue));
+        _lastAuthoredMeshletWorkItemCount = _lastAuthoredClusterCount;
         for (int i = 0; i < FramesInFlight; i++)
         {
             EnsureCapacity(ref _instanceBuffers[i], instanceCapacity, (ulong)Marshal.SizeOf<GPUFoliageInstance>(), $"Foliage.InstanceBuffer.Frame{i}");
-            EnsureCapacity(ref _visibleClusterBuffers[i], visibleClusterCapacity, sizeof(uint), $"Foliage.VisibleClusterBuffer.Frame{i}");
+            EnsureCapacity(ref _visibleClusterBuffers[i], visibleClusterCapacity, (ulong)Marshal.SizeOf<GPUFoliageProceduralDrawCommand>(), $"Foliage.VisibleClusterBuffer.Frame{i}");
+            EnsureCapacity(
+                ref _authoredInstanceCommandBuffers[i],
+                CheckedCount(_lastAuthoredClusterCount),
+                (ulong)Marshal.SizeOf<GPUFoliageAuthoredInstanceCommand>(),
+                $"Foliage.AuthoredInstanceCommandBuffer.Frame{i}");
             EnsureCapacity(ref _meshletDrawBuffers[i], drawCapacity, (ulong)Marshal.SizeOf<GPUFoliageMeshletDrawCommand>(), $"Foliage.MeshletDrawBuffer.Frame{i}");
             EnsureCapacity(ref _counterBuffers[i], 1u, CounterStride, $"Foliage.CounterBuffer.Frame{i}");
-            EnsureCapacity(ref _indirectDispatchBuffers[i], 1u, (ulong)Marshal.SizeOf<GPUFoliageDispatchArgs>(), $"Foliage.IndirectDispatchBuffer.Frame{i}", BufferUsageFlags.IndirectBufferBit);
+            EnsureCapacity(ref _indirectDispatchBuffers[i], IndirectDispatchCommandCount, (ulong)Marshal.SizeOf<GPUFoliageDispatchArgs>(), $"Foliage.IndirectDispatchBuffer.Frame{i}", BufferUsageFlags.IndirectBufferBit);
         }
     }
 
@@ -823,6 +1085,8 @@ public sealed class FoliageManager : IDisposable
     {
         ulong uploaded = 0;
         uploaded += UploadSpan(CollectionsMarshal.AsSpan(_gpuPrototypeScratch), _prototypeBuffer.Handle, commandBuffer);
+        uploaded += UploadSpan(CollectionsMarshal.AsSpan(_gpuImpostorScratch), _impostorBuffer.Handle, commandBuffer);
+        uploaded += UploadSpan(CollectionsMarshal.AsSpan(_gpuImpostorViewScratch), _impostorViewBuffer.Handle, commandBuffer);
         uploaded += UploadSpan(CollectionsMarshal.AsSpan(_gpuPatchScratch), _patchBuffer.Handle, commandBuffer);
         uploaded += UploadSpan(CollectionsMarshal.AsSpan(_gpuClusterScratch), _clusterBuffer.Handle, commandBuffer);
         for (int i = 0; i < FramesInFlight; i++)
@@ -852,12 +1116,20 @@ public sealed class FoliageManager : IDisposable
             return;
 
         RegisterStorageBuffer(BindlessIndex.FoliagePrototypeBuffer, _prototypeBuffer.Handle);
+        RegisterStorageBuffer(BindlessIndex.FoliageImpostorMetadataBuffer, _impostorBuffer.Handle);
+        RegisterStorageBuffer(BindlessIndex.FoliageImpostorViewBuffer, _impostorViewBuffer.Handle);
         RegisterStorageBuffer(BindlessIndex.FoliagePatchBuffer, _patchBuffer.Handle);
         RegisterStorageBuffer(BindlessIndex.FoliageClusterBuffer, _clusterBuffer.Handle);
         RegisterStorageBuffer(BindlessIndex.FoliageInstanceBufferBase, _instanceBuffers[0].Handle);
         RegisterStorageBuffer(BindlessIndex.FoliageInstanceBufferFrame1, _instanceBuffers[1].Handle);
         RegisterStorageBuffer(BindlessIndex.FoliageVisibleClusterBufferBase, _visibleClusterBuffers[0].Handle);
         RegisterStorageBuffer(BindlessIndex.FoliageVisibleClusterBufferFrame1, _visibleClusterBuffers[1].Handle);
+        RegisterStorageBuffer(
+            BindlessIndex.FoliageAuthoredInstanceCommandBufferBase,
+            _authoredInstanceCommandBuffers[0].Handle);
+        RegisterStorageBuffer(
+            BindlessIndex.FoliageAuthoredInstanceCommandBufferFrame1,
+            _authoredInstanceCommandBuffers[1].Handle);
         RegisterStorageBuffer(BindlessIndex.FoliageMeshletDrawBufferBase, _meshletDrawBuffers[0].Handle);
         RegisterStorageBuffer(BindlessIndex.FoliageMeshletDrawBufferFrame1, _meshletDrawBuffers[1].Handle);
         RegisterStorageBuffer(BindlessIndex.FoliageCounterBufferBase, _counterBuffers[0].Handle);
@@ -966,7 +1238,11 @@ public sealed class FoliageManager : IDisposable
             hash.Add(patch.Density);
             hash.Add(patch.Seed);
             hash.Add(patch.Visible);
-            hash.Add(patch.DensityTexture);
+            hash.Add(patch.DensityMap?.SourcePath);
+            hash.Add(patch.DensityMap?.ContentHash);
+            hash.Add(patch.PlacementMode);
+            hash.Add(patch.Placement.Revision);
+            hash.Add(patch.TerrainQuery?.Revision ?? 0UL);
         }
 
         return new FoliageSceneRegistrationSnapshot(
@@ -1012,7 +1288,6 @@ public sealed class FoliageManager : IDisposable
         hash = Hash(hash, (uint)prototype.GeometryMode);
         hash = Hash(hash, prototype.Mesh?.GetHashCode() is int meshHash ? unchecked((uint)meshHash) : 0u);
         hash = Hash(hash, prototype.Material?.GetHashCode() is int materialHash ? unchecked((uint)materialHash) : 0u);
-        hash = Hash(hash, prototype.AuthoredMeshletStride);
         hash = Hash(hash, BitConverter.SingleToUInt32Bits(prototype.CardHeight));
         hash = Hash(hash, BitConverter.SingleToUInt32Bits(prototype.CardWidth));
         hash = Hash(hash, BitConverter.SingleToUInt32Bits(prototype.Lod.Lod0Distance));
@@ -1025,6 +1300,16 @@ public sealed class FoliageManager : IDisposable
         hash = Hash(hash, BitConverter.SingleToUInt32Bits(prototype.Lighting.Backlight));
         hash = Hash(hash, BitConverter.SingleToUInt32Bits(prototype.Lighting.NormalBend));
         hash = Hash(hash, prototype.FarImpostorEnabled ? 1u : 0u);
+        hash = Hash(hash, prototype.CastShadows ? 1u : 0u);
+        hash = Hash(hash, prototype.TwoSided ? 1u : 0u);
+        hash = Hash(hash, unchecked((uint)(prototype.Impostor?.ContentHash?.GetHashCode(
+            StringComparison.Ordinal) ?? 0)));
+        if (prototype.Impostor is { } impostor)
+        {
+            ulong layout = ComputeImpostorLayoutSignature(impostor);
+            hash = Hash(hash, unchecked((uint)layout));
+            hash = Hash(hash, unchecked((uint)(layout >> 32)));
+        }
         return hash;
     }
 
@@ -1161,6 +1446,354 @@ public sealed class FoliageManager : IDisposable
         return (long)((Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000.0 / Stopwatch.Frequency);
     }
 
+    private DensityMapRuntime? ResolveDensityMap(
+        FoliageDensityMapReference? reference)
+    {
+        if (reference == null)
+            return null;
+        if (!reference.IsValid ||
+            reference.Format != FoliageDensityMapFormat.R8UNorm)
+        {
+            _lastMissingDensityTextureCount++;
+            return null;
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(reference.SourcePath);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException)
+        {
+            _lastMissingDensityTextureCount++;
+            return null;
+        }
+
+        string key = string.Concat(
+            fullPath,
+            "|",
+            reference.ContentHash ?? string.Empty,
+            "|",
+            reference.Revision.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+        if (!_densityMaps.TryGetValue(key, out DensityMapRuntime? runtime))
+        {
+            runtime = LoadDensityMap(fullPath, reference);
+            _densityMaps.Add(key, runtime);
+        }
+        if (!runtime.IsValid)
+        {
+            _lastMissingDensityTextureCount++;
+            return null;
+        }
+        if (_densityMapsUsedThisBuild.Add(key))
+            _lastDensityTextureBytes = checked(
+                _lastDensityTextureBytes + runtime.ByteCount);
+        return runtime;
+    }
+
+    private DensityMapRuntime LoadDensityMap(
+        string fullPath,
+        FoliageDensityMapReference reference)
+    {
+        try
+        {
+            byte[] encoded = File.ReadAllBytes(fullPath);
+            ImageResult image = ImageResult.FromMemory(
+                encoded,
+                ColorComponents.RedGreenBlueAlpha);
+            if (image.Width != reference.Width ||
+                image.Height != reference.Height ||
+                image.Data.Length != checked(image.Width * image.Height * 4))
+            {
+                return DensityMapRuntime.Invalid;
+            }
+
+            TextureHandle handle = TextureHandle.Invalid;
+            uint bindlessIndex = uint.MaxValue;
+            if (_textureManager != null)
+            {
+                handle = _textureManager.LoadTextureFromFile(
+                    fullPath,
+                    generateMipmaps: false,
+                    srgb: false,
+                    requireWithinMemoryBudget: true,
+                    semantic: TextureSemantic.Scalar);
+                int resolvedIndex = _textureManager.GetBindlessTextureIndex(
+                    handle);
+                if (resolvedIndex < BindlessIndex.FirstDynamicTextureIndex)
+                {
+                    _textureManager.ReleaseTexture(handle);
+                    return DensityMapRuntime.Invalid;
+                }
+                bindlessIndex = checked((uint)resolvedIndex);
+            }
+
+            return new DensityMapRuntime(
+                image.Data,
+                image.Width,
+                image.Height,
+                handle,
+                bindlessIndex);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or
+                ArgumentException or InvalidOperationException or
+                NotSupportedException or VulkanException)
+        {
+            return DensityMapRuntime.Invalid;
+        }
+    }
+
+    private ImpostorRuntime? ResolveImpostor(
+        FoliagePrototype prototype,
+        FoliageSettings settings)
+    {
+        if (!settings.FarImpostorsEnabled ||
+            !prototype.FarImpostorEnabled ||
+            prototype.GeometryMode != FoliageGeometryMode.AuthoredMeshlets)
+        {
+            return null;
+        }
+
+        FoliageImpostorAsset? asset = prototype.Impostor;
+        if (_textureManager == null || asset is not { IsComplete: true })
+        {
+            _lastMissingImpostorCount++;
+            return null;
+        }
+
+        string albedoPath;
+        string normalPath;
+        string depthPath;
+        try
+        {
+            albedoPath = Path.GetFullPath(asset.AlbedoOpacityAtlasPath);
+            normalPath = Path.GetFullPath(asset.NormalAtlasPath);
+            depthPath = Path.GetFullPath(asset.DepthAtlasPath);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException)
+        {
+            _lastMissingImpostorCount++;
+            return null;
+        }
+
+        string key = string.Concat(
+            albedoPath,
+            "|",
+            normalPath,
+            "|",
+            depthPath,
+            "|",
+            asset.ContentHash ?? string.Empty,
+            "|",
+            asset.ViewCount.ToString(
+                System.Globalization.CultureInfo.InvariantCulture),
+            "|",
+            ComputeImpostorLayoutSignature(asset).ToString("x16",
+                System.Globalization.CultureInfo.InvariantCulture));
+        if (!_impostors.TryGetValue(key, out ImpostorRuntime? runtime))
+        {
+            runtime = LoadImpostor(asset, albedoPath, normalPath, depthPath);
+            _impostors.Add(key, runtime);
+        }
+
+        if (!runtime.IsValid)
+        {
+            _lastMissingImpostorCount++;
+            return null;
+        }
+
+        if (_impostorsUsedThisBuild.Add(key))
+        {
+            _lastImpostorAtlasBytes = checked(
+                _lastImpostorAtlasBytes + runtime.ByteCount);
+        }
+
+        return runtime;
+    }
+
+    private ImpostorRuntime LoadImpostor(
+        FoliageImpostorAsset asset,
+        string albedoPath,
+        string normalPath,
+        string depthPath)
+    {
+        if (_textureManager == null)
+            return ImpostorRuntime.Invalid;
+
+        TextureHandle albedo = TextureHandle.Invalid;
+        TextureHandle normal = TextureHandle.Invalid;
+        TextureHandle depth = TextureHandle.Invalid;
+        try
+        {
+            albedo = _textureManager.LoadTextureFromFile(
+                albedoPath,
+                generateMipmaps: true,
+                srgb: true,
+                requireWithinMemoryBudget: true,
+                semantic: TextureSemantic.Color,
+                mipPolicy: RuntimeTextureMipPolicy.AlphaMask(0.05f));
+            normal = _textureManager.LoadTextureFromFile(
+                normalPath,
+                generateMipmaps: true,
+                srgb: false,
+                requireWithinMemoryBudget: true,
+                semantic: TextureSemantic.Normal);
+            depth = _textureManager.LoadTextureFromFile(
+                depthPath,
+                generateMipmaps: true,
+                srgb: false,
+                requireWithinMemoryBudget: true,
+                semantic: TextureSemantic.Scalar);
+
+            uint albedoIndex = ResolveDynamicTextureIndex(albedo);
+            uint normalIndex = ResolveDynamicTextureIndex(normal);
+            uint depthIndex = ResolveDynamicTextureIndex(depth);
+            ulong byteCount = checked(
+                EstimateTextureBytes(albedo) +
+                EstimateTextureBytes(normal) +
+                EstimateTextureBytes(depth));
+            var metadata = new GPUFoliageImpostor
+            {
+                AlbedoOpacityTextureIndex = albedoIndex,
+                NormalTextureIndex = normalIndex,
+                DepthTextureIndex = depthIndex,
+                ViewCount = checked((uint)asset.ViewCount),
+                SourceBoundsMinScale = new Vector4(
+                    asset.SourceBounds.Min.X,
+                    asset.SourceBounds.Min.Y,
+                    asset.SourceBounds.Min.Z,
+                    asset.Scale),
+                SourceBoundsMax = new Vector4(
+                    asset.SourceBounds.Max.X,
+                    asset.SourceBounds.Max.Y,
+                    asset.SourceBounds.Max.Z,
+                    0f),
+                Pivot = new Vector3(
+                    asset.Pivot.X,
+                    asset.Pivot.Y,
+                    asset.Pivot.Z),
+                ViewDataOffset = 0u
+            };
+            GPUFoliageImpostorView[] views = CreateImpostorViews(asset);
+            return new ImpostorRuntime(
+                metadata,
+                views,
+                albedo,
+                normal,
+                depth,
+                byteCount);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or
+                ArgumentException or InvalidOperationException or
+                NotSupportedException or OverflowException or VulkanException)
+        {
+            ReleaseTextureIfValid(albedo);
+            ReleaseTextureIfValid(normal);
+            ReleaseTextureIfValid(depth);
+            return ImpostorRuntime.Invalid;
+        }
+    }
+
+    private static GPUFoliageImpostorView[] CreateImpostorViews(
+        FoliageImpostorAsset asset)
+    {
+        var views = new GPUFoliageImpostorView[asset.ViewCount];
+        for (int index = 0; index < views.Length; index++)
+        {
+            Vector3 direction;
+            Vector4 rectangle;
+            if (asset.HasExplicitViewLayout)
+            {
+                direction = asset.ViewDirections[index].Normalized();
+                rectangle = asset.AtlasRectangles[index];
+            }
+            else
+            {
+                float angle = index * (2f * MathF.PI / asset.ViewCount);
+                direction = new Vector3(
+                    MathF.Sin(angle),
+                    0f,
+                    MathF.Cos(angle));
+                float width = 1f / asset.ViewCount;
+                rectangle = new Vector4(index * width, 0f, width, 1f);
+            }
+
+            views[index] = new GPUFoliageImpostorView
+            {
+                Direction = new Vector4(
+                    direction.X,
+                    direction.Y,
+                    direction.Z,
+                    0f),
+                AtlasRectangle = rectangle
+            };
+        }
+        return views;
+    }
+
+    private static ulong ComputeImpostorLayoutSignature(
+        FoliageImpostorAsset asset)
+    {
+        ulong hash = 14695981039346656037UL;
+        hash = Hash(hash, checked((uint)Math.Max(asset.ViewCount, 0)));
+        hash = Hash(hash, checked((uint)Math.Max(asset.AtlasWidth, 0)));
+        hash = Hash(hash, checked((uint)Math.Max(asset.AtlasHeight, 0)));
+        hash = HashVector(hash, asset.SourceBounds.Min);
+        hash = HashVector(hash, asset.SourceBounds.Max);
+        hash = HashVector(hash, asset.Pivot);
+        hash = Hash(hash, BitConverter.SingleToUInt32Bits(asset.Scale));
+        foreach (Vector3 direction in asset.ViewDirections)
+            hash = HashVector(hash, direction);
+        foreach (Vector4 rectangle in asset.AtlasRectangles)
+        {
+            hash = Hash(hash, BitConverter.SingleToUInt32Bits(rectangle.X));
+            hash = Hash(hash, BitConverter.SingleToUInt32Bits(rectangle.Y));
+            hash = Hash(hash, BitConverter.SingleToUInt32Bits(rectangle.Z));
+            hash = Hash(hash, BitConverter.SingleToUInt32Bits(rectangle.W));
+        }
+        return hash;
+    }
+
+    private uint ResolveDynamicTextureIndex(TextureHandle handle)
+    {
+        if (_textureManager == null || !handle.IsValid)
+        {
+            throw new InvalidOperationException(
+                "Foliage impostor texture did not produce a valid handle.");
+        }
+
+        int resolvedIndex = _textureManager.GetBindlessTextureIndex(handle);
+        if (resolvedIndex < BindlessIndex.FirstDynamicTextureIndex)
+        {
+            throw new InvalidOperationException(
+                "Foliage impostor texture did not receive a dynamic bindless index.");
+        }
+
+        return checked((uint)resolvedIndex);
+    }
+
+    private ulong EstimateTextureBytes(TextureHandle handle)
+    {
+        if (_textureManager == null)
+            return 0;
+        (_, _, Extent3D extent) = _textureManager.GetTextureInfo(handle);
+        // Runtime foliage atlases generate a complete mip chain. Four bytes
+        // per texel times 4/3 is a conservative, format-independent diagnostic.
+        ulong baseBytes = checked((ulong)extent.Width * extent.Height * 4UL);
+        return checked(baseBytes + (baseBytes + 2UL) / 3UL);
+    }
+
+    private void ReleaseTextureIfValid(TextureHandle handle)
+    {
+        if (_textureManager != null && handle.IsValid)
+            _textureManager.ReleaseTexture(handle);
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -1169,13 +1802,31 @@ public sealed class FoliageManager : IDisposable
 
         lock (_lock)
         {
+            if (_textureManager != null)
+            {
+                foreach (DensityMapRuntime densityMap in _densityMaps.Values)
+                {
+                    if (densityMap.Texture.IsValid)
+                        _textureManager.ReleaseTexture(densityMap.Texture);
+                }
+            }
+            _densityMaps.Clear();
+            if (_textureManager != null)
+            {
+                foreach (ImpostorRuntime impostor in _impostors.Values)
+                    impostor.Release(_textureManager);
+            }
+            _impostors.Clear();
             DestroyIfValid(_prototypeBuffer.Handle);
+            DestroyIfValid(_impostorBuffer.Handle);
+            DestroyIfValid(_impostorViewBuffer.Handle);
             DestroyIfValid(_patchBuffer.Handle);
             DestroyIfValid(_clusterBuffer.Handle);
             for (int i = 0; i < FramesInFlight; i++)
             {
                 DestroyIfValid(_instanceBuffers[i].Handle);
                 DestroyIfValid(_visibleClusterBuffers[i].Handle);
+                DestroyIfValid(_authoredInstanceCommandBuffers[i].Handle);
                 DestroyIfValid(_meshletDrawBuffers[i].Handle);
                 DestroyIfValid(_counterBuffers[i].Handle);
                 DestroyIfValid(_indirectDispatchBuffers[i].Handle);
@@ -1197,6 +1848,118 @@ public sealed class FoliageManager : IDisposable
         public uint ElementCapacity { get; }
         public ulong ByteSize { get; }
     }
+
+    private sealed class DensityMapRuntime
+    {
+        public static DensityMapRuntime Invalid { get; } = new(
+            Array.Empty<byte>(),
+            0,
+            0,
+            TextureHandle.Invalid,
+            uint.MaxValue);
+
+        public DensityMapRuntime(
+            byte[] rgbaPixels,
+            int width,
+            int height,
+            TextureHandle texture,
+            uint bindlessIndex)
+        {
+            RgbaPixels = rgbaPixels;
+            Width = width;
+            Height = height;
+            Texture = texture;
+            BindlessIndex = bindlessIndex;
+        }
+
+        public byte[] RgbaPixels { get; }
+        public int Width { get; }
+        public int Height { get; }
+        public TextureHandle Texture { get; }
+        public uint BindlessIndex { get; }
+        public bool IsValid => Width > 0 && Height > 0 &&
+            RgbaPixels.Length == Width * Height * 4;
+        public ulong ByteCount => checked((ulong)RgbaPixels.Length);
+
+        public float SampleWorld(
+            Vector2 worldPosition,
+            FoliageDensityMapReference reference)
+        {
+            float u = Math.Clamp(
+                worldPosition.X * reference.WorldToUvScale.X +
+                reference.WorldToUvOffset.X,
+                0f,
+                1f);
+            float v = Math.Clamp(
+                worldPosition.Y * reference.WorldToUvScale.Y +
+                reference.WorldToUvOffset.Y,
+                0f,
+                1f);
+            int x = Math.Clamp(
+                (int)MathF.Round(u * Math.Max(0, Width - 1)),
+                0,
+                Width - 1);
+            int y = Math.Clamp(
+                (int)MathF.Round(v * Math.Max(0, Height - 1)),
+                0,
+                Height - 1);
+            return RgbaPixels[(y * Width + x) * 4] / 255f;
+        }
+    }
+
+    private sealed class ImpostorRuntime
+    {
+        public static ImpostorRuntime Invalid { get; } = new(
+            default,
+            [],
+            TextureHandle.Invalid,
+            TextureHandle.Invalid,
+            TextureHandle.Invalid,
+            0);
+
+        public ImpostorRuntime(
+            GPUFoliageImpostor metadata,
+            GPUFoliageImpostorView[] views,
+            TextureHandle albedoOpacity,
+            TextureHandle normal,
+            TextureHandle depth,
+            ulong byteCount)
+        {
+            Metadata = metadata;
+            Views = views;
+            AlbedoOpacity = albedoOpacity;
+            Normal = normal;
+            Depth = depth;
+            ByteCount = byteCount;
+        }
+
+        public GPUFoliageImpostor Metadata { get; }
+        public GPUFoliageImpostorView[] Views { get; }
+        public TextureHandle AlbedoOpacity { get; }
+        public TextureHandle Normal { get; }
+        public TextureHandle Depth { get; }
+        public ulong ByteCount { get; }
+        public bool IsValid =>
+            AlbedoOpacity.IsValid && Normal.IsValid && Depth.IsValid &&
+            Metadata.ViewCount > 0 &&
+            Views.Length == Metadata.ViewCount &&
+            Metadata.AlbedoOpacityTextureIndex >=
+                BindlessIndex.FirstDynamicTextureIndex &&
+            Metadata.NormalTextureIndex >=
+                BindlessIndex.FirstDynamicTextureIndex &&
+            Metadata.DepthTextureIndex >=
+                BindlessIndex.FirstDynamicTextureIndex;
+
+        public void Release(TextureManager textureManager)
+        {
+            if (AlbedoOpacity.IsValid)
+                textureManager.ReleaseTexture(AlbedoOpacity);
+            if (Normal.IsValid)
+                textureManager.ReleaseTexture(Normal);
+            if (Depth.IsValid)
+                textureManager.ReleaseTexture(Depth);
+        }
+    }
 }
 
 public readonly record struct FoliageGpuBuildSnapshot(
@@ -1214,15 +1977,18 @@ public readonly record struct FoliageRuntimeBuffers(
     BufferHandle ClusterBuffer,
     BufferHandle InstanceBuffer,
     BufferHandle VisibleClusterBuffer,
+    BufferHandle AuthoredInstanceCommandBuffer,
     BufferHandle MeshletDrawBuffer,
     BufferHandle CounterBuffer,
     BufferHandle IndirectDispatchBuffer,
     ulong VisibleClusterBufferSize,
+    ulong AuthoredInstanceCommandBufferSize,
     ulong MeshletDrawBufferSize,
     ulong CounterBufferSize,
     ulong IndirectDispatchBufferSize,
     int ClusterCount,
     int VisibleClusterCapacity,
+    int AuthoredInstanceCommandCapacity,
     int MeshletDrawCapacity,
     int AuthoredMeshletWorkItemCount,
     uint FirstAuthoredClusterIndex,
@@ -1239,9 +2005,12 @@ public readonly record struct FoliageCounterSnapshot(
     uint HiZRejectedCount,
     uint VisibleMeshletDrawCount,
     uint MeshletDrawOverflowCount,
-    uint FarImpostorVisibleCount)
+    uint FarImpostorVisibleCount,
+    uint DensityRejectedCount,
+    uint InvalidCommandCount)
 {
-    public static FoliageCounterSnapshot Invalid { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static FoliageCounterSnapshot Invalid { get; } = new(
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
     public static FoliageCounterSnapshot FromCounters(GPUFoliageCounters counters)
     {
@@ -1256,6 +2025,8 @@ public readonly record struct FoliageCounterSnapshot(
             counters.HiZRejectedCount,
             counters.VisibleMeshletDrawCount,
             counters.MeshletDrawOverflowCount,
-            counters.FarImpostorVisibleCount);
+            counters.FarImpostorVisibleCount,
+            counters.DensityRejectedCount,
+            counters.InvalidCommandCount);
     }
 }

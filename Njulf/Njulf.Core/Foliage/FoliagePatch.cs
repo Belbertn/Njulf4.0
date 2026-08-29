@@ -12,8 +12,11 @@ public sealed class FoliagePatch : Njulf.Core.Scene.IIdentifiedSceneEntity
     private float _instanceScale = 1f;
     private float _density = 1f;
     private uint _seed = 1;
-    private object? _densityTexture;
-    private string? _densityTexturePath;
+    private FoliagePlacementMode _placementMode =
+        FoliagePlacementMode.ProceduralSurface;
+    private FoliageDensityMapReference? _densityMap;
+    private string? _legacyDensityTexturePath;
+    private ITerrainFoliageQuery? _terrainQuery;
     private bool _visible = true;
     private uint _revision = 1;
 
@@ -23,6 +26,11 @@ public sealed class FoliagePatch : Njulf.Core.Scene.IIdentifiedSceneEntity
     {
         _prototype = prototype ?? throw new ArgumentNullException(nameof(prototype));
         _bounds = bounds;
+        _placementMode = prototype.GeometryMode ==
+            FoliageGeometryMode.AuthoredMeshlets
+                ? FoliagePlacementMode.SingleInstance
+                : FoliagePlacementMode.ProceduralSurface;
+        Placement.Changed += () => IncrementRevision();
     }
 
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -124,15 +132,31 @@ public sealed class FoliagePatch : Njulf.Core.Scene.IIdentifiedSceneEntity
         }
     }
 
-    public object? DensityTexture
+    public FoliagePlacementMode PlacementMode
     {
-        get => _densityTexture;
+        get => _placementMode;
         set
         {
-            if (Equals(_densityTexture, value))
+            if (!Enum.IsDefined(value))
+                throw new ArgumentOutOfRangeException(nameof(value));
+            if (_placementMode == value)
                 return;
+            _placementMode = value;
+            IncrementRevision();
+        }
+    }
 
-            _densityTexture = value;
+    public FoliagePlacementSettings Placement { get; } = new();
+
+    public FoliageDensityMapReference? DensityMap
+    {
+        get => _densityMap;
+        set
+        {
+            if (ReferenceEquals(_densityMap, value))
+                return;
+            _densityMap = value;
+            _legacyDensityTexturePath = value?.SourcePath;
             IncrementRevision();
         }
     }
@@ -140,12 +164,25 @@ public sealed class FoliagePatch : Njulf.Core.Scene.IIdentifiedSceneEntity
     /// <summary>Optional source path retained by scene documents for density texture reloads.</summary>
     public string? DensityTexturePath
     {
-        get => _densityTexturePath;
+        get => _densityMap?.SourcePath ?? _legacyDensityTexturePath;
         set
         {
-            if (string.Equals(_densityTexturePath, value, StringComparison.Ordinal))
+            if (string.Equals(DensityTexturePath, value, StringComparison.Ordinal))
                 return;
-            _densityTexturePath = value;
+            _densityMap = null;
+            _legacyDensityTexturePath = value;
+            IncrementRevision();
+        }
+    }
+
+    public ITerrainFoliageQuery? TerrainQuery
+    {
+        get => _terrainQuery;
+        set
+        {
+            if (ReferenceEquals(_terrainQuery, value))
+                return;
+            _terrainQuery = value;
             IncrementRevision();
         }
     }
@@ -164,7 +201,13 @@ public sealed class FoliagePatch : Njulf.Core.Scene.IIdentifiedSceneEntity
     }
 
     public uint Revision => _revision;
-    public uint ContentRevision => CombineRevision(_revision, _prototype.Revision);
+    public uint ContentRevision => CombineRevision(
+        _revision,
+        _prototype.Revision,
+        Placement.Revision,
+        DensityMap?.Revision ?? 0u,
+        unchecked((uint)(TerrainQuery?.Revision ?? 0UL)),
+        unchecked((uint)((TerrainQuery?.Revision ?? 0UL) >> 32)));
 
     private static float ClampDensity(float value)
     {
@@ -180,13 +223,13 @@ public sealed class FoliagePatch : Njulf.Core.Scene.IIdentifiedSceneEntity
         return value;
     }
 
-    private static uint CombineRevision(uint patchRevision, uint prototypeRevision)
+    private static uint CombineRevision(params uint[] revisions)
     {
         unchecked
         {
             uint hash = 2166136261u;
-            hash = (hash ^ patchRevision) * 16777619u;
-            hash = (hash ^ prototypeRevision) * 16777619u;
+            foreach (uint revision in revisions)
+                hash = (hash ^ revision) * 16777619u;
             return hash == 0 ? 1u : hash;
         }
     }

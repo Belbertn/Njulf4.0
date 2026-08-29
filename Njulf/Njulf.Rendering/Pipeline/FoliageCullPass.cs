@@ -22,6 +22,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferManager _bufferManager;
         private readonly FoliageManager _foliageManager;
         private readonly FoliagePipeline _pipeline;
+        private readonly FoliageAuthoredExpandPass _authoredExpandPass;
 
         public FoliageCullPass(
             VulkanContext context,
@@ -35,6 +36,10 @@ namespace Njulf.Rendering.Pipeline
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _foliageManager = foliageManager ?? throw new ArgumentNullException(nameof(foliageManager));
             _pipeline = pipeline ?? throw new ArgumentNullException(nameof(pipeline));
+            _authoredExpandPass = new FoliageAuthoredExpandPass(
+                _context,
+                _bufferManager,
+                _pipeline);
         }
 
         public void Execute(CommandBuffer commandBuffer, int frameIndex, SceneRenderingData sceneData)
@@ -45,6 +50,7 @@ namespace Njulf.Rendering.Pipeline
             FoliageRuntimeBuffers buffers = _foliageManager.GetBuffers(frameIndex);
             if (!buffers.ClusterBuffer.IsValid ||
                 !buffers.VisibleClusterBuffer.IsValid ||
+                !buffers.AuthoredInstanceCommandBuffer.IsValid ||
                 !buffers.MeshletDrawBuffer.IsValid ||
                 !buffers.IndirectDispatchBuffer.IsValid ||
                 !buffers.CounterBuffer.IsValid)
@@ -93,7 +99,23 @@ namespace Njulf.Rendering.Pipeline
                 Flags = sceneData.OcclusionCullingEnabled ? 1u : 0u,
                 AuthoredMeshletWorkItemCount = checked((uint)Math.Max(0, buffers.AuthoredMeshletWorkItemCount)),
                 FirstAuthoredClusterIndex = buffers.FirstAuthoredClusterIndex == uint.MaxValue ? 0u : buffers.FirstAuthoredClusterIndex,
-                AuthoredClusterCount = checked((uint)Math.Max(0, buffers.AuthoredClusterCount))
+                AuthoredClusterCount = checked((uint)Math.Max(0, buffers.AuthoredClusterCount)),
+                ScreenDimensions = new Vector2(
+                    sceneData.ScreenWidth,
+                    sceneData.ScreenHeight),
+                HiZTextureIndex = (uint)BindlessIndex.HiZDepthTexture,
+                HiZMipCount = sceneData.HiZMipCount,
+                OcclusionCullingEnabled =
+                    sceneData.FoliageHiZCullingEnabled &&
+                    sceneData.OcclusionCullingEnabled
+                        ? (uint)sceneData.HiZTestMode
+                        : (uint)HiZTestMode.Off,
+                OcclusionBias = sceneData.OcclusionBias,
+                PreviousHiZFrameValid = sceneData.PreviousHiZFrameValid
+                    ? 1u
+                    : 0u,
+                PreviousFrameUvPaddingPixels = checked(
+                    (uint)Math.Max(0, sceneData.PreviousHiZUvPaddingPixels))
             };
 
             _context.Api.CmdPushConstants(
@@ -104,9 +126,13 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUFoliageCullPushConstants>(),
                 &pushConstants);
 
-            uint invocationCount = Math.Max(pushConstants.ClusterCount, pushConstants.AuthoredMeshletWorkItemCount);
-            uint groupCountX = Math.Max(1u, (invocationCount + WorkgroupSize - 1u) / WorkgroupSize);
+            uint clusterGroupCount =
+                (pushConstants.ClusterCount + WorkgroupSize - 1u) /
+                WorkgroupSize;
+            uint groupCountX = Math.Max(1u, clusterGroupCount);
             _context.Api.CmdDispatch(commandBuffer, groupCountX, 1, 1);
+            RecordCullToAuthoredExpandBarrier(commandBuffer, buffers);
+            _authoredExpandPass.Execute(commandBuffer, buffers);
             RecordCullOutputBarrier(commandBuffer, buffers);
             _foliageManager.RecordCounterReadback(commandBuffer, frameIndex);
         }
@@ -115,17 +141,49 @@ namespace Njulf.Rendering.Pipeline
         {
             VkBuffer counter = _bufferManager.GetBuffer(buffers.CounterBuffer);
             VkBuffer visible = _bufferManager.GetBuffer(buffers.VisibleClusterBuffer);
+            VkBuffer authored = _bufferManager.GetBuffer(
+                buffers.AuthoredInstanceCommandBuffer);
             VkBuffer meshletDraw = _bufferManager.GetBuffer(buffers.MeshletDrawBuffer);
             VkBuffer indirect = _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer);
 
             _context.Api.CmdFillBuffer(commandBuffer, counter, 0, FoliageManager.CounterStride, 0u);
             _context.Api.CmdFillBuffer(commandBuffer, visible, 0, buffers.VisibleClusterBufferSize, 0xffffffffu);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                authored,
+                0,
+                buffers.AuthoredInstanceCommandBufferSize,
+                0xffffffffu);
             _context.Api.CmdFillBuffer(commandBuffer, meshletDraw, 0, buffers.MeshletDrawBufferSize, 0xffffffffu);
             _context.Api.CmdFillBuffer(commandBuffer, indirect, 0, buffers.IndirectDispatchBufferSize, 0u);
             _context.Api.CmdFillBuffer(commandBuffer, indirect, 4, 4, 1u);
             _context.Api.CmdFillBuffer(commandBuffer, indirect, 8, 4, 1u);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                indirect,
+                FoliageManager.AuthoredIndirectDispatchOffset + 4,
+                4,
+                1u);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                indirect,
+                FoliageManager.AuthoredIndirectDispatchOffset + 8,
+                4,
+                1u);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                indirect,
+                FoliageManager.AuthoredExpandIndirectDispatchOffset + 4,
+                4,
+                1u);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                indirect,
+                FoliageManager.AuthoredExpandIndirectDispatchOffset + 8,
+                4,
+                1u);
 
-            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[4];
+            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[5];
             barriers[0] = BarrierBuilder.BufferBarrier(
                 counter,
                 PipelineStageFlags2.TransferBit,
@@ -143,6 +201,15 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 buffers.VisibleClusterBufferSize);
             barriers[2] = BarrierBuilder.BufferBarrier(
+                authored,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.ShaderStorageWriteBit,
+                0,
+                buffers.AuthoredInstanceCommandBufferSize);
+            barriers[3] = BarrierBuilder.BufferBarrier(
                 meshletDraw,
                 PipelineStageFlags2.TransferBit,
                 AccessFlags2.TransferWriteBit,
@@ -150,7 +217,7 @@ namespace Njulf.Rendering.Pipeline
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
                 0,
                 buffers.MeshletDrawBufferSize);
-            barriers[3] = BarrierBuilder.BufferBarrier(
+            barriers[4] = BarrierBuilder.BufferBarrier(
                 indirect,
                 PipelineStageFlags2.TransferBit,
                 AccessFlags2.TransferWriteBit,
@@ -161,9 +228,38 @@ namespace Njulf.Rendering.Pipeline
             ExecuteBarriers(commandBuffer, barriers);
         }
 
+        private void RecordCullToAuthoredExpandBarrier(
+            CommandBuffer commandBuffer,
+            FoliageRuntimeBuffers buffers)
+        {
+            Span<BufferMemoryBarrier2> barriers =
+                stackalloc BufferMemoryBarrier2[2];
+            barriers[0] = BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(
+                    buffers.AuthoredInstanceCommandBuffer),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit,
+                0,
+                buffers.AuthoredInstanceCommandBufferSize);
+            barriers[1] = BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.DrawIndirectBit |
+                    PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.IndirectCommandReadBit |
+                    AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.ShaderStorageWriteBit,
+                FoliageManager.AuthoredExpandIndirectDispatchOffset,
+                (ulong)Marshal.SizeOf<GPUFoliageDispatchArgs>());
+            ExecuteBarriers(commandBuffer, barriers);
+        }
+
         private void RecordCullOutputBarrier(CommandBuffer commandBuffer, FoliageRuntimeBuffers buffers)
         {
-            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[4];
+            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[5];
             barriers[0] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(buffers.CounterBuffer),
                 PipelineStageFlags2.ComputeShaderBit,
@@ -181,6 +277,16 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 buffers.VisibleClusterBufferSize);
             barriers[2] = BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(
+                    buffers.AuthoredInstanceCommandBuffer),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit |
+                    AccessFlags2.ShaderStorageReadBit,
+                PipelineStageFlags2.AllCommandsBit,
+                AccessFlags2.ShaderStorageReadBit,
+                0,
+                buffers.AuthoredInstanceCommandBufferSize);
+            barriers[3] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(buffers.MeshletDrawBuffer),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
@@ -188,7 +294,7 @@ namespace Njulf.Rendering.Pipeline
                 AccessFlags2.ShaderStorageReadBit,
                 0,
                 buffers.MeshletDrawBufferSize);
-            barriers[3] = BarrierBuilder.BufferBarrier(
+            barriers[4] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,

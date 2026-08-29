@@ -51,15 +51,16 @@ namespace Njulf.Rendering.Data
     }
 
     /// <summary>
-    /// Optional short-history stabilization for the CSM receiver result. Auto
-    /// remains inactive until a matching qualification manifest proves that
-    /// stable-map residual stepping exceeds the committed threshold.
+    /// Optional short-history stabilization for the CSM receiver result.
+    /// Enabled is the ordinary production request and bypasses legacy
+    /// qualification manifests while retaining runtime resource/reset gates.
     /// </summary>
     public enum DirectionalCsmTemporalMode : uint
     {
         Disabled = 0,
         Auto = 1,
-        DeveloperForce = 2
+        DeveloperForce = 2,
+        Enabled = 3
     }
 
     public enum DirectionalShadowFilterMode : uint
@@ -153,7 +154,8 @@ namespace Njulf.Rendering.Data
             set => _directionalCsmTemporalMode = value is
                 DirectionalCsmTemporalMode.Disabled or
                 DirectionalCsmTemporalMode.Auto or
-                DirectionalCsmTemporalMode.DeveloperForce
+                DirectionalCsmTemporalMode.DeveloperForce or
+                DirectionalCsmTemporalMode.Enabled
                     ? value
                     : DirectionalCsmTemporalMode.Disabled;
         }
@@ -167,9 +169,14 @@ namespace Njulf.Rendering.Data
 
         [JsonIgnore]
         public bool EffectiveDirectionalCsmTemporalEnabled =>
-            DirectionalCsmTemporalMode == DirectionalCsmTemporalMode.DeveloperForce ||
-            DirectionalCsmTemporalMode == DirectionalCsmTemporalMode.Auto &&
-            DirectionalCsmTemporalQualificationApproved;
+            DirectionalCsmTemporalMode is
+                DirectionalCsmTemporalMode.Enabled or
+                DirectionalCsmTemporalMode.DeveloperForce or
+                // Auto is a durable compatibility value. Schema migration
+                // rewrites old Auto requests to Enabled, but treating a live
+                // Auto assignment identically prevents a manifest from
+                // becoming activation authority again.
+                DirectionalCsmTemporalMode.Auto;
 
         public DirectionalShadowFilterMode DirectionalFilterMode
         {
@@ -900,6 +907,18 @@ namespace Njulf.Rendering.Data
         HybridRayQuery = 5
     }
 
+    /// <summary>
+    /// Selects the implementation used to execute the requested reflection
+    /// mode. Auto deliberately resolves to Adaptive in production; Legacy is
+    /// retained as an explicit rollback and comparison path.
+    /// </summary>
+    public enum ReflectionImplementationMode : uint
+    {
+        Auto = 0,
+        Legacy = 1,
+        Adaptive = 2
+    }
+
     public enum ReflectionDebugView : uint
     {
         None = 0,
@@ -1111,9 +1130,26 @@ namespace Njulf.Rendering.Data
         Auto = 1
     }
 
+    /// <summary>
+    /// Selects a portable mesh-shader output/workgroup contract. Auto uses the
+    /// compact 48-vertex/64-primitive taskless path and widens only when loaded
+    /// content requires it. CompatibilityTask is the sole explicit task-stage
+    /// mode.
+    /// </summary>
+    public enum MeshShaderTuningMode : uint
+    {
+        Auto = 0,
+        Taskless48V64P64Threads = 1,
+        Taskless48V64P128Threads = 2,
+        Taskless64V126P64Threads = 3,
+        Taskless64V126P128Threads = 4,
+        CompatibilityTask = 5
+    }
+
     public sealed class RasterSettings
     {
         private VariableRateShadingMode _variableRateShadingMode;
+        private MeshShaderTuningMode _meshShaderTuningMode;
 
         public VariableRateShadingMode VariableRateShadingMode
         {
@@ -1121,6 +1157,14 @@ namespace Njulf.Rendering.Data
             set => _variableRateShadingMode = Enum.IsDefined(value)
                 ? value
                 : VariableRateShadingMode.Off;
+        }
+
+        public MeshShaderTuningMode MeshShaderTuningMode
+        {
+            get => _meshShaderTuningMode;
+            set => _meshShaderTuningMode = Enum.IsDefined(value)
+                ? value
+                : MeshShaderTuningMode.Auto;
         }
     }
 
@@ -1182,7 +1226,6 @@ namespace Njulf.Rendering.Data
         private int _maxLocalShadowMeshletDraws = 8192;
 
         public bool Enabled { get; set; } = true;
-        public bool GpuDrivenEnabled { get; set; } = true;
         public bool HiZCullingEnabled { get; set; } = true;
         public bool CastShadows { get; set; } = true;
         public bool IndirectMeshletDispatchEnabled { get; set; } = true;
@@ -1314,7 +1357,8 @@ namespace Njulf.Rendering.Data
         /// <summary>
         /// Enables authenticated 64 KiB static-meshlet page admission. Missing,
         /// corrupt, or over-budget sidecars retain the full-resident path.
-        /// Skinned and coarse fallback pages are always pinned.
+        /// Activated static meshes pin coarse fallback pages; skinned meshes
+        /// remain fully resident.
         /// </summary>
         public bool GpuMeshletStreamingEnabled { get; set; } = true;
 
@@ -2197,7 +2241,8 @@ namespace Njulf.Rendering.Data
     public sealed class ReflectionSettings
     {
         public const int ShaderMaxProbesPerPixel = 4;
-        public const uint ReceiverPayloadAbiVersion = 4;
+        public const uint ReceiverPayloadAbiVersion = 5;
+        public const uint HistoryMetadataAbiVersion = 2;
 
         private int _maxProbes = 8;
         private int _maxProbesPerPixel = 2;
@@ -2228,6 +2273,8 @@ namespace Njulf.Rendering.Data
 
         public bool Enabled { get; set; } = true;
         public ReflectionMode Mode { get; set; } = ReflectionMode.StaticProbes;
+        public ReflectionImplementationMode ImplementationMode { get; set; } =
+            ReflectionImplementationMode.Auto;
 
         public int MaxProbes
         {
@@ -2363,7 +2410,7 @@ namespace Njulf.Rendering.Data
                     RayQueryPixelBudgetFraction = 0.0f;
                     RayQueryHitLightLimit = 0;
                     TemporalHistoryLength = 8;
-                    SpatialFilterPassCount = 2;
+                    SpatialFilterPassCount = 1;
                     break;
                 case RenderQualityPreset.Ultra:
                     Mode = ReflectionMode.HybridRayQuery;
@@ -2379,7 +2426,7 @@ namespace Njulf.Rendering.Data
                     RayQueryPixelBudgetFraction = 0.015625f;
                     RayQueryHitLightLimit = 4;
                     TemporalHistoryLength = 32;
-                    SpatialFilterPassCount = 4;
+                    SpatialFilterPassCount = 2;
                     break;
                 default:
                     Mode = ReflectionMode.HybridRayQuery;
@@ -2735,11 +2782,10 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiTransportAlbedoClamp = 0.95f;
         private float _simpleDdgiTransportTailRelativeTolerance = 0.025f;
         private int _simpleDdgiTransportAcceleratedSweepCount = 2;
-        // The certified single-sweep Jacobi path is the correctness fallback.
-        // Accelerated cached sweeps remain explicitly selectable for hardware
-        // qualification, but are not a production default after the
-        // 2026-08-27 fixed-point-tail regression.
-        private bool _simpleDdgiTransportAccelerationEnabled;
+        // Production tiers request the bounded red-black solve. The certified
+        // Jacobi path remains the automatic correctness fallback when runtime
+        // validation or resource admission rejects acceleration.
+        private bool _simpleDdgiTransportAccelerationEnabled = true;
         private bool _simpleDdgiTransportTailCertificationEnabled = true;
         private int _simpleDdgiTransportMaximumSolverGenerations = 8;
         // The static source-age watchdog is independent of legacy generation
@@ -4664,6 +4710,9 @@ namespace Njulf.Rendering.Data
             SimpleDdgiReceiverCacheMode = productionGiTier
                 ? DefaultSimpleDdgiReceiverCacheMode
                 : SimpleDdgiReceiverCacheMode.Exact;
+            SimpleDdgiReceiverFeedbackMode = productionGiTier
+                ? DefaultSimpleDdgiReceiverFeedbackMode
+                : SimpleDdgiReceiverFeedbackMode.Off;
             DdgiOpacityMicromapMode = productionGiTier
                 ? DefaultDdgiOpacityMicromapMode
                 : DdgiOpacityMicromapMode.Off;
@@ -4673,21 +4722,26 @@ namespace Njulf.Rendering.Data
             GiCausticMode = productionGiTier
                 ? DefaultGiCausticMode
                 : GiCausticMode.Off;
+            bool directionalTier = productionGiTier;
             bool highTier = tier is
                 DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra;
-            SimpleDdgiRefinementBricksEnabled = highTier;
+            SimpleDdgiRefinementBricksEnabled = productionGiTier;
             SimpleDdgiRefinementMaximumBricks = tier == DdgiQualityTier.DdgiUltra
                 ? 4
                 : tier == DdgiQualityTier.DdgiHigh
                     ? 2
-                    : 0;
-            SimpleDdgiNearVisibilitySidecarEnabled = highTier;
+                    : productionGiTier
+                        ? 1
+                        : 0;
+            SimpleDdgiNearVisibilitySidecarEnabled = productionGiTier;
             SimpleDdgiNearVisibilitySidecarMemoryBudgetBytes = tier ==
                 DdgiQualityTier.DdgiUltra
                     ? 96UL * 1024UL * 1024UL
                     : tier == DdgiQualityTier.DdgiHigh
                         ? 64UL * 1024UL * 1024UL
-                        : 0UL;
+                        : productionGiTier
+                            ? 32UL * 1024UL * 1024UL
+                            : 0UL;
             SimpleDdgiSourceCacheLayoutMode =
                 SimpleDdgiSourceCacheLayoutMode.Auto;
             SimpleDdgiTransportMaximumSolverGenerations = 8;
@@ -4733,21 +4787,13 @@ namespace Njulf.Rendering.Data
             // consumes the same production L2 publication through a clustered
             // HG phase query; ordinary opaque receivers may still select their
             // cheaper cache path independently.
-            SimpleDdgiDirectionalRadianceMode = highTier
+            SimpleDdgiDirectionalRadianceMode = directionalTier
                 ? SimpleDdgiDirectionalRadianceMode.L2
                 : SimpleDdgiDirectionalRadianceMode.Off;
-            // Directional L2 is the probe-free glossy base for both shipping
-            // DDGI tiers. High evaluates it at the receiver only; Ultra also
-            // feeds one bounded glossy bounce back into transport.
-            SimpleDdgiGlossyTransportMode = tier switch
-            {
-                DdgiQualityTier.DdgiUltra =>
-                    SimpleDdgiGlossyTransportMode.OneBounce,
-                DdgiQualityTier.DdgiHigh =>
-                    SimpleDdgiGlossyTransportMode.ReceiverOnly,
-                _ => SimpleDdgiGlossyTransportMode.Off
-            };
-            SimpleDdgiDirectionalFogEnabled = highTier;
+            SimpleDdgiGlossyTransportMode = directionalTier
+                ? SimpleDdgiGlossyTransportMode.RecursiveCertified
+                : SimpleDdgiGlossyTransportMode.Off;
+            SimpleDdgiDirectionalFogEnabled = directionalTier;
             // Current-pose transport remains gated by the authenticated
             // content-dependent rollout. Tail audits use geometry-epoch
             // snapshots and never claim a stale pose as generation-current.
@@ -4774,6 +4820,7 @@ namespace Njulf.Rendering.Data
             {
                 DdgiQualityTier.DdgiUltra => 128UL * 1024UL * 1024UL,
                 DdgiQualityTier.DdgiHigh => 64UL * 1024UL * 1024UL,
+                DdgiQualityTier.DdgiMedium => 32UL * 1024UL * 1024UL,
                 _ => 0UL
             };
             DdgiDynamicBlasMemoryBudgetBytes = tier switch
@@ -5546,13 +5593,25 @@ namespace Njulf.Rendering.Data
 
     public sealed class AsyncComputeSettings
     {
+        public const AsyncComputePreferredPathMask DefaultPreferredPathMask =
+            AsyncComputePreferredPathMask.SimpleDdgiUpdate |
+            AsyncComputePreferredPathMask.FarFieldClipmapBake;
+
         /// <summary>
-        /// Defaults to <see cref="AsyncComputeMode.Auto"/> for new installations. Auto starts on
-        /// the graphics queue, collects isolated timing samples, and only promotes a complete
-        /// resource plan after it proves a sustained benefit. Pre-v3 files without a Mode keep
-        /// their legacy graphics-only behavior during settings migration.
+        /// Defaults to <see cref="AsyncComputeMode.Auto"/> for new installations. Auto schedules
+        /// preferred production paths immediately after concrete queue/resource validation;
+        /// other paths retain isolated timing promotion. Pre-v3 files without a Mode keep their
+        /// legacy graphics-only behavior during settings migration.
         /// </summary>
         public AsyncComputeMode Mode { get; set; } = AsyncComputeMode.Auto;
+
+        /// <summary>
+        /// Paths that start on a compatible compute queue immediately after
+        /// concrete resource-plan validation. Runtime timing may still demote
+        /// them and explicit per-path booleans or Disabled mode remain opt-outs.
+        /// </summary>
+        public AsyncComputePreferredPathMask PreferredPathMask { get; set; } =
+            DefaultPreferredPathMask;
 
         /// <summary>Atomic path explicitly authorized by a validation harness in Force mode.</summary>
         public AsyncComputePath? ForceValidationPath { get; set; }
@@ -5598,7 +5657,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 24;
+        public const int SerializationVersion = 26;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5743,18 +5802,24 @@ namespace Njulf.Rendering.Data
                 productionGiProfile;
             GlobalIllumination.SimpleDdgiTransportAcceleratedSweepCount = 2;
 
-            // C5 is part of the High-class production profile. Lower tiers do
-            // not reserve its immutable trace, history, filter, and composite
-            // resources. Applying a preset deliberately restores the tier
-            // default; persisted settings and explicit runtime/CLI overrides
-            // are applied after the preset and may still opt out.
-            GlobalIllumination.SimpleDdgiNearFieldResidualMode = preset is
-                RenderQualityPreset.High or
-                RenderQualityPreset.DdgiHigh or
-                RenderQualityPreset.Ultra
+            // Every non-Low production tier requests the bounded C5 path.
+            // Runtime content, memory, and resource completeness remain the
+            // only admission gates; an explicit persisted Off is applied
+            // after the preset and still wins.
+            GlobalIllumination.SimpleDdgiNearFieldResidualMode =
+                productionGiProfile
                     ? GlobalIlluminationSettings
                         .DefaultSimpleDdgiNearFieldResidualMode
                     : SimpleDdgiNearFieldResidualMode.Off;
+            GlobalIllumination.SimpleDdgiNearFieldResidualQualityPreset =
+                preset switch
+                {
+                    RenderQualityPreset.Medium =>
+                        SimpleDdgiNearFieldResidualQualityPreset.Performance,
+                    RenderQualityPreset.Ultra =>
+                        SimpleDdgiNearFieldResidualQualityPreset.Quality,
+                    _ => SimpleDdgiNearFieldResidualQualityPreset.Balanced
+                };
 
             // High and Ultra retain their authored bent-normal quality. The
             // receiver-cache variants consume the same normal-dependent
@@ -5772,9 +5837,13 @@ namespace Njulf.Rendering.Data
             };
             GlobalIllumination
                 .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled =
-                preset is RenderQualityPreset.High or
-                    RenderQualityPreset.DdgiHigh or
-                    RenderQualityPreset.Ultra;
+                productionGiProfile;
+            Shadows.DirectionalCsmTemporalMode = productionGiProfile
+                ? DirectionalCsmTemporalMode.Enabled
+                : DirectionalCsmTemporalMode.Disabled;
+            AsyncCompute.PreferredPathMask = productionGiProfile
+                ? AsyncComputeSettings.DefaultPreferredPathMask
+                : AsyncComputePreferredPathMask.None;
             SceneSubmission.EnableProductionMeshletFeatures();
             Foliage.IndirectMeshletDispatchEnabled = true;
             MeshletNormalConeCullingEnabled = true;
@@ -5794,8 +5863,9 @@ namespace Njulf.Rendering.Data
                 RenderQualityPreset.Low or
                 RenderQualityPreset.Medium or
                 RenderQualityPreset.DdgiHigh
-                    ? VariableRateShadingMode.Auto
-                    : VariableRateShadingMode.Off;
+                ? VariableRateShadingMode.Auto
+                : VariableRateShadingMode.Off;
+            Raster.MeshShaderTuningMode = MeshShaderTuningMode.Auto;
 
             AmbientOcclusion.GtaoQualityPreset = preset switch
             {
@@ -5836,7 +5906,6 @@ namespace Njulf.Rendering.Data
                     Reflections.Mode = ReflectionMode.StaticProbes;
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
-                    Foliage.GpuDrivenEnabled = true;
                     Foliage.HiZCullingEnabled = true;
                     Foliage.CastShadows = false;
                     Foliage.DensityScale = 0.45f;
@@ -5905,7 +5974,6 @@ namespace Njulf.Rendering.Data
                     Reflections.ApplyHybridQualityBudget(RenderQualityPreset.Medium);
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
-                    Foliage.GpuDrivenEnabled = true;
                     Foliage.HiZCullingEnabled = true;
                     Foliage.CastShadows = true;
                     Foliage.DensityScale = 0.75f;
@@ -5973,7 +6041,6 @@ namespace Njulf.Rendering.Data
                     Reflections.ApplyHybridQualityBudget(RenderQualityPreset.DdgiHigh);
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
-                    Foliage.GpuDrivenEnabled = true;
                     Foliage.HiZCullingEnabled = true;
                     Foliage.CastShadows = true;
                     Foliage.DensityScale = 1.0f;
@@ -6041,7 +6108,6 @@ namespace Njulf.Rendering.Data
                     Reflections.ApplyHybridQualityBudget(RenderQualityPreset.Ultra);
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
-                    Foliage.GpuDrivenEnabled = true;
                     Foliage.HiZCullingEnabled = true;
                     Foliage.CastShadows = true;
                     Foliage.DensityScale = 1.5f;
@@ -6112,7 +6178,6 @@ namespace Njulf.Rendering.Data
                     Reflections.ApplyHybridQualityBudget(RenderQualityPreset.High);
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
-                    Foliage.GpuDrivenEnabled = true;
                     Foliage.HiZCullingEnabled = true;
                     Foliage.CastShadows = true;
                     Foliage.DensityScale = 1.0f;
@@ -6360,6 +6425,11 @@ namespace Njulf.Rendering.Data
             // older files now promote that v2-only production behavior. Version
             // 24 persists eight-frame LOD dithering, hierarchy traversal, and
             // the bounded authenticated meshlet-streaming budgets.
+            // Version 25 persists the taskless mesh-shader tuning contract and
+            // the remaining renderer activation controls introduced together.
+            // Version 26 persists adaptive-reflection implementation selection
+            // and its compact receiver/history contracts after the combined
+            // renderer plans consumed the in-progress version-25 schema.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -6384,6 +6454,7 @@ namespace Njulf.Rendering.Data
             public bool? MeshletNormalConeCullingEnabled { get; init; }
             public SpecularAntialiasingMode? SpecularAntialiasingMode { get; init; }
             public VariableRateShadingMode? VariableRateShadingMode { get; init; }
+            public MeshShaderTuningMode? MeshShaderTuningMode { get; init; }
             public TransparencySettingsFile? Transparency { get; init; }
             public bool? TransparentReceiveGlobalIllumination { get; init; }
             public bool? DecalReceiveGlobalIllumination { get; init; }
@@ -6425,6 +6496,8 @@ namespace Njulf.Rendering.Data
                         settings.Materials.SpecularAntialiasingMode,
                     VariableRateShadingMode =
                         settings.Raster.VariableRateShadingMode,
+                    MeshShaderTuningMode =
+                        settings.Raster.MeshShaderTuningMode,
                     Transparency = TransparencySettingsFile.FromSettings(
                         settings.Transparency),
                     TransparentReceiveGlobalIllumination =
@@ -6488,7 +6561,9 @@ namespace Njulf.Rendering.Data
                 }
                 if (Shadows != null)
                 {
-                    Shadows.ApplyTo(settings.Shadows);
+                    Shadows.ApplyTo(
+                        settings.Shadows,
+                        Version.GetValueOrDefault());
                 }
                 else if (ShadowsEnabled.HasValue)
                 {
@@ -6523,6 +6598,12 @@ namespace Njulf.Rendering.Data
                 {
                     settings.Raster.VariableRateShadingMode =
                         VariableRateShadingMode.Value;
+                }
+                if (Version.GetValueOrDefault() >= 25 &&
+                    MeshShaderTuningMode.HasValue)
+                {
+                    settings.Raster.MeshShaderTuningMode =
+                        MeshShaderTuningMode.Value;
                 }
                 if (Version.GetValueOrDefault() >= 18 && Transparency != null)
                 {
@@ -6798,6 +6879,8 @@ namespace Njulf.Rendering.Data
         {
             public bool Enabled { get; init; } = true;
             public ReflectionMode Mode { get; init; } = ReflectionMode.StaticProbes;
+            public ReflectionImplementationMode ImplementationMode { get; init; } =
+                ReflectionImplementationMode.Auto;
             public int MaxProbes { get; init; } = 8;
             public int MaxProbesPerPixel { get; init; } = 2;
             public uint ProbeResolution { get; init; } = 128;
@@ -6820,6 +6903,7 @@ namespace Njulf.Rendering.Data
             {
                 Enabled = settings.Enabled,
                 Mode = settings.Mode,
+                ImplementationMode = settings.ImplementationMode,
                 MaxProbes = settings.MaxProbes,
                 MaxProbesPerPixel = settings.MaxProbesPerPixel,
                 ProbeResolution = settings.ProbeResolution,
@@ -6843,6 +6927,9 @@ namespace Njulf.Rendering.Data
             {
                 settings.Enabled = Enabled;
                 settings.Mode = Enum.IsDefined(Mode) ? Mode : ReflectionMode.StaticProbes;
+                settings.ImplementationMode = Enum.IsDefined(ImplementationMode)
+                    ? ImplementationMode
+                    : ReflectionImplementationMode.Auto;
                 settings.MaxProbes = MaxProbes;
                 settings.MaxProbesPerPixel = MaxProbesPerPixel;
                 settings.ProbeResolution = ProbeResolution;
@@ -7044,11 +7131,19 @@ namespace Njulf.Rendering.Data
                 AreaShadowSampleCount = settings.AreaShadowSampleCount
             };
 
-            public void ApplyTo(ShadowSettings settings)
+            public void ApplyTo(
+                ShadowSettings settings,
+                int sourceVersion)
             {
                 settings.DirectionalShadowsEnabled = DirectionalShadowsEnabled;
                 settings.RequestedDirectionalShadowMode = RequestedDirectionalShadowMode;
-                settings.DirectionalCsmTemporalMode = DirectionalCsmTemporalMode;
+                settings.DirectionalCsmTemporalMode =
+                    sourceVersion < 25 && DirectionalCsmTemporalMode ==
+                        global::Njulf.Rendering.Data
+                            .DirectionalCsmTemporalMode.Auto
+                        ? global::Njulf.Rendering.Data
+                            .DirectionalCsmTemporalMode.Enabled
+                        : DirectionalCsmTemporalMode;
                 settings.DirectionalFilterMode = DirectionalFilterMode;
                 settings.DirectionalBiasMode = DirectionalBiasMode;
                 settings.DirectionalPcfRadiusMode = DirectionalPcfRadiusMode;
@@ -8355,6 +8450,8 @@ namespace Njulf.Rendering.Data
         private sealed record AsyncComputeFile
         {
             public AsyncComputeMode? Mode { get; init; }
+            public AsyncComputePreferredPathMask? PreferredPathMask
+                { get; init; }
 
             // Version 1 persisted a single bool. Keep accepting it, but do not emit it from
             // new files so a modern mode cannot be overwritten by JSON property ordering.
@@ -8378,6 +8475,7 @@ namespace Njulf.Rendering.Data
                 return new AsyncComputeFile
                 {
                     Mode = settings.Mode,
+                    PreferredPathMask = settings.PreferredPathMask,
                     HiZBuildEnabled = settings.HiZBuildEnabled,
                     AmbientOcclusionBlurEnabled = settings.AmbientOcclusionBlurEnabled,
                     FogEnabled = settings.FogEnabled,
@@ -8404,6 +8502,13 @@ namespace Njulf.Rendering.Data
                         : missingModeMeansDisabled
                             ? AsyncComputeMode.Disabled
                             : AsyncComputeMode.Auto;
+                AsyncComputePreferredPathMask preferred =
+                    PreferredPathMask ??
+                    (missingModeMeansDisabled
+                        ? AsyncComputePreferredPathMask.None
+                        : AsyncComputeSettings.DefaultPreferredPathMask);
+                settings.PreferredPathMask =
+                    preferred & AsyncComputePreferredPathMask.All;
                 settings.HiZBuildEnabled = HiZBuildEnabled;
                 settings.AmbientOcclusionBlurEnabled = AmbientOcclusionBlurEnabled;
                 settings.FogEnabled = FogEnabled;
@@ -8598,7 +8703,6 @@ namespace Njulf.Rendering.Data
         private sealed record FoliageFile
         {
             public bool Enabled { get; init; } = true;
-            public bool GpuDrivenEnabled { get; init; } = true;
             public bool HiZCullingEnabled { get; init; } = true;
             public bool CastShadows { get; init; } = true;
             public bool IndirectMeshletDispatchEnabled { get; init; } = true;
@@ -8622,7 +8726,6 @@ namespace Njulf.Rendering.Data
                 return new FoliageFile
                 {
                     Enabled = settings.Enabled,
-                    GpuDrivenEnabled = settings.GpuDrivenEnabled,
                     HiZCullingEnabled = settings.HiZCullingEnabled,
                     CastShadows = settings.CastShadows,
                     IndirectMeshletDispatchEnabled = settings.IndirectMeshletDispatchEnabled,
@@ -8646,7 +8749,6 @@ namespace Njulf.Rendering.Data
             public void ApplyTo(FoliageSettings settings)
             {
                 settings.Enabled = Enabled;
-                settings.GpuDrivenEnabled = GpuDrivenEnabled;
                 settings.HiZCullingEnabled = HiZCullingEnabled;
                 settings.CastShadows = CastShadows;
                 settings.IndirectMeshletDispatchEnabled = IndirectMeshletDispatchEnabled;

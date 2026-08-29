@@ -66,6 +66,10 @@ internal sealed class SimpleDdgiReceiverFeedbackCoordinator :
             ? SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics.Disabled
             : _runtime.Diagnostics;
 
+    internal void SetPipelineCacheService(
+        GiPipelineCacheService pipelineCacheService) =>
+        _runtime.SetPipelineCacheService(pipelineCacheService);
+
     public SimpleDdgiReceiverFeedbackCoordinator(
         VulkanContext context,
         BufferManager bufferManager,
@@ -161,8 +165,7 @@ internal sealed class SimpleDdgiReceiverFeedbackCoordinator :
                 request.PrerequisiteGate);
         AdvancedGiQualificationGateResult qualification =
             request.QualificationGate;
-        if (requestedMode ==
-            SimpleDdgiReceiverFeedbackMode.AutoQualified &&
+        if (AdvancedGiActivationPolicy.RequiresQualification(requestedMode) &&
             !request.RuntimeContentMatched)
         {
             qualification = AdvancedGiQualificationGateResult.Reject(

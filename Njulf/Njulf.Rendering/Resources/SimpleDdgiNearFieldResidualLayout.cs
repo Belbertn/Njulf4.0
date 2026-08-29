@@ -83,7 +83,8 @@ public readonly record struct SimpleDdgiNearFieldResidualProfile(
         MaximumRaysPerPixel = 1,
         AllowedResolutionScales =
             SimpleDdgiNearFieldResidualResolutionScales.Eighth |
-            SimpleDdgiNearFieldResidualResolutionScales.Quarter
+            SimpleDdgiNearFieldResidualResolutionScales.Quarter |
+            SimpleDdgiNearFieldResidualResolutionScales.Half
     };
 
     /// <summary>Fixed production Balanced preset at its highest tier.</summary>

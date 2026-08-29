@@ -104,24 +104,20 @@ internal sealed unsafe class DirectionalShadowComputePipeline : IDisposable
                 Layout = Layout,
                 BasePipelineIndex = -1
             };
-            long start = _cacheService?.BeginPipelineCreation() ?? 0L;
-            try
-            {
-                result = _context.Api.CreateComputePipelines(
+            result = _cacheService != null
+                ? _cacheService.CreateComputePipeline(
+                    new PipelineArtifactId(
+                        $"DirectionalShadow:{shaderName}"),
+                    &pipelineInfo,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
                     _context.Device,
                     cache,
                     1,
                     &pipelineInfo,
                     null,
-                    out VkPipeline pipeline);
-                Pipeline = pipeline;
-            }
-            finally
-            {
-                _cacheService?.EndPipelineCreation(
-                    $"DirectionalShadow:{shaderName}",
-                    start);
-            }
+                    out pipeline);
+            Pipeline = pipeline;
             if (result != Result.Success)
                 throw new VulkanException($"Failed to create {shaderName} pipeline", result);
         }

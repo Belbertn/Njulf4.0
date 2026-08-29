@@ -20,6 +20,7 @@ public sealed unsafe class ImGuiRenderPass : RenderPassBase
     private readonly BufferManager _buffers;
     private readonly StagingRing _staging;
     private readonly OverlayDrawDataSource _source;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly FrameBuffers[] _frames = new FrameBuffers[FramesInFlight];
     private nint _entry;
     private bool _initialized;
@@ -27,8 +28,21 @@ public sealed unsafe class ImGuiRenderPass : RenderPassBase
     private PipelineCache _cache;
     private VkPipeline _pipeline;
 
-    internal ImGuiRenderPass(VulkanContext context, SwapchainManager swapchain, BindlessHeap heap, BufferManager buffers, StagingRing staging, OverlayDrawDataSource source)
-        : base("ImGuiRenderPass", context, swapchain, heap) { _buffers = buffers; _staging = staging; _source = source; }
+    internal ImGuiRenderPass(
+        VulkanContext context,
+        SwapchainManager swapchain,
+        BindlessHeap heap,
+        BufferManager buffers,
+        StagingRing staging,
+        OverlayDrawDataSource source,
+        GiPipelineCacheService? pipelineCacheService = null)
+        : base("ImGuiRenderPass", context, swapchain, heap)
+    {
+        _buffers = buffers;
+        _staging = staging;
+        _source = source;
+        _pipelineCacheService = pipelineCacheService;
+    }
 
     // Intentionally lazy: shipping/runtime-only processes allocate no overlay GPU resources.
     public override void Initialize() { }
@@ -88,7 +102,7 @@ public sealed unsafe class ImGuiRenderPass : RenderPassBase
             _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
             _layout = default;
         }
-        if (_cache.Handle != 0)
+        if (_pipelineCacheService is null && _cache.Handle != 0)
         {
             _context.Api.DestroyPipelineCache(_context.Device, _cache, null);
             _cache = default;
@@ -112,7 +126,10 @@ public sealed unsafe class ImGuiRenderPass : RenderPassBase
     {
         if (_initialized) return;
         _entry = SilkMarshal.StringToPtr("main");
-        _cache = GraphicsPipelineFactory.CreatePipelineCache(_context, "ImGui Pipeline Cache");
+        _cache = _pipelineCacheService?.Cache ??
+            GraphicsPipelineFactory.CreatePipelineCache(
+                _context,
+                "ImGui Pipeline Cache");
         var range = new PushConstantRange { StageFlags = ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, Size = (uint)Marshal.SizeOf<Push>() };
         _layout = GraphicsPipelineFactory.CreateBindlessPipelineLayout(_context, _bindlessHeap, range, "ImGui Pipeline Layout");
         _pipeline = CreatePipeline();
@@ -151,7 +168,18 @@ public sealed unsafe class ImGuiRenderPass : RenderPassBase
             var states = stackalloc DynamicState[2]; var dynamic = GraphicsPipelineFactory.DynamicViewportScissor(states);
             Format format = _swapchain.SurfaceFormat; var rendering = new PipelineRenderingCreateInfo { SType = StructureType.PipelineRenderingCreateInfo, ColorAttachmentCount = 1, PColorAttachmentFormats = &format };
             var info = new GraphicsPipelineCreateInfo { SType = StructureType.GraphicsPipelineCreateInfo, PNext = &rendering, StageCount = 2, PStages = stages, PVertexInputState = &input, PInputAssemblyState = &assembly, PViewportState = &viewport, PRasterizationState = &raster, PMultisampleState = &multisample, PDepthStencilState = &depth, PColorBlendState = &blend, PDynamicState = &dynamic, Layout = _layout };
-            Result result = _context.Api.CreateGraphicsPipelines(_context.Device, _cache, 1, &info, null, out VkPipeline pipeline);
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateGraphicsPipeline(
+                    new PipelineArtifactId("ImGui.Composite"),
+                    &info,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateGraphicsPipelines(
+                    _context.Device,
+                    _cache,
+                    1,
+                    &info,
+                    null,
+                    out pipeline);
             if (result != Result.Success) throw new VulkanException("Failed to create ImGui pipeline", result);
             return pipeline;
         }

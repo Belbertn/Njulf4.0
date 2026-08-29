@@ -20,9 +20,24 @@ layout(push_constant) uniform HybridReflectionTemporalPushBlock
     float Padding0;
     uint CurrentFrameIndex;
     uint CameraOnlyReprojection;
-    uint Padding2;
+    uint SourceInvalidations;
     uint Padding3;
 } pc;
+
+bool HybridHistorySourceInvalidated(uint source)
+{
+    if (source == HYBRID_REFLECTION_SOURCE_RAY_QUERY)
+        return (pc.SourceInvalidations & (1u << 0u)) != 0u;
+    if (source == HYBRID_REFLECTION_SOURCE_DDGI)
+        return (pc.SourceInvalidations & (1u << 1u)) != 0u;
+    if (source == HYBRID_REFLECTION_SOURCE_LOCAL_PROBE)
+        return (pc.SourceInvalidations & (1u << 3u)) != 0u;
+    if (source == HYBRID_REFLECTION_SOURCE_ENVIRONMENT)
+        return (pc.SourceInvalidations & (1u << 4u)) != 0u;
+    if (source == HYBRID_REFLECTION_SOURCE_PLANAR)
+        return (pc.SourceInvalidations & (1u << 5u)) != 0u;
+    return false;
+}
 
 float HybridLuminance(vec3 color)
 {
@@ -32,7 +47,7 @@ float HybridLuminance(vec3 color)
 bool HybridHistorySurfaceMatches(
     vec3 worldPosition,
     vec3 currentNormal,
-    uvec4 previousMetadata)
+    uvec2 previousMetadata)
 {
     if (ReadMeshletTaskPreviousHiZFrameValid(pc.CurrentFrameIndex) == 0u)
         return false;
@@ -45,7 +60,7 @@ bool HybridHistorySurfaceMatches(
         return false;
     }
     float expectedDepth = previousClip.z / previousClip.w;
-    float previousDepth = uintBitsToFloat(previousMetadata.z);
+    float previousDepth = HybridHistoryMetadataDepth(previousMetadata);
     float depthTolerance = max(0.0005, abs(expectedDepth) * 0.002);
     if (!HybridFinite(expectedDepth) || !HybridFinite(previousDepth) ||
         expectedDepth < 0.0 || expectedDepth > 1.0 ||
@@ -54,7 +69,7 @@ bool HybridHistorySurfaceMatches(
         return false;
     }
     vec3 previousNormal =
-        NjulfHybridReflectionOctDecode(previousMetadata.w);
+        HybridHistoryMetadataNormal(previousMetadata);
     return HybridFinite(previousNormal) &&
         dot(currentNormal, previousNormal) >= 0.9;
 }
@@ -142,8 +157,8 @@ void main()
     // Gather four bilinear history taps. Each tap is validated independently;
     // rejected geometry edges cannot drag a point-sampled trail across motion.
     vec4 previous = vec4(0.0);
-    vec2 previousMoments = vec2(0.0);
-    uvec4 previousMetadata = uvec4(0u);
+    float previousVariance = 0.0;
+    uvec2 previousMetadata = uvec2(0u);
     float acceptedHistoryWeight = 0.0;
     float dominantHistoryWeight = -1.0;
     if (pc.ResetReasons == 0u && previousInside)
@@ -166,29 +181,31 @@ void main()
                 {
                     continue;
                 }
-                uvec4 tapMetadata = imageLoad(
-                    HybridMetadataPrevious, previousPixel);
+                uvec2 tapMetadata = imageLoad(
+                    HybridMetadataPrevious, previousPixel).xy;
                 vec4 tapHistory = imageLoad(
                     HybridHistoryPrevious, previousPixel);
-                vec2 tapMoments = imageLoad(
-                    HybridMomentsPrevious, previousPixel).rg;
-                uint tapSource = HybridMetadataSource(tapMetadata.x);
+                float tapVariance = imageLoad(
+                    HybridMomentsPrevious, previousPixel).r;
+                uint tapSource =
+                    HybridHistoryMetadataSource(tapMetadata);
                 bool tapGeometricSource =
                     tapSource == HYBRID_REFLECTION_SOURCE_SSR ||
                     tapSource == HYBRID_REFLECTION_SOURCE_RAY_QUERY;
-                if (!HybridMetadataValid(tapMetadata.x) ||
-                    tapMetadata.y != currentIdentity ||
+                if (!HybridHistoryMetadataValid(tapMetadata) ||
+                    HybridHistoryMetadataIdentity(tapMetadata) !=
+                        currentIdentity ||
+                    HybridHistorySourceInvalidated(tapSource) ||
                     (sparseCurrent && !tapGeometricSource) ||
                     !HybridFinite(tapHistory) ||
-                    !HybridFinite(tapMoments) ||
-                    tapMoments.y < tapMoments.x * tapMoments.x ||
+                    !HybridFinite(tapVariance) || tapVariance < 0.0 ||
                     !HybridHistorySurfaceMatches(
                         currentWorldPosition, currentNormal, tapMetadata))
                 {
                     continue;
                 }
                 previous += tapHistory * tapWeight;
-                previousMoments += tapMoments * tapWeight;
+                previousVariance += tapVariance * tapWeight;
                 acceptedHistoryWeight += tapWeight;
                 if (tapWeight > dominantHistoryWeight)
                 {
@@ -202,7 +219,7 @@ void main()
     if (historyValid)
     {
         previous /= acceptedHistoryWeight;
-        previousMoments /= acceptedHistoryWeight;
+        previousVariance /= acceptedHistoryWeight;
     }
     if (!currentValid &&
         currentReason != HYBRID_REFLECTION_REASON_RESOLUTION_SKIP &&
@@ -211,15 +228,16 @@ void main()
         historyValid = false;
     }
     uint currentSource = HybridMetadataSource(currentMetadata.x);
-    uint previousSource = HybridMetadataSource(previousMetadata.x);
-    uint previousReason = HybridMetadataReason(previousMetadata.x);
-    uint previousAge = HybridMetadataAge(previousMetadata.x);
+    uint previousSource =
+        HybridHistoryMetadataSource(previousMetadata);
+    uint previousSparseState =
+        HybridHistoryMetadataSparseState(previousMetadata);
+    uint previousAge = HybridHistoryMetadataAge(previousMetadata);
     bool previousGeometricSource =
         previousSource == HYBRID_REFLECTION_SOURCE_SSR ||
         previousSource == HYBRID_REFLECTION_SOURCE_RAY_QUERY;
-    bool previousSparse =
-        previousReason == HYBRID_REFLECTION_REASON_RESOLUTION_SKIP ||
-        previousReason == HYBRID_REFLECTION_REASON_RAY_BUDGET;
+    bool previousSparse = previousSparseState !=
+        HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
     uint previousSparseAge = previousSparse ? previousAge : 0u;
     float motionPixels = length(motion * dimensions);
     float sparseMotionWeight = 1.0 - smoothstep(
@@ -252,12 +270,15 @@ void main()
                 ivec2(pc.ScreenWidth, pc.ScreenHeight) - ivec2(1));
             uvec2 neighborMetadata = imageLoad(
                 HybridRawMetadata, neighbor).xy;
+            uvec4 neighborPayload = texelFetch(
+                HybridReceiverPayload, neighbor, 0);
             uint neighborSource = HybridMetadataSource(neighborMetadata.x);
             bool neighborGeometricSource =
                 neighborSource == HYBRID_REFLECTION_SOURCE_SSR ||
                 neighborSource == HYBRID_REFLECTION_SOURCE_RAY_QUERY;
             if (!HybridMetadataValid(neighborMetadata.x) ||
-                neighborMetadata.y != currentIdentity ||
+                !HybridReflectionPayloadValid(neighborPayload) ||
+                HybridReceiverIdentity(neighborPayload) != currentIdentity ||
                 (sparseCurrent && !neighborGeometricSource))
                 continue;
             vec3 sampleValue = imageLoad(HybridRawRadiance, neighbor).rgb;
@@ -308,8 +329,7 @@ void main()
     vec3 clippedHistory = reuseSparseHistory
         ? sparseHistory
         : clamp(previous.rgb, neighborhoodMinimum, neighborhoodMaximum);
-    float previousVariance = max(previousMoments.y -
-        previousMoments.x * previousMoments.x, 0.0);
+    previousVariance = max(previousVariance, 0.0);
     float standardDeviation = sqrt(previousVariance);
     float currentLuminance = HybridLuminance(current.rgb);
     float historyLuminance = HybridLuminance(clippedHistory);
@@ -334,14 +354,15 @@ void main()
         : mix(currentConfidence,
             previous.a, historyWeight);
     float luminance = HybridLuminance(accumulated);
-    vec2 boundedPreviousMoments = reuseSparseHistory
-        ? vec2(historyLuminance, historyLuminance * historyLuminance)
-        : previousMoments;
-    vec2 moments = reuseSparseHistory
-        ? mix(vec2(luminance, luminance * luminance),
-            boundedPreviousMoments, sparseHistoryWeight)
-        : mix(vec2(luminance, luminance * luminance),
-            boundedPreviousMoments, historyWeight);
+    float observationVariance = (luminance - historyLuminance) *
+        (luminance - historyLuminance);
+    float varianceHistoryWeight = reuseSparseHistory
+        ? sparseHistoryWeight
+        : historyWeight;
+    float variance = mix(
+        observationVariance,
+        previousVariance,
+        varianceHistoryWeight);
     bool sparseHistoryDominant =
         reuseSparseHistory && sparseHistoryWeight >= 0.5;
     uint age = reuseSparseHistory
@@ -360,11 +381,23 @@ void main()
 
     imageStore(HybridHistoryCurrent, pixel,
         vec4(clamp(accumulated, vec3(0.0), vec3(65504.0)), confidence));
-    imageStore(HybridMomentsCurrent, pixel, vec4(moments, 0.0, 0.0));
+    imageStore(HybridMomentsCurrent, pixel,
+        vec4(clamp(variance, 0.0, 65504.0), 0.0, 0.0, 0.0));
+    uint sparseState = currentReason ==
+            HYBRID_REFLECTION_REASON_RESOLUTION_SKIP
+        ? HYBRID_REFLECTION_HISTORY_SPARSE_RESOLUTION
+        : currentReason == HYBRID_REFLECTION_REASON_RAY_BUDGET
+            ? HYBRID_REFLECTION_HISTORY_SPARSE_RAY_BUDGET
+            : HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
     imageStore(HybridMetadataCurrent, pixel, uvec4(
-        HybridPackMetadata(outputSource, confidence,
-            currentReason, age, outputValid),
-        currentIdentity,
-        floatBitsToUint(currentDepth),
-        packSnorm2x16(NjulfHybridReflectionOctEncode(currentNormal))));
+        HybridPackHistoryMetadata(
+            currentIdentity,
+            currentDepth,
+            currentNormal,
+            outputSource,
+            age,
+            sparseState,
+            outputValid),
+        0u,
+        0u));
 }

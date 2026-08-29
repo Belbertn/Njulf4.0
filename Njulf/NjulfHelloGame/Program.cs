@@ -4686,7 +4686,6 @@ internal sealed class HelloGame : Game
         settings.Particles.Enabled = false;
         settings.AmbientOcclusion.Enabled = true;
         settings.Foliage.Enabled = true;
-        settings.Foliage.GpuDrivenEnabled = true;
     }
 
     private void PrintLoadedSceneSummary(

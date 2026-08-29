@@ -46,6 +46,15 @@ namespace Njulf.Rendering.Data
         public Vector4 Color;
     }
 
+    [Flags]
+    public enum GpuMeshResidencyFlags : uint
+    {
+        None = 0,
+        ManagedPhysicalResidency = 1u << 0,
+        HasPinnedFallback = 1u << 1,
+        HasHierarchyVirtualAddresses = 1u << 2
+    }
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUMeshInfo
     {
@@ -66,6 +75,8 @@ namespace Njulf.Rendering.Data
         public uint HierarchyNodeOffset;
         public uint HierarchyNodeCount;
         public uint HierarchyRootNode;
+        public uint StreamingRangeIndex;
+        public GpuMeshResidencyFlags ResidencyFlags;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -986,11 +997,33 @@ namespace Njulf.Rendering.Data
         public uint MaterialIndex;
         public uint GeometryMode;
         public uint Flags;
+        public uint ImpostorMetadataIndex;
+        public uint MeshletOutputClass;
         public float BladeHeight;
         public float BladeWidth;
         public Vector4 LodDistances;
         public Vector4 WindParams;
         public Vector4 LightingParams;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageImpostor
+    {
+        public uint AlbedoOpacityTextureIndex;
+        public uint NormalTextureIndex;
+        public uint DepthTextureIndex;
+        public uint ViewCount;
+        public Vector4 SourceBoundsMinScale;
+        public Vector4 SourceBoundsMax;
+        public Vector3 Pivot;
+        public uint ViewDataOffset;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageImpostorView
+    {
+        public Vector4 Direction;
+        public Vector4 AtlasRectangle;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1006,6 +1039,11 @@ namespace Njulf.Rendering.Data
         public uint Flags;
         public uint NearFieldStableMaterialId;
         public uint NearFieldPackedObjectMaterialRevisions;
+        public uint DensityTextureIndex;
+        public uint TerrainDescriptorIndex;
+        public uint PlacementMode;
+        public uint ContentRevision;
+        public Vector4 DensityUvScaleOffset;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1059,6 +1097,8 @@ namespace Njulf.Rendering.Data
         public uint VisibleMeshletDrawCount;
         public uint MeshletDrawOverflowCount;
         public uint FarImpostorVisibleCount;
+        public uint DensityRejectedCount;
+        public uint InvalidCommandCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1175,6 +1215,37 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageProceduralDrawCommand
+    {
+        public uint ClusterIndex;
+        public uint LodBand;
+        public uint CandidateCount;
+        public uint ActiveCount;
+        public float DensityFraction;
+        public float TransitionFraction;
+        public float WidthCompensation;
+        public uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageAuthoredInstanceCommand
+    {
+        public uint InstanceIndex;
+        public uint ClusterIndex;
+        public uint PrototypeIndex;
+        public uint LodLevel;
+        public uint FirstMeshlet;
+        public uint MeshletCount;
+        public uint TargetFirstMeshlet;
+        public uint TargetMeshletCount;
+        public Vector4 WorldCenterRadius;
+        public uint Flags;
+        public float TransitionFraction;
+        public uint Padding0;
+        public uint Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSceneOpaqueCompactionPushConstants
     {
         public Vector4 CameraPosition;
@@ -1268,6 +1339,14 @@ namespace Njulf.Rendering.Data
         public uint AuthoredMeshletWorkItemCount;
         public uint FirstAuthoredClusterIndex;
         public uint AuthoredClusterCount;
+        public uint Padding0;
+        public Vector2 ScreenDimensions;
+        public uint HiZTextureIndex;
+        public uint HiZMipCount;
+        public uint OcclusionCullingEnabled;
+        public float OcclusionBias;
+        public uint PreviousHiZFrameValid;
+        public uint PreviousFrameUvPaddingPixels;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1276,6 +1355,7 @@ namespace Njulf.Rendering.Data
         private const uint TraceResolutionScaleMask = 0x3u;
         private const uint MaterialTransportProvenanceFlag = 1u << 2;
         private const uint ReflectionFeedbackFlag = 1u << 3;
+        private const uint ReflectionCaptureFlag = 1u << 4;
         private const int ReflectionCaptureLayerShift = 8;
         private const uint ReflectionCaptureLayerMask = 0x1FFFu;
 
@@ -1290,13 +1370,15 @@ namespace Njulf.Rendering.Data
         public float ShadowDensityScale;
         public uint Padding1;
         public uint Padding2;
+        public uint FirstDraw;
 
         public static uint PackFlags(
             bool materialTransportProvenanceEnabled,
             bool reflectionFeedbackEnabled = false,
-            int reflectionCaptureLayer = 0)
+            int reflectionCaptureLayer = 0,
+            bool reflectionCaptureEnabled = false)
         {
-            if (!reflectionFeedbackEnabled)
+            if (!reflectionFeedbackEnabled && !reflectionCaptureEnabled)
                 return materialTransportProvenanceEnabled
                     ? MaterialTransportProvenanceFlag
                     : 0u;
@@ -1311,7 +1393,12 @@ namespace Njulf.Rendering.Data
             return (materialTransportProvenanceEnabled
                        ? MaterialTransportProvenanceFlag
                        : 0u) |
-                   ReflectionFeedbackFlag |
+                   (reflectionFeedbackEnabled
+                       ? ReflectionFeedbackFlag
+                       : 0u) |
+                   (reflectionCaptureEnabled
+                       ? ReflectionCaptureFlag
+                       : 0u) |
                    ((uint)reflectionCaptureLayer << ReflectionCaptureLayerShift);
         }
 
@@ -1769,6 +1856,12 @@ namespace Njulf.Rendering.Data
         public float PreviousTime;
         /// <summary>First command in a partitioned compacted draw list.</summary>
         public uint FirstDraw;
+        public uint Padding0;
+        public uint Padding1;
+        public uint Padding2;
+        /// <summary>Current and previous camera positions used by view-facing foliage.</summary>
+        public Vector4 CameraPosition;
+        public Vector4 PreviousCameraPosition;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

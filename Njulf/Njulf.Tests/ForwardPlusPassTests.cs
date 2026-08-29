@@ -1,5 +1,6 @@
 using System.IO;
 using Njulf.Rendering.Pipeline.PipelineObjects;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -58,6 +59,31 @@ public sealed class ForwardPlusPassTests
             Assert.That(
                 source,
                 Does.Contain("TryResolveForwardOpaquePipeline"));
+        });
+    }
+
+    [Test]
+    public void ReceiverGatherSurfaceDescriptor_CoversTheWholeAllocation()
+    {
+        string source = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "ForwardPlusPass.cs").ReplaceLineEndings("\n");
+        const string registrationStart =
+            "_bindlessHeap.RegisterStorageBuffer(\n" +
+            "                    BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase + i,";
+        int start = source.IndexOf(registrationStart, StringComparison.Ordinal);
+        Assert.That(start, Is.GreaterThanOrEqualTo(0));
+        int end = source.IndexOf(");", start, StringComparison.Ordinal);
+        Assert.That(end, Is.GreaterThan(start));
+        string registration = source[start..(end + 2)];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(registration, Does.Contain(
+                "gatherSurfaceNativeBuffers[i],\n                    0,\n                    gatherSurfaceByteSize"));
+            Assert.That(registration, Does.Not.Contain(
+                nameof(FoliageManager.AuthoredIndirectDispatchOffset)));
         });
     }
 

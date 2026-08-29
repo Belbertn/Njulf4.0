@@ -26,11 +26,11 @@ void main()
         return;
     ivec2 pixel = ivec2(invocation);
     uvec2 metadata = imageLoad(HybridMetadataCurrent, pixel).xy;
-    bool valid = HybridMetadataValid(metadata.x);
+    bool valid = HybridHistoryMetadataValid(metadata);
     vec4 reflection = pc.SpatialPassCount == 0u
         ? imageLoad(HybridHistoryCurrent, pixel)
         : (pc.SpatialPassCount & 1u) != 0u
-            ? imageLoad(HybridFilterScratch, pixel)
+            ? imageLoad(HybridPreviousHistoryScratch, pixel)
             : imageLoad(HybridRawRadiance, pixel);
     vec4 scene = imageLoad(HybridSceneColor, pixel);
 
@@ -112,7 +112,7 @@ void main()
     if (pc.DebugView == 13u)
     {
         float confidence = valid
-            ? HybridMetadataConfidence(metadata.x)
+            ? clamp(reflection.a, 0.0, 1.0)
             : 0.0;
         imageStore(HybridSceneColor, pixel,
             vec4(vec3(confidence), scene.a));
@@ -122,13 +122,13 @@ void main()
     {
         imageStore(HybridSceneColor, pixel, vec4(
             valid ? HybridSourceDebugColor(
-                HybridMetadataSource(metadata.x)) : vec3(0.0),
+                HybridHistoryMetadataSource(metadata)) : vec3(0.0),
             scene.a));
         return;
     }
     if (pc.DebugView == 7u)
     {
-        bool ssr = valid && HybridMetadataSource(metadata.x) ==
+        bool ssr = valid && HybridHistoryMetadataSource(metadata) ==
             HYBRID_REFLECTION_SOURCE_SSR;
         imageStore(HybridSceneColor, pixel,
             vec4(ssr ? vec3(0.0, 1.0, 1.0) : vec3(0.0), scene.a));

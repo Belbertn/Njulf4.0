@@ -474,26 +474,18 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                long pipelineStart =
-                    _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-                Result result;
-                VkPipeline pipeline;
-                try
-                {
-                    result = _context.Api.CreateComputePipelines(
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateComputePipeline(
+                        new PipelineArtifactId($"Fog:{shaderName}"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateComputePipelines(
                         _context.Device,
                         _pipelineCache,
                         1,
                         &pipelineInfo,
                         null,
                         out pipeline);
-                }
-                finally
-                {
-                    _pipelineCacheService?.EndPipelineCreation(
-                        $"Fog:{shaderName}",
-                        pipelineStart);
-                }
 
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create fog pass pipeline", result);

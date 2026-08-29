@@ -31,7 +31,9 @@ void main()
     }
 
     GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(pc.Push.MeshletDrawBufferBaseIndex, pc.Push.CurrentFrameIndex, shadowPayload.DrawCommandIndex);
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    GPUMeshlet meshlet = ReadMeshlet(
+        command.MeshletIndex,
+        pc.Push.CurrentFrameIndex);
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
 
@@ -52,7 +54,7 @@ void main()
          vertexSlot < meshlet.LocalVertexCount;
          vertexSlot += gl_WorkGroupSize.x)
     {
-        uint localVertexIndex = ReadStorageWord(uint(MESHLET_VERTEX_INDEX_BUFFER_INDEX), meshlet.LocalVertexOffset + vertexSlot);
+        uint localVertexIndex = ReadMeshletLocalVertexIndex(meshlet, vertexSlot);
         vec3 position = FetchRenderableVertexPosition(meshlet, localVertexIndex, objectData, pc.Push.CurrentFrameIndex);
 
         vec4 worldPosition = TransformRowMajorPoint(position, instanceBufferIndex, objectWordOffset);
@@ -63,10 +65,10 @@ void main()
          triangleSlot < meshlet.LocalTriangleCount;
          triangleSlot += gl_WorkGroupSize.x)
     {
-        uint triangleOffset = meshlet.LocalTriangleOffset + triangleSlot * 3u;
-        uint i0 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 0u);
-        uint i1 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 1u);
-        uint i2 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 2u);
+        uint triangleOffset = triangleSlot * 3u;
+        uint i0 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 0u);
+        uint i1 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 1u);
+        uint i2 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 2u);
         gl_PrimitiveTriangleIndicesEXT[triangleSlot] = ResolveMirroredInstanceTriangle(
             i0,
             i1,

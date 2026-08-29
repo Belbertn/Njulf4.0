@@ -54,11 +54,9 @@
 #define NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION 0
 #endif
 
-#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_ballot : require
-#endif
 
 // Ordinary forward variants consume the current frame's depth prepass. The
 // reduced C5 source owns a fresh depth target and must run coverage before its
@@ -141,7 +139,7 @@ layout(early_fragment_tests) in;
 #if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 #error "Hybrid reflection receivers cannot share material-provenance MRT ownership."
 #endif
-#if NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION != 1
+#if NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION != 2
 #error "Hybrid reflection receiver shader semantics version mismatch."
 #endif
 #elif NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION != 0
@@ -149,6 +147,7 @@ layout(early_fragment_tests) in;
 #endif
 
 #include "common.glsl"
+#include "automatic_planar_reflection.glsl"
 
 #ifndef NJULF_GTAO_BENT_NORMAL_LIGHTING
 #define NJULF_GTAO_BENT_NORMAL_LIGHTING 1
@@ -311,12 +310,16 @@ layout(location = 1) out float outMaterialTransportProvenance;
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
 #if NJULF_C4_RECEIVER_OUTPUT && NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 layout(location = 4) out uvec4 outHybridReflectionReceiverPayload;
+layout(location = 5) out uvec2 outHybridReflectionLobeExtension;
 #elif NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 layout(location = 3) out uvec4 outHybridReflectionReceiverPayload;
+layout(location = 4) out uvec2 outHybridReflectionLobeExtension;
 #elif NJULF_C4_RECEIVER_OUTPUT
 layout(location = 2) out uvec4 outHybridReflectionReceiverPayload;
+layout(location = 3) out uvec2 outHybridReflectionLobeExtension;
 #else
 layout(location = 1) out uvec4 outHybridReflectionReceiverPayload;
+layout(location = 2) out uvec2 outHybridReflectionLobeExtension;
 #endif
 #endif
 #endif
@@ -493,6 +496,7 @@ const uint FORWARD_REFLECTION_SOURCE_RAY_QUERY = 2u;
 const uint FORWARD_REFLECTION_SOURCE_DDGI = 3u;
 const uint FORWARD_REFLECTION_SOURCE_LOCAL_PROBE = 4u;
 const uint FORWARD_REFLECTION_SOURCE_ENVIRONMENT = 5u;
+const uint FORWARD_REFLECTION_SOURCE_PLANAR = 6u;
 const uint REFLECTION_ENABLED_FLAG = 1u << 0u;
 const uint REFLECTION_BOX_PROJECTION_ENABLED_FLAG = 1u << 1u;
 const uint REFLECTION_PROBE_BLENDING_ENABLED_FLAG = 1u << 2u;
@@ -625,6 +629,33 @@ bool ForwardReflectionCaptureEnabled()
 uint ForwardReflectionCaptureLayer()
 {
     return (pc.Push.DiagnosticFlags >> 16u) & 0x1fffu;
+}
+
+bool ForwardAutomaticPlanarCaptureEnabled()
+{
+    return ForwardReflectionCaptureEnabled() &&
+        (ForwardReflectionCaptureLayer() &
+            AUTOMATIC_PLANAR_CAPTURE_LAYER_FLAG) != 0u;
+}
+
+uint ForwardAutomaticPlanarCaptureSlot()
+{
+    return ForwardReflectionCaptureLayer() &
+        (AUTOMATIC_PLANAR_CAPTURE_LAYER_FLAG - 1u);
+}
+
+void EnforceAutomaticPlanarCaptureClip()
+{
+    if (ForwardAutomaticPlanarCaptureEnabled() &&
+        AutomaticPlanarShouldDiscardCaptureFragment(
+            pc.Push.CurrentFrameIndex,
+            ForwardAutomaticPlanarCaptureSlot(),
+            fragObjectIndex,
+            fragWorldPosition,
+            pc.Push.CameraPosition))
+    {
+        discard;
+    }
 }
 
 bool ForwardDdgiReceiverCacheEnabled()
@@ -3082,6 +3113,8 @@ vec3 ForwardReflectionSourceColor(uint source)
         return vec3(1.0, 0.85, 0.0);
     if (source == FORWARD_REFLECTION_SOURCE_ENVIRONMENT)
         return vec3(0.1, 0.3, 1.0);
+    if (source == FORWARD_REFLECTION_SOURCE_PLANAR)
+        return vec3(1.0, 0.45, 0.05);
     return vec3(0.0);
 }
 
@@ -3097,16 +3130,35 @@ void ForwardAddTransparentReflectionEstimate(uint counter)
         return;
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
         pc.Push.CurrentFrameIndex;
-    atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counter],
-        64u);
+    uint subgroupValue = subgroupAdd(64u);
+    if (subgroupElect())
+    {
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counter],
+            subgroupValue);
+    }
 }
 
 void ForwardAddTransparentReflectionExact(uint counter, uint value)
 {
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
         pc.Push.CurrentFrameIndex;
-    atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counter],
-        value);
+    uint subgroupValue = subgroupAdd(value);
+    if (subgroupElect())
+    {
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counter],
+            subgroupValue);
+    }
+}
+
+uint ForwardTransparentReflectionAdmissionHash(uint salt)
+{
+    uvec2 pixel = uvec2(max(floor(ForwardScreenPixel()), vec2(0.0)));
+    return HashUint(pixel.x * 0x9e3779b9u ^
+        pixel.y * 0x85ebca6bu ^
+        pc.Push.CurrentFrameIndex * 0xc2b2ae35u ^
+        floatBitsToUint(pc.Push.Time) ^ salt);
 }
 
 bool ForwardTryReserveTransparentSsr(
@@ -3119,26 +3171,41 @@ bool ForwardTryReserveTransparentSsr(
     reservedSamples = max(header.SsrMaximumSteps, 8u) * 2u;
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
         pc.Push.CurrentFrameIndex;
-    uint taskIndex = atomicAdd(
-        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
-            TRANSPARENT_REFLECTION_SSR_ELIGIBLE_COUNTER],
-        1u);
     uint maximumTraces = header.SceneReflectionSsrSampleBudget /
         reservedSamples;
-    if (taskIndex >= maximumTraces)
+    uint requested = subgroupAdd(1u);
+    bool hashAccepted = header.Padding1 != 0u &&
+        ForwardTransparentReflectionAdmissionHash(0x51f15e5du) <=
+            header.Padding1;
+    uint candidate = hashAccepted ? 1u : 0u;
+    uint candidates = subgroupAdd(candidate);
+    uint prefix = subgroupExclusiveAdd(candidate);
+    uint allocationBase = 0u;
+    if (subgroupElect())
     {
-        ForwardAddTransparentReflectionExact(
-            TRANSPARENT_REFLECTION_SSR_BUDGET_REJECT_COUNTER,
-            1u);
-        return false;
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            TRANSPARENT_REFLECTION_SSR_ELIGIBLE_COUNTER], requested);
+        allocationBase = atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+                TRANSPARENT_REFLECTION_SSR_ALLOCATION_CURSOR],
+            candidates);
     }
-    ForwardAddTransparentReflectionExact(
-        TRANSPARENT_REFLECTION_SSR_ADMITTED_COUNTER,
-        1u);
-    ForwardAddTransparentReflectionExact(
-        TRANSPARENT_REFLECTION_SSR_RESERVED_SAMPLE_COUNTER,
-        reservedSamples);
-    return true;
+    allocationBase = subgroupBroadcastFirst(allocationBase);
+    bool admitted = hashAccepted &&
+        allocationBase + prefix < maximumTraces;
+    uint admittedCount = subgroupAdd(admitted ? 1u : 0u);
+    if (subgroupElect())
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            TRANSPARENT_REFLECTION_SSR_ADMITTED_COUNTER], admittedCount);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            TRANSPARENT_REFLECTION_SSR_BUDGET_REJECT_COUNTER],
+            requested - admittedCount);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            TRANSPARENT_REFLECTION_SSR_RESERVED_SAMPLE_COUNTER],
+            admittedCount * reservedSamples);
+    }
+    return admitted;
 }
 
 bool ForwardTryReserveTransparentReflectionRay(
@@ -3147,23 +3214,69 @@ bool ForwardTryReserveTransparentReflectionRay(
     uint budget = header.SceneReflectionRayTaskBudget;
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
         pc.Push.CurrentFrameIndex;
-    uint taskIndex = atomicAdd(
-        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
-            TRANSPARENT_REFLECTION_TASK_COUNTER],
-        1u);
-    if (taskIndex < budget)
+    uint requested = subgroupAdd(1u);
+    bool hashAccepted = header.Padding2 != 0u &&
+        ForwardTransparentReflectionAdmissionHash(0x7a143595u) <=
+            header.Padding2;
+    uint candidate = hashAccepted ? 1u : 0u;
+    uint candidates = subgroupAdd(candidate);
+    uint prefix = subgroupExclusiveAdd(candidate);
+    uint allocationBase = 0u;
+    if (subgroupElect())
     {
-        ForwardAddTransparentReflectionExact(
-            TRANSPARENT_REFLECTION_RAY_ADMITTED_COUNTER,
-            1u);
-        return true;
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            TRANSPARENT_REFLECTION_TASK_COUNTER], requested);
+        allocationBase = atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+                TRANSPARENT_REFLECTION_RAY_ALLOCATION_CURSOR],
+            candidates);
     }
-    ForwardAddTransparentReflectionExact(
-        TRANSPARENT_REFLECTION_RAY_EXACT_BUDGET_REJECT_COUNTER,
-        1u);
-    ForwardAddTransparentReflectionEstimate(
-        TRANSPARENT_REFLECTION_BUDGET_REJECT_COUNTER);
-    return false;
+    allocationBase = subgroupBroadcastFirst(allocationBase);
+    bool admitted = hashAccepted && allocationBase + prefix < budget;
+    uint admittedCount = subgroupAdd(admitted ? 1u : 0u);
+    if (subgroupElect())
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            TRANSPARENT_REFLECTION_RAY_ADMITTED_COUNTER], admittedCount);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            TRANSPARENT_REFLECTION_RAY_EXACT_BUDGET_REJECT_COUNTER],
+            requested - admittedCount);
+    }
+    if (!admitted)
+        ForwardAddTransparentReflectionEstimate(
+            TRANSPARENT_REFLECTION_BUDGET_REJECT_COUNTER);
+    return admitted;
+}
+
+vec3 ForwardSampleOpaqueReflectionColorCone(vec2 uv, float logicalLod)
+{
+    vec3 fullResolution = textureLod(
+        BindlessTextures[nonuniformEXT(
+            OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX)],
+        uv,
+        0.0).rgb;
+    if (logicalLod <= 0.0)
+        return max(fullResolution, vec3(0.0));
+
+    float tailLod = max(logicalLod - 1.0, 0.0);
+    uint lower = min(
+        uint(floor(tailLod)),
+        uint(MAX_BLOOM_MIP_TEXTURES - 1));
+    uint upper = min(lower + 1u,
+        uint(MAX_BLOOM_MIP_TEXTURES - 1));
+    vec3 lowerValue = textureLod(
+        BindlessTextures[nonuniformEXT(
+            BLOOM_MIP_TEXTURE_BASE + int(lower))],
+        uv,
+        0.0).rgb;
+    vec3 upperValue = textureLod(
+        BindlessTextures[nonuniformEXT(
+            BLOOM_MIP_TEXTURE_BASE + int(upper))],
+        uv,
+        0.0).rgb;
+    vec3 tail = mix(lowerValue, upperValue, fract(tailLod));
+    return max(mix(fullResolution, tail,
+        clamp(logicalLod, 0.0, 1.0)), vec3(0.0));
 }
 
 bool ForwardTraceTransparentSsr(
@@ -3256,11 +3369,15 @@ bool ForwardTraceTransparentSsr(
         if (confidence < header.SsrConfidenceThreshold)
             continue;
 
-        vec3 radiance = textureLod(
-            BindlessTextures[nonuniformEXT(
-                OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX)],
+        float colorLod = clamp(max(
+            mip,
+            schedulingRoughness *
+                float(MAX_BLOOM_MIP_TEXTURES)),
+            0.0,
+            float(MAX_BLOOM_MIP_TEXTURES));
+        vec3 radiance = ForwardSampleOpaqueReflectionColorCone(
             uv,
-            0.0).rgb;
+            colorLod);
         if (any(isnan(radiance)) || any(isinf(radiance)))
         {
             ForwardAddTransparentReflectionExact(
@@ -3790,16 +3907,38 @@ vec3 EvaluateTransparentReflectionSpecular(
     return fallbackSpecular;
 #else
     uint effectiveMode = ForwardEffectiveReflectionMode();
-    bool geometricEnabled = sampleSceneReflections &&
+    bool planarEnabled = sampleSceneReflections &&
+        ForwardTransparentSampleReflections() &&
+        (effectiveMode == 4u || effectiveMode == 5u);
+    bool screenGeometricEnabled = sampleSceneReflections &&
         ForwardTransparentSampleReflections() &&
         ForwardOpaqueSceneColorSnapshotAvailable() &&
         (effectiveMode == 3u || effectiveMode == 5u);
+    bool geometricEnabled = planarEnabled || screenGeometricEnabled;
     ForwardTransparentReflectionSample geometric;
     geometric.Radiance = vec3(0.0);
     geometric.Confidence = 0.0;
     geometric.Source = FORWARD_REFLECTION_SOURCE_NONE;
     bool geometricHit = false;
-    if (geometricEnabled)
+    if (planarEnabled)
+    {
+        GPUMaterialData receiverMaterial =
+            ReadForwardMaterial(fragMaterialIndex);
+        geometricHit = AutomaticPlanarTrySample(
+            pc.Push.CurrentFrameIndex,
+            AutomaticPlanarReceiverIdentity(
+                fragObjectIndex,
+                fragMaterialIndex,
+                receiverMaterial.MaterialRevision),
+            worldPosition,
+            geometricNormal,
+            physicalRoughness,
+            geometric.Radiance,
+            geometric.Confidence);
+        if (geometricHit)
+            geometric.Source = FORWARD_REFLECTION_SOURCE_PLANAR;
+    }
+    if (!geometricHit && screenGeometricEnabled)
     {
         geometricHit = ForwardTraceTransparentSsr(
             header,
@@ -5002,7 +5141,8 @@ void EmitSimpleDdgiAlphaMaskReceiverFeedback(
     // The fragment has already passed the shipping alpha expression. Its
     // projected raster-sample area is one pixel; sampled alpha supplies the
     // sub-pixel coverage estimate without counting rejected fragments.
-    bool reflectionFeedback = ForwardReflectionCaptureEnabled();
+    bool reflectionFeedback = ForwardReflectionCaptureEnabled() &&
+        !ForwardAutomaticPlanarCaptureEnabled();
     uint tileNamespaceBase = 0u;
     bool tileNamespaceValid = !reflectionFeedback ||
         SimpleDdgiTryComputeCubemapTileNamespace(
@@ -5176,6 +5316,7 @@ bool C4CreateReceiverPayload(
 #if FORWARD_THIN_GLASS_ONLY
 void main()
 {
+    EnforceAutomaticPlanarCaptureClip();
     GPUMaterialData material = ReadForwardMaterial(fragMaterialIndex);
     bool doubleSided = material.NormalScaleBias.w >= 0.5;
     if (!doubleSided && !gl_FrontFacing)
@@ -5383,6 +5524,7 @@ void main()
 #else
 void main()
 {
+    EnforceAutomaticPlanarCaptureClip();
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
     // Every non-discard path, including diagnostic early returns, has a
     // defined source attachment value. The C5-capability gate excludes debug
@@ -5395,6 +5537,7 @@ void main()
 #endif
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
     outHybridReflectionReceiverPayload = uvec4(0u);
+    outHybridReflectionLobeExtension = uvec2(0u);
 #endif
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
@@ -7671,6 +7814,25 @@ void main()
         hybridReflectionLobeFlags |=
             NJULF_HYBRID_REFLECTION_LOBE_BROAD_ANISOTROPIC;
     }
+    if (clearcoatFactor > 0.0)
+    {
+        hybridReflectionLobeFlags |=
+            NJULF_HYBRID_REFLECTION_LOBE_CLEARCOAT;
+    }
+    vec3 hybridTangent = fragWorldTangent.xyz - normal *
+        dot(fragWorldTangent.xyz, normal);
+    if (dot(hybridTangent, hybridTangent) <= 1.0e-12)
+        hybridTangent = NjulfHybridReflectionCanonicalTangentBasisX(normal);
+    else
+        hybridTangent = normalize(hybridTangent);
+    vec3 hybridBitangent = normalize(cross(normal, hybridTangent) *
+        (fragWorldTangent.w < 0.0 ? -1.0 : 1.0));
+    float hybridAnisotropyRotation = hasMaterialExtension
+        ? materialExtension.Anisotropy.y
+        : 0.0;
+    hybridTangent = normalize(
+        hybridTangent * cos(hybridAnisotropyRotation) +
+        hybridBitangent * sin(hybridAnisotropyRotation));
     NjulfHybridReflectionCreatePayload(
         geometricNormal,
         normal,
@@ -7681,8 +7843,19 @@ void main()
         hybridReflectionLobeFlags,
         // Meshlet IDs are rasterization details and change across otherwise
         // continuous surfaces. History identity must remain stable across them.
-        uvec3(fragObjectIndex, fragMaterialIndex, 0u),
+        uvec3(
+            fragObjectIndex,
+            fragMaterialIndex,
+            material.MaterialRevision),
         outHybridReflectionReceiverPayload);
+    outHybridReflectionLobeExtension =
+        NjulfHybridReflectionCreateLobeExtension(
+            clearcoatNormal,
+            clearcoatFactor,
+            clearcoatRoughness,
+            anisotropyStrength,
+            normal,
+            hybridTangent);
 #endif
 
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
@@ -7711,6 +7884,7 @@ void main()
     {
         float nDotV = max(dot(normal, viewDirection), 0.0);
         GPUEnvironmentData extensionEnvironment = environment;
+#if !NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
         if (clearcoatFactor > 0.0 && extensionEnvironment.Enabled != 0u)
         {
             float clearcoatNdotV = max(
@@ -7738,6 +7912,7 @@ void main()
                 clearcoatFactor *
                 extensionEnvironment.SpecularIntensity * indirectAo;
         }
+#endif
 
         if (MaxComponent(sheenColor) > 0.0 &&
             extensionEnvironment.Enabled != 0u)

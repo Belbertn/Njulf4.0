@@ -211,6 +211,9 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
         in NearFieldResidualInitializationRequest request)
     {
         ThrowIfDisposed();
+        SimpleDdgiNearFieldResidualMode productionMode =
+            AdvancedGiActivationPolicy.NormalizeProductionMode(
+                request.RequestedMode);
         _initialization = request;
         _hasEvidence = request.HasQualificationEvidence;
         _evidence = request.HasQualificationEvidence
@@ -234,17 +237,14 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
 
         SimpleDdgiNearFieldResidualProfile profile =
             _candidate?.Configuration.Profile ??
-            (request.RequestedMode ==
-             SimpleDdgiNearFieldResidualMode.AutoQualified
-                ? _requestedProfile
-                : ResolveExplicitProfile(
-                    request.SceneRenderExtent,
-                    request.RequestedMode,
-                    request.Settings));
+            ResolveExplicitProfile(
+                request.SceneRenderExtent,
+                productionMode,
+                request.Settings);
         profile = ApplyAdvancedOverrides(profile, request.Settings);
         _effectiveProfile = profile;
 
-        bool gpuRequested = IsGpuMode(request.RequestedMode);
+        bool gpuRequested = IsGpuMode(productionMode);
         SimpleDdgiNearFieldResidualLayout preliminaryLayout =
             SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
                 checked((int)request.SceneRenderExtent.Width),
@@ -294,7 +294,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
                 _candidateAuthorization);
             publishAdmissionContext = true;
         }
-        else if (request.RequestedMode is
+        else if (productionMode is
                  SimpleDdgiNearFieldResidualMode
                      .HiZHalfResolutionExperiment or
                  SimpleDdgiNearFieldResidualMode.HiZAdaptive)
@@ -359,7 +359,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
     public SimpleDdgiNearFieldResidualVulkanRuntime CreateRuntime(
         in NearFieldResidualRuntimeAllocationRequest request,
         in SimpleDdgiNearFieldResidualLayout layout,
-        SimpleDdgiNearFieldResidualRenderTargetGeneration targetGeneration)
+        SimpleDdgiNearFieldResidualRenderTargetGeneration targetGeneration,
+        GiPipelineCacheService? pipelineCacheService = null)
     {
         ThrowIfDisposed();
         if (!Plan.Layout.Equals(layout) ||
@@ -378,10 +379,12 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
             request.FoliageManager,
             layout,
             GpuConfiguration,
-            _initialization.RequestedMode is
+            AdvancedGiActivationPolicy.NormalizeProductionMode(
+                _initialization.RequestedMode) is
                 SimpleDdgiNearFieldResidualMode.HiZAdaptive or
                 SimpleDdgiNearFieldResidualMode.AutoQualified,
-            _initialization.RequestedMode is
+            AdvancedGiActivationPolicy.NormalizeProductionMode(
+                _initialization.RequestedMode) is
                 SimpleDdgiNearFieldResidualMode
                     .HiZHalfResolutionExperiment or
                 SimpleDdgiNearFieldResidualMode.HiZAdaptive
@@ -394,24 +397,19 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
                     _evidence.SourceMrtCostUpperBoundMilliseconds * 1000.0))
                 : 0UL,
             sourceCostAuthoritative:
-            _initialization.RequestedMode ==
-            SimpleDdgiNearFieldResidualMode.AutoQualified &&
             _hasEvidence && _evidence.SourceCostAuthoritative,
-            startingScale:
-            _initialization.RequestedMode ==
-            SimpleDdgiNearFieldResidualMode.AutoQualified &&
-            _hasEvidence
-                ? _startupScale
-                : null,
+            startingScale: null,
             promotionEnabled:
-            _initialization.RequestedMode ==
-            SimpleDdgiNearFieldResidualMode.AutoQualified,
+            AdvancedGiActivationPolicy.NormalizeProductionMode(
+                _initialization.RequestedMode) ==
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive,
             captureIdentifiers: _hasEvidence
                 ? new SimpleDdgiNearFieldResidualCaptureIdentifiers(
                     _evidence.BenchmarkCaptureId,
                     _evidence.ReferenceManifestId)
                 : SimpleDdgiNearFieldResidualCaptureIdentifiers.None,
-            targetGeneration: targetGeneration);
+            targetGeneration: targetGeneration,
+            pipelineCacheService: pipelineCacheService);
     }
 
     public NearFieldResidualPublication InitializeRuntime(
@@ -1219,10 +1217,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
         SimpleDdgiNearFieldResidualMode mode,
         in NearFieldResidualSettings settings)
     {
-        ReadOnlySpan<float> scales =
-            mode == SimpleDdgiNearFieldResidualMode.HiZAdaptive
-                ? [0.25f, 0.125f]
-                : [0.5f, 0.25f, 0.125f];
+        ReadOnlySpan<float> scales = [0.5f, 0.25f, 0.125f];
         int width = checked((int)sceneRenderExtent.Width);
         int height = checked((int)sceneRenderExtent.Height);
         foreach (float scale in scales)

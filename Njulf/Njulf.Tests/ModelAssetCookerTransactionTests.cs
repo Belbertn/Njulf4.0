@@ -236,7 +236,7 @@ public sealed class ModelAssetCookerTransactionTests
     }
 
     [Test]
-    public void CookModel_ExplicitFoliage_UsesFoliagePipelineWithoutAlphaCoverage()
+    public void CookModel_ExplicitFoliage_UsesFoliagePipelineWithAlphaCoverage()
     {
         string sourcePath = Path.Combine(_directory, "explicit-foliage.gltf");
         WriteTexturedFoliageNamedTriangleGltf(sourcePath);
@@ -272,8 +272,8 @@ public sealed class ModelAssetCookerTransactionTests
         Assert.Multiple(() =>
         {
             Assert.That(cooked.Materials.Pipelines.Single(), Is.EqualTo(CookedMaterialPipeline.Foliage));
-            Assert.That(texture.AlphaCoveragePreserved, Is.False);
-            Assert.That(texture.AlphaCoverageCutoff, Is.Null);
+            Assert.That(texture.AlphaCoveragePreserved, Is.True);
+            Assert.That(texture.AlphaCoverageCutoff, Is.EqualTo(material.AlphaCutoff));
         });
     }
 

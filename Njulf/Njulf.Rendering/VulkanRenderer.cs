@@ -65,6 +65,8 @@ namespace Njulf.Rendering
         private readonly StagingRing _stagingRing;
         private readonly FenceBasedDeleter _deleter;
         private readonly IModelRenderUploadService _modelUploadService;
+        private readonly VulkanMeshletPhysicalResidencyResources?
+            _meshletPhysicalResidencyResources;
         private readonly OverlayDrawDataSource _overlayDrawData = new();
         private readonly RendererDiagnosticsBuffer _diagnosticsBuffer;
         private readonly GpuTimestampRecorder _gpuTimestamps;
@@ -114,6 +116,8 @@ namespace Njulf.Rendering
         private EnvironmentManager? _environmentManager;
         private readonly IesPhotometricProfileManager _iesPhotometricProfileManager;
         private ReflectionProbeManager? _reflectionProbeManager;
+        private AutomaticPlanarReflectionManager
+            _automaticPlanarReflectionManager = null!;
         private ForwardPlusPass? _forwardPlusPass;
         private ReflectionProbeCapturePass? _reflectionProbeCapturePass;
         private ReflectionProbePrefilterPass? _reflectionProbePrefilterPass;
@@ -1116,7 +1120,9 @@ namespace Njulf.Rendering
             IModelRenderUploadService modelUploadService,
             bool ownsDependencies,
             RenderSettings? initialSettings = null,
-            RendererStartupLog? startupLog = null)
+            RendererStartupLog? startupLog = null,
+            VulkanMeshletPhysicalResidencyResources?
+                meshletPhysicalResidencyResources = null)
         {
             _window = window ?? throw new ArgumentNullException(nameof(window));
             _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -1141,6 +1147,8 @@ namespace Njulf.Rendering
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
             _modelUploadService = modelUploadService ?? throw new ArgumentNullException(nameof(modelUploadService));
+            _meshletPhysicalResidencyResources =
+                meshletPhysicalResidencyResources;
             _lifetime = new RendererLifetimeCoordinator(
                 nameof(VulkanRenderer),
                 startupLog);
@@ -1172,7 +1180,13 @@ namespace Njulf.Rendering
             _particleSystemManager = new ParticleSystemManager(_context, _bufferManager, _stagingRing);
             _gpuParticleRuntimeManager = new GpuParticleRuntimeManager(_context, _bufferManager, _stagingRing);
             _foliageManager =
-                new FoliageManager(_context, _bufferManager, _stagingRing, _meshManager, _materialManager);
+                new FoliageManager(
+                    _context,
+                    _bufferManager,
+                    _stagingRing,
+                    _meshManager,
+                    _materialManager,
+                    _textureManager);
             _ownsDependencies = ownsDependencies;
         }
 
@@ -1306,6 +1320,15 @@ namespace Njulf.Rendering
                 _bufferManager,
                 Settings,
                 _swapchain.DepthFormat);
+            _automaticPlanarReflectionManager =
+                new AutomaticPlanarReflectionManager(
+                    _context,
+                    _bufferManager,
+                    _meshManager,
+                    _materialManager,
+                    _bindlessHeap,
+                    Settings,
+                    _swapchain.DepthFormat);
             // Persistent GI priors and AutoQualified admission share the exact same effective
             // shader identity resolved at the start of this initialization transaction.
             _simpleDdgiVolumeManager = new SimpleDdgiVolumeManager(
@@ -1400,6 +1423,10 @@ namespace Njulf.Rendering
                 _performanceCaptureMetadataProvider.BuildIdentity
                     .CompileConfiguration,
                 cacheDirectory: null);
+            _simpleDdgiReceiverFeedback.SetPipelineCacheService(
+                _giPipelineCacheService);
+            _simpleDdgiGuidingRuntime.SetPipelineCacheService(
+                _giPipelineCacheService);
             _hybridReflectionRuntime = new HybridReflectionVulkanRuntime(
                 _context,
                 _bindlessHeap,
@@ -1415,7 +1442,8 @@ namespace Njulf.Rendering
                 _giCaustic.CreateRuntime(
                     _accelerationStructureManager,
                     () => { WaitForSimpleDdgiBindlessDescriptorReaders(); },
-                    _renderTargets);
+                    _renderTargets,
+                    _giPipelineCacheService);
             }
 
             if (_advancedGiAdmission.GraphModes.UsesNearFieldHiZResidual)
@@ -1452,7 +1480,8 @@ namespace Njulf.Rendering
                     _foliageManager ?? throw new InvalidOperationException(
                         "C5 requires foliage state before runtime allocation.")),
                 layout,
-                targetGeneration);
+                targetGeneration,
+                _giPipelineCacheService);
         }
 
         private void InitializeNearFieldResidualGenerationTransaction()
@@ -1569,7 +1598,12 @@ namespace Njulf.Rendering
                     _giPipelineCacheService,
                     createPipelines: false);
             });
-            _skinningPass = new SkinningPass(_context, _bindlessHeap, _bufferManager, _skinningManager);
+            _skinningPass = new SkinningPass(
+                _context,
+                _bindlessHeap,
+                _bufferManager,
+                _skinningManager,
+                _giPipelineCacheService);
             _ddgiFoliageProxyGenerationPass =
                 new DdgiFoliageProxyGenerationPass(
                     _context,
@@ -1577,11 +1611,26 @@ namespace Njulf.Rendering
                     _bufferManager,
                     _giPipelineCacheService);
             _gpuParticleResetPass =
-                new GpuParticleResetPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
+                new GpuParticleResetPass(
+                    _context,
+                    _bindlessHeap,
+                    _bufferManager,
+                    _gpuParticleRuntimeManager,
+                    _giPipelineCacheService);
             _gpuParticleSimulatePass =
-                new GpuParticleSimulatePass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
+                new GpuParticleSimulatePass(
+                    _context,
+                    _bindlessHeap,
+                    _bufferManager,
+                    _gpuParticleRuntimeManager,
+                    _giPipelineCacheService);
             _gpuParticleSortPass =
-                new GpuParticleSortPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
+                new GpuParticleSortPass(
+                    _context,
+                    _bindlessHeap,
+                    _bufferManager,
+                    _gpuParticleRuntimeManager,
+                    _giPipelineCacheService);
             _gpuParticleResetGraphPass =
                 new GpuParticleResetGraphPass(_context, _swapchain, _bindlessHeap, _gpuParticleResetPass);
             _gpuParticleSimulateGraphPass =
@@ -1683,7 +1732,12 @@ namespace Njulf.Rendering
             AddPassInstance(motionVectorPass);
 
             var hizBuildPass = new HiZBuildPass(
-                _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _hizDepthPyramid!,
+                _renderTargets!,
+                _giPipelineCacheService);
             AddPassInstance(hizBuildPass);
 
             var directionalRayShadowPass = new DirectionalRayShadowPass(
@@ -1826,6 +1880,7 @@ namespace Njulf.Rendering
             var hybridReflectionReceiverBinding =
                 new ForwardHybridReflectionReceiverAttachmentBinding(
                     _renderTargets!.HybridReflectionReceiverPayload!,
+                    _renderTargets.HybridReflectionRawMetadata!,
                     ForwardHybridReflectionReceiverPipelineConfiguration
                         .Production);
             var forwardPass = new ForwardPlusPass(
@@ -1976,7 +2031,8 @@ namespace Njulf.Rendering
                 _swapchain,
                 _bindlessHeap,
                 _reflectionProbeManager!,
-                Settings.Reflections);
+                Settings.Reflections,
+                _giPipelineCacheService);
             _reflectionProbePublishPass = new ReflectionProbePublishPass(
                 _context,
                 _swapchain,
@@ -2149,16 +2205,24 @@ namespace Njulf.Rendering
                 _context, _swapchain, _bindlessHeap, _skyboxPipeline, _renderTargets!, Settings);
             AddPassInstance(skyboxPass);
 
+            AddPassInstance(new AutomaticPlanarReflectionPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _automaticPlanarReflectionManager,
+                forwardPass,
+                _giPipelineCacheService));
+
             HybridReflectionVulkanRuntime hybridReflectionRuntime =
                 _hybridReflectionRuntime ?? throw new InvalidOperationException(
                     "The hybrid reflection graph requires its shared runtime.");
+            AddPassInstance(new HybridReflectionDdgiBasePass(
+                _context, _swapchain, _bindlessHeap,
+                hybridReflectionRuntime));
             AddPassInstance(new HybridReflectionSsrPass(
                 _context, _swapchain, _bindlessHeap,
                 hybridReflectionRuntime));
             AddPassInstance(new HybridReflectionRayQueryPass(
-                _context, _swapchain, _bindlessHeap,
-                hybridReflectionRuntime));
-            AddPassInstance(new HybridReflectionDdgiBasePass(
                 _context, _swapchain, _bindlessHeap,
                 hybridReflectionRuntime));
             AddPassInstance(new HybridReflectionResolvePass(
@@ -2223,15 +2287,26 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 _bufferManager,
                 _stagingRing,
-                _renderTargets!);
+                _renderTargets!,
+                _giPipelineCacheService);
             AddPassInstance(simpleDdgiProbeDebugPass);
 
             var debugDrawPass = new DebugDrawPass(
-                _context, _swapchain, _bindlessHeap, _bufferManager, _stagingRing, _renderTargets!);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _bufferManager,
+                _stagingRing,
+                _renderTargets!,
+                _giPipelineCacheService);
             AddPassInstance(debugDrawPass);
 
             var debugOverlayPass = new DebugOverlayPass(
-                _context, _swapchain, _bindlessHeap, _renderTargets!);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                _giPipelineCacheService);
             AddPassInstance(debugOverlayPass);
 
             var fogPass = new FogPass(
@@ -2259,7 +2334,12 @@ namespace Njulf.Rendering
             AddPassInstance(autoExposurePass);
 
             var bloomPass = new BloomPass(
-                _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings,
+                _giPipelineCacheService);
             AddPassInstance(bloomPass);
 
             var toneMapCompositePass = new ToneMapCompositePass(
@@ -2276,8 +2356,14 @@ namespace Njulf.Rendering
                 () => _smaaResources?.IsReady == true,
                 _giPipelineCacheService);
             AddPassInstance(antiAliasingPass);
-            AddPassInstance(new ImGuiRenderPass(_context, _swapchain, _bindlessHeap, _bufferManager, _stagingRing,
-                _overlayDrawData));
+            AddPassInstance(new ImGuiRenderPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _bufferManager,
+                _stagingRing,
+                _overlayDrawData,
+                _giPipelineCacheService));
             ProductionRenderPipelineDeclaration.Instance.RegisterPasses(
                 _renderGraph,
                 passInstances,
@@ -2806,6 +2892,7 @@ namespace Njulf.Rendering
             _ddgiFoliageProxyManager!.Register(_bindlessHeap);
             _farFieldClipmapManager!.Register(_bindlessHeap);
             _accelerationStructureManager!.Register(_bindlessHeap);
+            _meshletPhysicalResidencyResources?.Initialize();
 
             System.Diagnostics.Debug.WriteLine("Scene buffers registered.");
         }
@@ -2847,6 +2934,10 @@ namespace Njulf.Rendering
             {
                 _completedGraphicsFrameFenceValue = completedGraphicsFenceValue;
             }
+            _meshletPhysicalResidencyResources?.BeginFenceSafeFrame(
+                _currentFrame,
+                _ddgiFrameSerial,
+                _completedGraphicsFrameFenceValue);
 
             _simpleDdgiVolumeManager?.ObserveFrameFenceCompletion(
                 _ddgiFrameSerial,
@@ -2914,6 +3005,9 @@ namespace Njulf.Rendering
                 _diagnosticsBuffer
                     .GetLastCompletedTransparentReflectionCounters(
                         _currentFrame);
+            _reflectionProbeManager?
+                .ObserveCompletedTransparentReflectionCounters(
+                    _completedTransparentReflectionCounters);
             _completedFarFieldMaterialV2Counters =
                 _diagnosticsBuffer.GetLastCompletedFarFieldMaterialV2Counters(_currentFrame);
             _completedMaterialGiCounters = _diagnosticsBuffer.GetLastCompletedMaterialGiCounters(_currentFrame);
@@ -3093,6 +3187,11 @@ namespace Njulf.Rendering
 
             _currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
             InsertInterFrameSharedResourceDependency(_currentCommandBuffer);
+            _meshletPhysicalResidencyResources?.RecordFrameUploads(
+                _currentCommandBuffer,
+                _currentFrame,
+                _ddgiFrameSerial,
+                _sync.GetInFlightFence(1 - _currentFrame));
             RendererValidationMessageSnapshot validationAtBoundary = _context.ValidationMessageSnapshot;
             _asyncComputeCoordinator.BeginFrame(
                 new AsyncComputeFrameBoundaryInput(
@@ -3121,6 +3220,10 @@ namespace Njulf.Rendering
             _lifetime.EnsureCanEndFrame();
 
             var vk = _context.Api;
+
+            _meshletPhysicalResidencyResources?.RecordFeedbackReadback(
+                _currentCommandBuffer,
+                _currentFrame);
 
             // The acquired image is only transitioned once the terminal graphics submission owns
             // it. Earlier async setup/compute submissions never consume imageAvailable.
@@ -3311,10 +3414,12 @@ namespace Njulf.Rendering
                 throw new VulkanException("Failed to present swapchain image", presentResult);
             }
 
+            if (_initialScenePipelinesPrepared)
+                _giPipelineCacheService?.SchedulePersist();
+
             if (_initialScenePipelinesPrepared &&
                 !_pipelineCachePersistenceScheduled)
             {
-                _giPipelineCacheService?.SchedulePersist();
                 _performanceCaptureMetadataProvider
                     .SchedulePostStartupIdentityResolution();
                 _pipelineCachePersistenceScheduled = true;
@@ -3488,6 +3593,50 @@ namespace Njulf.Rendering
 
             bool exhaustive = RendererBuildConfiguration.PipelineStartupMode ==
                               RendererPipelineStartupMode.Exhaustive;
+            ScenePipelineManifest pipelineManifest = exhaustive
+                ? new ScenePipelineManifest(
+                    SceneMaterialPipelineKinds.Masked |
+                    SceneMaterialPipelineKinds.OrdinaryTransparent |
+                    SceneMaterialPipelineKinds.ThinGlass |
+                    SceneMaterialPipelineKinds.GeometryDecal |
+                    SceneMaterialPipelineKinds.ThickTransmission)
+                : BuildScenePipelineManifest(scene);
+            bool receiverFeedbackRequired =
+                _simpleDdgiReceiverFeedback?.GraphicsPipelinesRequested == true;
+            bool transparentRayVariantsRequired =
+                pipelineManifest.HasRealTransparentSurface &&
+                Settings.Transparency.Enabled &&
+                (Settings.Transparency.ReceiveShadows ||
+                 pipelineManifest.Requires(
+                     SceneMaterialPipelineKinds.ThickTransmission) &&
+                 Settings.Transparency.ThickTransmissionMode ==
+                     ThickTransmissionMode.RayQuery ||
+                 Settings.Transparency.SampleReflections &&
+                 Settings.Reflections.Enabled &&
+                 Settings.Reflections.Mode == ReflectionMode.HybridRayQuery);
+            bool decalRayVariantsRequired =
+                pipelineManifest.Requires(
+                    SceneMaterialPipelineKinds.GeometryDecal) &&
+                Settings.Transparency.Enabled &&
+                Settings.Decals.ReceiveShadows;
+            if (pipelineManifest.MaterialKinds !=
+                SceneMaterialPipelineKinds.None)
+            {
+                _lifetime.RunStartupStep(
+                    "Pipeline.Prepare.SceneManifest",
+                    () => _meshPipeline.PrepareScenePipelineManifest(
+                        pipelineManifest,
+                        Settings.Transparency.Mode,
+                        Settings.Transparency.Enabled &&
+                        Settings.Transparency.PipelinePartitioningEnabled,
+                        receiverFeedbackRequired,
+                        _context.RayQuerySupported &&
+                        (transparentRayVariantsRequired ||
+                         decalRayVariantsRequired),
+                        receiverFeedbackRequired &&
+                        Settings.Decals.ReceiveGlobalIllumination));
+            }
+
             bool foliageRequired = exhaustive ||
                                    Settings.Foliage.Enabled &&
                                    scene.FoliagePatches.Count > 0 &&
@@ -3536,6 +3685,7 @@ namespace Njulf.Rendering
                 Settings.Reflections.Enabled &&
                 Settings.Reflections.Mode is
                     (ReflectionMode.StaticProbesAndSsr or
+                     ReflectionMode.StaticProbesAndPlanar or
                      ReflectionMode.HybridRayQuery);
             if (hybridReflectionsRequired &&
                 _hybridReflectionRuntime is
@@ -3555,6 +3705,57 @@ namespace Njulf.Rendering
                 _giPipelineCacheService!.MarkRenderCriticalFramesStarted();
                 _initialScenePipelinesPrepared = true;
             }
+        }
+
+        private ScenePipelineManifest BuildScenePipelineManifest(Scene scene)
+        {
+            ScenePipelineManifest manifest = ScenePipelineManifest.Empty;
+            const SceneMaterialPipelineKinds complete =
+                SceneMaterialPipelineKinds.Masked |
+                SceneMaterialPipelineKinds.OrdinaryTransparent |
+                SceneMaterialPipelineKinds.ThinGlass |
+                SceneMaterialPipelineKinds.GeometryDecal |
+                SceneMaterialPipelineKinds.ThickTransmission;
+
+            foreach (RenderObject renderObject in scene.RenderObjects)
+            {
+                if (!renderObject.Visible)
+                    continue;
+                manifest = IncludeSceneMaterial(
+                    manifest,
+                    renderObject.Material,
+                    renderObject.Name);
+                if (manifest.MaterialKinds == complete)
+                    return manifest;
+            }
+
+            foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
+            {
+                if (!batch.Visible)
+                    continue;
+                manifest = IncludeSceneMaterial(
+                    manifest,
+                    batch.Material,
+                    batch.Name);
+                if (manifest.MaterialKinds == complete)
+                    break;
+            }
+
+            return manifest;
+        }
+
+        private ScenePipelineManifest IncludeSceneMaterial(
+            ScenePipelineManifest manifest,
+            object? material,
+            string objectName)
+        {
+            MaterialHandle handle =
+                SceneDataBuilder.ResolveRenderObjectMaterialHandle(
+                    material,
+                    _materialManager.DefaultMaterialHandle,
+                    objectName);
+            return manifest.Include(
+                _materialManager.GetMaterialMetadata(handle));
         }
 
         public void ReportFirstPresent(long elapsedMicroseconds)
@@ -4038,6 +4239,7 @@ namespace Njulf.Rendering
                 sceneData.FoliageCastShadows =
                     shadowsAllowed && Settings.Foliage.Enabled && Settings.Foliage.CastShadows;
                 sceneData.FoliageMotionVectorsEnabled = Settings.Foliage.MotionVectorsEnabled;
+                sceneData.FoliageHiZCullingEnabled = Settings.Foliage.HiZCullingEnabled;
                 sceneData.FoliageLocalShadowsEnabled = shadowsAllowed && Settings.Foliage.LocalShadowsEnabled;
                 sceneData.FoliageGrassShadowDensityScale = Settings.Foliage.GrassShadowDensityScale;
                 sceneData.FoliageMaxLocalShadowedSpotLights = Settings.Foliage.MaxLocalShadowedSpotLights;
@@ -4050,6 +4252,7 @@ namespace Njulf.Rendering
                 sceneData.FoliageIndirectMeshletDispatchEnabled = false;
                 sceneData.FoliageCastShadows = false;
                 sceneData.FoliageMotionVectorsEnabled = false;
+                sceneData.FoliageHiZCullingEnabled = false;
                 sceneData.FoliageLocalShadowsEnabled = false;
                 sceneData.FoliageGrassShadowDensityScale = 0f;
                 sceneData.FoliageMaxLocalShadowedSpotLights = 0;
@@ -4351,6 +4554,9 @@ namespace Njulf.Rendering
                 camera,
                 sceneData,
                 lightSnapshot);
+            _automaticPlanarReflectionManager.PrepareFrame(
+                scene,
+                sceneData);
             long simpleDdgiPrepareMicroseconds =
                 ElapsedMicroseconds(resourceSubstageStart);
             resourceSubstageStart = Stopwatch.GetTimestamp();
@@ -4514,6 +4720,28 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiCompletedFrameEvidence =
                 _simpleDdgiFrameEvidence.CaptureSnapshot().Completed;
             ApplyCompletedGpuTimings(sceneData, completedGpuTimings);
+            bool hybridReflectionTimingValid = HasCompletedGpuTiming(
+                completedGpuTimings,
+                "HybridReflectionSsrPass");
+            long hybridReflectionOwnedMicroseconds =
+                sceneData.GpuHybridReflectionSsrMicroseconds +
+                sceneData.GpuHybridReflectionRayQueryMicroseconds +
+                sceneData.GpuHybridReflectionDdgiBaseMicroseconds +
+                sceneData.GpuHybridReflectionResolveMicroseconds +
+                sceneData.GpuHybridReflectionTemporalMicroseconds +
+                sceneData.GpuHybridReflectionSpatialMicroseconds +
+                sceneData.GpuHybridReflectionCompositeMicroseconds +
+                completedGpuTimings.GetGpuMicrosecondsOrZero(
+                    "OpaqueSceneColorSnapshotPass") +
+                (sceneData.TransparentSampleReflections
+                    ? sceneData.GpuTransparentMicroseconds
+                    : 0L);
+            _hybridReflectionRuntime?.ObserveCompletedBudgetSample(
+                new HybridReflectionBudgetSample(
+                    hybridReflectionOwnedMicroseconds,
+                    hybridReflectionTimingValid,
+                    _completedHybridReflectionCounters.RayOverflows != 0u ||
+                    _completedHybridReflectionCounters.TileOverflows != 0u));
             sceneData.AsyncComputeEstimatedOverlapMicroseconds =
                 _asyncComputeCoordinator.EstimateOverlapMicroseconds(
                     frameAsyncComputePlan,
@@ -5387,10 +5615,10 @@ namespace Njulf.Rendering
                              sceneData.ScreenWidth;
             uint maskHeight = _renderTargets?.SceneDepth.Extent.Height ??
                               sceneData.ScreenHeight;
-            bool csmTemporalAutoRequested =
-                requestedMode == DirectionalShadowMode.Cascaded &&
-                settings.DirectionalCsmTemporalMode ==
-                DirectionalCsmTemporalMode.Auto;
+            // Qualification manifests are retained as optional evidence only.
+            // Enabled and the legacy Auto value both execute through the same
+            // runtime allocation/reset gates without consulting a manifest.
+            bool csmTemporalAutoRequested = false;
             DirectionalShadowQualificationGateResult csmTemporalQualification =
                 csmTemporalAutoRequested
                     ? EvaluateDirectionalShadowQualification(
@@ -5401,9 +5629,7 @@ namespace Njulf.Rendering
                         readiness)
                     : DirectionalShadowQualificationGateResult.Reject(
                         "directional-shadow-csm-temporal-auto-not-requested");
-            settings.DirectionalCsmTemporalQualificationApproved =
-                csmTemporalQualification.Passed &&
-                csmTemporalQualification.CsmTemporalApproved;
+            settings.DirectionalCsmTemporalQualificationApproved = false;
             bool csmTemporalActive = requestedMode == DirectionalShadowMode.Cascaded &&
                                      settings.EffectiveDirectionalCsmTemporalEnabled;
             bool detailedScreenDiagnostics = settings.DebugView is
@@ -6229,6 +6455,7 @@ namespace Njulf.Rendering
                     _reflectionProbeManager,
                     _forwardPlusPass,
                     _meshPipeline,
+                    _meshletPhysicalResidencyResources,
                     _dynamicResolutionScaleController),
                 new RendererDiagnosticsExecutionInput(
                     asyncComputeSnapshot,
@@ -7107,6 +7334,15 @@ namespace Njulf.Rendering
                     queueFamilies,
                     graphicsFamily,
                     frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.HybridReflectionTileScheduler,
+                    $"Hybrid reflection tiles frame {frameIndex}",
+                    _hybridReflectionRuntime?.GetTileBuffer(frameIndex) ??
+                    BufferHandle.Invalid,
+                    queueFamilies,
+                    graphicsFamily,
+                    frameIndex: frameIndex);
             }
 
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MeshGeometryBuffers, "Mesh vertex positions",
@@ -7979,6 +8215,9 @@ namespace Njulf.Rendering
                 reflectionTimingsMatchCompletedLifecycle
                     ? timings.GetGpuMicrosecondsOrZero("ReflectionProbePublishPass")
                     : 0;
+            sceneData.GpuAutomaticPlanarCaptureMicroseconds =
+                timings.GetGpuMicrosecondsOrZero(
+                    "AutomaticPlanarReflectionPass");
             sceneData.GpuHybridReflectionSsrMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("HybridReflectionSsrPass");
             sceneData.GpuHybridReflectionRayQueryMicroseconds =
@@ -8235,6 +8474,29 @@ namespace Njulf.Rendering
                                  sceneData.RaySceneReadiness.IsReady(
                                      RaySceneConsumer.Reflection,
                                      reflectionRequirement.RequiredCategories);
+            bool lobeExtensionAvailable =
+                _renderTargets?.HybridReflectionRawMetadata is { } lobeTarget &&
+                lobeTarget.Format ==
+                    ForwardHybridReflectionReceiverContract.LobeExtensionFormat &&
+                lobeTarget.Extent.Width == sceneData.ScreenWidth &&
+                lobeTarget.Extent.Height == sceneData.ScreenHeight;
+            bool compactHistoryAvailable =
+                _renderTargets?.HybridReflectionHistoryMetadata0?.Format ==
+                    RenderTargetManager.HybridReflectionHistoryMetadataFormat &&
+                _renderTargets.HybridReflectionHistoryMetadata1?.Format ==
+                    RenderTargetManager.HybridReflectionHistoryMetadataFormat &&
+                _renderTargets.HybridReflectionMoments0?.Format ==
+                    RenderTargetManager.HybridReflectionMomentsFormat &&
+                _renderTargets.HybridReflectionMoments1?.Format ==
+                    RenderTargetManager.HybridReflectionMomentsFormat;
+            ReflectionImplementationResolution implementationResolution =
+                ReflectionImplementationResolver.Resolve(
+                    settings,
+                    new ReflectionImplementationCapabilities(
+                        _hybridReflectionRuntime?.ScreenPipelinesAvailable ==
+                            true,
+                        lobeExtensionAvailable,
+                        compactHistoryAvailable));
             ReflectionModeResolution reflectionResolution =
                 ReflectionModeResolver.Resolve(
                     settings,
@@ -8262,6 +8524,14 @@ namespace Njulf.Rendering
                 reflectionResolution.Effective != ReflectionMode.Disabled;
             sceneData.RequestedReflectionMode = reflectionResolution.Requested;
             sceneData.EffectiveReflectionMode = reflectionResolution.Effective;
+            sceneData.RequestedReflectionImplementation =
+                implementationResolution.Requested;
+            sceneData.EffectiveReflectionImplementation =
+                implementationResolution.Effective;
+            sceneData.ReflectionImplementationFallbackReason =
+                implementationResolution.Reason;
+            sceneData.ReflectionImplementationFallbackDetail =
+                implementationResolution.Detail;
             sceneData.ReflectionMode = reflectionResolution.Effective;
             sceneData.ReflectionFallbackReason = reflectionResolution.Reason;
             sceneData.ReflectionFallbackDetail = reflectionResolution.Detail;
@@ -9973,6 +10243,20 @@ namespace Njulf.Rendering
                 counters.ProbeFallbacks;
             sceneData.HybridReflectionEnvironmentFallbackCount =
                 counters.EnvironmentFallbacks;
+            sceneData.HybridReflectionFullRateTileCount =
+                counters.FullRateTiles;
+            sceneData.HybridReflectionHalfRateTileCount =
+                counters.HalfRateTiles;
+            sceneData.HybridReflectionQuarterRateTileCount =
+                counters.QuarterRateTiles;
+            sceneData.HybridReflectionAnalyticTileCount =
+                counters.AnalyticTiles;
+            sceneData.HybridReflectionReuseTileCount =
+                counters.ReuseTiles;
+            sceneData.HybridReflectionActiveTileCount =
+                counters.ActiveTiles;
+            sceneData.HybridReflectionTileOverflowCount =
+                counters.TileOverflows;
         }
 
         private static void ApplyCompletedTransparentReflectionCounters(
@@ -10846,6 +11130,8 @@ namespace Njulf.Rendering
                 checked((int)(counters.VisibleClusterCount + counters.VisibleMeshletDrawCount));
             sceneData.FoliageMeshletDrawOverflowCount = checked((int)counters.MeshletDrawOverflowCount);
             sceneData.FoliageFarImpostorVisibleCount = checked((int)counters.FarImpostorVisibleCount);
+            sceneData.FoliageDensityRejectedCount = checked(
+                (int)counters.DensityRejectedCount);
             sceneData.FoliageOverflowCount =
                 checked(sceneData.FoliageOverflowCount + sceneData.FoliageMeshletDrawOverflowCount);
         }
@@ -11189,6 +11475,8 @@ namespace Njulf.Rendering
                 RuntimeStallReason.ResourceResize,
                 $"Render target profile rebuild: {recreateReason}",
                 _context.WaitIdle);
+            _automaticPlanarReflectionManager
+                .ReleaseForSwapchainRecreation();
             long waitIdleMicroseconds = ElapsedMicroseconds(stageStart);
             stageStart = Stopwatch.GetTimestamp();
             ApplyGiCausticExtentTransitionAfterDeviceIdle(sceneRenderExtent);
@@ -11440,6 +11728,9 @@ namespace Njulf.Rendering
                         _screenshotReadbackManager.CompleteAllAfterDeviceIdle();
                         _linearHdrReadbackManager.CompleteAllAfterDeviceIdle();
                     }
+
+                    _automaticPlanarReflectionManager
+                        .ReleaseForSwapchainRecreation();
                 }))
             {
                 return false;
@@ -11661,6 +11952,7 @@ namespace Njulf.Rendering
             ArgumentNullException.ThrowIfNull(settings);
             return settings.Reflections.Enabled && settings.Reflections.Mode is
                 ReflectionMode.StaticProbesAndSsr or
+                ReflectionMode.StaticProbesAndPlanar or
                 ReflectionMode.HybridRayQuery;
         }
 
@@ -11766,7 +12058,6 @@ namespace Njulf.Rendering
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             ImageView opaqueSceneColorSnapshotView =
-                _renderTargets.HybridReflectionFilterScratch?.View ??
                 _textureManager.GetTextureView(
                     _textureManager.DefaultBlackTexture);
             _bindlessHeap.RegisterTexture(
@@ -12042,6 +12333,9 @@ namespace Njulf.Rendering
                 "diagnostics-buffer",
                 _diagnosticsBuffer.Dispose);
             AddResourceStage(
+                "meshlet-physical-residency",
+                () => _meshletPhysicalResidencyResources?.Dispose());
+            AddResourceStage(
                 "directional-shadow-resources",
                 () =>
                     _directionalShadowResources
@@ -12079,6 +12373,10 @@ namespace Njulf.Rendering
                 () =>
                     _reflectionProbeManager
                         ?.Dispose());
+            AddResourceStage(
+                "automatic-planar-reflection-manager",
+                _automaticPlanarReflectionManager.Dispose,
+                "render-graph");
             AddResourceStage(
                 "ddgi-mutation-journal",
                 _ddgiInvalidation.Dispose);

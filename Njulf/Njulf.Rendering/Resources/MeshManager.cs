@@ -32,7 +32,15 @@ namespace Njulf.Rendering.Resources
         public uint CoarseRayProxyIndexOffset;
         public uint CoarseRayProxyIndexCount;
         public uint MeshMetadataOffset;
+        /// <summary>
+        /// Runtime address consumed by submission. Managed-residency meshes
+        /// carry the virtual-address high bit here.
+        /// </summary>
         public uint MeshletOffset;
+        /// <summary>
+        /// Direct record-buffer offset used only for allocation/lifetime.
+        /// </summary>
+        public uint PhysicalMeshletOffset;
         public uint MeshletCount;
         public uint MeshletLod1Offset;
         public uint MeshletLod1Count;
@@ -59,12 +67,19 @@ namespace Njulf.Rendering.Resources
         public bool HasVertexColor;
         public bool HasUv1;
         public bool HasTangents;
+        public bool UsesManagedPhysicalResidency;
+        public uint StreamingRangeIndex;
+        public GpuMeshResidencyFlags ResidencyFlags;
         public ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence;
 
         public readonly uint EffectiveGpuMeshletRecordCount =>
-            GpuMeshletRecordCount == 0
+            !UsesManagedPhysicalResidency && GpuMeshletRecordCount == 0
                 ? MeshletLodGeneratedCount
                 : GpuMeshletRecordCount;
+        public readonly uint EffectivePhysicalMeshletOffset =>
+            UsesManagedPhysicalResidency
+                ? PhysicalMeshletOffset
+                : MeshletOffset;
         public readonly uint EffectiveGpuIndexCount =>
             GpuIndexCount == 0 ? IndexCount : GpuIndexCount;
         public readonly bool UsesCoarseRayProxy =>
@@ -147,6 +162,7 @@ namespace Njulf.Rendering.Resources
 
         private readonly List<MeshInfo> _meshes = new List<MeshInfo>();
         private readonly List<Meshlet> _meshlets = new List<Meshlet>();
+        private readonly ManagedCpuMeshletCache _managedCpuMeshlets = new();
         // Retained, immutable triangle inputs for bounded CPU-built transport
         // tables (currently emissive-mesh importance sampling). Raster/AS data
         // remains authoritative on the GPU; this cache avoids readback stalls.
@@ -426,6 +442,33 @@ namespace Njulf.Rendering.Resources
             internal uint MeshletVertexSum { get; private set; }
             internal uint SmallMeshletsUnder16Triangles { get; private set; }
             internal uint SmallMeshletsUnder32Triangles { get; private set; }
+            internal MeshletStreamingSubMeshGpuBinding?
+                ManagedResidencyBinding { get; private set; }
+            internal uint? RegisteredVertexOffset { get; set; }
+
+            internal void EnableManagedPhysicalResidency(
+                MeshletStreamingSubMeshGpuBinding binding)
+            {
+                ArgumentNullException.ThrowIfNull(binding);
+                if (IsSkinned)
+                {
+                    throw new InvalidOperationException(
+                        "Skinned meshes cannot use managed physical residency.");
+                }
+                if (!HasPrebuiltMeshlets ||
+                    binding.Lod0MeshletCount != Lod0MeshletCount ||
+                    binding.Lod1MeshletCount != Lod1MeshletCount ||
+                    binding.Lod2MeshletCount != Lod2MeshletCount ||
+                    binding.HierarchyMeshletCount !=
+                        Meshlets.Length -
+                        (Lod0MeshletCount + Lod1MeshletCount +
+                         Lod2MeshletCount))
+                {
+                    throw new InvalidOperationException(
+                        "The streaming manifest does not match the cooked meshlet ranges.");
+                }
+                ManagedResidencyBinding = binding;
+            }
 
             private void PrepareRegistrationMetadata()
             {
@@ -942,7 +985,8 @@ namespace Njulf.Rendering.Resources
                         .Select(static record => record with { })
                         .ToArray(),
                     BaseColorSamplingBinding = profile.BaseColorSamplingBinding with { },
-                    EmissiveSamplingBinding = profile.EmissiveSamplingBinding with { }
+                    EmissiveSamplingBinding = profile.EmissiveSamplingBinding with { },
+                    PlanarEvidence = profile.PlanarEvidence with { }
                 };
             }
 
@@ -1212,6 +1256,7 @@ namespace Njulf.Rendering.Resources
                         finalMeshletTriangleIndexBytesUsed,
                         finalSkinningDataBytesUsed,
                         mesh.SkinningData.Length);
+                    mesh.RegisteredVertexOffset = meshInfo.VertexOffset;
                     meshInfo.CausticTopologyEvidence =
                         mesh.CausticTopologyEvidence;
                     meshInfo.HasVertexColor = mesh.HasVertexColor;
@@ -1265,21 +1310,31 @@ namespace Njulf.Rendering.Resources
                                 ref meshInfo,
                                 meshlets);
                         }
-                        ApplyGlobalMeshletOffsets(meshlets, meshInfo);
-                        if (mesh.CookedValidationCompleted)
+                        if (mesh.ManagedResidencyBinding is null)
                         {
-                            meshInfo.LocalVertexIndexCount =
-                                CheckedCount(localVertexIndices.Length);
-                            meshInfo.LocalTriangleIndexCount =
-                                CheckedCount(localTriangleIndices.Length);
+                            ApplyGlobalMeshletOffsets(meshlets, meshInfo);
+                            if (mesh.CookedValidationCompleted)
+                            {
+                                meshInfo.LocalVertexIndexCount =
+                                    CheckedCount(localVertexIndices.Length);
+                                meshInfo.LocalTriangleIndexCount =
+                                    CheckedCount(localTriangleIndices.Length);
+                            }
+                            else
+                            {
+                                ValidateMeshletRanges(
+                                    ref meshInfo,
+                                    meshlets,
+                                    localVertexIndices,
+                                    localTriangleIndices);
+                            }
                         }
                         else
                         {
-                            ValidateMeshletRanges(
+                            ConfigureManagedPhysicalResidency(
                                 ref meshInfo,
-                                meshlets,
-                                localVertexIndices,
-                                localTriangleIndices);
+                                mesh.ManagedResidencyBinding,
+                                meshlets.Length);
                         }
                     }
                     else if (mesh.GenerateMeshlets)
@@ -1322,16 +1377,42 @@ namespace Njulf.Rendering.Resources
                         localVertexIndices = Array.Empty<uint>();
                         localTriangleIndices = Array.Empty<uint>();
                     }
-                    ConfigureHierarchyMeshInfo(
-                        ref meshInfo,
-                        meshlets.Length,
-                        hierarchyNodes,
-                        hierarchyRootNode);
-                    GPUPackedMeshlet[] gpuMeshlets =
-                        PackGpuMeshlets(
+                    bool managedResidency =
+                        mesh.ManagedResidencyBinding is not null;
+                    if (managedResidency)
+                    {
+                        ConfigureManagedHierarchyMeshInfo(
+                            ref meshInfo,
+                            hierarchyNodes,
+                            hierarchyRootNode);
+                    }
+                    else
+                    {
+                        ConfigureHierarchyMeshInfo(
+                            ref meshInfo,
+                            meshlets.Length,
+                            hierarchyNodes,
+                            hierarchyRootNode);
+                    }
+                    GPUPackedMeshlet[] gpuMeshlets = managedResidency
+                        ? PackGpuMeshlets(
+                            ReadOnlySpan<Meshlet>.Empty,
+                            hierarchyNodes,
+                            meshInfo)
+                        : PackGpuMeshlets(
                             meshlets,
                             hierarchyNodes,
                             meshInfo);
+                    // Managed submeshes omit duplicate GPU geometry records,
+                    // but CPU culling, sorting, validation, and debug tooling
+                    // still require the immutable authored meshlets.
+                    Meshlet[] retainedCpuMeshlets = meshlets;
+                    uint[] uploadedLocalVertexIndices = managedResidency
+                        ? Array.Empty<uint>()
+                        : localVertexIndices;
+                    uint[] uploadedLocalTriangleIndices = managedResidency
+                        ? Array.Empty<uint>()
+                        : localTriangleIndices;
 
                     var meshMetadata = CreateGpuMeshInfo(meshInfo);
                     if (CheckedElementOffset(finalVertexPositionBytesUsed, VertexPositionStride) != meshInfo.VertexOffset ||
@@ -1353,8 +1434,8 @@ namespace Njulf.Rendering.Resources
                     ulong meshletBytes = CheckedByteSize(
                         gpuMeshlets.Length,
                         MeshletStride);
-                    ulong localVertexIndexBytes = CheckedByteSize(localVertexIndices.Length, IndexStride);
-                    ulong localTriangleIndexBytes = CheckedByteSize(localTriangleIndices.Length, IndexStride);
+                    ulong localVertexIndexBytes = CheckedByteSize(uploadedLocalVertexIndices.Length, IndexStride);
+                    ulong localTriangleIndexBytes = CheckedByteSize(uploadedLocalTriangleIndices.Length, IndexStride);
                     ulong skinningDataBytes = CheckedByteSize(mesh.SkinningData.Length, SkinningDataStride);
 
                     lastPendingMeshBytes = checked(
@@ -1396,10 +1477,10 @@ namespace Njulf.Rendering.Resources
                         gpuIndices,
                         meshInfo,
                         meshMetadata,
-                        meshlets,
+                        retainedCpuMeshlets,
                         gpuMeshlets,
-                        localVertexIndices,
-                        localTriangleIndices,
+                        uploadedLocalVertexIndices,
+                        uploadedLocalTriangleIndices,
                         mesh.SkinningData,
                         transportGeometry));
                     handles[uploadIndex] = new MeshHandle(meshIndex, generation);
@@ -1764,6 +1845,9 @@ namespace Njulf.Rendering.Resources
                 IndexCount = CheckedCount(indexCount),
                 MeshMetadataOffset = CheckedCount(meshIndex),
                 MeshletOffset = CheckedElementOffset(meshletBytesUsed, MeshletStride),
+                PhysicalMeshletOffset = CheckedElementOffset(
+                    meshletBytesUsed,
+                    MeshletStride),
                 HierarchyRootNode = uint.MaxValue,
                 LocalVertexIndexOffset = CheckedElementOffset(meshletVertexIndexBytesUsed, IndexStride),
                 LocalTriangleIndexOffset = CheckedElementOffset(meshletTriangleIndexBytesUsed, IndexStride),
@@ -1806,7 +1890,9 @@ namespace Njulf.Rendering.Resources
                     meshInfo.EffectiveGpuMeshletRecordCount,
                 HierarchyNodeOffset = meshInfo.HierarchyNodeOffset,
                 HierarchyNodeCount = meshInfo.HierarchyNodeCount,
-                HierarchyRootNode = meshInfo.HierarchyRootNode
+                HierarchyRootNode = meshInfo.HierarchyRootNode,
+                StreamingRangeIndex = meshInfo.StreamingRangeIndex,
+                ResidencyFlags = meshInfo.ResidencyFlags
             };
         }
 
@@ -2426,7 +2512,7 @@ namespace Njulf.Rendering.Resources
                 UploadConcatenatedArrays(
                     pendingUploads,
                     static pending => pending.GpuMeshlets,
-                    static pending => pending.MeshInfo.MeshletOffset *
+                    static pending => pending.MeshInfo.EffectivePhysicalMeshletOffset *
                                       MeshletStride,
                     buffers.Meshlet,
                     upload);
@@ -4008,10 +4094,28 @@ namespace Njulf.Rendering.Resources
                     finalMeshSlotCount,
                     checked(pending.MeshIndex + 1));
 
-                if (pending.Meshlets.Length == 0)
-                    continue;
+                if (pending.MeshInfo.UsesManagedPhysicalResidency)
+                {
+                    _managedCpuMeshlets.ValidatePrepared(
+                        new MeshHandle(
+                            pending.MeshIndex,
+                            pending.Generation),
+                        pending.MeshInfo,
+                        pending.Meshlets);
+                }
 
-                ulong meshletStart = pending.MeshInfo.MeshletOffset;
+                if (pending.MeshInfo.EffectiveGpuMeshletRecordCount == 0)
+                {
+                    if (pending.GpuMeshlets.Length != 0)
+                    {
+                        throw new InvalidOperationException(
+                            "A mesh without physical meshlet records produced a GPU meshlet payload.");
+                    }
+                    continue;
+                }
+
+                ulong meshletStart =
+                    pending.MeshInfo.EffectivePhysicalMeshletOffset;
                 ulong meshletEnd = checked(
                     meshletStart +
                     pending.MeshInfo.EffectiveGpuMeshletRecordCount);
@@ -4032,6 +4136,10 @@ namespace Njulf.Rendering.Resources
             _meshLifetimes.EnsureCapacity(finalMeshSlotCount);
             _transportGeometry.EnsureCapacity(finalMeshSlotCount);
             _meshlets.EnsureCapacity(finalMeshletCount);
+            _managedCpuMeshlets.EnsureCapacity(checked(
+                _managedCpuMeshlets.Count +
+                pendingUploads.Count(static pending =>
+                    pending.MeshInfo.UsesManagedPhysicalResidency)));
             _quarantinedUploadBuffers.EnsureCapacity(
                 checked(_quarantinedUploadBuffers.Count + 9));
             _quarantinedUploadFences.EnsureCapacity(
@@ -4075,7 +4183,11 @@ namespace Njulf.Rendering.Resources
 
             foreach (PendingMeshUpload pending in pendingUploads)
             {
-                AppendCpuMeshlets(pending.MeshInfo, pending.Meshlets);
+                AppendCpuMeshlets(
+                    pending.MeshInfo,
+                    pending.MeshInfo.UsesManagedPhysicalResidency
+                        ? Array.Empty<Meshlet>()
+                        : pending.Meshlets);
                 CommitMeshSlot(pending);
             }
             _runtimeEmissiveTriangleBytes = finalEmissiveBytes;
@@ -4098,6 +4210,14 @@ namespace Njulf.Rendering.Resources
             _meshLifetimes.CommitSlot(
                 meshIndex,
                 pending.Generation);
+
+            if (pending.MeshInfo.UsesManagedPhysicalResidency)
+            {
+                _managedCpuMeshlets.Commit(
+                    new MeshHandle(meshIndex, pending.Generation),
+                    pending.MeshInfo,
+                    pending.Meshlets);
+            }
 
             while (_transportGeometry.Count < meshIndex)
                 _transportGeometry.Add(default);
@@ -4217,7 +4337,8 @@ namespace Njulf.Rendering.Resources
 
         private void AppendCpuMeshlets(MeshInfo meshInfo, IReadOnlyList<Meshlet> meshlets)
         {
-            ulong requiredCount = (ulong)meshInfo.MeshletOffset +
+            ulong requiredCount =
+                (ulong)meshInfo.EffectivePhysicalMeshletOffset +
                 meshInfo.EffectiveGpuMeshletRecordCount;
             if (requiredCount > int.MaxValue)
                 throw new InvalidOperationException("CPU meshlet cache exceeded supported element count.");
@@ -4230,9 +4351,11 @@ namespace Njulf.Rendering.Resources
             }
 
             for (int i = 0; i < meshlets.Count; i++)
-                _meshlets[(int)meshInfo.MeshletOffset + i] = meshlets[i];
+                _meshlets[(int)meshInfo.EffectivePhysicalMeshletOffset + i] =
+                    meshlets[i];
             int hierarchyStart = checked(
-                (int)meshInfo.MeshletOffset + meshlets.Count);
+                (int)meshInfo.EffectivePhysicalMeshletOffset +
+                meshlets.Count);
             int hierarchyCount = checked(
                 (int)meshInfo.EffectiveGpuMeshletRecordCount -
                 meshlets.Count);
@@ -4368,6 +4491,85 @@ namespace Njulf.Rendering.Resources
             meshInfo.HierarchyNodeOffset = CheckedAdd(
                 meshInfo.MeshletOffset,
                 geometryCount);
+            meshInfo.HierarchyNodeCount =
+                CheckedCount(hierarchyNodes.Count);
+            meshInfo.HierarchyRootNode = CheckedAdd(
+                meshInfo.HierarchyNodeOffset,
+                CheckedCount(hierarchyRootNode));
+        }
+
+        private static void ConfigureManagedPhysicalResidency(
+            ref MeshInfo meshInfo,
+            MeshletStreamingSubMeshGpuBinding binding,
+            int geometryMeshletCount)
+        {
+            uint expectedGeometryCount = checked(
+                binding.Lod0MeshletCount +
+                binding.Lod1MeshletCount +
+                binding.Lod2MeshletCount +
+                binding.HierarchyMeshletCount);
+            if (expectedGeometryCount != CheckedCount(geometryMeshletCount))
+            {
+                throw new InvalidOperationException(
+                    "Managed meshlet geometry and virtual mappings diverged.");
+            }
+            meshInfo.UsesManagedPhysicalResidency = true;
+            meshInfo.MeshletOffset = MeshletVirtualAddress.Encode(
+                binding.VirtualMeshletBase);
+            meshInfo.MeshletCount = binding.Lod0MeshletCount;
+            meshInfo.MeshletLod1Offset = MeshletVirtualAddress.Encode(
+                checked(binding.VirtualMeshletBase +
+                    binding.Lod0MeshletCount));
+            meshInfo.MeshletLod1Count = binding.Lod1MeshletCount;
+            meshInfo.MeshletLod2Offset = MeshletVirtualAddress.Encode(
+                checked(binding.VirtualMeshletBase +
+                    binding.Lod0MeshletCount +
+                    binding.Lod1MeshletCount));
+            meshInfo.MeshletLod2Count = binding.Lod2MeshletCount;
+            meshInfo.MeshletLodGeneratedCount = expectedGeometryCount;
+            meshInfo.LocalVertexIndexOffset = 0;
+            meshInfo.LocalVertexIndexCount = 0;
+            meshInfo.LocalTriangleIndexOffset = 0;
+            meshInfo.LocalTriangleIndexCount = 0;
+            meshInfo.StreamingRangeIndex = binding.Lod0RangeIndex;
+            meshInfo.ResidencyFlags =
+                GpuMeshResidencyFlags.ManagedPhysicalResidency |
+                GpuMeshResidencyFlags.HasPinnedFallback;
+            if (binding.HierarchyMeshletCount != 0)
+            {
+                meshInfo.ResidencyFlags |=
+                    GpuMeshResidencyFlags
+                        .HasHierarchyVirtualAddresses;
+            }
+        }
+
+        private static void ConfigureManagedHierarchyMeshInfo(
+            ref MeshInfo meshInfo,
+            IReadOnlyList<MeshletHierarchyNode> hierarchyNodes,
+            int hierarchyRootNode)
+        {
+            meshInfo.GpuMeshletRecordCount =
+                CheckedCount(hierarchyNodes.Count);
+            if (hierarchyNodes.Count == 0)
+            {
+                if (hierarchyRootNode != -1)
+                {
+                    throw new InvalidOperationException(
+                        "A hierarchy root cannot exist without hierarchy nodes.");
+                }
+                meshInfo.HierarchyNodeOffset = 0;
+                meshInfo.HierarchyNodeCount = 0;
+                meshInfo.HierarchyRootNode = uint.MaxValue;
+                return;
+            }
+            if ((uint)hierarchyRootNode >=
+                (uint)hierarchyNodes.Count)
+            {
+                throw new InvalidOperationException(
+                    "Meshlet hierarchy root is outside its node stream.");
+            }
+            meshInfo.HierarchyNodeOffset =
+                meshInfo.PhysicalMeshletOffset;
             meshInfo.HierarchyNodeCount =
                 CheckedCount(hierarchyNodes.Count);
             meshInfo.HierarchyRootNode = CheckedAdd(
@@ -5014,7 +5216,7 @@ namespace Njulf.Rendering.Resources
                 ValidateElementRange(nameof(meshInfo.VertexOffset), meshInfo.VertexOffset, meshInfo.VertexCount, _vertexUvColorBytesUsed / VertexUvColorStride);
                 ValidateElementRange(nameof(meshInfo.IndexOffset), meshInfo.IndexOffset, meshInfo.EffectiveGpuIndexCount, _indexBytesUsed / IndexStride);
                 ValidateElementRange(nameof(meshInfo.MeshMetadataOffset), meshInfo.MeshMetadataOffset, 1, _meshMetadataBytesUsed / MeshMetadataStride);
-                ValidateElementRange(nameof(meshInfo.MeshletOffset), meshInfo.MeshletOffset, meshInfo.EffectiveGpuMeshletRecordCount, _meshletBytesUsed / MeshletStride);
+                ValidateElementRange(nameof(meshInfo.PhysicalMeshletOffset), meshInfo.EffectivePhysicalMeshletOffset, meshInfo.EffectiveGpuMeshletRecordCount, _meshletBytesUsed / MeshletStride);
                 ValidateElementRange(nameof(meshInfo.LocalVertexIndexOffset), meshInfo.LocalVertexIndexOffset, meshInfo.LocalVertexIndexCount, _meshletVertexIndexBytesUsed / IndexStride);
                 ValidateElementRange(nameof(meshInfo.LocalTriangleIndexOffset), meshInfo.LocalTriangleIndexOffset, meshInfo.LocalTriangleIndexCount, _meshletTriangleIndexBytesUsed / IndexStride);
                 ValidateElementRange(nameof(meshInfo.SkinningDataOffset), meshInfo.SkinningDataOffset, meshInfo.SkinningDataCount, _skinningDataBytesUsed / SkinningDataStride);
@@ -5201,7 +5403,7 @@ namespace Njulf.Rendering.Resources
                 "index");
             ValidateReleasedRange(
                 _meshletBytesUsed,
-                meshInfo.MeshletOffset,
+                meshInfo.EffectivePhysicalMeshletOffset,
                 meshInfo.EffectiveGpuMeshletRecordCount,
                 MeshletStride,
                 "meshlet");
@@ -5250,7 +5452,8 @@ namespace Njulf.Rendering.Resources
                     "Remaining mesh metadata range exceeds authoritative storage.");
             }
 
-            int meshletStart = checked((int)meshInfo.MeshletOffset);
+            int meshletStart = checked(
+                (int)meshInfo.EffectivePhysicalMeshletOffset);
             int meshletCount = checked(
                 (int)meshInfo.EffectiveGpuMeshletRecordCount);
             int meshletEnd = checked(meshletStart + meshletCount);
@@ -5259,6 +5462,7 @@ namespace Njulf.Rendering.Resources
                 throw new InvalidOperationException(
                     "Released meshlet range exceeds the CPU meshlet cache.");
             }
+            _managedCpuMeshlets.ValidateRelease(meshIndex, meshInfo);
 
             return new MeshReleaseState(
                 remaining.VertexElements * VertexPositionStride,
@@ -5274,7 +5478,8 @@ namespace Njulf.Rendering.Resources
                 finalRuntimeEmissiveBytes,
                 meshletStart,
                 meshletCount,
-                checked((int)remaining.MeshletElements));
+                checked((int)remaining.MeshletElements),
+                meshInfo.UsesManagedPhysicalResidency);
         }
 
         private void ApplyMeshReleaseState(
@@ -5315,6 +5520,8 @@ namespace Njulf.Rendering.Resources
                         releaseState.FinalMeshletCount);
                 }
             }
+            if (releaseState.RemoveManagedCpuMeshlets)
+                _managedCpuMeshlets.Release(meshIndex);
 
             _meshes[meshIndex] = default;
             _transportGeometry[meshIndex] = default;
@@ -5451,10 +5658,55 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 ThrowIfDisposedLocked();
+                if (MeshletVirtualAddress.IsVirtual(meshletIndex))
+                {
+                    throw new InvalidOperationException(
+                        $"Virtual meshlet address 0x{meshletIndex:x8} requires its owning mesh handle.");
+                }
                 if (meshletIndex >= _meshlets.Count)
-                    throw new InvalidOperationException("Invalid meshlet index.");
+                    throw new InvalidOperationException(
+                        $"Direct meshlet index {meshletIndex} exceeds the CPU cache count {_meshlets.Count}.");
 
                 return _meshlets[(int)meshletIndex];
+            }
+        }
+
+        internal Meshlet GetMeshlet(
+            MeshHandle handle,
+            uint meshletAddress)
+        {
+            lock (_lock)
+            {
+                ThrowIfDisposedLocked();
+                if (!_meshLifetimes.IsLive(handle) ||
+                    handle.Index >= _meshes.Count)
+                {
+                    throw new InvalidOperationException(
+                        "Invalid mesh handle for CPU meshlet lookup.");
+                }
+
+                MeshInfo meshInfo = _meshes[handle.Index];
+                if (MeshletVirtualAddress.IsVirtual(meshletAddress))
+                {
+                    return _managedCpuMeshlets.Get(
+                        handle,
+                        meshInfo,
+                        meshletAddress);
+                }
+
+                ulong geometryStart = meshInfo.MeshletOffset;
+                ulong geometryEnd = checked(
+                    geometryStart + meshInfo.MeshletLodGeneratedCount);
+                if (meshInfo.UsesManagedPhysicalResidency ||
+                    meshletAddress < geometryStart ||
+                    meshletAddress >= geometryEnd ||
+                    meshletAddress >= _meshlets.Count)
+                {
+                    throw new InvalidOperationException(
+                        $"Direct meshlet address {meshletAddress} is outside mesh " +
+                        $"{handle.Index}:{handle.Generation} geometry range.");
+                }
+                return _meshlets[(int)meshletAddress];
             }
         }
 
@@ -5623,6 +5875,7 @@ namespace Njulf.Rendering.Resources
                         BufferHandle.Invalid;
                     _meshes.Clear();
                     _meshlets.Clear();
+                    _managedCpuMeshlets.Clear();
                     _transportGeometry.Clear();
                     _runtimeEmissiveTriangleBytes = 0;
                     _meshLifetimes.Clear();
@@ -5808,7 +6061,8 @@ namespace Njulf.Rendering.Resources
             long RuntimeEmissiveTriangleBytes,
             int MeshletStart,
             int MeshletCount,
-            int FinalMeshletCount);
+            int FinalMeshletCount,
+            bool RemoveManagedCpuMeshlets);
 
         private readonly record struct MeshBufferCompactionStateSnapshot(
             MeshBufferHandles Buffers,
@@ -6054,6 +6308,7 @@ namespace Njulf.Rendering.Resources
             private readonly int _meshCount;
             private readonly int _meshletCount;
             private readonly int _transportGeometryCount;
+            private readonly int[] _pendingMeshIndices;
             private readonly MeshSlotLifetimeTable.RegistrationSnapshot
                 _lifetimeSnapshot;
             private readonly MeshSlotSnapshot[] _reusedSlots;
@@ -6062,7 +6317,8 @@ namespace Njulf.Rendering.Resources
                 MeshManager owner,
                 MeshSlotLifetimeTable.RegistrationSnapshot
                     lifetimeSnapshot,
-                MeshSlotSnapshot[] reusedSlots)
+                MeshSlotSnapshot[] reusedSlots,
+                int[] pendingMeshIndices)
             {
                 _buffers = owner.CaptureMeshBufferHandles();
                 _vertexPositionBytesUsed = owner._vertexPositionBytesUsed;
@@ -6083,6 +6339,7 @@ namespace Njulf.Rendering.Resources
                 _meshletCount = owner._meshlets.Count;
                 _transportGeometryCount =
                     owner._transportGeometry.Count;
+                _pendingMeshIndices = pendingMeshIndices;
                 _lifetimeSnapshot = lifetimeSnapshot;
                 _reusedSlots = reusedSlots;
             }
@@ -6115,7 +6372,8 @@ namespace Njulf.Rendering.Resources
                     owner._meshLifetimes
                         .CaptureRegistrationSnapshot(
                             pendingIndices),
-                    reusedSlots.ToArray());
+                    reusedSlots.ToArray(),
+                    pendingIndices);
             }
 
             public void Restore(MeshManager owner)
@@ -6147,6 +6405,8 @@ namespace Njulf.Rendering.Resources
                 CollectionsMarshal.SetCount(
                     owner._transportGeometry,
                     _transportGeometryCount);
+                owner._managedCpuMeshlets.RemovePreparedSlots(
+                    _pendingMeshIndices);
                 owner._meshLifetimes
                     .RestoreRegistrationSnapshot(
                         _lifetimeSnapshot);

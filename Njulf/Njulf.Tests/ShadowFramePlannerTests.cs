@@ -310,7 +310,7 @@ public sealed class ShadowFramePlannerTests
     }
 
     [Test]
-    public void CreatePlan_AutoCsmTemporalPublishesGateAndUsesStrictBudgets()
+    public void CreatePlan_AutoCsmTemporalRunsWithoutManifestAuthority()
     {
         RenderSettings settings = CreateSettings(
             DirectionalShadowMode.Cascaded);
@@ -358,14 +358,16 @@ public sealed class ShadowFramePlannerTests
             Assert.That(
                 plan.QualificationLevel,
                 Is.EqualTo(DirectionalShadowQualificationLevel.Production));
-            Assert.That(plan.QualificationId, Is.EqualTo("qualified-shadow"));
-            Assert.That(plan.QualifiedGpuBudgetMicroseconds, Is.EqualTo(100.0));
-            Assert.That(plan.QualifiedMemoryBudgetBytes, Is.EqualTo(1024UL));
+            Assert.That(plan.QualificationId, Is.Empty);
+            Assert.That(plan.QualificationDetail, Is.EqualTo(
+                "directional-shadow-csm-temporal-production-enabled"));
+            Assert.That(plan.QualifiedGpuBudgetMicroseconds, Is.Zero);
+            Assert.That(plan.QualifiedMemoryBudgetBytes, Is.Zero);
         });
     }
 
     [Test]
-    public void CreatePlan_ThirdQualifiedOverrunStartsSharedCooldown()
+    public void CreatePlan_ThirdQualifiedRayOverrunDoesNotDisableProductionCsmTemporal()
     {
         RenderSettings raySettings = CreateSettings(
             DirectionalShadowMode.RayQueryHard);
@@ -455,14 +457,11 @@ public sealed class ShadowFramePlannerTests
             Assert.That(
                 third.FallbackDetail,
                 Does.Contain("gpu=110us/100us"));
-            Assert.That(crossTrackCooldown.UsesCsmTemporal, Is.False);
+            Assert.That(crossTrackCooldown.UsesCsmTemporal, Is.True);
             Assert.That(
                 crossTrackCooldown.FallbackReason,
-                Is.EqualTo(
-                    DirectionalShadowFallbackReason.GpuBudgetDemotion));
-            Assert.That(
-                crossTrackCooldown.FallbackDetail,
-                Does.Contain("until frame 132"));
+                Is.EqualTo(DirectionalShadowFallbackReason.None));
+            Assert.That(crossTrackCooldown.FallbackDetail, Is.Empty);
         });
     }
 

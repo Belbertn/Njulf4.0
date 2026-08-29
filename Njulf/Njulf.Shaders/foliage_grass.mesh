@@ -23,6 +23,7 @@
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 32) out;
 
+#ifndef FOLIAGE_GRASS_COMPACTED_MESH
 struct FoliageGrassPayload
 {
     uint ClusterIndex;
@@ -30,6 +31,7 @@ struct FoliageGrassPayload
 };
 
 taskPayloadSharedEXT FoliageGrassPayload foliagePayload;
+#endif
 
 layout(location = 0) out vec2 meshTexCoord[];
 layout(location = 1) flat out uint meshMaterialIndex[];
@@ -41,6 +43,7 @@ layout(location = 6) flat out uint meshGeometryMode[];
 layout(location = 7) flat out uint meshDebugMeshletIndex[];
 layout(location = 8) flat out vec4 meshColorVariation[];
 layout(location = 9) flat out vec4 meshDdgiIrradianceCoverage[];
+layout(location = 10) flat out uint meshImpostorMetadataIndex[];
 
 layout(push_constant) uniform FoliageDrawPushConstantBlock
 {
@@ -104,6 +107,7 @@ void EmitBladeVertex(
     meshDebugMeshletIndex[vertexIndex] = clusterIndex;
     meshColorVariation[vertexIndex] = colorVariation;
     meshDdgiIrradianceCoverage[vertexIndex] = ddgiIrradianceCoverage;
+    meshImpostorMetadataIndex[vertexIndex] = 0xffffffffu;
 }
 
 void EmitCardVertex(
@@ -114,6 +118,7 @@ void EmitCardVertex(
     uint materialIndex,
     uint clusterIndex,
     uint lodBand,
+    uint impostorMetadataIndex,
     vec4 colorVariation,
     vec4 ddgiIrradianceCoverage)
 {
@@ -128,18 +133,48 @@ void EmitCardVertex(
     meshDebugMeshletIndex[vertexIndex] = clusterIndex;
     meshColorVariation[vertexIndex] = colorVariation;
     meshDdgiIrradianceCoverage[vertexIndex] = ddgiIrradianceCoverage;
+    meshImpostorMetadataIndex[vertexIndex] = impostorMetadataIndex;
 }
 
 void main()
 {
+#ifdef FOLIAGE_GRASS_COMPACTED_MESH
+    uint drawIndex = gl_WorkGroupID.x + pc.Push.FirstDraw;
+    if (gl_WorkGroupID.x >= pc.Push.ClusterDrawCount)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
+    bool unculledShadowDraw =
+        (pc.Push.Flags & FOLIAGE_DRAW_FLAG_SHADOW) != 0u;
+    GPUFoliageProceduralDrawCommand drawCommand;
+    uint clusterIndex = gl_WorkGroupID.x;
+    if (!unculledShadowDraw)
+    {
+        drawCommand = ReadFoliageProceduralDrawCommand(
+            pc.Push.VisibleClusterBufferBaseIndex,
+            pc.Push.CurrentFrameIndex,
+            drawIndex);
+        clusterIndex = drawCommand.ClusterIndex;
+    }
+    if (clusterIndex == 0xffffffffu)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
+#else
     if (foliagePayload.Visible == 0u)
     {
         if (gl_LocalInvocationIndex == 0u)
             SetMeshOutputsEXT(0u, 0u);
         return;
     }
+    uint clusterIndex = foliagePayload.ClusterIndex;
+#endif
 
-    GPUFoliageCluster cluster = ReadFoliageCluster(foliagePayload.ClusterIndex);
+    GPUFoliageCluster cluster = ReadFoliageCluster(clusterIndex);
     GPUFoliagePatch foliagePatch = ReadFoliagePatch(cluster.PatchIndex);
     GPUFoliagePrototype prototype = ReadFoliagePrototype(foliagePatch.PrototypeIndex);
 #if NJULF_GPU_DIAGNOSTIC_COUNTERS
@@ -189,11 +224,11 @@ void main()
                 pc.Push.CurrentFrameIndex,
                 cluster.PatchIndex,
                 cluster.FirstInstance,
-                foliagePayload.ClusterIndex,
+                clusterIndex,
                 diagnosticLod,
                 DIRECTIONAL_SHADOW_CASTER_CLASS_FOLIAGE,
                 pc.Push.Padding1,
-                foliagePayload.ClusterIndex,
+                clusterIndex,
                 DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_INPUT |
                     DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_FOLIAGE |
                     DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_CONSERVATIVE_LOD,
@@ -205,6 +240,10 @@ void main()
 #endif
 
     uint requestedBlades = min(cluster.InstanceCount, 16u);
+#ifdef FOLIAGE_GRASS_COMPACTED_MESH
+    if (!unculledShadowDraw)
+        requestedBlades = min(requestedBlades, drawCommand.ActiveCount);
+#endif
     if ((pc.Push.Flags & FOLIAGE_DRAW_FLAG_SHADOW) != 0u)
     {
         float shadowDistance = prototype.LightingParams.w;
@@ -221,7 +260,13 @@ void main()
         requestedBlades = min(requestedBlades, max(1u, uint(ceil(float(requestedBlades) * pc.Push.ShadowDensityScale))));
     }
 
+#ifdef FOLIAGE_GRASS_COMPACTED_MESH
+    uint lodBand = unculledShadowDraw
+        ? SelectLod(pc.Push.CameraPositionTime.xyz, cluster, prototype)
+        : drawCommand.LodBand;
+#else
     uint lodBand = SelectLod(pc.Push.CameraPositionTime.xyz, cluster, prototype);
+#endif
     bool drawAuthoredFarImpostor = prototype.GeometryMode == 1u &&
         lodBand == 2u &&
         (prototype.Flags & FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR) != 0u;
@@ -234,10 +279,14 @@ void main()
     }
 
     uint bladeCount = drawAuthoredFarImpostor
-        ? 4u
+        ? 1u
+#ifdef FOLIAGE_GRASS_COMPACTED_MESH
+        : requestedBlades;
+#else
         : (lodBand == 0u
         ? requestedBlades
         : (lodBand == 1u ? max(1u, requestedBlades / 2u) : max(1u, requestedBlades / 4u)));
+#endif
     uint vertexCount = bladeCount * 4u;
     uint primitiveCount = bladeCount * 2u;
 
@@ -251,6 +300,10 @@ void main()
     vec3 extent = max(boundsMax - boundsMin, vec3(0.001));
     float baseHeight = max(0.05, prototype.BladeHeight);
     float baseWidth = max(0.01, prototype.BladeWidth);
+#ifdef FOLIAGE_GRASS_COMPACTED_MESH
+    if (!unculledShadowDraw)
+        baseWidth *= drawCommand.WidthCompensation;
+#endif
     float time = pc.Push.CameraPositionTime.w;
     vec3 clumpNormal = SafeNormalize(vec3(
         cluster.WorldCenterRadius.x - pc.Push.CameraPositionTime.x,
@@ -274,7 +327,45 @@ void main()
     if (prototype.GeometryMode == 2u || drawAuthoredFarImpostor)
     {
         vec3 wallUp = vec3(0.0, 1.0, 0.0);
-        vec3 viewNormal = SafeNormalize(pc.Push.CameraPositionTime.xyz - cluster.WorldCenterRadius.xyz, vec3(0.0, 0.0, 1.0));
+        vec3 cardAnchor = cluster.WorldCenterRadius.xyz;
+        uint impostorMetadataIndex = 0xffffffffu;
+        uint impostorViewIndex = 0u;
+        GPUFoliageInstance impostorInstance;
+        GPUFoliageImpostor impostor;
+        if (drawAuthoredFarImpostor)
+        {
+            impostorMetadataIndex = prototype.ImpostorMetadataIndex;
+            impostor = ReadFoliageImpostor(impostorMetadataIndex);
+            impostorInstance = ReadFoliageInstance(
+                pc.Push.CurrentFrameIndex,
+                cluster.FirstInstance);
+            float instanceScale = max(impostorInstance.PositionScale.w, 0.0001);
+            vec3 sourceSize = max(
+                impostor.SourceBoundsMax.xyz -
+                    impostor.SourceBoundsMinScale.xyz,
+                vec3(0.001));
+            sourceSize *= impostor.SourceBoundsMinScale.w * instanceScale;
+            vec3 sourceCenter =
+                (impostor.SourceBoundsMinScale.xyz +
+                    impostor.SourceBoundsMax.xyz) * 0.5 -
+                impostor.Pivot;
+            sourceCenter *= impostor.SourceBoundsMinScale.w * instanceScale;
+            cardAnchor = impostorInstance.PositionScale.xyz +
+                vec3(0.0, sourceCenter.y, 0.0);
+            baseHeight = max(0.05, sourceSize.y);
+            baseWidth = max(0.05, max(sourceSize.x, sourceSize.z));
+        }
+        vec3 viewNormal = SafeNormalize(
+            pc.Push.CameraPositionTime.xyz - cardAnchor,
+            vec3(0.0, 0.0, 1.0));
+        if (drawAuthoredFarImpostor)
+        {
+            float viewAngle = atan(viewNormal.x, viewNormal.z) -
+                impostorInstance.RotationWind.x;
+            impostorViewIndex = SelectFoliageImpostorView(
+                impostor,
+                vec3(sin(viewAngle), viewNormal.y, cos(viewAngle)));
+        }
         vec3 wallSide = drawAuthoredFarImpostor
             ? SafeNormalize(cross(wallUp, viewNormal), vec3(1.0, 0.0, 0.0))
             : vec3(1.0, 0.0, 0.0);
@@ -294,17 +385,12 @@ void main()
                 ? (card & 1u) * 1.57079632679
                 : Hash01(seed + 6u) * 6.28318530718;
             vec3 center = drawAuthoredFarImpostor
-                ? cluster.WorldCenterRadius.xyz + vec3(
-                    (rx - 0.5) * cluster.WorldCenterRadius.w * 0.18,
-                    (ry - 0.5) * cluster.WorldCenterRadius.w * 0.22,
-                    (rz - 0.5) * cluster.WorldCenterRadius.w * 0.18)
+                ? cardAnchor
                 : vec3(
                     boundsMin.x + rx * extent.x,
                     boundsMin.y + ry * extent.y,
                     boundsMax.z - 0.02 - rz * 0.03);
-            vec3 sideAxis = drawAuthoredFarImpostor && (card & 1u) != 0u
-                ? crossSide
-                : wallSide;
+            vec3 sideAxis = wallSide;
             vec3 side = drawAuthoredFarImpostor
                 ? sideAxis
                 : normalize(wallSide * cos(angle) + wallUp * sin(angle));
@@ -312,8 +398,12 @@ void main()
                 ? wallUp
                 : normalize(-wallSide * sin(angle) + wallUp * cos(angle));
 
-            float height = baseHeight * mix(0.75, 1.25, rs) * (drawAuthoredFarImpostor ? 1.0 : 1.0);
-            float width = baseWidth * mix(0.75, 1.25, rw) * (drawAuthoredFarImpostor ? 1.0 : 1.0);
+            float height = drawAuthoredFarImpostor
+                ? baseHeight
+                : baseHeight * mix(0.75, 1.25, rs);
+            float width = drawAuthoredFarImpostor
+                ? baseWidth
+                : baseWidth * mix(0.75, 1.25, rw);
             float wind = sin(time * prototype.WindParams.y + float(seed & 1023u) * 0.013) * prototype.WindParams.x;
             vec3 windOffset = wallNormal * wind * height * 0.08;
             vec3 halfSide = side * (width * 0.5);
@@ -322,11 +412,20 @@ void main()
             uint materialIndex = prototype.MaterialIndex;
             float valueVariation = mix(0.88, 1.12, Hash01(seed + 7u));
             vec4 colorVariation = vec4(vec3(0.94, 1.04, 0.88) * valueVariation, 1.0);
+            vec4 atlasRectangle = drawAuthoredFarImpostor
+                ? ReadFoliageImpostorView(
+                    impostor.ViewDataOffset + impostorViewIndex)
+                    .AtlasRectangle
+                : vec4(0.0, 0.0, 1.0, 1.0);
+            vec2 uv00 = atlasRectangle.xy;
+            vec2 uv10 = atlasRectangle.xy + vec2(atlasRectangle.z, 0.0);
+            vec2 uv01 = atlasRectangle.xy + vec2(0.0, atlasRectangle.w);
+            vec2 uv11 = atlasRectangle.xy + atlasRectangle.zw;
 
-            EmitCardVertex(vertexBase + 0u, center - halfSide - halfUp, wallNormal, vec2(0.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
-            EmitCardVertex(vertexBase + 1u, center + halfSide - halfUp, wallNormal, vec2(1.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
-            EmitCardVertex(vertexBase + 2u, center - halfSide + halfUp + windOffset, wallNormal, vec2(0.0, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
-            EmitCardVertex(vertexBase + 3u, center + halfSide + halfUp + windOffset, wallNormal, vec2(1.0, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
+            EmitCardVertex(vertexBase + 0u, center - halfSide - halfUp, wallNormal, uv00, materialIndex, clusterIndex, lodBand, impostorMetadataIndex, colorVariation, clusterDdgiIrradianceCoverage);
+            EmitCardVertex(vertexBase + 1u, center + halfSide - halfUp, wallNormal, uv10, materialIndex, clusterIndex, lodBand, impostorMetadataIndex, colorVariation, clusterDdgiIrradianceCoverage);
+            EmitCardVertex(vertexBase + 2u, center - halfSide + halfUp + windOffset, wallNormal, uv01, materialIndex, clusterIndex, lodBand, impostorMetadataIndex, colorVariation, clusterDdgiIrradianceCoverage);
+            EmitCardVertex(vertexBase + 3u, center + halfSide + halfUp + windOffset, wallNormal, uv11, materialIndex, clusterIndex, lodBand, impostorMetadataIndex, colorVariation, clusterDdgiIrradianceCoverage);
         }
 
         for (uint primitive = gl_LocalInvocationIndex; primitive < primitiveCount; primitive += gl_WorkGroupSize.x)
@@ -366,10 +465,10 @@ void main()
         float valueVariation = mix(0.86, 1.14, Hash01(seed + 6u));
         vec4 colorVariation = vec4(vec3(0.90, 1.05, 0.82) * valueVariation, 1.0);
 
-        EmitBladeVertex(vertexBase + 0u, root - side, vec2(0.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
-        EmitBladeVertex(vertexBase + 1u, root + side, vec2(1.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
-        EmitBladeVertex(vertexBase + 2u, top - side * 0.18, vec2(0.15, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
-        EmitBladeVertex(vertexBase + 3u, top + side * 0.18, vec2(0.85, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
+        EmitBladeVertex(vertexBase + 0u, root - side, vec2(0.0, 0.0), materialIndex, clusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
+        EmitBladeVertex(vertexBase + 1u, root + side, vec2(1.0, 0.0), materialIndex, clusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
+        EmitBladeVertex(vertexBase + 2u, top - side * 0.18, vec2(0.15, 1.0), materialIndex, clusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
+        EmitBladeVertex(vertexBase + 3u, top + side * 0.18, vec2(0.85, 1.0), materialIndex, clusterIndex, lodBand, colorVariation, clusterDdgiIrradianceCoverage);
     }
 
     for (uint primitive = gl_LocalInvocationIndex; primitive < primitiveCount; primitive += gl_WorkGroupSize.x)

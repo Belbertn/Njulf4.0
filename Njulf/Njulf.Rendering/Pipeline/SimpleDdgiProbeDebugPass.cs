@@ -33,6 +33,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferManager _bufferManager;
         private readonly StagingRing _stagingRing;
         private readonly RenderTargetManager _renderTargets;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly BufferHandle[] _instanceBuffers =
             new BufferHandle[FramesInFlight];
         private nint _entryPointName;
@@ -51,12 +52,14 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             BufferManager bufferManager,
             StagingRing stagingRing,
-            RenderTargetManager renderTargets)
+            RenderTargetManager renderTargets,
+            GiPipelineCacheService? pipelineCacheService = null)
             : base("SimpleDdgiProbeDebugPass", context, swapchain, bindlessHeap)
         {
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _pipelineCacheService = pipelineCacheService;
             Array.Fill(_instanceBuffers, BufferHandle.Invalid);
         }
 
@@ -202,7 +205,7 @@ namespace Njulf.Rendering.Pipeline
             DestroyPipelines();
             if (_pipelineLayout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
             _pipelineLayout = default;
             _pipelineCache = default;
@@ -226,9 +229,10 @@ namespace Njulf.Rendering.Pipeline
                 return;
             if (_entryPointName == 0)
                 _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
-            _pipelineCache = GraphicsPipelineFactory.CreatePipelineCache(
-                _context,
-                "Simple DDGI Probe Debug Pipeline Cache");
+            _pipelineCache = _pipelineCacheService?.Cache ??
+                GraphicsPipelineFactory.CreatePipelineCache(
+                    _context,
+                    "Simple DDGI Probe Debug Pipeline Cache");
             CreatePipelineLayout();
             CreatePipelines();
             _initialized = true;
@@ -419,13 +423,19 @@ namespace Njulf.Rendering.Pipeline
                     PDynamicState = &dynamic,
                     Layout = _pipelineLayout
                 };
-                Result result = _context.Api.CreateGraphicsPipelines(
-                    _context.Device,
-                    _pipelineCache,
-                    1,
-                    &pipelineInfo,
-                    null,
-                    out VkPipeline pipeline);
+                Result result = _pipelineCacheService != null
+                    ? _pipelineCacheService.CreateGraphicsPipeline(
+                        new PipelineArtifactId(
+                            $"SimpleDdgi.ProbeDebug.{debugName}"),
+                        &pipelineInfo,
+                        out VkPipeline pipeline)
+                    : _context.Api.CreateGraphicsPipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out pipeline);
                 if (result != Result.Success)
                     throw new VulkanException($"Failed to create {debugName}", result);
                 _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, debugName);

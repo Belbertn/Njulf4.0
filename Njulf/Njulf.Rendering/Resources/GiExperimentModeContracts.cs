@@ -14,9 +14,8 @@ public enum SimpleDdgiReceiverFeedbackMode : uint
     LegacyPackedReference = 1,
     ExactCompacted = 2,
     /// <summary>
-    /// Selects the exact compacted producer only when the complete B1
-    /// qualification binding matches this build, device, settings, corpus,
-    /// content profile, and scene asset. A mismatch retains canonical Off.
+    /// Durable compatibility value normalized to ExactCompacted. Evidence is
+    /// diagnostic only; real runtime capability and resource gates still apply.
     /// </summary>
     AutoQualified = 3
 }
@@ -58,7 +57,7 @@ public enum SimpleDdgiNearFieldResidualMode : uint
     /// Bounded Hi-Z SSGI residual. Explicit selection starts at quarter
     /// resolution and falls back to eighth resolution when its independent
     /// memory envelope cannot admit the complete quarter-resolution profile.
-    /// Half resolution is reserved for evidence-bound AutoQualified profiles.
+    /// Sustained completed-GPU timing may promote it to half resolution.
     /// </summary>
     HiZAdaptive = 4
 }
@@ -164,24 +163,60 @@ public readonly record struct AdvancedGiFeatureSelection(
 }
 
 /// <summary>
-/// Separates explicit user intent from automatic promotion policy.  Explicit
-/// modes still pass every hardware, Vulkan-limit, memory, ABI, allocation and
-/// resource-completeness check; only AutoQualified consumes manifest gates.
+/// Separates durable user intent from production mode selection. Explicit and
+/// AutoQualified compatibility values still pass every hardware, Vulkan-limit,
+/// memory, ABI, allocation, content, and resource-completeness check.
 /// </summary>
 public static class AdvancedGiActivationPolicy
 {
     public static bool RequiresQualification<TMode>(TMode mode)
-        where TMode : struct, Enum =>
-        ModeTraits<TMode>.HasAutoQualified &&
-        EqualityComparer<TMode>.Default.Equals(
-            mode,
-            ModeTraits<TMode>.AutoQualified);
+        where TMode : struct, Enum => false;
 
     public static bool PrerequisitesSatisfied<TMode>(
         TMode mode,
         in AdvancedGiPrerequisiteGateResult gate)
         where TMode : struct, Enum =>
-        !RequiresQualification(mode) || gate.Passed;
+        true;
+
+    /// <summary>
+    /// Converts the durable AutoQualified compatibility value into the same
+    /// explicit implementation requested by production presets. The caller
+    /// retains the original value in RequestedMode diagnostics.
+    /// </summary>
+    public static TMode NormalizeProductionMode<TMode>(TMode mode)
+        where TMode : struct, Enum
+    {
+        if (!ModeTraits<TMode>.HasAutoQualified ||
+            !EqualityComparer<TMode>.Default.Equals(
+                mode,
+                ModeTraits<TMode>.AutoQualified))
+        {
+            return mode;
+        }
+
+        string? productionName = typeof(TMode) ==
+            typeof(SimpleDdgiReceiverFeedbackMode)
+                ? nameof(SimpleDdgiReceiverFeedbackMode.ExactCompacted)
+                : typeof(TMode) == typeof(DdgiOpacityMicromapMode)
+                    ? nameof(DdgiOpacityMicromapMode.ExtFourStateExperiment)
+                    : typeof(TMode) ==
+                        typeof(SimpleDdgiDirectionalGuidingMode)
+                        ? nameof(SimpleDdgiDirectionalGuidingMode
+                            .PerProbeHistogramExperiment)
+                        : typeof(TMode) == typeof(GiCausticMode)
+                            ? nameof(GiCausticMode.WorldCacheExperiment)
+                            : typeof(TMode) ==
+                                typeof(SimpleDdgiNearFieldResidualMode)
+                                ? nameof(SimpleDdgiNearFieldResidualMode
+                                    .HiZAdaptive)
+                                : null;
+        return productionName is not null && Enum.TryParse(
+            productionName,
+            ignoreCase: false,
+            out TMode productionMode)
+                ? productionMode
+                : mode;
+    }
 
     private static class ModeTraits<TMode>
         where TMode : struct, Enum

@@ -61,13 +61,28 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.SceneGpuLodHistoryBufferFrame1, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferBase + 1));
             Assert.That(BindlessIndex.DdgiDynamicGeometryBufferBase, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferFrame1 + 1));
             Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(
-                BindlessIndex.DdgiDynamicGeometryBufferBase +
-                BindlessIndex.DdgiDynamicGeometryBufferCount + 2));
+                BindlessIndex.FoliageImpostorViewBuffer + 1));
+            Assert.That(
+                BindlessIndex.FoliageImpostorMetadataBuffer,
+                Is.EqualTo(
+                    BindlessIndex.MeshletPhysicalPageBankBufferBase +
+                    BindlessIndex.MeshletPhysicalPageBankBufferCount));
+            Assert.That(BindlessIndex.AutomaticPlanarReflectionBuffer,
+                Is.EqualTo(BindlessIndex.FoliageImpostorMetadataBuffer + 1));
+            Assert.That(BindlessIndex.FoliageAuthoredInstanceCommandBufferBase,
+                Is.EqualTo(BindlessIndex.AutomaticPlanarReflectionBuffer + 1));
+            Assert.That(BindlessIndex.FoliageImpostorViewBuffer,
+                Is.EqualTo(
+                    BindlessIndex.FoliageAuthoredInstanceCommandBufferFrame1 + 1));
             Assert.That(BindlessIndex.SceneInstanceCandidateBufferBase, Is.EqualTo(
                 BindlessIndex.DdgiDynamicGeometryBufferBase +
                 BindlessIndex.DdgiDynamicGeometryBufferCount));
             Assert.That(BindlessIndex.SceneInstanceCandidateBufferFrame1, Is.EqualTo(
                 BindlessIndex.SceneInstanceCandidateBufferBase + 1));
+            Assert.That(BindlessIndex.MeshletPhysicalPageTableBufferBase, Is.EqualTo(
+                BindlessIndex.SceneInstanceCandidateBufferFrame1 + 1));
+            Assert.That(BindlessIndex.MeshletPhysicalPageBankBufferBase, Is.EqualTo(
+                BindlessIndex.MeshletStreamingFeedbackCounterBufferFrame1 + 1));
             Assert.That(BindlessIndex.AreaLightLtcMatrixTexture, Is.EqualTo(BindlessIndex.PrefilteredEnvironmentNextTexture + 1));
             Assert.That(BindlessIndex.AreaLightLtcAmplitudeTexture, Is.EqualTo(BindlessIndex.AreaLightLtcMatrixTexture + 1));
             Assert.That(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase, Is.EqualTo(BindlessIndex.AreaLightLtcAmplitudeTexture + 1));
@@ -167,6 +182,21 @@ public sealed class BindlessIndexTests
             ["SCENE_GPU_LOD_HISTORY_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneGpuLodHistoryBufferFrame1,
             ["SCENE_INSTANCE_CANDIDATE_BUFFER_BASE_INDEX"] = BindlessIndex.SceneInstanceCandidateBufferBase,
             ["SCENE_INSTANCE_CANDIDATE_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneInstanceCandidateBufferFrame1,
+            ["MESHLET_PHYSICAL_PAGE_TABLE_BUFFER_BASE_INDEX"] = BindlessIndex.MeshletPhysicalPageTableBufferBase,
+            ["MESHLET_PHYSICAL_PAGE_TABLE_BUFFER_FRAME1_INDEX"] = BindlessIndex.MeshletPhysicalPageTableBufferFrame1,
+            ["MESHLET_STREAMING_RANGE_BUFFER_INDEX"] = BindlessIndex.MeshletStreamingRangeBuffer,
+            ["MESHLET_STREAMING_RANGE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.MeshletStreamingRangeStateBufferBase,
+            ["MESHLET_STREAMING_RANGE_STATE_BUFFER_FRAME1_INDEX"] = BindlessIndex.MeshletStreamingRangeStateBufferFrame1,
+            ["MESHLET_VIRTUAL_MAPPING_BUFFER_INDEX"] = BindlessIndex.MeshletVirtualMappingBuffer,
+            ["MESHLET_STREAMING_DEMAND_BUFFER_BASE_INDEX"] = BindlessIndex.MeshletStreamingDemandBufferBase,
+            ["MESHLET_STREAMING_DEMAND_BUFFER_FRAME1_INDEX"] = BindlessIndex.MeshletStreamingDemandBufferFrame1,
+            ["MESHLET_STREAMING_FEEDBACK_COUNTER_BUFFER_BASE_INDEX"] = BindlessIndex.MeshletStreamingFeedbackCounterBufferBase,
+            ["MESHLET_STREAMING_FEEDBACK_COUNTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.MeshletStreamingFeedbackCounterBufferFrame1,
+            ["MESHLET_PHYSICAL_PAGE_BANK_BUFFER_BASE_INDEX"] = BindlessIndex.MeshletPhysicalPageBankBufferBase,
+            ["AUTOMATIC_PLANAR_REFLECTION_BUFFER_INDEX"] = BindlessIndex.AutomaticPlanarReflectionBuffer,
+            ["FOLIAGE_AUTHORED_INSTANCE_COMMAND_BUFFER_BASE_INDEX"] = BindlessIndex.FoliageAuthoredInstanceCommandBufferBase,
+            ["FOLIAGE_AUTHORED_INSTANCE_COMMAND_BUFFER_FRAME1_INDEX"] = BindlessIndex.FoliageAuthoredInstanceCommandBufferFrame1,
+            ["FOLIAGE_IMPOSTOR_VIEW_BUFFER_INDEX"] = BindlessIndex.FoliageImpostorViewBuffer,
             ["AREA_LIGHT_LTC_MATRIX_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcMatrixTexture,
             ["AREA_LIGHT_LTC_AMPLITUDE_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcAmplitudeTexture,
             ["OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX"] = BindlessIndex.OpaqueSceneColorSnapshotTexture,

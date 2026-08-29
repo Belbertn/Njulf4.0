@@ -279,24 +279,19 @@ public sealed unsafe class DdgiFoliageProxyGenerationPass : IDisposable
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            long start = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-            Result result;
-            try
-            {
-                result = _context.Api.CreateComputePipelines(
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId(
+                        $"DdgiFoliageProxyGenerationPass:{ShaderName}"),
+                    &createInfo,
+                    out _pipeline)
+                : _context.Api.CreateComputePipelines(
                     _context.Device,
                     _pipelineCache,
                     1,
                     &createInfo,
                     null,
                     out _pipeline);
-            }
-            finally
-            {
-                _pipelineCacheService?.EndPipelineCreation(
-                    $"DdgiFoliageProxyGenerationPass:{ShaderName}",
-                    start);
-            }
             if (result != Result.Success)
                 throw new VulkanException(
                     "Failed to create DDGI foliage proxy compute pipeline",

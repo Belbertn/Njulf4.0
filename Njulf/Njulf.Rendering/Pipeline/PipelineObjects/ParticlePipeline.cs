@@ -472,26 +472,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 BasePipelineIndex = -1
             };
 
-            long pipelineStart =
-                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
-            Result result;
-            VkPipeline pipeline;
-            try
-            {
-                result = _context.Api.CreateGraphicsPipelines(
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateGraphicsPipeline(
+                    new PipelineArtifactId(debugName),
+                    &pipelineInfo,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateGraphicsPipelines(
                     _context.Device,
                     _pipelineCache,
                     1,
                     &pipelineInfo,
                     null,
                     out pipeline);
-            }
-            finally
-            {
-                _pipelineCacheService?.EndPipelineCreation(
-                    debugName,
-                    pipelineStart);
-            }
             if (result != Result.Success)
                 throw new VulkanException($"Failed to create {debugName}", result);
 

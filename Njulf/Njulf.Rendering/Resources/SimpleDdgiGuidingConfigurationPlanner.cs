@@ -28,8 +28,8 @@ internal static class SimpleDdgiGuidingConfigurationPlanner
             return SimpleDdgiGuidingFrameConfiguration.Disabled;
         }
 
-        if (gi.SimpleDdgiDirectionalGuidingMode ==
-            SimpleDdgiDirectionalGuidingMode.AutoQualified &&
+        if (AdvancedGiActivationPolicy.RequiresQualification(
+                gi.SimpleDdgiDirectionalGuidingMode) &&
             !request.RuntimeContentState.Matched)
         {
             reason = request.RuntimeContentState.Reason;

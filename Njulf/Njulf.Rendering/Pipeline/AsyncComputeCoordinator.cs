@@ -277,7 +277,10 @@ internal sealed class AsyncComputeCoordinator
                 : null;
         AsyncComputePath? autoTimingProbe =
             effectiveMode == AsyncComputeMode.Auto &&
-            !autoEnabledPath.HasValue
+            !autoEnabledPath.HasValue &&
+            !allPaths.Any(path =>
+                requestedByFeature[path] &&
+                settings.AsyncCompute.IsPreferred(path))
                 ? SelectAutoTimingProbe(input, requestedByFeature)
                 : null;
         AsyncComputePath? autoIsolatedPath =
@@ -287,23 +290,30 @@ internal sealed class AsyncComputeCoordinator
         {
             bool requested = requestedByFeature[path];
             AsyncComputeTimingDecision timing = timingDecisions[path];
+            bool preferred = effectiveMode == AsyncComputeMode.Auto &&
+                requested && settings.AsyncCompute.IsPreferred(path);
             bool isSelectedAutoPath = autoIsolatedPath == path;
             bool isProbe = autoTimingProbe == path;
             bool pauseForAutoIsolation =
                 effectiveMode == AsyncComputeMode.Auto &&
                 requested &&
+                !preferred &&
                 autoIsolatedPath.HasValue &&
                 !isSelectedAutoPath;
             bool timingEligible = effectiveMode == AsyncComputeMode.Auto
-                ? isSelectedAutoPath && timing.Eligible
+                ? preferred || isSelectedAutoPath && timing.Eligible
                 : timing.Eligible;
-            AsyncComputePathStatus timingStatus = pauseForAutoIsolation
+            AsyncComputePathStatus timingStatus = preferred
+                ? AsyncComputePathStatus.Enabled
+                : pauseForAutoIsolation
                 ? timing.Status == AsyncComputePathStatus.Enabled
                     ? AsyncComputePathStatus.PendingWarmup
                     : timing.Status
                 : timing.Status;
             string reason = !requested
                 ? DescribeInactivePath(path, input)
+                : preferred
+                    ? "Preferred production path; concrete queue/resource validation still applies."
                 : isProbe
                     ? $"Collecting isolated Auto timing samples for {path}; no other async path is scheduled this frame."
                     : pauseForAutoIsolation
@@ -320,7 +330,8 @@ internal sealed class AsyncComputeCoordinator
                 reason,
                 IsAutoTimingProbe: isProbe,
                 CorrectnessCertified:
-                    AsyncComputePassCatalog.IsCorrectnessCertified(path),
+                    AsyncComputePassCatalog
+                        .IsProductionActivationAuthorized(path),
                 ForceValidationAuthorized:
                     effectiveMode ==
                         AsyncComputeMode.ForceEnabledForValidation &&
@@ -1187,8 +1198,7 @@ internal sealed class AsyncComputeCoordinator
                 sceneData.SimpleDdgiActive != 0 &&
                 (sceneData.SimpleDdgiProbesUpdated > 0 ||
                  (sceneData.SimpleDdgiSchedulerMode.IsGpuMode() &&
-                  sceneData.SimpleDdgiSchedulerReady != 0)) &&
-                sceneData.SimpleDdgiSampledAtlasActive == 0,
+                  sceneData.SimpleDdgiSchedulerReady != 0)),
             AsyncComputePath.FarFieldClipmapBake =>
                 gi.EffectiveUseDdgi &&
                 gi.FarFieldClipmapEnabled &&
@@ -1230,7 +1240,7 @@ internal sealed class AsyncComputeCoordinator
                 new AsyncComputeTimingStats(0, 0, 0, 0));
         }
 
-        if (!AsyncComputePassCatalog.IsCorrectnessCertified(path))
+        if (!AsyncComputePassCatalog.IsProductionActivationAuthorized(path))
         {
             return new AsyncComputeTimingDecision(
                 AsyncComputePathStatus.Uncertified,
@@ -1288,7 +1298,7 @@ internal sealed class AsyncComputeCoordinator
             int index = (_nextAutoTimingProbePath + offset) %
                 allPaths.Length;
             AsyncComputePath path = allPaths[index];
-            if (!AsyncComputePassCatalog.IsCorrectnessCertified(path))
+            if (!AsyncComputePassCatalog.IsProductionActivationAuthorized(path))
                 continue;
             if (!requestedByFeature.TryGetValue(
                     path,
@@ -1449,6 +1459,9 @@ internal sealed class AsyncComputeCoordinator
         signature = MixSettingsSignature(
             signature,
             settings.GpuParticlesEnabled ? 1UL : 0UL);
+        signature = MixSettingsSignature(
+            signature,
+            (uint)settings.PreferredPathMask);
         signature = MixSettingsSignature(
             signature,
             unchecked((uint)settings.AutoMinimumSampleCount));

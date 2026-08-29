@@ -32,6 +32,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
     private readonly BufferManager _bufferManager;
     private readonly BindlessHeap _bindlessHeap;
     private readonly SimpleDdgiStoragePackingMode _storagePackingMode;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly nint _entryPointName;
     private DescriptorSetLayout _descriptorSetLayout;
     private DescriptorPool _descriptorPool;
@@ -54,7 +55,8 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         VulkanContext context,
         BufferManager bufferManager,
         BindlessHeap bindlessHeap,
-        SimpleDdgiStoragePackingMode storagePackingMode)
+        SimpleDdgiStoragePackingMode storagePackingMode,
+        GiPipelineCacheService? pipelineCacheService = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
@@ -62,6 +64,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         if (!Enum.IsDefined(storagePackingMode))
             throw new ArgumentOutOfRangeException(nameof(storagePackingMode));
         _storagePackingMode = storagePackingMode;
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr("main");
 
         try
@@ -1539,16 +1542,23 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
                 Layout = pipelineLayout,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device,
-                // This short-lived pass-local cache never persisted useful
-                // data and sharing it across the six optional C3 programs can
-                // propagate a failed native compilation on affected drivers.
-                default,
-                1u,
-                &info,
-                null,
-                out VkPipeline pipeline);
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId(
+                        $"SimpleDdgi.Guiding.{shaderName}"),
+                    &info,
+                    out VkPipeline pipeline,
+                    // Preserve the established affected-driver workaround:
+                    // C3 participates in telemetry and verification but not
+                    // the shared driver cache or binary store.
+                    PipelineCacheUsage.Bypass)
+                : _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    default,
+                    1u,
+                    &info,
+                    null,
+                    out pipeline);
             if (result != Result.Success)
             {
                 throw new VulkanException(

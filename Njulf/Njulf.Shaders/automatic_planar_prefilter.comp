@@ -1,0 +1,98 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 2, binding = 0) uniform sampler2D PlanarBaseColor;
+layout(set = 2, binding = 1, rgba16f) uniform writeonly image2D PlanarFilteredColor;
+
+layout(push_constant) uniform AutomaticPlanarPrefilterPushBlock
+{
+    uint OutputWidth;
+    uint OutputHeight;
+    uint SampleCount;
+    uint MipLevel;
+    float Roughness;
+    float SourceTexelX;
+    float SourceTexelY;
+    float MaximumUvFootprint;
+} pc;
+
+float AutomaticPlanarRadicalInverse(uint bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) |
+        ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) |
+        ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) |
+        ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) |
+        ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+
+vec2 AutomaticPlanarHammersley(uint index, uint count)
+{
+    return vec2(
+        (float(index) + 0.5) / max(float(count), 1.0),
+        AutomaticPlanarRadicalInverse(index));
+}
+
+vec3 AutomaticPlanarImportanceSampleGgx(vec2 point, float roughness)
+{
+    float alpha = max(roughness * roughness, 0.001);
+    float alphaSquared = alpha * alpha;
+    float phi = 6.28318530718 * point.x;
+    float cosine = sqrt(max(
+        (1.0 - point.y) /
+            (1.0 + (alphaSquared - 1.0) * point.y),
+        0.0));
+    float sine = sqrt(max(1.0 - cosine * cosine, 0.0));
+    return vec3(cos(phi) * sine, sin(phi) * sine, cosine);
+}
+
+void main()
+{
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.x >= pc.OutputWidth || pixel.y >= pc.OutputHeight)
+        return;
+
+    vec2 uv = (vec2(pixel) + vec2(0.5)) /
+        vec2(max(pc.OutputWidth, 1u), max(pc.OutputHeight, 1u));
+    uint sampleCount = max(pc.SampleCount, 1u);
+    vec4 accumulated = vec4(0.0);
+    float totalWeight = 0.0;
+    vec3 viewDirection = vec3(0.0, 0.0, 1.0);
+    for (uint sampleIndex = 0u; sampleIndex < sampleCount; sampleIndex++)
+    {
+        vec3 halfVector = AutomaticPlanarImportanceSampleGgx(
+            AutomaticPlanarHammersley(sampleIndex, sampleCount),
+            pc.Roughness);
+        vec3 lightDirection = normalize(
+            2.0 * dot(viewDirection, halfVector) * halfVector -
+            viewDirection);
+        float weight = max(lightDirection.z, 0.0);
+        if (weight <= 0.0)
+            continue;
+        vec2 slope = lightDirection.xy / max(lightDirection.z, 0.2);
+        vec2 offset = slope * pc.MaximumUvFootprint;
+        vec2 edge = vec2(pc.SourceTexelX, pc.SourceTexelY) * 0.5;
+        vec2 sampleUv = clamp(uv + offset, edge, vec2(1.0) - edge);
+        vec4 value = textureLod(PlanarBaseColor, sampleUv, 0.0);
+        if (any(isnan(value)) || any(isinf(value)))
+            continue;
+        accumulated += vec4(max(value.rgb, vec3(0.0)),
+            clamp(value.a, 0.0, 1.0)) * weight;
+        totalWeight += weight;
+    }
+    vec4 filtered = totalWeight > 0.0
+        ? accumulated / totalWeight
+        : textureLod(PlanarBaseColor, uv, 0.0);
+    imageStore(
+        PlanarFilteredColor,
+        ivec2(pixel),
+        vec4(max(filtered.rgb, vec3(0.0)),
+            clamp(filtered.a, 0.0, 1.0)));
+}

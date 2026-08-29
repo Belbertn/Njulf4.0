@@ -356,9 +356,9 @@ public sealed class SubsurfaceBacklightingContractTests
             Assert.That(shaderProject,
                 Does.Contain("<AdditionalCompileOptions>%(ReceiverFeedbackGraphicsShaderVariant.AdditionalCompileOptions)</AdditionalCompileOptions>"));
             Assert.That(atomicVerification,
-                Does.Contain("'forward_transparent_ray.frag.spv' = 10"));
+                Does.Contain("'forward_transparent_ray.frag.spv' = 17"));
             Assert.That(atomicVerification,
-                Does.Contain("'forward_weighted_oit_ray.frag.spv' = 10"));
+                Does.Contain("'forward_weighted_oit_ray.frag.spv' = 17"));
         });
     }
 

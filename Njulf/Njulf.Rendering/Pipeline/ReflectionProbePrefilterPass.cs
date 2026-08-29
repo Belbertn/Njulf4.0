@@ -24,6 +24,7 @@ public sealed unsafe class ReflectionProbePrefilterPass : RenderPassBase
 
     private readonly ReflectionProbeManager _manager;
     private readonly ReflectionSettings _settings;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly nint _entryPointName;
     private readonly DescriptorSet[] _descriptorSets = new DescriptorSet[DescriptorSetCount];
     private DescriptorSetLayout _descriptorSetLayout;
@@ -37,11 +38,13 @@ public sealed unsafe class ReflectionProbePrefilterPass : RenderPassBase
         SwapchainManager swapchain,
         BindlessHeap bindlessHeap,
         ReflectionProbeManager manager,
-        ReflectionSettings settings)
+        ReflectionSettings settings,
+        GiPipelineCacheService? pipelineCacheService = null)
         : base("ReflectionProbePrefilterPass", context, swapchain, bindlessHeap)
     {
         _manager = manager ?? throw new ArgumentNullException(nameof(manager));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr("main");
     }
 
@@ -139,7 +142,7 @@ public sealed unsafe class ReflectionProbePrefilterPass : RenderPassBase
             _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
         if (_pipelineLayout.Handle != 0)
             _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_descriptorPool.Handle != 0)
             _context.Api.DestroyDescriptorPool(_context.Device, _descriptorPool, null);
@@ -267,6 +270,12 @@ public sealed unsafe class ReflectionProbePrefilterPass : RenderPassBase
 
     private void CreatePipelineCache()
     {
+        if (_pipelineCacheService != null)
+        {
+            _pipelineCache = _pipelineCacheService.Cache;
+            return;
+        }
+
         var info = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
         Result result = _context.Api.CreatePipelineCache(
             _context.Device,
@@ -297,13 +306,18 @@ public sealed unsafe class ReflectionProbePrefilterPass : RenderPassBase
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device,
-                _pipelineCache,
-                1,
-                &info,
-                null,
-                out VkPipeline pipeline);
+            Result result = _pipelineCacheService != null
+                ? _pipelineCacheService.CreateComputePipeline(
+                    new PipelineArtifactId("ReflectionProbe.Prefilter"),
+                    &info,
+                    out VkPipeline pipeline)
+                : _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &info,
+                    null,
+                    out pipeline);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create reflection prefilter pipeline.", result);
             return pipeline;

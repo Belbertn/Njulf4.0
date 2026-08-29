@@ -109,10 +109,10 @@ public enum DdgiFeatureFallbackReason : uint
 public sealed class DdgiContentRolloutPolicy
 {
     /// <summary>
-    /// Features that have completed the device-independent production audit.
-    /// Recursive glossy transport remains separately qualified per device and
-    /// build because its coupled convergence certificate is hardware/shader
-    /// specific.
+    /// Features requested by the ordinary production profile. Device support,
+    /// memory admission, source ABI, resource completeness, and transport
+    /// convergence remain runtime facts; external qualification artifacts are
+    /// optional evidence and are not activation authority.
     /// </summary>
     public const DdgiContentFeature ProductionBaseline =
         DdgiContentFeature.ManyLightSampling |
@@ -120,7 +120,8 @@ public sealed class DdgiContentRolloutPolicy
         DdgiContentFeature.TransparentGeometry |
         DdgiContentFeature.FoliageGeometry |
         DdgiContentFeature.DirectionalRadiance |
-        DdgiContentFeature.OneBounceGlossyTransport;
+        DdgiContentFeature.OneBounceGlossyTransport |
+        DdgiContentFeature.RecursiveGlossyTransport;
 
     private int _approvedFeatures = unchecked((int)(uint)ProductionBaseline);
     private int _validationReferenceModesAuthorized;
