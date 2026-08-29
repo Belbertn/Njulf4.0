@@ -1233,6 +1233,19 @@ namespace Njulf.Rendering.Pipeline
             ExecuteCanonicalOnly(cmd);
             ExecuteSampledOnly(cmd);
 
+            // This is the receiver-visible publication boundary for an
+            // accelerated transaction. Keep it separate from mere pipeline
+            // availability and intermediate red/black SSBO copies so strict
+            // qualification can prove end-to-end consumption.
+            if (sceneData.SimpleDdgiTransportAcceleratedDispatchCount > 0)
+            {
+                sceneData.SimpleDdgiTransportAcceleratedFinalPublicationCount =
+                    checked(
+                        sceneData
+                            .SimpleDdgiTransportAcceleratedFinalPublicationCount +
+                        1);
+            }
+
             // Capture state only after canonical and optional image publication
             // have been recorded. The transaction is completed at this point.
             if (!gpuResident)

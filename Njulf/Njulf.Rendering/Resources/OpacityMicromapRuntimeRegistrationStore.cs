@@ -7,6 +7,22 @@ using Njulf.Rendering.Data;
 namespace Njulf.Rendering.Resources;
 
 /// <summary>
+/// Material aspects that can change the baked opacity decision or the static
+/// BLAS candidate-confirmation policy. Transport-rollout and shading-only
+/// revisions are intentionally excluded from this identity.
+/// </summary>
+public readonly record struct OpacityMicromapMaterialRevision(
+    uint AlphaCoverage,
+    uint Sidedness)
+{
+    public bool IsValid => AlphaCoverage != 0U && Sidedness != 0U;
+
+    public static OpacityMicromapMaterialRevision From(
+        in MaterialAspectRevisions revisions) =>
+        new(revisions.AlphaCoverage, revisions.Sidedness);
+}
+
+/// <summary>
 /// Immutable association between one submesh-local static BLAS domain and an
 /// exact cooked OMM payload. A model-wide payload is deliberately not
 /// registered against one of several submesh BLASes: doing so would silently
@@ -15,7 +31,7 @@ namespace Njulf.Rendering.Resources;
 public readonly record struct OpacityMicromapRuntimeMeshRegistration(
     MeshHandle Mesh,
     MaterialHandle Material,
-    uint MaterialContentRevision,
+    OpacityMicromapMaterialRevision MaterialOpacityRevision,
     OpacityMicromapContentKey MeshGeometryKey,
     OpacityMicromapCookedPayload Payload,
     StaticBlasRayGeometryPolicy RayGeometryPolicy,
@@ -23,7 +39,8 @@ public readonly record struct OpacityMicromapRuntimeMeshRegistration(
 {
     public bool TryValidate(out string detail)
     {
-        if (!Mesh.IsValid || !Material.IsValid || MaterialContentRevision == 0U ||
+        if (!Mesh.IsValid || !Material.IsValid ||
+            !MaterialOpacityRevision.IsValid ||
             MeshGeometryKey.IsZero || Payload is null ||
             AccelerationStructureBuildAbi == 0U)
         {
@@ -277,7 +294,7 @@ public sealed class OpacityMicromapRuntimeRegistrationStore
         in OpacityMicromapRuntimeMeshRegistration right) =>
         left.Mesh == right.Mesh &&
         left.Material == right.Material &&
-        left.MaterialContentRevision == right.MaterialContentRevision &&
+        left.MaterialOpacityRevision == right.MaterialOpacityRevision &&
         left.MeshGeometryKey == right.MeshGeometryKey &&
         left.Payload.SourceContentHash == right.Payload.SourceContentHash &&
         left.Payload.CookAbi == right.Payload.CookAbi &&

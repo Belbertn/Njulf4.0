@@ -443,6 +443,40 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
 
         ImGui.SeparatorText("Other advanced GI features");
 
+        bool receiverCache = selection.ReceiverCacheEnabled;
+        if (ImGui.Checkbox(
+                "Temporal-adaptive DDGI receiver cache",
+                ref receiverCache))
+        {
+            selection = selection with
+            {
+                ReceiverCacheEnabled = receiverCache
+            };
+            changed = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "Reuses surface-validated DDGI receiver estimates and falls back per fragment when the cache cannot prove a match.");
+        }
+        bool acceleratedSolver =
+            selection.AcceleratedTransportSolverEnabled;
+        if (ImGui.Checkbox(
+                "Accelerated DDGI transport solver (2 sweeps)",
+                ref acceleratedSolver))
+        {
+            selection = selection with
+            {
+                AcceleratedTransportSolverEnabled = acceleratedSolver
+            };
+            changed = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "Runs two bounded red-black transport sweeps; the certified Jacobi path remains the automatic safety fallback.");
+        }
+
         bool receiverFeedback = selection.ReceiverFeedbackEnabled;
         if (ImGui.Checkbox("B1 exact receiver feedback", ref receiverFeedback))
         {

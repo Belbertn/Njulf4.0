@@ -113,6 +113,21 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     // the plan's readback budget while leaving room for future counters.
     public const int AuditSummaryBytes = 1024;
     public const int AuditSummaryWordCount = AuditSummaryBytes / sizeof(uint);
+    // Words 0..52 are the certificate reduction ABI. Words 53..63 remain
+    // reserved so the optional solve-stage witness begins on a cache-line
+    // boundary and survives the certificate clear recorded immediately before
+    // audit dispatch.
+    public const int TransportAuditCertificateWordCount = 53;
+    public const int TransportAuditCertificateBytes =
+        TransportAuditCertificateWordCount * sizeof(uint);
+    public const int TransportAuditStageEvidenceBaseWord = 64;
+    public const int TransportAuditStageEvidenceWordCount = 87;
+    public const uint TransportAuditStageEvidenceMagic = 0x44444749u;
+    public const uint TransportAuditStageEvidenceVersion = 3u;
+    public const uint TransportAuditStageBlendMask = 1u << 0;
+    public const uint TransportAuditStagePrivateReadbackMask = 1u << 1;
+    public const uint TransportAuditStageIntermediatePublishMask = 1u << 2;
+    public const uint TransportAuditStageCanonicalReadbackMask = 1u << 3;
     // Tail certification processes at most this many probes per frame. One
     // atomic status word per probe lives in a dedicated arena region, keeping
     // the exact ray-scratch stride/byte plan unchanged even on tiers whose

@@ -7,8 +7,14 @@ namespace Njulf.Assets.Cooked;
 internal enum MeshOptimizerSimplificationOptions : uint
 {
     None = 0,
-    LockBorder = 1u << 0
+    LockBorder = 1u << 0,
+    Sparse = 1u << 1,
+    ErrorAbsolute = 1u << 2
 }
+
+internal readonly record struct MeshOptimizerSphereBounds(
+    Vector3 Center,
+    float Radius);
 
 internal readonly record struct MeshOptimizerMeshletDescriptor(
     uint VertexOffset,
@@ -35,11 +41,37 @@ internal static unsafe class MeshOptimizerCodec
         public uint TriangleCount;
     }
 
+    // meshopt_Bounds is returned by value. Keep the complete native layout even
+    // though ComputeSphereBounds only populates Center and Radius; omitting the
+    // cone members would corrupt the platform return ABI.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeBounds
+    {
+        public float CenterX;
+        public float CenterY;
+        public float CenterZ;
+        public float Radius;
+        public float ConeApexX;
+        public float ConeApexY;
+        public float ConeApexZ;
+        public float ConeAxisX;
+        public float ConeAxisY;
+        public float ConeAxisZ;
+        public float ConeCutoff;
+        public sbyte ConeAxisX8;
+        public sbyte ConeAxisY8;
+        public sbyte ConeAxisZ8;
+        public sbyte ConeCutoff8;
+    }
+
     public static MeshOptimizerMeshletBuildResult BuildMeshlets(
         ReadOnlySpan<uint> indices,
         ReadOnlySpan<Vector3> positions,
         int maxVertices,
-        int maxTriangles)
+        int maxTriangles,
+        int minTriangles = 0,
+        float coneWeight = 0f,
+        float splitFactor = 0f)
     {
         if (indices.IsEmpty || indices.Length % 3 != 0)
         {
@@ -57,6 +89,18 @@ internal static unsafe class MeshOptimizerCodec
                 nameof(maxTriangles),
                 "Meshoptimizer's triangle limit must be divisible by four and between 4 and 512.");
         }
+        if (minTriangles != 0 &&
+            (minTriangles < 4 || minTriangles > maxTriangles ||
+             minTriangles % 4 != 0))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(minTriangles),
+                "Flexible meshlet minimum triangles must be zero or a multiple of four between 4 and maxTriangles.");
+        }
+        if (!float.IsFinite(coneWeight) || coneWeight is < 0f or > 1f)
+            throw new ArgumentOutOfRangeException(nameof(coneWeight));
+        if (!float.IsFinite(splitFactor) || splitFactor < 0f)
+            throw new ArgumentOutOfRangeException(nameof(splitFactor));
 
         for (int i = 0; i < indices.Length; i++)
         {
@@ -71,7 +115,7 @@ internal static unsafe class MeshOptimizerCodec
         nuint bound = MeshoptBuildMeshletsBound(
             checked((nuint)indices.Length),
             checked((nuint)maxVertices),
-            checked((nuint)maxTriangles));
+            checked((nuint)(minTriangles > 0 ? minTriangles : maxTriangles)));
         if (bound == 0 || bound > int.MaxValue)
             throw new InvalidOperationException($"meshoptimizer returned invalid meshlet bound {bound}.");
 
@@ -89,18 +133,33 @@ internal static unsafe class MeshOptimizerCodec
         fixed (uint* indicesPtr = indices)
         fixed (Vector3* positionsPtr = positions)
         {
-            count = MeshoptBuildMeshlets(
-                meshletsPtr,
-                meshletVerticesPtr,
-                meshletTrianglesPtr,
-                indicesPtr,
-                checked((nuint)indices.Length),
-                (float*)positionsPtr,
-                checked((nuint)positions.Length),
-                checked((nuint)sizeof(Vector3)),
-                checked((nuint)maxVertices),
-                checked((nuint)maxTriangles),
-                coneWeight: 0.0f);
+            count = minTriangles > 0
+                ? MeshoptBuildMeshletsFlex(
+                    meshletsPtr,
+                    meshletVerticesPtr,
+                    meshletTrianglesPtr,
+                    indicesPtr,
+                    checked((nuint)indices.Length),
+                    (float*)positionsPtr,
+                    checked((nuint)positions.Length),
+                    checked((nuint)sizeof(Vector3)),
+                    checked((nuint)maxVertices),
+                    checked((nuint)minTriangles),
+                    checked((nuint)maxTriangles),
+                    coneWeight,
+                    splitFactor)
+                : MeshoptBuildMeshlets(
+                    meshletsPtr,
+                    meshletVerticesPtr,
+                    meshletTrianglesPtr,
+                    indicesPtr,
+                    checked((nuint)indices.Length),
+                    (float*)positionsPtr,
+                    checked((nuint)positions.Length),
+                    checked((nuint)sizeof(Vector3)),
+                    checked((nuint)maxVertices),
+                    checked((nuint)maxTriangles),
+                    coneWeight);
         }
 
         if (count == 0 || count > bound)
@@ -147,10 +206,7 @@ internal static unsafe class MeshOptimizerCodec
         MeshOptimizerSimplificationOptions options,
         out float resultError)
     {
-        if (indices.Length == 0 || indices.Length % 3 != 0)
-            throw new ArgumentException("Meshoptimizer simplification requires a non-empty triangle list.", nameof(indices));
-        if (positions.IsEmpty)
-            throw new ArgumentException("Meshoptimizer simplification requires positions.", nameof(positions));
+        ValidateSimplificationInput(indices, positions, targetError);
         targetIndexCount = Math.Clamp(targetIndexCount - targetIndexCount % 3, 3, indices.Length);
         var destination = GC.AllocateUninitializedArray<uint>(indices.Length);
         fixed (uint* destinationPtr = destination)
@@ -172,6 +228,123 @@ internal static unsafe class MeshOptimizerCodec
                 throw new InvalidOperationException($"meshoptimizer returned invalid simplified index count {count}.");
             Array.Resize(ref destination, checked((int)count));
             return destination;
+        }
+    }
+
+    public static uint[] SimplifyWithAttributes(
+        ReadOnlySpan<uint> indices,
+        ReadOnlySpan<Vector3> positions,
+        ReadOnlySpan<float> attributes,
+        int attributeCount,
+        ReadOnlySpan<float> attributeWeights,
+        ReadOnlySpan<byte> vertexLocks,
+        int targetIndexCount,
+        float targetError,
+        MeshOptimizerSimplificationOptions options,
+        out float resultError)
+    {
+        ValidateSimplificationInput(indices, positions, targetError);
+        if (attributeCount is < 1 or > 32)
+            throw new ArgumentOutOfRangeException(nameof(attributeCount), "meshoptimizer supports 1 to 32 scalar attributes.");
+        if (attributes.Length != checked(positions.Length * attributeCount))
+            throw new ArgumentException("The interleaved attribute buffer must contain attributeCount floats per vertex.", nameof(attributes));
+        if (attributeWeights.Length != attributeCount)
+            throw new ArgumentException("Attribute weights must contain one value per scalar attribute.", nameof(attributeWeights));
+        if (!vertexLocks.IsEmpty && vertexLocks.Length != positions.Length)
+            throw new ArgumentException("Vertex locks must be empty or contain one byte per vertex.", nameof(vertexLocks));
+        for (int i = 0; i < attributeWeights.Length; i++)
+        {
+            if (!float.IsFinite(attributeWeights[i]) || attributeWeights[i] < 0f)
+                throw new ArgumentOutOfRangeException(nameof(attributeWeights), "Attribute weights must be finite and non-negative.");
+        }
+
+        targetIndexCount = Math.Clamp(targetIndexCount - targetIndexCount % 3, 3, indices.Length);
+        var destination = GC.AllocateUninitializedArray<uint>(indices.Length);
+        fixed (uint* destinationPtr = destination)
+        fixed (uint* indicesPtr = indices)
+        fixed (Vector3* positionsPtr = positions)
+        fixed (float* attributesPtr = attributes)
+        fixed (float* weightsPtr = attributeWeights)
+        fixed (byte* locksPtr = vertexLocks)
+        {
+            nuint count = MeshoptSimplifyWithAttributes(
+                destinationPtr,
+                indicesPtr,
+                checked((nuint)indices.Length),
+                (float*)positionsPtr,
+                checked((nuint)positions.Length),
+                checked((nuint)sizeof(Vector3)),
+                attributesPtr,
+                checked((nuint)(attributeCount * sizeof(float))),
+                weightsPtr,
+                checked((nuint)attributeCount),
+                vertexLocks.IsEmpty ? null : locksPtr,
+                checked((nuint)targetIndexCount),
+                targetError,
+                (uint)options,
+                out resultError);
+            if (count == 0 || count > (nuint)indices.Length || count % 3 != 0)
+                throw new InvalidOperationException($"meshoptimizer returned invalid simplified index count {count}.");
+            Array.Resize(ref destination, checked((int)count));
+            return destination;
+        }
+    }
+
+    public static float SimplifyScale(ReadOnlySpan<Vector3> positions)
+    {
+        if (positions.IsEmpty)
+            throw new ArgumentException("Meshoptimizer simplification requires positions.", nameof(positions));
+        fixed (Vector3* positionsPtr = positions)
+        {
+            float scale = MeshoptSimplifyScale(
+                (float*)positionsPtr,
+                checked((nuint)positions.Length),
+                checked((nuint)sizeof(Vector3)));
+            if (!float.IsFinite(scale) || scale < 0f)
+                throw new InvalidOperationException($"meshoptimizer returned invalid simplification scale {scale}.");
+            return scale;
+        }
+    }
+
+    public static MeshOptimizerSphereBounds ComputeSphereBounds(
+        ReadOnlySpan<Vector3> positions)
+    {
+        if (positions.IsEmpty)
+            throw new ArgumentException("Sphere bounds require at least one position.", nameof(positions));
+        fixed (Vector3* positionsPtr = positions)
+        {
+            NativeBounds bounds = MeshoptComputeSphereBounds(
+                (float*)positionsPtr,
+                checked((nuint)positions.Length),
+                checked((nuint)sizeof(Vector3)),
+                null,
+                0);
+            var center = new Vector3(bounds.CenterX, bounds.CenterY, bounds.CenterZ);
+            if (!float.IsFinite(center.X) || !float.IsFinite(center.Y) ||
+                !float.IsFinite(center.Z) || !float.IsFinite(bounds.Radius) ||
+                bounds.Radius < 0f)
+            {
+                throw new InvalidOperationException("meshoptimizer returned invalid sphere bounds.");
+            }
+            return new MeshOptimizerSphereBounds(center, bounds.Radius);
+        }
+    }
+
+    private static void ValidateSimplificationInput(
+        ReadOnlySpan<uint> indices,
+        ReadOnlySpan<Vector3> positions,
+        float targetError)
+    {
+        if (indices.Length == 0 || indices.Length % 3 != 0)
+            throw new ArgumentException("Meshoptimizer simplification requires a non-empty triangle list.", nameof(indices));
+        if (positions.IsEmpty)
+            throw new ArgumentException("Meshoptimizer simplification requires positions.", nameof(positions));
+        if (!float.IsFinite(targetError) || targetError < 0f)
+            throw new ArgumentOutOfRangeException(nameof(targetError));
+        for (int i = 0; i < indices.Length; i++)
+        {
+            if (indices[i] >= positions.Length)
+                throw new ArgumentOutOfRangeException(nameof(indices), $"Index {indices[i]} is outside the vertex buffer.");
         }
     }
 
@@ -243,6 +416,15 @@ internal static unsafe class MeshOptimizerCodec
     [DllImport(Library, EntryPoint = "meshopt_simplify", CallingConvention = CallingConvention.Cdecl)]
     private static extern nuint MeshoptSimplify(uint* destination, uint* indices, nuint indexCount, float* positions, nuint vertexCount, nuint vertexStride, nuint targetIndexCount, float targetError, uint options, out float resultError);
 
+    [DllImport(Library, EntryPoint = "meshopt_simplifyWithAttributes", CallingConvention = CallingConvention.Cdecl)]
+    private static extern nuint MeshoptSimplifyWithAttributes(uint* destination, uint* indices, nuint indexCount, float* positions, nuint vertexCount, nuint vertexStride, float* attributes, nuint attributeStride, float* attributeWeights, nuint attributeCount, byte* vertexLocks, nuint targetIndexCount, float targetError, uint options, out float resultError);
+
+    [DllImport(Library, EntryPoint = "meshopt_simplifyScale", CallingConvention = CallingConvention.Cdecl)]
+    private static extern float MeshoptSimplifyScale(float* positions, nuint vertexCount, nuint vertexStride);
+
+    [DllImport(Library, EntryPoint = "meshopt_computeSphereBounds", CallingConvention = CallingConvention.Cdecl)]
+    private static extern NativeBounds MeshoptComputeSphereBounds(float* positions, nuint count, nuint positionsStride, float* radii, nuint radiiStride);
+
     [DllImport(Library, EntryPoint = "meshopt_buildMeshletsBound", CallingConvention = CallingConvention.Cdecl)]
     private static extern nuint MeshoptBuildMeshletsBound(
         nuint indexCount,
@@ -262,6 +444,22 @@ internal static unsafe class MeshOptimizerCodec
         nuint maxVertices,
         nuint maxTriangles,
         float coneWeight);
+
+    [DllImport(Library, EntryPoint = "meshopt_buildMeshletsFlex", CallingConvention = CallingConvention.Cdecl)]
+    private static extern nuint MeshoptBuildMeshletsFlex(
+        NativeMeshlet* meshlets,
+        uint* meshletVertices,
+        byte* meshletTriangles,
+        uint* indices,
+        nuint indexCount,
+        float* vertexPositions,
+        nuint vertexCount,
+        nuint vertexPositionsStride,
+        nuint maxVertices,
+        nuint minTriangles,
+        nuint maxTriangles,
+        float coneWeight,
+        float splitFactor);
 
     [DllImport(Library, EntryPoint = "meshopt_encodeVertexBufferBound", CallingConvention = CallingConvention.Cdecl)]
     private static extern nuint MeshoptEncodeVertexBufferBound(nuint vertexCount, nuint vertexSize);

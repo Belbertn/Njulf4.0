@@ -5546,7 +5546,10 @@ namespace Njulf.Rendering.Resources
                         authoredConfiguredRequestBudget,
                         _raysPerProbe,
                         TransportV2Active,
-                        TailCertificationEnabled && TransportAccelerationEnabled);
+                        ShouldProvisionAcceleratedTailSchedulerCapacity(
+                            gi.SimpleDdgiTransportTailCertificationEnabled,
+                            gi.SimpleDdgiTransportAccelerationEnabled,
+                            _schedulerMode));
                 int dirtyBoostedBudget = ResolveLightingDirtyUpdateBudget(gi, baseUpdateBudget);
                 // Atlas growth can invalidate every physical slot. Establish storage
                 // first so MarkFreshForNewOrScrolledProbes observes that invalidation;
@@ -9362,6 +9365,22 @@ namespace Njulf.Rendering.Resources
                 maximumCachedRayEvaluationsPerFrame / raysPerProbe);
             return Math.Min(configured, Math.Max(sourceCapacity, cachedSolveCapacity));
         }
+
+        /// <summary>
+        /// Resolves the scheduler's persistent capacity from authored and
+        /// structural state only. Runtime execution availability is deliberately
+        /// excluded: a replacement arena is unavailable while its bootstrap
+        /// submission is pending, so feeding that transient state back into the
+        /// capacity key would alternate between source-only and accelerated-solve
+        /// layouts and prevent either generation from ever executing.
+        /// </summary>
+        internal static bool ShouldProvisionAcceleratedTailSchedulerCapacity(
+            bool tailCertificationRequested,
+            bool transportAccelerationRequested,
+            SimpleDdgiSchedulerMode schedulerMode) =>
+            tailCertificationRequested &&
+            transportAccelerationRequested &&
+            schedulerMode == SimpleDdgiSchedulerMode.GpuResident;
 
         internal static int ResolveTransportV2FrameRequestBudget(
             int requestedBudget,

@@ -10,6 +10,34 @@ namespace Njulf.Tests;
 public sealed class ModelImporterFacadeTests
 {
     [Test]
+    public void ImportApis_RejectInvalidMaximumSamplerAnisotropy()
+    {
+        using var importer = new ModelImporter();
+        const string path = "invalid-sampler-options.gltf";
+
+        foreach (float invalid in new[]
+                 {
+                     0f,
+                     17f,
+                     float.NaN,
+                     float.PositiveInfinity
+                 })
+        {
+            var options = new ImporterOptions
+            {
+                Backend = ModelImportBackend.SharpGltf,
+                MaximumSamplerAnisotropy = invalid
+            };
+            Assert.That(
+                () => importer.Import(path, options),
+                Throws.TypeOf<ArgumentOutOfRangeException>());
+            Assert.That(
+                () => importer.ImportDetailed(path, options),
+                Throws.TypeOf<ArgumentOutOfRangeException>());
+        }
+    }
+
+    [Test]
     public void ImportDetailed_DefaultBackendPreservesAssimpForObj()
     {
         string path = WriteTriangleObj();

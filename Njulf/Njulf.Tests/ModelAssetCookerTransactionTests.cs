@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
@@ -90,9 +91,110 @@ public sealed class ModelAssetCookerTransactionTests
                 Is.EqualTo(1));
             Assert.That(
                 Directory.EnumerateFiles(
+                    Path.GetDirectoryName(oldMeshPath)!,
+                    "transaction.*.pages").Count(),
+                Is.EqualTo(1));
+            Assert.That(
+                Directory.EnumerateFiles(
                     Path.GetDirectoryName(oldMaterialPath)!,
                     "transaction.*.materials.njmat").Count(),
                 Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void CleanStale_RetainsOnlyPublishedMeshletSidecarGeneration()
+    {
+        string sourcePath = Path.Combine(_directory, "cleanup.gltf");
+        WriteTriangleGltf(sourcePath, extent: 1.0f);
+        var options = new ModelCookOptions
+        {
+            UsePlatformSubdirectory = false,
+            Force = true,
+            ImporterOptions = new ImporterOptions
+            {
+                Backend = ModelImportBackend.SharpGltf
+            }
+        };
+        using var cooker = new ModelAssetCooker();
+        cooker.CookModel(sourcePath, _directory, options);
+        WriteTriangleGltf(sourcePath, extent: 2.0f);
+        cooker.CookModel(sourcePath, _directory, options);
+
+        string modelDirectory = Path.Combine(_directory, "models");
+        Assert.That(
+            Directory.EnumerateFiles(
+                modelDirectory,
+                "cleanup.*.pages").Count(),
+            Is.EqualTo(2));
+
+        int deleted = cooker.CleanStale(
+            _directory,
+            usePlatformSubdirectory: false);
+        CookedModelAsset current = CookedPackage.LoadModel(Path.Combine(
+            modelDirectory,
+            "cleanup.njmodel"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(deleted, Is.GreaterThanOrEqualTo(3));
+            Assert.That(
+                Directory.EnumerateFiles(
+                    modelDirectory,
+                    "cleanup.*.meshes.njmesh").Count(),
+                Is.EqualTo(1));
+            Assert.That(
+                Directory.EnumerateFiles(
+                    modelDirectory,
+                    "cleanup.*.pages").Count(),
+                Is.EqualTo(1));
+            Assert.That(current.Mesh.StreamingManifest, Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public void CookModel_KnownIncompatiblePriorPackage_IsReplacedFromSource()
+    {
+        string sourcePath = Path.Combine(_directory, "recook.gltf");
+        WriteTriangleGltf(sourcePath, extent: 1.0f);
+        var options = new ModelCookOptions
+        {
+            UsePlatformSubdirectory = false,
+            Force = true,
+            ImporterOptions = new ImporterOptions
+            {
+                Backend = ModelImportBackend.SharpGltf
+            }
+        };
+        using var cooker = new ModelAssetCooker();
+        cooker.CookModel(sourcePath, _directory, options);
+
+        string modelPath = Path.Combine(
+            _directory,
+            "models",
+            "recook.njmodel");
+        byte[] incompatible = File.ReadAllBytes(modelPath);
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            incompatible.AsSpan(6, sizeof(ushort)),
+            1);
+        File.WriteAllBytes(modelPath, incompatible);
+
+        Assert.That(
+            () => CookedPackage.LoadModel(modelPath),
+            Throws.TypeOf<CookedAssetFormatException>());
+
+        AssetCookResult result = cooker.CookModel(
+            sourcePath,
+            _directory,
+            options);
+        CookedModelAsset recooked = CookedPackage.LoadModel(modelPath);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Skipped, Is.False);
+            Assert.That(
+                recooked.Manifest.SourcePath.Replace('\\', '/'),
+                Is.EqualTo(Path.GetFullPath(sourcePath).Replace('\\', '/')));
         });
     }
 

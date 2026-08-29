@@ -1053,30 +1053,38 @@ public sealed class GiCausticGpuResourceManager : IDisposable
                 return;
 
             bool changed = false;
-            if (_state == GiCausticGpuResourceState.Readable &&
+            bool publishedInvalidated = false;
+            bool hasPublishedBank =
+                _photonReadBankIndex is 0 or 1 &&
+                _cacheReadBankIndex is 0 or 1 &&
+                _readableGeneration != 0U;
+            if (hasPublishedBank &&
                 !_publishedRevision.Equals(currentRevision))
             {
-                _state = GiCausticGpuResourceState.Invalidated;
-                _reason = string.IsNullOrWhiteSpace(reason)
-                    ? "caustic-published-revision-invalidated"
-                    : reason.Trim();
+                ClearPublishedBankNoLock();
+                publishedInvalidated = true;
                 changed = true;
             }
             if (_pendingBuild.HasValue &&
                 !_pendingBuild.Value.Revision.Equals(currentRevision))
             {
                 _pendingBuild = null;
-                _state = _photonReadBankIndex is 0 or 1 &&
-                    _cacheReadBankIndex is 0 or 1
-                    ? GiCausticGpuResourceState.Invalidated
-                    : GiCausticGpuResourceState.ReadyForBuild;
-                _reason = string.IsNullOrWhiteSpace(reason)
-                    ? "caustic-build-revision-invalidated"
-                    : reason.Trim();
                 changed = true;
             }
             if (changed)
+            {
+                _state = _pendingBuild.HasValue
+                    ? GiCausticGpuResourceState.Building
+                    : publishedInvalidated
+                        ? GiCausticGpuResourceState.Invalidated
+                        : GiCausticGpuResourceState.ReadyForBuild;
+                _reason = string.IsNullOrWhiteSpace(reason)
+                    ? publishedInvalidated
+                        ? "caustic-published-revision-invalidated"
+                        : "caustic-build-revision-invalidated"
+                    : reason.Trim();
                 InvalidationCount++;
+            }
         }
     }
 
@@ -1092,6 +1100,18 @@ public sealed class GiCausticGpuResourceManager : IDisposable
             photonBankIndex = -1;
             cacheBankIndex = -1;
             header = default;
+            bool hasPublishedBank =
+                _photonReadBankIndex is 0 or 1 &&
+                _cacheReadBankIndex is 0 or 1 &&
+                _readableGeneration != 0U;
+            if (!hasPublishedBank)
+            {
+                // A first-generation build has no prior read bank. Querying
+                // availability while it is in flight must be observational;
+                // cancelling that pending token prevents C4 from ever
+                // reaching its fence-complete publication boundary.
+                return false;
+            }
             if (_state is not (GiCausticGpuResourceState.Readable or
                     GiCausticGpuResourceState.Building) ||
                 !_publishedRevision.Equals(revision))
@@ -1099,8 +1119,15 @@ public sealed class GiCausticGpuResourceManager : IDisposable
                 if (_state is GiCausticGpuResourceState.Readable or
                     GiCausticGpuResourceState.Building)
                 {
-                    _pendingBuild = null;
-                    _state = GiCausticGpuResourceState.Invalidated;
+                    ClearPublishedBankNoLock();
+                    if (_pendingBuild.HasValue &&
+                        !_pendingBuild.Value.Revision.Equals(revision))
+                    {
+                        _pendingBuild = null;
+                    }
+                    _state = _pendingBuild.HasValue
+                        ? GiCausticGpuResourceState.Building
+                        : GiCausticGpuResourceState.Invalidated;
                     _reason = "caustic-resolve-revision-mismatch";
                     InvalidationCount++;
                 }
@@ -1112,6 +1139,15 @@ public sealed class GiCausticGpuResourceManager : IDisposable
             header = _publishedHeader;
             return photonBankIndex is 0 or 1 && cacheBankIndex is 0 or 1;
         }
+    }
+
+    private void ClearPublishedBankNoLock()
+    {
+        _photonReadBankIndex = -1;
+        _cacheReadBankIndex = -1;
+        _readableGeneration = 0U;
+        _publishedRevision = default;
+        _publishedHeader = default;
     }
 
     public void Disable(string reason = "disabled")

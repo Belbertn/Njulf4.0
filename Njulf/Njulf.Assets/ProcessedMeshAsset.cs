@@ -57,6 +57,35 @@ public sealed record ProcessedMeshLodRange(
     float ScreenCoverageThreshold,
     float SimplificationError = -1f);
 
+[Flags]
+public enum MeshletHierarchyNodeFlags : uint
+{
+    None = 0,
+    Leaf = 1u << 0,
+    ForceRefine = 1u << 1
+}
+
+/// <summary>
+/// A 48-byte, bottom-up cluster node. Child indices and meshlet offsets are
+/// local to the owning submesh until runtime upload applies global offsets.
+/// </summary>
+[System.Runtime.InteropServices.StructLayout(
+    System.Runtime.InteropServices.LayoutKind.Sequential,
+    Pack = 4)]
+public struct MeshletHierarchyNode
+{
+    public Vector3 BoundingSphereCenter;
+    public float BoundingSphereRadius;
+    public float GeometricError;
+    public uint FirstChild;
+    public uint ChildCount;
+    public uint MeshletOffset;
+    public uint MeshletCount;
+    public uint ParentIndex;
+    public uint Depth;
+    public MeshletHierarchyNodeFlags Flags;
+}
+
 public sealed record ProcessedSubMeshAsset(
     string Name,
     int MaterialSlot,
@@ -83,6 +112,9 @@ public sealed record ProcessedSubMeshAsset(
     IReadOnlyList<ProcessedMeshDrawRange> DrawRanges,
     IReadOnlyList<ProcessedMeshLodRange> LodRanges)
 {
+    public MeshletHierarchyNode[] HierarchyNodes { get; init; } =
+        Array.Empty<MeshletHierarchyNode>();
+    public int HierarchyRootNode { get; init; } = -1;
     public ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence { get; init; }
     public ModelGiCausticHeroValidation CausticAuthoringValidation { get; init; }
     public string CausticTopologyDetail { get; init; } = "participation-disabled";
@@ -111,7 +143,7 @@ public sealed class ProcessedMeshAssetBuilder
     private readonly RendererMeshletLodBuilder _meshletLodBuilder;
 
     public ProcessedMeshAssetBuilder()
-        : this(new MeshletBuilder(maxVerticesPerMeshlet: 48, maxTrianglesPerMeshlet: 64))
+        : this(RendererMeshletBuildProfiles.Production.CreateBuilder())
     {
     }
 
@@ -189,7 +221,7 @@ public sealed class ProcessedMeshAssetBuilder
         ModelMaterial material)
     {
         ValidateSubMesh(subMesh);
-        RendererMeshletLodBuild meshletMesh = _meshletLodBuilder.Build(subMesh.Vertices, subMesh.Indices, subMesh.Name);
+        RendererMeshletLodBuild meshletMesh = _meshletLodBuilder.Build(subMesh);
 
         ModelGiCausticHeroTopologyEvidence topologyEvidence = default;
         string topologyDetail = "participation-disabled";
@@ -275,6 +307,8 @@ public sealed class ProcessedMeshAssetBuilder
             },
             meshletMesh.Ranges)
         {
+            HierarchyNodes = meshletMesh.HierarchyNodes.ToArray(),
+            HierarchyRootNode = meshletMesh.HierarchyRootNode,
             CausticTopologyEvidence = topologyEvidence,
             CausticAuthoringValidation = causticValidation,
             CausticTopologyDetail = topologyDetail

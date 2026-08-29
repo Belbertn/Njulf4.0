@@ -56,6 +56,8 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint SchedulerUpdateRecordsOffsetWords;
 } pc;
 
+#include "ddgi_simple_transport_stage_evidence.glsl"
+
 void WriteSimpleTransportRayResult(
     uint rayResultIndex,
     SimpleDdgiParams params,
@@ -87,6 +89,20 @@ void WriteSimpleTransportRayResult(
 void main()
 {
     SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    bool compactRead =
+        (pc.Flags & SIMPLE_DDGI_TRANSPORT_SOLVE_COMPACT_READ) != 0u;
+    // A cached solve is defined by the read bank and frozen source cache
+    // selected for this dispatch.  Do not recover either binding from the
+    // mutable receiver header: audit already uses these pass-local values.
+    // A compact sweep redirects participating probes through the private
+    // resolver below; dependencies outside that bounded cohort retain the
+    // immutable canonical bank supplied by IrradianceAtlasBufferIndex.
+    params.publishedIrradianceAtlasBufferIndex =
+        compactRead
+            ? pc.IrradianceAtlasBufferIndex
+            : pc.TransportReadIrradianceAtlasBufferIndex;
+    params.transportSourceCacheBufferIndex =
+        pc.TransportSourceCacheBufferIndex;
     uint dispatchRay = gl_GlobalInvocationID.x;
     bool gpuScheduler = SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex);
     uint schedulerQueueOffset = 0u;
@@ -129,8 +145,7 @@ void main()
             pc.DispatchProbeCount)
         : 0u;
     ConfigureSimpleDdgiPrivateSolverGather(
-        gpuScheduler &&
-            (pc.Flags & SIMPLE_DDGI_TRANSPORT_SOLVE_COMPACT_READ) != 0u,
+        gpuScheduler && compactRead,
         pc.SchedulerArenaBufferIndex,
         pc.ProbeUpdateQueueBufferIndex,
         pc.DispatchQueueOffset,
@@ -451,6 +466,37 @@ void main()
                 update.probeIndex);
         bounceRadiance = vec3(0.0);
         totalRadiance = source.sourceRadiance;
+    }
+
+    if (SimpleDdgiTransportStageArmed() &&
+        update.probeIndex == pc.MaxShadedLights &&
+        rayIndex == 0u &&
+        SimpleDdgiSolveIsFinalSweep(
+            pc.Flags,
+            params.transportAcceleratedSweepCount))
+    {
+        SimpleDdgiTransportStageWrite(
+            SIMPLE_DDGI_TRANSPORT_STAGE_TRANSPORT_SOLVE_EPOCH_WORD,
+            pc.FarFieldParamsBufferIndex);
+        SimpleDdgiTransportStageWriteRgb(
+            SIMPLE_DDGI_TRANSPORT_STAGE_TRANSPORT_SOURCE_R_WORD,
+            source.sourceRadiance);
+        SimpleDdgiTransportStageWriteRgb(
+            SIMPLE_DDGI_TRANSPORT_STAGE_TRANSPORT_BOUNCE_R_WORD,
+            bounceRadiance);
+        SimpleDdgiTransportStageWriteRgb(
+            SIMPLE_DDGI_TRANSPORT_STAGE_TRANSPORT_TOTAL_R_WORD,
+            totalRadiance);
+        SimpleDdgiTransportStageWrite(
+            SIMPLE_DDGI_TRANSPORT_STAGE_TRANSPORT_GATHER_COUNT_WORD,
+            solverGatherCount);
+        SimpleDdgiTransportStageWrite(
+            SIMPLE_DDGI_TRANSPORT_STAGE_TRANSPORT_OWNERSHIP_WORD,
+            floatBitsToUint(solverOwnershipSum));
+        SimpleDdgiTransportStageWrite(
+            SIMPLE_DDGI_TRANSPORT_STAGE_TRANSPORT_FALLBACK_WORD,
+            floatBitsToUint(solverFallbackWeightSum));
+        memoryBarrierBuffer();
     }
 
     if ((params.flags & SIMPLE_DDGI_FLAG_DETAILED_DIAGNOSTICS_ENABLED) != 0u &&

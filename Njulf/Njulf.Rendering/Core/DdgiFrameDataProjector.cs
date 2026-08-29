@@ -608,6 +608,8 @@ internal static class DdgiFrameDataProjector
             input.Settings.SimpleDdgiTransportAcceleratedSweepCount;
         sceneData.SimpleDdgiTransportAccelerationEnabled =
             input.Settings.SimpleDdgiTransportAccelerationEnabled;
+        sceneData.SimpleDdgiTransportAccelerationRuntimeAvailable =
+            manager.TransportAccelerationRuntimeAvailable;
         sceneData.SimpleDdgiTransportTailCertificationEnabled =
             manager.TailCertificationEnabled;
         sceneData.SimpleDdgiTransportTailCertificationFallbackReason =

@@ -24,6 +24,7 @@ public sealed class SimpleDdgiGuidingSampleTelemetryTests
         {
             Assert.That(valid, Is.True, reason);
             Assert.That(telemetry.ValidSampleCount, Is.EqualTo(100U));
+            Assert.That(telemetry.BootstrapInvalidationCount, Is.Zero);
             Assert.That(telemetry.MaintenanceSampleCount, Is.EqualTo(8U));
             Assert.That(telemetry.MixtureUniformSampleCount, Is.EqualTo(22U));
             Assert.That(telemetry.MixtureGuidedSampleCount, Is.EqualTo(70U));
@@ -36,6 +37,38 @@ public sealed class SimpleDdgiGuidingSampleTelemetryTests
             Assert.That(telemetry.P99InversePdfUpperBound, Is.EqualTo(8.0f));
             Assert.That(telemetry.MaximumInversePdf, Is.EqualTo(6.0f));
             Assert.That(telemetry.InversePdfHistogram.Total, Is.EqualTo(100UL));
+        });
+    }
+
+    [Test]
+    public void TryCreate_AccountsIntentionalGpuBootstrapInvalidations()
+    {
+        var words = new uint[checked((int)
+            SimpleDdgiGuidingGpuAbi.ValidationCounterWordCount)];
+        words[(int)SimpleDdgiGuidingGpuAbi.CounterBootstrapInvalidations] =
+            100U;
+        words[(int)SimpleDdgiGuidingGpuAbi.CounterGpuSampleRequestCount] =
+            100U;
+        words[(int)SimpleDdgiGuidingGpuAbi.CounterGpuPreparationStatus] =
+            SimpleDdgiGuidingGpuAbi.Version;
+
+        bool valid = SimpleDdgiGuidingSampleTelemetry.TryCreate(
+            words,
+            requestCount: 100U,
+            validation: default,
+            out SimpleDdgiGuidingSampleTelemetry telemetry,
+            out string reason,
+            gpuGenerated: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(valid, Is.True, reason);
+            Assert.That(telemetry.RequestCount, Is.EqualTo(100U));
+            Assert.That(telemetry.ValidSampleCount, Is.Zero);
+            Assert.That(telemetry.BootstrapInvalidationCount,
+                Is.EqualTo(100U));
+            Assert.That(telemetry.InversePdfHistogram.Total, Is.Zero);
+            Assert.That(telemetry.IsConsistent(default), Is.True);
         });
     }
 

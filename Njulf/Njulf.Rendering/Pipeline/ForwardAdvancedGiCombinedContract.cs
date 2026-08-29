@@ -15,6 +15,12 @@ public static class ForwardAdvancedGiCombinedContract
         "forward_opaque_simple_ddgi_c4_c5.frag.spv";
     public const string SimpleFullInputOpaqueFragmentShader =
         "forward_opaque_simple_full_input_ddgi_c4_c5.frag.spv";
+    public const string ReceiverCacheOpaqueFragmentShader =
+        "forward_opaque_ddgi_c4_c5_cache_required.frag.spv";
+    public const string ReceiverCacheSimpleOpaqueFragmentShader =
+        "forward_opaque_simple_ddgi_c4_c5_cache_required.frag.spv";
+    public const string ReceiverCacheSimpleFullInputOpaqueFragmentShader =
+        "forward_opaque_simple_full_input_ddgi_c4_c5_cache_required.frag.spv";
 
     public static bool TryValidatePipelineConfigurations(
         in ForwardGiCausticReceiverPipelineConfiguration caustic,

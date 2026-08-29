@@ -301,6 +301,50 @@ public sealed class GiCausticVulkanRuntimeContractTests
         });
     }
 
+    [Test]
+    public void SupersededFenceReadback_PreservesNewerFrameSlotTransaction()
+    {
+        GiCausticGpuResourceLayout layout = CreateValidLayout();
+        using var manager = new GiCausticGpuResourceManager();
+        _ = manager.Reconcile(
+            new GiCausticGpuRuntimeRequest(true, layout, FullySupported()),
+            new FakeAllocator());
+
+        GiCausticCacheRevision staleRevision = CreateRevision(110UL);
+        GiCausticGpuBuildBeginResult stale = manager.BeginBuild(
+            staleRevision,
+            taskCount: 3,
+            new Vector4(0.0f, 0.0f, 0.0f, 0.5f));
+        GiCausticCacheRevision replacementRevision = CreateRevision(120UL);
+        manager.Invalidate(replacementRevision, "test-semantic-revision-changed");
+        GiCausticGpuBuildBeginResult replacement = manager.BeginBuild(
+            replacementRevision,
+            taskCount: 3,
+            new Vector4(0.0f, 0.0f, 0.0f, 0.5f));
+
+        GiCausticGpuPublicationResult rejectedStaleReadback =
+            manager.CompleteBuild(stale.Token, true, default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stale.Started, Is.True, stale.Reason);
+            Assert.That(replacement.Started, Is.True, replacement.Reason);
+            Assert.That(rejectedStaleReadback.Published, Is.False);
+            Assert.That(rejectedStaleReadback.Failure,
+                Is.EqualTo(GiCausticGpuPublicationFailure.TokenMismatch));
+            Assert.That(GiCausticVulkanRuntime.PreservesReplacementReadback(
+                    rejectedStaleReadback.Failure),
+                Is.True);
+            Assert.That(manager.Snapshot.PendingGeneration,
+                Is.EqualTo(replacement.Token.CacheGeneration));
+            Assert.That(manager.AbortBuild(
+                    replacement.Token,
+                    "test-replacement-cleanup"),
+                Is.True,
+                "The stale fence result must not orphan or cancel the replacement token.");
+        });
+    }
+
     private static GiCausticGpuResourceLayout CreateValidLayout()
     {
         GiCausticCacheLayout source = GiCausticCacheLayoutCompiler.Compile(

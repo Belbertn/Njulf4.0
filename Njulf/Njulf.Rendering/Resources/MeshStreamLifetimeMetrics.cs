@@ -32,11 +32,11 @@ internal static class MeshStreamLifetimeMetrics
             indexElements = Math.Max(
                 indexElements,
                 checked((ulong)live.IndexOffset +
-                        live.IndexCount));
+                        live.EffectiveGpuIndexCount));
             meshletElements = Math.Max(
                 meshletElements,
                 checked((ulong)live.MeshletOffset +
-                        live.MeshletLodGeneratedCount));
+                        live.EffectiveGpuMeshletRecordCount));
             meshletVertexIndexElements = Math.Max(
                 meshletVertexIndexElements,
                 checked((ulong)live.LocalVertexIndexOffset +

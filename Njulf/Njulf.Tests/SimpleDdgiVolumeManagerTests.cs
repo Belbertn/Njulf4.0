@@ -710,6 +710,25 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
+    [TestCase(true, true, SimpleDdgiSchedulerMode.GpuResident, true)]
+    [TestCase(false, true, SimpleDdgiSchedulerMode.GpuResident, false)]
+    [TestCase(true, false, SimpleDdgiSchedulerMode.GpuResident, false)]
+    [TestCase(true, true, SimpleDdgiSchedulerMode.GpuMirror, false)]
+    [TestCase(true, true, SimpleDdgiSchedulerMode.CpuReference, false)]
+    public void AcceleratedTailCapacityProvisioning_UsesStableStructuralInputs(
+        bool tailCertificationRequested,
+        bool transportAccelerationRequested,
+        SimpleDdgiSchedulerMode schedulerMode,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ShouldProvisionAcceleratedTailSchedulerCapacity(
+                tailCertificationRequested,
+                transportAccelerationRequested,
+                schedulerMode),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(4_096, 128, 512, true, false, 128)]
     [TestCase(4_096, 128, 512, true, true, 512)]
     [TestCase(256, 128, 512, true, true, 256)]

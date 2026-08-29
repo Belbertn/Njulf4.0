@@ -130,6 +130,43 @@ public sealed class SimpleDdgiTransportAuditVariantTests
         });
     }
 
+    [Test]
+    public void SolveAndAudit_UseTheSamePassLocalFrozenOperatorInputs()
+    {
+        string solve = File.ReadAllText(
+            FindRepoFile("Njulf.Shaders", "ddgi_simple_transport.comp"));
+        string audit = File.ReadAllText(
+            FindRepoFile("Njulf.Shaders", "ddgi_simple_transport_audit.comp"));
+        string shared = File.ReadAllText(
+            FindRepoFile("Njulf.Shaders", "ddgi_simple_shared.glsl"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(solve, Does.Contain(
+                "params.publishedIrradianceAtlasBufferIndex =\n" +
+                "        compactRead\n" +
+                "            ? pc.IrradianceAtlasBufferIndex\n" +
+                "            : pc.TransportReadIrradianceAtlasBufferIndex;"));
+            Assert.That(solve, Does.Contain(
+                "params.transportSourceCacheBufferIndex =\n" +
+                "        pc.TransportSourceCacheBufferIndex;"));
+            Assert.That(audit, Does.Contain(
+                "auditParams.publishedIrradianceAtlasBufferIndex =\n" +
+                "        pc.TransportReadIrradianceAtlasBufferIndex;"));
+            Assert.That(audit, Does.Contain(
+                "auditParams.transportSourceCacheBufferIndex =\n" +
+                "        pc.TransportSourceCacheBufferIndex;"));
+            Assert.That(shared, Does.Contain(
+                "uint privateIrradianceBufferIndex;"));
+            Assert.That(shared, Does.Contain(
+                "irradianceBufferIndex = privateIrradianceBufferIndex;"));
+            Assert.That(shared, Does.Not.Contain(
+                "p.irradianceTexels,\n" +
+                "                irradianceBufferIndex,\n" +
+                "                privateProbeBaseWord"));
+        });
+    }
+
     private static string FindRepoFile(params string[] pathParts)
     {
         string? directory = TestContext.CurrentContext.TestDirectory;

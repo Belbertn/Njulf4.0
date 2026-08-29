@@ -491,10 +491,16 @@ namespace Njulf.Rendering.Resources
                         subMesh,
                         out int lod0Count,
                         out int lod1Count,
-                        out int lod2Count);
+                        out int lod2Count,
+                        out MeshletHierarchyNode[] hierarchyNodes,
+                        out int hierarchyRootNode);
                     uint[] meshletVertices = payload.MeshletVertices.AsSpan(subMesh.MeshletVertexOffset, subMesh.MeshletVertexCount).ToArray();
                     uint[] meshletTriangles = payload.MeshletTriangles.AsSpan(subMesh.MeshletTriangleOffset, subMesh.MeshletTriangleCount).ToArray();
                     GPUVertexSkinningData[] skinning = BuildCookedSkinning(payload, subMesh);
+                    uint[] coarseRayProxyIndices =
+                        BuildCookedCoarseRayProxyIndices(
+                            payload,
+                            subMesh);
                     registrations[i] = new MeshManager.MeshRegistrationData(
                         vertexPositions,
                         vertexNormalTangents,
@@ -510,7 +516,10 @@ namespace Njulf.Rendering.Resources
                         primitiveProfiles[i],
                         subMesh.CausticTopologyEvidence,
                         ResolveLodSimplificationError(subMesh, 1),
-                        ResolveLodSimplificationError(subMesh, 2));
+                        ResolveLodSimplificationError(subMesh, 2),
+                        hierarchyNodes,
+                        hierarchyRootNode,
+                        coarseRayProxyIndices);
                 }
 
                 MeshHandle[] lifetimeMeshes =
@@ -1069,6 +1078,13 @@ namespace Njulf.Rendering.Resources
             return result;
         }
 
+        private static uint[] BuildCookedCoarseRayProxyIndices(
+            CookedMeshPayload payload,
+            CookedSubMeshRecord subMesh) =>
+            payload.CoarseRayProxyIndices.AsSpan(
+                subMesh.CoarseRayProxyIndexOffset,
+                subMesh.CoarseRayProxyIndexCount).ToArray();
+
         /// <summary>
         /// Materializes the three independent cooked LOD ranges directly into
         /// the one contiguous registration buffer required by MeshManager.
@@ -1080,13 +1096,16 @@ namespace Njulf.Rendering.Resources
             CookedSubMeshRecord subMesh,
             out int lod0Count,
             out int lod1Count,
-            out int lod2Count)
+            out int lod2Count,
+            out MeshletHierarchyNode[] hierarchyNodes,
+            out int hierarchyRootNode)
         {
             lod0Count = subMesh.MeshletCount;
             lod1Count = subMesh.MeshletLod1Count;
             lod2Count = subMesh.MeshletLod2Count;
             var combined = new Meshlet[checked(
-                lod0Count + lod1Count + lod2Count)];
+                lod0Count + lod1Count + lod2Count +
+                subMesh.HierarchyMeshletCount)];
             payload.MeshletsLod0.AsSpan(
                 subMesh.MeshletOffset,
                 lod0Count).CopyTo(combined);
@@ -1097,6 +1116,19 @@ namespace Njulf.Rendering.Resources
                 subMesh.MeshletLod2Offset,
                 lod2Count).CopyTo(combined.AsSpan(
                     checked(lod0Count + lod1Count)));
+            payload.HierarchyMeshlets.AsSpan(
+                subMesh.HierarchyMeshletOffset,
+                subMesh.HierarchyMeshletCount).CopyTo(
+                    combined.AsSpan(checked(
+                        lod0Count + lod1Count + lod2Count)));
+            hierarchyNodes = payload.HierarchyNodes.AsSpan(
+                subMesh.HierarchyNodeOffset,
+                subMesh.HierarchyNodeCount).ToArray();
+            hierarchyRootNode = subMesh.HierarchyRootNode < 0
+                ? -1
+                : checked(
+                    subMesh.HierarchyRootNode -
+                    subMesh.HierarchyNodeOffset);
             return combined;
         }
 
@@ -1252,7 +1284,9 @@ namespace Njulf.Rendering.Resources
                     subMesh,
                     out int lod0Count,
                     out int lod1Count,
-                    out int lod2Count);
+                    out int lod2Count,
+                    out MeshletHierarchyNode[] hierarchyNodes,
+                    out int hierarchyRootNode);
                 uint[] meshletVertices = payload.MeshletVertices.AsSpan(
                     subMesh.MeshletVertexOffset,
                     subMesh.MeshletVertexCount).ToArray();
@@ -1261,6 +1295,10 @@ namespace Njulf.Rendering.Resources
                     subMesh.MeshletTriangleCount).ToArray();
                 GPUVertexSkinningData[] skinning =
                     BuildCookedSkinning(payload, subMesh);
+                uint[] coarseRayProxyIndices =
+                    BuildCookedCoarseRayProxyIndices(
+                        payload,
+                        subMesh);
                 meshes[i] = new PreparedModelMeshData(
                     SourceVertices: null,
                     vertexPositions,
@@ -1276,7 +1314,10 @@ namespace Njulf.Rendering.Resources
                     skinning,
                     subMesh.CausticTopologyEvidence,
                     ResolveLodSimplificationError(subMesh, 1),
-                    ResolveLodSimplificationError(subMesh, 2));
+                    ResolveLodSimplificationError(subMesh, 2),
+                    hierarchyNodes,
+                    hierarchyRootNode,
+                    coarseRayProxyIndices);
                 subMeshes[i] = new PreparedModelSubMeshData(
                     subMesh.Name,
                     subMesh.MaterialSlot,
@@ -1393,10 +1434,7 @@ namespace Njulf.Rendering.Resources
                 GPUVertexSkinningData[] skinning =
                     BuildGpuSkinningData(subMesh, model);
                 RendererMeshletLodBuild meshletLods =
-                    meshletLodBuilder.Build(
-                        subMesh.Vertices,
-                        subMesh.Indices,
-                        subMesh.Name);
+                    meshletLodBuilder.Build(subMesh);
                 int materialIndex = ResolveSubMeshMaterialIndex(
                     subMesh,
                     importedMaterials.Count);
@@ -1432,7 +1470,11 @@ namespace Njulf.Rendering.Resources
                     Lod1SimplificationError:
                         meshletLods.SimplificationErrors[1],
                     Lod2SimplificationError:
-                        meshletLods.SimplificationErrors[2]);
+                        meshletLods.SimplificationErrors[2],
+                    HierarchyNodes: meshletLods.HierarchyNodes,
+                    HierarchyRootNode:
+                        meshletLods.HierarchyRootNode,
+                    CoarseRayProxyIndices: Array.Empty<uint>());
                 subMeshes[i] = new PreparedModelSubMeshData(
                     subMesh.Name,
                     materialIndex,
@@ -3552,7 +3594,8 @@ namespace Njulf.Rendering.Resources
                     new OpacityMicromapRuntimeMeshRegistration(
                         meshes[subMeshIndex],
                         materialHandle,
-                        _backend.GetMaterialContentRevision(materialHandle),
+                        _backend.GetOpacityMicromapMaterialRevision(
+                            materialHandle),
                         OpacityMicromapRuntimeRegistrationStore
                             .ComputeMeshGeometryKey(
                                 registration.VertexPositions,
@@ -4755,7 +4798,13 @@ namespace Njulf.Rendering.Resources
                                     lod1SimplificationError:
                                         mesh.Lod1SimplificationError,
                                     lod2SimplificationError:
-                                        mesh.Lod2SimplificationError)
+                                        mesh.Lod2SimplificationError,
+                                    hierarchyNodes:
+                                        mesh.HierarchyNodes,
+                                    hierarchyRootNode:
+                                        mesh.HierarchyRootNode,
+                                    coarseRayProxyIndices:
+                                        mesh.CoarseRayProxyIndices)
                                 : new MeshManager.MeshRegistrationData(
                                     mesh.VertexPositions,
                                     mesh.VertexNormalTangents,
@@ -4773,7 +4822,10 @@ namespace Njulf.Rendering.Resources
                                     _primitiveProfiles[i],
                                     mesh.CausticTopologyEvidence,
                                     mesh.Lod1SimplificationError,
-                                    mesh.Lod2SimplificationError);
+                                    mesh.Lod2SimplificationError,
+                                    mesh.HierarchyNodes,
+                                    mesh.HierarchyRootNode,
+                                    mesh.CoarseRayProxyIndices);
                         registration.PrepareTransportGeometry();
                         registrations[i] = registration;
 
@@ -5178,7 +5230,10 @@ namespace Njulf.Rendering.Resources
             GPUVertexSkinningData[] Skinning,
             ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence,
             float Lod1SimplificationError,
-            float Lod2SimplificationError);
+            float Lod2SimplificationError,
+            MeshletHierarchyNode[] HierarchyNodes,
+            int HierarchyRootNode,
+            uint[] CoarseRayProxyIndices);
 
         private sealed record PreparedModelSubMeshData(
             string Name,

@@ -295,6 +295,10 @@ public sealed class SimpleDdgiGuidingVulkanRuntimeTests
             Assert.That(build, Does.Contain("guidingBuildWorkItems.words"));
             Assert.That(sample, Does.Contain("guidingSampleRequests.words"));
             Assert.That(sample, Does.Contain("guidingSamplePayloads.words"));
+            Assert.That(sample, Does.Contain(
+                "SIMPLE_DDGI_GUIDING_COUNTER_BOOTSTRAP_INVALIDATIONS"));
+            Assert.That(sample, Does.Contain(
+                "SimpleDdgiGuidingInvalidateBootstrapPayload(payloadIndex, request);\n        atomicAdd"));
             Assert.That(validate, Does.Contain("guidingValidatePublication.words"));
             Assert.That(prepare, Does.Contain("guidingPrepareBuildWork.words"));
             Assert.That(prepare, Does.Contain("readBankIndex == 0xffffffffu"));

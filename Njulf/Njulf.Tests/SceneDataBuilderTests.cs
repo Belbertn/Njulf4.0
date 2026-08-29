@@ -196,6 +196,89 @@ namespace Njulf.Tests
             });
         }
 
+        [TestCase(
+            MaterialForwardClass.SimpleOpaque,
+            false,
+            MaterialRenderMode.Opaque,
+            GPUSceneInstanceClassification.SimpleOpaque)]
+        [TestCase(
+            MaterialForwardClass.SimpleOpaque,
+            true,
+            MaterialRenderMode.Opaque,
+            GPUSceneInstanceClassification.SimpleNormalOpaque)]
+        [TestCase(
+            MaterialForwardClass.SimpleOpaqueNormal,
+            false,
+            MaterialRenderMode.Opaque,
+            GPUSceneInstanceClassification.SimpleNormalOpaque)]
+        [TestCase(
+            MaterialForwardClass.FullOpaque,
+            false,
+            MaterialRenderMode.Opaque,
+            GPUSceneInstanceClassification.FullOpaque)]
+        [TestCase(
+            MaterialForwardClass.Masked,
+            false,
+            MaterialRenderMode.Mask,
+            GPUSceneInstanceClassification.FullOpaque |
+            GPUSceneInstanceClassification.Masked)]
+        public void ClassifyGpuInstanceCandidate_MatchesForwardAndDepthBuckets(
+            MaterialForwardClass forwardClass,
+            bool hasVertexColor,
+            MaterialRenderMode renderMode,
+            GPUSceneInstanceClassification expected)
+        {
+            Assert.That(
+                SceneDataBuilder.ClassifyGpuInstanceCandidate(
+                    forwardClass,
+                    hasVertexColor,
+                    renderMode),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void ClassifyGpuInstanceCandidate_EncodesDirectionalShadowOwnership()
+        {
+            GPUSceneInstanceClassification staticCaster =
+                SceneDataBuilder.ClassifyGpuInstanceCandidate(
+                    MaterialForwardClass.SimpleOpaque,
+                    hasVertexColor: false,
+                    MaterialRenderMode.Opaque,
+                    castsDirectionalShadow: true,
+                    dynamicDirectionalShadow: false);
+            GPUSceneInstanceClassification dynamicCaster =
+                SceneDataBuilder.ClassifyGpuInstanceCandidate(
+                    MaterialForwardClass.Masked,
+                    hasVertexColor: false,
+                    MaterialRenderMode.Mask,
+                    castsDirectionalShadow: true,
+                    dynamicDirectionalShadow: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    staticCaster.HasFlag(GPUSceneInstanceClassification
+                        .CastsDirectionalShadow),
+                    Is.True);
+                Assert.That(
+                    staticCaster.HasFlag(GPUSceneInstanceClassification
+                        .DynamicDirectionalShadow),
+                    Is.False);
+                Assert.That(
+                    dynamicCaster.HasFlag(GPUSceneInstanceClassification
+                        .CastsDirectionalShadow),
+                    Is.True);
+                Assert.That(
+                    dynamicCaster.HasFlag(GPUSceneInstanceClassification
+                        .DynamicDirectionalShadow),
+                    Is.True);
+                Assert.That(
+                    dynamicCaster.HasFlag(GPUSceneInstanceClassification
+                        .Masked),
+                    Is.True);
+            });
+        }
+
         private static GPUMaterialData CreateGpuMaterial(
             int albedoTextureIndex,
             int normalTextureIndex,

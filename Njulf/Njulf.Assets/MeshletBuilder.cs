@@ -12,17 +12,37 @@ namespace Njulf.Assets
         public const int DefaultMaxTrianglesPerMeshlet = 126;
         private readonly int _maxVerticesPerMeshlet;
         private readonly int _maxTrianglesPerMeshlet;
+        private readonly int _minTrianglesPerMeshlet;
+        private readonly float _coneWeight;
+        private readonly float _splitFactor;
 
         public MeshletBuilder(
             int maxVerticesPerMeshlet = DefaultMaxVerticesPerMeshlet,
-            int maxTrianglesPerMeshlet = DefaultMaxTrianglesPerMeshlet)
+            int maxTrianglesPerMeshlet = DefaultMaxTrianglesPerMeshlet,
+            int minTrianglesPerMeshlet = 0,
+            float coneWeight = 0f,
+            float splitFactor = 0f)
         {
             if (maxVerticesPerMeshlet is < 3 or > DefaultMaxVerticesPerMeshlet)
                 throw new ArgumentOutOfRangeException(nameof(maxVerticesPerMeshlet), $"Meshlet vertex limit must be between 3 and {DefaultMaxVerticesPerMeshlet}.");
             if (maxTrianglesPerMeshlet is < 1 or > DefaultMaxTrianglesPerMeshlet)
                 throw new ArgumentOutOfRangeException(nameof(maxTrianglesPerMeshlet), $"Meshlet triangle limit must be between 1 and {DefaultMaxTrianglesPerMeshlet}.");
+            if (minTrianglesPerMeshlet != 0 &&
+                (minTrianglesPerMeshlet < 4 ||
+                 minTrianglesPerMeshlet > maxTrianglesPerMeshlet ||
+                 minTrianglesPerMeshlet % 4 != 0))
+            {
+                throw new ArgumentOutOfRangeException(nameof(minTrianglesPerMeshlet));
+            }
+            if (!float.IsFinite(coneWeight) || coneWeight is < 0f or > 1f)
+                throw new ArgumentOutOfRangeException(nameof(coneWeight));
+            if (!float.IsFinite(splitFactor) || splitFactor < 0f)
+                throw new ArgumentOutOfRangeException(nameof(splitFactor));
             _maxVerticesPerMeshlet = maxVerticesPerMeshlet;
             _maxTrianglesPerMeshlet = maxTrianglesPerMeshlet;
+            _minTrianglesPerMeshlet = minTrianglesPerMeshlet;
+            _coneWeight = coneWeight;
+            _splitFactor = splitFactor;
         }
 
         public MeshletMesh BuildMeshlets(
@@ -120,7 +140,10 @@ namespace Njulf.Assets
                 indices,
                 vertices,
                 _maxVerticesPerMeshlet,
-                optimizedTriangleLimit);
+                optimizedTriangleLimit,
+                _minTrianglesPerMeshlet,
+                _coneWeight,
+                _splitFactor);
 
             foreach (MeshOptimizerMeshletDescriptor descriptor in result.Meshlets)
             {
@@ -343,15 +366,16 @@ namespace Njulf.Assets
             out Vector3 center,
             out float radius)
         {
-            center = Vector3.Zero;
-            foreach (int vertexIndex in meshletVertexSet)
-                center += vertices[vertexIndex];
+            if (meshletVertexSet.Count == 0)
+                throw new InvalidOperationException("Cannot compute bounds for an empty meshlet.");
 
-            center /= meshletVertexSet.Count;
+            int[] sortedIndices = meshletVertexSet.ToArray();
+            Array.Sort(sortedIndices);
+            var points = new Vector3[sortedIndices.Length];
+            for (int i = 0; i < sortedIndices.Length; i++)
+                points[i] = vertices[sortedIndices[i]];
 
-            radius = 0f;
-            foreach (int vertexIndex in meshletVertexSet)
-                radius = System.Math.Max(radius, Vector3.Distance(center, vertices[vertexIndex]));
+            ComputeTightConservativeSphere(points, out center, out radius);
         }
 
         private static void ComputeMeshletBounds(
@@ -360,21 +384,26 @@ namespace Njulf.Assets
             out Vector3 center,
             out float radius)
         {
-            center = Vector3.Zero;
-            for (int i = 0; i < meshletVertexIndices.Length; i++)
-                center += vertices[checked((int)meshletVertexIndices[i])];
+            if (meshletVertexIndices.IsEmpty)
+                throw new InvalidOperationException("Cannot compute bounds for an empty meshlet.");
 
-            center /= meshletVertexIndices.Length;
-
-            radius = 0f;
+            var points = new Vector3[meshletVertexIndices.Length];
             for (int i = 0; i < meshletVertexIndices.Length; i++)
-            {
-                radius = System.Math.Max(
-                    radius,
-                    Vector3.Distance(
-                        center,
-                        vertices[checked((int)meshletVertexIndices[i])]));
-            }
+                points[i] = vertices[checked((int)meshletVertexIndices[i])];
+
+            ComputeTightConservativeSphere(points, out center, out radius);
+        }
+
+        private static void ComputeTightConservativeSphere(
+            ReadOnlySpan<Vector3> points,
+            out Vector3 center,
+            out float radius)
+        {
+            MeshOptimizerSphereBounds bounds =
+                MeshOptimizerCodec.ComputeSphereBounds(points);
+            center = bounds.Center;
+            float safetyMargin = MathF.Max(bounds.Radius * 1e-5f, 1e-6f);
+            radius = checked(bounds.Radius + safetyMargin);
         }
 
         private static void ComputeMeshletNormalCones(

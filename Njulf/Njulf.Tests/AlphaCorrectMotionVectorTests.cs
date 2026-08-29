@@ -1,10 +1,23 @@
+using Njulf.Rendering.Pipeline;
 using NUnit.Framework;
+using Silk.NET.Vulkan;
 
 namespace Njulf.Tests;
 
 [TestFixture]
 public sealed class AlphaCorrectMotionVectorTests
 {
+    [Test]
+    public void MotionPushConstantsCoverTheCompleteSharedMeshPipelineRange()
+    {
+        Assert.That(
+            MotionVectorPass.MeshPipelinePushConstantStages,
+            Is.EqualTo(
+                ShaderStageFlags.TaskBitExt |
+                ShaderStageFlags.MeshBitExt |
+                ShaderStageFlags.FragmentBit));
+    }
+
     [Test]
     public void MotionPass_UsesDepthCoveragePartitionsInSolidThenMaskedOrder()
     {
@@ -42,9 +55,41 @@ public sealed class AlphaCorrectMotionVectorTests
             Assert.That(source, Does.Contain("MaskedMotionVectorPipeline => _maskedMotionVectorPipeline"));
             Assert.That(source, Does.Contain("\"motion_vector_alpha.mesh.spv\""));
             Assert.That(source, Does.Contain("\"motion_vector_alpha.frag.spv\""));
+            Assert.That(source, Does.Contain("motion_vector_alpha_compacted.mesh.spv"));
+            Assert.That(source, Does.Contain("CompactedMaskedMotionVectorPipeline"));
             Assert.That(Count(source, "cullMode: CullModeFlags.None"), Is.GreaterThanOrEqualTo(2));
             Assert.That(Count(source, "DestroyPipeline(_context.Device, _maskedMotionVectorPipeline"), Is.EqualTo(1));
             Assert.That(source, Does.Contain("_maskedMotionVectorPipeline = default;"));
+        });
+    }
+
+    [Test]
+    public void CompactedMotionVectorShaders_AreMeshOnlyAndUseExactDepthLists()
+    {
+        string pass = ReadRepoText(
+            "Njulf.Rendering", "Pipeline", "MotionVectorPass.cs");
+        string solid = ReadRepoText("Njulf.Shaders", "motion_vector.mesh");
+        string masked = ReadRepoText(
+            "Njulf.Shaders", "motion_vector_alpha.mesh");
+        string project = ReadRepoText(
+            "Njulf.Shaders", "Njulf.Shaders.csproj");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pass, Does.Contain(
+                "SceneSolidDepthCompactedMeshletDrawBufferBase"));
+            Assert.That(pass, Does.Contain(
+                "GetSolidDepthIndirectDispatchOffset"));
+            Assert.That(pass, Does.Contain("CmdDrawMeshTasksIndirect"));
+            Assert.That(solid, Does.Contain(
+                "#ifdef MOTION_VECTOR_COMPACTED_MESH"));
+            Assert.That(solid, Does.Contain("pc.Push.FirstDraw"));
+            Assert.That(masked, Does.Contain(
+                "#ifndef MOTION_VECTOR_COMPACTED_MESH"));
+            Assert.That(project, Does.Contain(
+                "motion_vector_compacted.mesh"));
+            Assert.That(project, Does.Contain(
+                "motion_vector_alpha_compacted.mesh"));
         });
     }
 

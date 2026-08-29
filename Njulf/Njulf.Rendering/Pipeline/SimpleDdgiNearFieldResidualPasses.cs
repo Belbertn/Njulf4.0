@@ -1367,7 +1367,11 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         images[7] = Sampled(_targets.NearFieldPreparedMotion!, _bindlessHeap.ScreenSampler);
         images[8] = Sampled(_targets.NearFieldPreparedReceiverPayload!,
             _bindlessHeap.HiZSampler);
-        images[9] = Sampled(normalRead, _bindlessHeap.ScreenSampler);
+        // Packed history normals use R32_UINT and are read with texelFetch.
+        // Integer formats are not linearly filterable, so pairing this view
+        // with the screen sampler is invalid even though the shader never
+        // requests interpolation.
+        images[9] = Sampled(normalRead, _bindlessHeap.HiZSampler);
         images[10] = Storage(normalWrite);
         images[11] = Sampled(_targets.NearFieldDirectSource!, _bindlessHeap.ScreenSampler);
         images[12] = SampledDepth(_targets.SceneDepth, _bindlessHeap.ScreenSampler);

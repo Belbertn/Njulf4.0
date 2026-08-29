@@ -156,7 +156,11 @@ extern "C" NJULF_OMM_API njulf_omm_status njulf_omm_bake(
         ommCpuTextureMipDesc mip = ommCpuTextureMipDescDefault();
         mip.width = request.texture_width;
         mip.height = request.texture_height;
-        mip.rowPitch = request.texture_width * sizeof(float);
+        // The pinned 1.9.2 CPU implementation treats a non-zero row pitch as
+        // a texel count and applies the FP32 byte size itself.  Use its
+        // canonical tightly-packed sentinel so the bridge cannot accidentally
+        // express the stride in bytes and make the SDK read past alpha_fp32.
+        mip.rowPitch = 0;
         mip.textureData = request.alpha_fp32;
         ommCpuTextureDesc texture_desc = ommCpuTextureDescDefault();
         texture_desc.format = ommCpuTextureFormat_FP32;

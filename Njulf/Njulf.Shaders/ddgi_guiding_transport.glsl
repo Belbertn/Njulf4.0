@@ -6,7 +6,7 @@
 // Compact consumer-side mirror of GPUSimpleDdgiGuidingSamplePayload. The
 // standalone train/build/sample shaders include the larger hierarchy ABI;
 // ordinary DDGI transport needs only these 16 words and the exact estimator.
-const uint SIMPLE_DDGI_GUIDING_TRANSPORT_ABI_VERSION = 0x43330009u;
+const uint SIMPLE_DDGI_GUIDING_TRANSPORT_ABI_VERSION = 0x4333000au;
 const uint SIMPLE_DDGI_GUIDING_PAYLOAD_WORDS = 16u;
 const uint SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE = 0u;
 const uint SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE = 1u;

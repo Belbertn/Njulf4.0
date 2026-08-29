@@ -101,8 +101,11 @@ namespace Njulf.Rendering.Diagnostics
         /// fence-validated C4 cache publication, timing, and memory telemetry.
         /// Version 10 adds fence-validated B1 publication counters, bounded
         /// stage timings, and exact central-memory telemetry.
+        /// Version 12 adds end-to-end receiver-cache generation/consumption,
+        /// accelerated-solver dispatch/publication, and C4 receiver-payload
+        /// evidence used by strict simultaneous all-on qualification.
         /// </summary>
-        public const int CurrentSchemaVersion = 11;
+        public const int CurrentSchemaVersion = 12;
 
         public int SchemaVersion { get; init; } = CurrentSchemaVersion;
         /// <summary>Persisted source version before migration, useful when opening baselines.</summary>
@@ -486,6 +489,26 @@ namespace Njulf.Rendering.Diagnostics
             SimpleDdgiReceiverCacheMode.Exact,
             SimpleDdgiReceiverCacheFallbackReason.ExactRequested,
             "receiver-cache diagnostics unavailable");
+        public bool ForwardGiReceiverCacheGenerated { get; init; }
+        public bool ForwardGiReceiverCacheConsumed { get; init; }
+        public bool SimpleDdgiTransportAccelerationRuntimeAvailable
+        {
+            get;
+            init;
+        }
+        public int SimpleDdgiTransportAcceleratedDispatchCount { get; init; }
+        public int SimpleDdgiTransportAcceleratedCanonicalPublicationCount
+        {
+            get;
+            init;
+        }
+        public int SimpleDdgiTransportAcceleratedFinalPublicationCount
+        {
+            get;
+            init;
+        }
+        public bool GiCausticReceiverPayloadCompleted { get; init; }
+        public ulong GiCausticReceiverPayloadFrameSerial { get; init; }
         /// <summary>Exact canonical, cache, scratch, and optional mirror allocation contract.</summary>
         public SimpleDdgiStorageDiagnostics SimpleDdgiStorage { get; init; } =
             SimpleDdgiStorageDiagnostics.Unavailable;
@@ -1685,6 +1708,24 @@ namespace Njulf.Rendering.Diagnostics
                 ForwardGiIncrementalAttribution = diagnostics.GpuForwardGiIncrementalAttribution,
                 ForwardGiIncrementalReason = diagnostics.GpuForwardGiIncrementalTimingReason,
                 SimpleDdgiReceiverCache = diagnostics.SimpleDdgiReceiverCache,
+                ForwardGiReceiverCacheGenerated =
+                    diagnostics.ForwardGiReceiverCacheGenerated != 0,
+                ForwardGiReceiverCacheConsumed =
+                    diagnostics.ForwardGiReceiverCacheConsumed != 0,
+                SimpleDdgiTransportAccelerationRuntimeAvailable =
+                    diagnostics.SimpleDdgiTransportAccelerationRuntimeAvailable,
+                SimpleDdgiTransportAcceleratedDispatchCount = diagnostics
+                    .SimpleDdgiTransportAcceleratedDispatchCount,
+                SimpleDdgiTransportAcceleratedCanonicalPublicationCount =
+                    diagnostics
+                        .SimpleDdgiTransportAcceleratedCanonicalPublicationCount,
+                SimpleDdgiTransportAcceleratedFinalPublicationCount =
+                    diagnostics
+                        .SimpleDdgiTransportAcceleratedFinalPublicationCount,
+                GiCausticReceiverPayloadCompleted =
+                    diagnostics.GiCausticReceiverPayloadCompleted != 0,
+                GiCausticReceiverPayloadFrameSerial =
+                    diagnostics.GiCausticReceiverPayloadFrameSerial,
                 SimpleDdgiScheduling = diagnostics.SimpleDdgiScheduling,
                 SimpleDdgiAdaptiveRayEvidence =
                     diagnostics.SimpleDdgiAdaptiveRayEvidence,
@@ -1895,11 +1936,12 @@ namespace Njulf.Rendering.Diagnostics
                 }
                 if (schemaVersion is not 2 and not 3 and not 4 and not 5 and
                     not 6 and not 7 and not 8 and not 9 and not 10 and
+                    not 11 and
                     not PerformanceSnapshot.CurrentSchemaVersion)
                 {
                     throw new NotSupportedException(
                         $"Performance snapshot schema {schemaVersion} is not supported. " +
-                        $"Supported schemas are 2, 3, 4, 5, 6, 7, 8, 9, 10, and " +
+                        $"Supported schemas are 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, and " +
                         $"{PerformanceSnapshot.CurrentSchemaVersion}.");
                 }
 
@@ -1917,6 +1959,7 @@ namespace Njulf.Rendering.Diagnostics
                 {
                     PerformanceSnapshot.CurrentSchemaVersion =>
                         NormalizeCurrentSchema(deserialized),
+                    11 => MigrateSchemaV11(deserialized),
                     10 => MigrateSchemaV10(deserialized),
                     9 => MigrateSchemaV9(deserialized),
                     8 => MigrateSchemaV8(deserialized),
@@ -2143,6 +2186,45 @@ namespace Njulf.Rendering.Diagnostics
                 {
                     SimpleDdgiNearFieldResidual = snapshotTelemetry
                 }
+            });
+        }
+
+        /// <summary>
+        /// Schema v11 predates strict simultaneous all-on execution evidence.
+        /// Requested/effective modes and allocation telemetry remain valid,
+        /// but execution or downstream consumption must never be inferred.
+        /// </summary>
+        private static PerformanceSnapshot MigrateSchemaV11(
+            PerformanceSnapshot legacy)
+        {
+            RendererDiagnostics diagnostics = legacy.Diagnostics with
+            {
+                ForwardGiReceiverCacheGenerated = 0,
+                SimpleDdgiTransportAccelerationRuntimeAvailable = false,
+                SimpleDdgiTransportAcceleratedDispatchCount = 0,
+                SimpleDdgiTransportAcceleratedCanonicalPublicationCount = 0,
+                SimpleDdgiTransportAcceleratedFinalPublicationCount = 0,
+                GiCausticReceiverPayloadCompleted = 0,
+                GiCausticReceiverPayloadFrameSerial = 0UL
+            };
+            PerformanceGlobalIlluminationSnapshot globalIllumination =
+                legacy.GlobalIllumination with
+                {
+                    ForwardGiReceiverCacheGenerated = false,
+                    ForwardGiReceiverCacheConsumed = false,
+                    SimpleDdgiTransportAccelerationRuntimeAvailable = false,
+                    SimpleDdgiTransportAcceleratedDispatchCount = 0,
+                    SimpleDdgiTransportAcceleratedCanonicalPublicationCount =
+                        0,
+                    SimpleDdgiTransportAcceleratedFinalPublicationCount = 0,
+                    GiCausticReceiverPayloadCompleted = false,
+                    GiCausticReceiverPayloadFrameSerial = 0UL
+                };
+            return NormalizeCurrentSchema(legacy with
+            {
+                OriginalSchemaVersion = 11,
+                Diagnostics = diagnostics,
+                GlobalIllumination = globalIllumination
             });
         }
 

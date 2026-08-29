@@ -629,6 +629,10 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
                 Does.Contain("EmitSimpleDdgiAlphaMaskReceiverFeedback"));
             Assert.That(forwardShader,
                 Does.Contain("materialCoverage.Alpha"));
+            Assert.That(forwardShader,
+                Does.Contain("defined(FORWARD_DDGI_RECEIVER_CACHE_REQUIRED)"));
+            Assert.That(forwardShader,
+                Does.Contain("exactGatherRequired = exactGatherRequired ||"));
             Assert.That(foliageShader,
                 Does.Contain("FoliageCoverageSurvives"));
             Assert.That(foliageShader,
@@ -645,6 +649,9 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
                 Does.Contain("AlphaMaskReceiverFeedbackPipelinesAvailable"));
             Assert.That(meshPipeline,
                 Does.Contain("receiver-feedback-pipeline-creation-failed"));
+            Assert.That(meshPipeline,
+                Does.Contain(
+                    "alphaMaskReceiverFeedbackRequired && !receiverCacheRequired"));
             Assert.That(foliagePipeline,
                 Does.Contain("ReceiverFeedbackPipelinesAvailable"));
             Assert.That(forwardPass,
@@ -661,6 +668,13 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
                 Is.EqualTo(typeof(ISimpleDdgiReceiverFeedbackCapture)));
             Assert.That(forwardPass,
                 Does.Contain("receiverCacheEligible && receiverGatherRecorded"));
+            Assert.That(forwardPass,
+                Does.Contain(
+                    "receiverCacheEnabled && alphaMaskFeedbackRequired"));
+            Assert.That(forwardPass,
+                Does.Not.Contain(
+                    "!giCausticReceiverEnabled &&\n" +
+                    "                                        !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView"));
         });
     }
 

@@ -23,6 +23,12 @@ public static class ForwardGiCausticReceiverContract
         "forward_opaque_simple_ddgi_c4_receiver.frag.spv";
     public const string SimpleFullInputOpaqueFragmentShader =
         "forward_opaque_simple_full_input_ddgi_c4_receiver.frag.spv";
+    public const string ReceiverCacheOpaqueFragmentShader =
+        "forward_opaque_ddgi_c4_receiver_cache_required.frag.spv";
+    public const string ReceiverCacheSimpleOpaqueFragmentShader =
+        "forward_opaque_simple_ddgi_c4_receiver_cache_required.frag.spv";
+    public const string ReceiverCacheSimpleFullInputOpaqueFragmentShader =
+        "forward_opaque_simple_full_input_ddgi_c4_receiver_cache_required.frag.spv";
 
     public static bool TryValidatePipelineConfiguration(
         in ForwardGiCausticReceiverPipelineConfiguration configuration,
@@ -141,4 +147,3 @@ public sealed class ForwardGiCausticReceiverAttachmentBinding
     public RenderTarget ReceiverPayload { get; }
     public ForwardGiCausticReceiverPipelineConfiguration Configuration { get; }
 }
-

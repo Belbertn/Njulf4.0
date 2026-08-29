@@ -266,6 +266,18 @@ public static class CookedAssetMigrator
     {
         sourcePath = Path.GetFullPath(sourcePath);
         targetPath = Path.GetFullPath(targetPath);
+        CookedAssetHeader? sourceHeader = TryReadMigrationHeader(sourcePath);
+        if (sourceHeader is { } legacyHeader &&
+            legacyHeader.Magic == CookedAssetHeader.ExpectedMagic &&
+            legacyHeader.AssetKind is
+                (CookedAssetKind.Model or CookedAssetKind.Mesh) &&
+            legacyHeader.FormatMajor <
+                CookedFormatVersions.For(legacyHeader.AssetKind).Major)
+        {
+            throw new NotSupportedException(
+                $"Cooked {legacyHeader.AssetKind.ToString().ToLowerInvariant()} '{sourcePath}' uses legacy format " +
+                $"{legacyHeader.FormatMajor}.{legacyHeader.FormatMinor}; the meshlet-v2 contract cannot be reconstructed by migration. Recook it from its source asset.");
+        }
         bool inPlace = string.Equals(
             sourcePath,
             targetPath,
@@ -275,11 +287,13 @@ public static class CookedAssetMigrator
                 targetPath,
                 "migrating.tmp")
             : targetPath;
+        MeshletStreamingManifest? streamingManifest = null;
         try
         {
             using (var reader = new CookedAssetReader(sourcePath))
             {
                 if (reader.Header.AssetKind == CookedAssetKind.Model &&
+                    reader.Header.FormatMajor == 1 &&
                     reader.Header.FormatMinor <
                         CookedModelImportContract.MinimumFormatMinor)
                 {
@@ -290,9 +304,33 @@ public static class CookedAssetMigrator
                         "Recook the model from its source asset.");
                 }
 
+                if (reader.Header.AssetKind == CookedAssetKind.Mesh &&
+                    reader.TryGetSection(
+                        CookedSectionIds.MeshletStreamingManifest,
+                        out ReadOnlyMemory<byte> streamingMetadata))
+                {
+                    streamingManifest =
+                        CookedJson.Deserialize<MeshletStreamingManifest>(
+                            streamingMetadata.Span,
+                            sourcePath,
+                            "meshlet streaming manifest");
+                    streamingManifest.Validate(sourcePath);
+                    using MeshletStreamingPageFile validatedSource =
+                        MeshletStreamingPageFile.Open(
+                            sourcePath,
+                            streamingManifest);
+                }
+
                 using var writer = new CookedAssetWriter(writePath, reader.Header.AssetKind, reader.Header.SourceHash, reader.Header.ImportSettingsHash, reader.Header.DependencyListHash, reader.Header.BuildToolVersion, reader.Header.Flags);
                 foreach (CookedSectionEntry section in reader.Sections.OrderBy(section => section.Offset))
                     MigrateSection(reader, writer, section);
+                if (!inPlace && streamingManifest is not null)
+                {
+                    CopyMeshletStreamingSidecar(
+                        sourcePath,
+                        writePath,
+                        streamingManifest);
+                }
                 writer.Complete();
             }
             if (inPlace)
@@ -305,25 +343,71 @@ public static class CookedAssetMigrator
         }
     }
 
+    private static CookedAssetHeader? TryReadMigrationHeader(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read | FileShare.Delete,
+            CookedAssetHeader.Size,
+            FileOptions.SequentialScan);
+        if (stream.Length < CookedAssetHeader.Size)
+            return null;
+        Span<byte> headerBytes = stackalloc byte[CookedAssetHeader.Size];
+        stream.ReadExactly(headerBytes);
+        return CookedAssetHeader.Read(headerBytes, path);
+    }
+
+    private static void CopyMeshletStreamingSidecar(
+        string sourcePackagePath,
+        string targetPackagePath,
+        MeshletStreamingManifest manifest)
+    {
+        string sourceSidecar = Path.Combine(
+            Path.GetDirectoryName(sourcePackagePath)!,
+            manifest.SidecarFileName);
+        string targetSidecar = Path.Combine(
+            Path.GetDirectoryName(targetPackagePath)!,
+            manifest.SidecarFileName);
+        MeshletStreamingPageRecord finalPage = manifest.Pages[^1];
+        long exactFileBytes = checked(
+            finalPage.DataOffset + finalPage.StoredBytes);
+        AssetArtifactFileIo.CopyAtomic(
+            sourceSidecar,
+            targetSidecar,
+            exactFileBytes,
+            "Meshlet streaming page sidecar");
+        using MeshletStreamingPageFile validatedTarget =
+            MeshletStreamingPageFile.Open(
+                targetPackagePath,
+                manifest);
+    }
+
     private static void MigrateSection(CookedAssetReader reader, CookedAssetWriter writer, CookedSectionEntry section)
     {
         CookedSectionFlags flags = section.Flags & CookedSectionFlags.Required;
         uint id = section.SectionId;
         if (TryMigrateTransportMetadataSection(reader, writer, id, flags))
             return;
-        if (id is var vertexId && (vertexId == CookedSectionIds.VertexPositions || vertexId == CookedSectionIds.VertexNormals || vertexId == CookedSectionIds.VertexUvColors || vertexId == CookedSectionIds.VertexSkinning || vertexId == CookedSectionIds.Meshlets0 || vertexId == CookedSectionIds.Meshlets1 || vertexId == CookedSectionIds.Meshlets2))
+        if (id is var vertexId && (vertexId == CookedSectionIds.VertexPositions || vertexId == CookedSectionIds.VertexNormals || vertexId == CookedSectionIds.VertexUvColors || vertexId == CookedSectionIds.VertexSkinning || vertexId == CookedSectionIds.Meshlets0 || vertexId == CookedSectionIds.Meshlets1 || vertexId == CookedSectionIds.Meshlets2 || vertexId == CookedSectionIds.MeshletHierarchy || vertexId == CookedSectionIds.MeshletHierarchyNodes))
         {
             if (id == CookedSectionIds.VertexPositions) writer.WriteMeshoptVertexSection(id, flags, reader.ReadSection<CookedVertexPositionStream>(id));
             else if (id == CookedSectionIds.VertexNormals) writer.WriteMeshoptVertexSection(id, flags, reader.ReadSection<CookedVertexNormalTangentStream>(id));
             else if (id == CookedSectionIds.VertexUvColors) writer.WriteMeshoptVertexSection(id, flags, reader.ReadSection<CookedVertexUvColorStream>(id));
             else if (id == CookedSectionIds.VertexSkinning) writer.WriteMeshoptVertexSection(id, flags, reader.ReadSection<CookedVertexSkinningData>(id));
+            else if (id == CookedSectionIds.MeshletHierarchyNodes)
+                writer.WriteMeshoptVertexSection(
+                    id,
+                    flags,
+                    reader.ReadSection<MeshletHierarchyNode>(id));
             else writer.WriteMeshoptVertexSection(
                 id,
                 flags,
                 CookedMeshletCompatibility.ReadRequired(reader, id));
             return;
         }
-        if (id is var indexId && (indexId == CookedSectionIds.Indices || indexId == CookedSectionIds.MeshletVertices || indexId == CookedSectionIds.MeshletTriangles))
+        if (id is var indexId && (indexId == CookedSectionIds.Indices || indexId == CookedSectionIds.MeshletVertices || indexId == CookedSectionIds.MeshletTriangles || indexId == CookedSectionIds.CoarseRayProxyIndices))
         {
             uint[] values = reader.ReadSection<uint>(id);
             int valueRange = values.Length == 0 ? 1 : checked((int)values.Max() + 1);
@@ -341,6 +425,13 @@ public static class CookedAssetMigrator
         uint id,
         CookedSectionFlags flags)
     {
+        bool transportMetadataSection =
+            reader.Header.AssetKind == CookedAssetKind.Texture &&
+            id == CookedSectionIds.Metadata ||
+            reader.Header.AssetKind == CookedAssetKind.Material &&
+            id == CookedSectionIds.Materials;
+        if (!transportMetadataSection)
+            return false;
         if (!reader.TryGetSection(id, out ReadOnlyMemory<byte> bytes))
             return false;
         try

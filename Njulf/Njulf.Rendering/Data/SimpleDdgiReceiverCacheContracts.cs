@@ -181,6 +181,16 @@ public static class SimpleDdgiReceiverCachePolicy
         mode is SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark or
             SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial or
             SimpleDdgiReceiverCacheMode.TemporalAdaptive;
+
+    /// <summary>
+    /// True when the cache ABI preserves the compact directional-L2 receiver
+    /// payload. The legacy depth-only benchmark intentionally carries only
+    /// scalar irradiance and therefore cannot replace a directional gather.
+    /// </summary>
+    public static bool CarriesDirectionalRadiancePayload(
+        this SimpleDdgiReceiverCacheMode mode) =>
+        mode is SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial or
+            SimpleDdgiReceiverCacheMode.TemporalAdaptive;
 }
 
 public readonly record struct SimpleDdgiReceiverCacheGpuCounters(

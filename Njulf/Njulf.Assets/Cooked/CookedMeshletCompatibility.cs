@@ -5,8 +5,9 @@ using Njulf.Core.Math;
 namespace Njulf.Assets.Cooked;
 
 /// <summary>
-/// Reads the 48-byte meshlet payload used through mesh format 1.2. Legacy
-/// assets remain renderable, but use a disabled cone until they are recooked.
+/// Decodes meshlet payloads. Model/mesh 2.0 is a hard recook boundary; the
+/// legacy branches remain isolated for non-mesh package sections and tooling
+/// diagnostics, but a runtime reader rejects 1.x mesh headers before this path.
 /// </summary>
 internal static class CookedMeshletCompatibility
 {
@@ -72,6 +73,7 @@ internal static class CookedMeshletCompatibility
 
     private static bool UsesNormalConePayload(CookedAssetReader reader) =>
         reader.Header.AssetKind != CookedAssetKind.Mesh ||
+        reader.Header.FormatMajor >= 2 ||
         reader.Header.FormatMinor >= NormalConeRecordFormatMinor;
 
     private static Meshlet[] Upgrade(ReadOnlySpan<MeshletV12> legacy)
@@ -103,6 +105,7 @@ internal static class CookedMeshletCompatibility
         Span<Meshlet> meshlets)
     {
         if (reader.Header.AssetKind != CookedAssetKind.Mesh ||
+            reader.Header.FormatMajor >= 2 ||
             reader.Header.FormatMinor != NormalConeRecordFormatMinor)
         {
             return;

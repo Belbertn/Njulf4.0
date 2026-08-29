@@ -94,7 +94,8 @@ public sealed class CookedContentResolver
                     sourceHash);
             if (expectedImportContractHash.HasValue)
             {
-                if (reader.Header.FormatMinor <
+                if (reader.Header.FormatMajor == 1 &&
+                    reader.Header.FormatMinor <
                     CookedModelImportContract.MinimumFormatMinor)
                 {
                     return new CookedResolution(

@@ -177,6 +177,24 @@ public sealed class AdvancedGiRenderGraphModesTests
                     usage => usage.Resource == RenderGraphResourceId.SimpleDdgiParameters &&
                         usage.Access == RenderGraphResourceAccess.Read),
                 Is.True);
+            Assert.That(declarations["GiCausticResolvePass"].Usages.Where(
+                    usage => usage.Resource is
+                        RenderGraphResourceId.GiCausticRadiance or
+                        RenderGraphResourceId.GiCausticMoments),
+                Has.All.Matches<RenderGraphResourceUsage>(usage =>
+                    usage.ImageLayout == ImageLayout.General &&
+                    usage.FinalImageLayout == ImageLayout.Undefined &&
+                    usage.Access == RenderGraphResourceAccess.Write &&
+                    (usage.AccessMask & AccessFlags2.ShaderStorageWriteBit) != 0));
+            Assert.That(declarations["GiCausticCompositePass"].Usages.Where(
+                    usage => usage.Resource is
+                        RenderGraphResourceId.GiCausticRadiance or
+                        RenderGraphResourceId.GiCausticMoments),
+                Has.All.Matches<RenderGraphResourceUsage>(usage =>
+                    usage.ImageLayout == ImageLayout.General &&
+                    usage.Access == RenderGraphResourceAccess.Read &&
+                    (usage.AccessMask & AccessFlags2.ShaderStorageReadBit) != 0 &&
+                    (usage.AccessMask & AccessFlags2.ShaderSampledReadBit) == 0));
         });
     }
 

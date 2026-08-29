@@ -203,6 +203,7 @@ internal static class Program
         AssimpMaterialTextureConvention assimpMaterialTextureConvention =
             AssimpMaterialTextureConvention.Standard;
         int maxDimension = 2048;
+        float maximumSamplerAnisotropy = 16f;
         bool force = false;
         string platform = CookedPlatform.Current;
         string? signingKey = null;
@@ -236,6 +237,18 @@ internal static class Program
                     maxDimension = int.Parse(RequireValue(args, ref i, "--max-texture-dimension"), CultureInfo.InvariantCulture);
                     if (maxDimension <= 0)
                         throw new ArgumentOutOfRangeException(nameof(maxDimension), "Maximum texture dimension must be positive.");
+                    break;
+                case "--max-sampler-anisotropy":
+                    maximumSamplerAnisotropy = float.Parse(
+                        RequireValue(args, ref i, "--max-sampler-anisotropy"),
+                        CultureInfo.InvariantCulture);
+                    if (!float.IsFinite(maximumSamplerAnisotropy) ||
+                        maximumSamplerAnisotropy is < 1f or > 16f)
+                    {
+                        throw new ArgumentOutOfRangeException(
+                            nameof(maximumSamplerAnisotropy),
+                            "Maximum sampler anisotropy must be in [1, 16].");
+                    }
                     break;
                 case "--force":
                     force = true;
@@ -340,7 +353,8 @@ internal static class Program
             ImporterOptions = new ImporterOptions
             {
                 Backend = backend,
-                AssimpMaterialTextureConvention = assimpMaterialTextureConvention
+                AssimpMaterialTextureConvention = assimpMaterialTextureConvention,
+                MaximumSamplerAnisotropy = maximumSamplerAnisotropy
             },
             TextureOptions = new TextureCookOptions(MaxDimension: maxDimension, TargetFormatPolicy: textureFormat),
             Force = force,
@@ -656,7 +670,7 @@ internal static class Program
         Console.WriteLine("  Njulf.AssetTool validate <path-or-folder> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>] [--timeout-ms <ms>] [--max-bytes <bytes>] [--high-texture-bytes <bytes>] [--child-process-all]");
         Console.WriteLine("  Njulf.AssetTool import <path> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>]");
         Console.WriteLine("  Njulf.AssetTool report <path-or-folder> --json <output> [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>]");
-        Console.WriteLine("  Njulf.AssetTool cook model <source> --out <folder> [--platform <rid>] [--texture-format <autoBc|rgba8|bc7|bc5|bc4|bc6h>] [--signing-key <pem>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--max-texture-dimension <pixels>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--omm-bridge <native-library> --omm-provenance <json> --omm-subdivision <0..12> --omm-max-subdivision <1..12> --omm-max-workload <count> --omm-max-array-bytes <bytes>]");
+        Console.WriteLine("  Njulf.AssetTool cook model <source> --out <folder> [--platform <rid>] [--texture-format <autoBc|rgba8|bc7|bc5|bc4|bc6h>] [--signing-key <pem>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--max-texture-dimension <pixels>] [--max-sampler-anisotropy <1..16>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--omm-bridge <native-library> --omm-provenance <json> --omm-subdivision <0..12> --omm-max-subdivision <1..12> --omm-max-workload <count> --omm-max-array-bytes <bytes>]");
         Console.WriteLine("  Njulf.AssetTool cook folder|changed <source-folder> --out <folder> [--platform <rid>] [--texture-format <format>] [--signing-key <pem>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--jobs <count|auto>] [--max-inflight-bytes <bytes>] [--omm-bridge <native-library> --omm-provenance <json>]");
         Console.WriteLine("  Njulf.AssetTool clean-stale --out <folder> [--platform <rid>]");
         Console.WriteLine("  Njulf.AssetTool migrate <cooked-folder> [--out <folder>] [--signing-key <pem>]");
@@ -672,5 +686,6 @@ internal static class Program
         Console.WriteLine("  Njulf.AssetTool advanced-gi create-startup --profile <json> --settings <json> --corpus-sha256 <sha256> --content-profile <id> --scene-sha256 <sha256> [--prerequisite <json>] [--qualification <json>] [--runtime-evidence <json>] [--candidate <json>] [--build-commit <sha> --shader-bundle-sha256 <sha256>]");
         Console.WriteLine("  Njulf.AssetTool advanced-gi verify-startup --profile <json> [--build-commit <sha> --shader-bundle-sha256 <sha256>]");
         Console.WriteLine("  Njulf.AssetTool advanced-gi verify-qualification --manifest <json>");
+        Console.WriteLine("  Njulf.AssetTool advanced-gi verify-c1-model --model <cooked.njmodel>");
     }
 }

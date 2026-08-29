@@ -81,7 +81,11 @@ public sealed record SampleSmokeOptions(
     string? VolumetricTemporalCaptureDirectory = null,
     string? VolumetricTemporalAnalyzeDirectory = null,
     SampleSponzaFixtureMode SponzaFixtureMode =
-        SampleSponzaFixtureMode.Architecture)
+        SampleSponzaFixtureMode.Architecture,
+    SimpleDdgiReceiverCacheMode? SimpleDdgiReceiverCacheModeOverride = null,
+    bool? SimpleDdgiTransportAccelerationEnabledOverride = null,
+    int? SimpleDdgiTransportAcceleratedSweepCountOverride = null,
+    string? GiAllOnQualificationReportPath = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
     public SampleBenchmarkQualitySequenceOptions BenchmarkQualitySequence { get; init; } =
@@ -137,6 +141,10 @@ public sealed record SampleSmokeOptions(
         SimpleDdgiDirectionalGuidingModeOverride.HasValue ||
         GiCausticModeOverride.HasValue ||
         SimpleDdgiNearFieldResidualModeOverride.HasValue ||
+        SimpleDdgiReceiverCacheModeOverride.HasValue ||
+        SimpleDdgiTransportAccelerationEnabledOverride.HasValue ||
+        SimpleDdgiTransportAcceleratedSweepCountOverride.HasValue ||
+        !string.IsNullOrWhiteSpace(GiAllOnQualificationReportPath) ||
         !string.IsNullOrWhiteSpace(LongRunReportPath) ||
         LongRunMinutes > 0.0 ||
         KhronosMaterialGiRenderedGate is not null ||
@@ -151,6 +159,7 @@ public sealed record SampleSmokeOptions(
         !string.IsNullOrWhiteSpace(SponzaTemporalCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(VolumetricTemporalCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(BistroQualityCaptureDirectory) ||
+        !string.IsNullOrWhiteSpace(GiAllOnQualificationReportPath) ||
         PerformanceScenario ==
             SamplePerformanceScenario.BistroQualityMotionRelight;
 }

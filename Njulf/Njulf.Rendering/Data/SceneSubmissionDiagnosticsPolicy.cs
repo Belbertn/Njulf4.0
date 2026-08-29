@@ -52,7 +52,25 @@ namespace Njulf.Rendering.Data
             if (!sceneData.SceneSubmissionGpuCompactionEnabled)
                 return "GPU compaction disabled";
 
-            if (sceneData.SceneSubmissionValidationCompareCpuGpuLists &&
+            string previousFailure = BuildPreviousFailureReason(
+                counters,
+                validation,
+                sceneData.SceneSubmissionValidationCompareCpuGpuLists);
+            if (previousFailure.Length != 0)
+                return previousFailure;
+
+            if (!HasEligibleGpuSubmission(sceneData))
+                return NoEligibleGpuSubmissionReason;
+
+            return string.Empty;
+        }
+
+        internal static string BuildPreviousFailureReason(
+            SceneSubmissionCounterSnapshot counters,
+            SceneSubmissionValidationSnapshot validation,
+            bool validationEnabled)
+        {
+            if (validationEnabled &&
                 validation.Valid != 0 &&
                 validation.MismatchCount > 0 &&
                 IsActionableValidationMismatch(validation))
@@ -83,9 +101,6 @@ namespace Njulf.Rendering.Data
                 Sum(counters.DirectionalDynamicShadowOverflowCounts);
             if (directionalShadowOverflow > 0)
                 return $"previous GPU directional shadow compaction overflow: overflow={directionalShadowOverflow}";
-
-            if (!HasEligibleGpuSubmission(sceneData))
-                return NoEligibleGpuSubmissionReason;
 
             return string.Empty;
         }

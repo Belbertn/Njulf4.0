@@ -40,6 +40,16 @@
 #extension GL_EXT_ray_query : require
 #endif
 
+#if !defined(NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION) && \
+    defined(FORWARD_DDGI_RECEIVER_CACHE_REQUIRED) && \
+    FORWARD_DDGI_RECEIVER_CACHE_REQUIRED && \
+    (defined(FORWARD_OPAQUE) || defined(FORWARD_SIMPLE_OPAQUE))
+// A cache-required opaque program can still encounter surviving alpha-mask
+// fragments. Keep those fragments on the exact B1 ownership path while
+// ordinary opaque fragments consume the resolved receiver cache.
+#define NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION 1
+#endif
+
 #ifndef NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
 #define NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION 0
 #endif
@@ -141,15 +151,7 @@ layout(early_fragment_tests) in;
 #include "common.glsl"
 
 #ifndef NJULF_GTAO_BENT_NORMAL_LIGHTING
-#if defined(FORWARD_DDGI_RECEIVER_CACHE_REQUIRED) && \
-    FORWARD_DDGI_RECEIVER_CACHE_REQUIRED
-// Bent-normal lighting deliberately compiles out of the receiver-cache hot
-// artifacts. Runtime policy selects the exact gather whenever bent lighting
-// is requested, so these variants retain their previous instruction stream.
-#define NJULF_GTAO_BENT_NORMAL_LIGHTING 0
-#else
 #define NJULF_GTAO_BENT_NORMAL_LIGHTING 1
-#endif
 #endif
 #include "area_lighting.glsl"
 #include "directional_csm_sampling.glsl"
@@ -6222,7 +6224,16 @@ void main()
         }
         bool exactGatherRequired =
             !receiverCacheAccepted ||
-            !receiverCompactDirectionalResolved;
+            !receiverCompactDirectionalResolved ||
+            (ForwardAmbientOcclusionBentNormalMode() == 2u &&
+             bentNormalValid);
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+        // Cache-required opaque artifacts also own B1 attribution. Only a
+        // surviving alpha-mask fragment pays for the exact structured gather;
+        // opaque receivers retain the cache fast path.
+        exactGatherRequired = exactGatherRequired ||
+            (alphaMode > 0.5 && alphaMode < 1.5);
+#endif
         if (exactGatherRequired && diffuseGatherRequired)
 #else
         if (diffuseGatherRequired)
@@ -6249,13 +6260,11 @@ void main()
                 fragWorldPosition,
                 ddgiNormal,
                 viewDirection);
-#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION && \
-    FORWARD_THIN_GLASS_ONLY
-            // The directional-only program intentionally skips the diffuse
-            // composition block where ordinary B1 values are populated. The
-            // same authoritative gather still owns this visible dielectric
-            // receiver, and ThinGlass explicitly opts into its reflection
-            // lobe at every roughness.
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+            // Cache-accepted alpha-mask receivers skip the exact diffuse
+            // composition block below, so publish B1 ownership directly from
+            // this authoritative gather. ThinGlass uses the same path and
+            // explicitly owns its reflection lobe at every roughness.
             exactFeedbackGatherContributed = true;
             exactFeedbackRadiometricOwnership =
                 SimpleDdgiRadiometricOwnership(
@@ -6263,7 +6272,14 @@ void main()
             exactFeedbackLeakAttenuation = SimpleDdgiLeakAttenuation(
                 precomputedSimpleDdgiGather,
                 directionalParams);
+#if FORWARD_THIN_GLASS_ONLY
             exactFeedbackRoughDdgiOwnership = 1.0;
+#else
+            exactFeedbackRoughDdgiOwnership =
+                SimpleDdgiRoughSpecularWeight(
+                    directionalParams.residencyFlags,
+                    roughness);
+#endif
 #endif
             indirectSpecularVisibility =
                 SimpleDdgiRoughIndirectSpecularVisibility(
@@ -6613,7 +6629,10 @@ void main()
         reflectionDebugColor);
 
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
-    if (!receiverCacheAccepted && environment.Enabled != 0u)
+    if ((!receiverCacheAccepted ||
+         (ForwardAmbientOcclusionBentNormalMode() != 0u &&
+          bentNormalValid)) &&
+        environment.Enabled != 0u)
     {
         // EvaluateIbl deliberately skips diffuse environment work in the
         // accepted cache path. A rejected fragment restores the exact
@@ -6683,12 +6702,65 @@ void main()
         // the fragment's local receiver surface. The producer already applied
         // intensity, ownership, leak attenuation, fallback visibility and the
         // Lambert factor; material/AO composition remains fragment exact.
-        finalDiffuseIndirect =
-            (ForwardDdgiReceiverCacheDdgiIrradiance(cachedGather) *
-                 ambientOcclusion * ddgiIndirectAo +
-             ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *
-                 indirectAo) *
-            diffuseReflectance;
+        vec3 cachedDdgiDiffuse =
+            ForwardDdgiReceiverCacheDdgiIrradiance(cachedGather) *
+            ambientOcclusion * ddgiIndirectAo * diffuseReflectance;
+        vec3 cachedEnvironmentDiffuse =
+            ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *
+            indirectAo * diffuseReflectance;
+        if (ForwardAmbientOcclusionBentNormalMode() != 0u &&
+            bentNormalValid)
+        {
+            // EnvironmentOnly and EnvironmentAndDdgi evaluate the authored
+            // bent direction at the fragment. The cache continues to own the
+            // DDGI estimate (EnvironmentOnly), admission, and rough-specular
+            // visibility without reusing normal-dependent sky irradiance.
+            cachedEnvironmentDiffuse = diffuseIbl * indirectAo;
+        }
+
+        finalDiffuseIndirect = cachedDdgiDiffuse + cachedEnvironmentDiffuse;
+#if !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+        if (ForwardAmbientOcclusionBentNormalMode() == 2u && bentNormalValid)
+        {
+            // Ultra's DDGI lobe is also bent-normal dependent. Re-evaluate
+            // only that lobe from the canonical gather while retaining the
+            // cache for receiver admission, environment replacement, and
+            // rough-specular visibility. This is the safe visible fallback
+            // when no compact diffuse-directional record is available.
+            SimpleDdgiParams bentParams = ReadSimpleDdgiParams(
+                uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+            SimpleDdgiGatherResult bentGather = precomputedSimpleDdgiGather;
+            float bentRadiometricOwnership =
+                SimpleDdgiRadiometricOwnership(bentGather);
+            float bentLeakAttenuation = SimpleDdgiLeakAttenuation(
+                bentGather,
+                bentParams);
+            float bentOwnership =
+                bentRadiometricOwnership * bentLeakAttenuation;
+            float bentEnvironmentFallback =
+                (1.0 - bentRadiometricOwnership) *
+                bentParams.environmentFallbackIntensity;
+            vec3 bentDdgiDiffuse = ApplyGiMaterialOcclusion(
+                EvaluateGiDiffuseFromIrradiance(
+                    bentGather.irradiance * bentParams.indirectIntensity,
+                    diffuseReflectance),
+                ambientOcclusion * ddgiIndirectAo) * bentOwnership;
+            vec3 bentEnvironmentDiffuse = diffuseIbl;
+            if (bentEnvironmentFallback >
+                    SIMPLE_DDGI_ENVIRONMENT_FALLBACK_MIN_WEIGHT &&
+                (bentParams.flags &
+                    SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
+            {
+                bentEnvironmentDiffuse *= EstimateFarFieldSkyVisibility(
+                    fragWorldPosition,
+                    ddgiNormal,
+                    bentParams,
+                    DdgiSparseDiagnosticSampleWeight());
+            }
+            finalDiffuseIndirect = bentDdgiDiffuse +
+                bentEnvironmentDiffuse * bentEnvironmentFallback * indirectAo;
+        }
+#endif
     }
 #if !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
     else

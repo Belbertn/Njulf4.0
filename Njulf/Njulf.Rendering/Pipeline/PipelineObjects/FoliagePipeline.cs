@@ -51,6 +51,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _shadowPipeline;
         private VkPipeline _authoredShadowPipeline;
         private VkPipeline _authoredMotionVectorPipeline;
+        private VkPipeline _authoredCompactedMotionVectorPipeline;
         private bool _pipelinesPrepared;
         private bool _disposed;
 
@@ -177,6 +178,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ShadowPipeline => _shadowPipeline;
         public VkPipeline AuthoredShadowPipeline => _authoredShadowPipeline;
         public VkPipeline AuthoredMotionVectorPipeline => _authoredMotionVectorPipeline;
+        public VkPipeline AuthoredCompactedMotionVectorPipeline =>
+            _authoredCompactedMotionVectorPipeline;
         public RenderSettings Settings { get; }
         /// <summary>
         /// Uses a separate foliage shadow mesh shader with bounded caster
@@ -554,6 +557,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: true,
                 depthWriteEnable: false);
             _context.SetDebugName(_authoredMotionVectorPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Motion Vector Pipeline");
+            _authoredCompactedMotionVectorPipeline = CreateGraphicsPipeline(
+                null,
+                "foliage_motion_compacted.mesh.spv",
+                "foliage_motion.frag.spv",
+                motionVectorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false);
+            _context.SetDebugName(
+                _authoredCompactedMotionVectorPipeline.Handle,
+                ObjectType.Pipeline,
+                "Foliage Compacted Mesh-Only Motion Vector Pipeline");
         }
 
         private void CreateNearFieldDirectSourcePipelines(
@@ -884,7 +899,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         }
 
         private VkPipeline CreateGraphicsPipeline(
-            string taskShaderName,
+            string? taskShaderName,
             string meshShaderName,
             string fragmentShaderName,
             Format colorFormat,
@@ -903,17 +918,23 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ShaderModule fragmentModule = default;
             try
             {
-                taskModule = ShaderModuleLoader.Load(_context, taskShaderName);
+                bool hasTaskShader = !string.IsNullOrWhiteSpace(taskShaderName);
+                if (hasTaskShader)
+                    taskModule = ShaderModuleLoader.Load(_context, taskShaderName!);
                 meshModule = ShaderModuleLoader.Load(_context, meshShaderName);
                 fragmentModule = ShaderModuleLoader.Load(_context, fragmentShaderName);
-                _context.SetDebugName(taskModule.Handle, ObjectType.ShaderModule, taskShaderName);
+                if (hasTaskShader)
+                    _context.SetDebugName(taskModule.Handle, ObjectType.ShaderModule, taskShaderName!);
                 _context.SetDebugName(meshModule.Handle, ObjectType.ShaderModule, meshShaderName);
                 _context.SetDebugName(fragmentModule.Handle, ObjectType.ShaderModule, fragmentShaderName);
 
                 var stages = stackalloc PipelineShaderStageCreateInfo[3];
-                stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
-                stages[1] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
-                stages[2] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
+                int meshStageIndex = hasTaskShader ? 1 : 0;
+                int fragmentStageIndex = meshStageIndex + 1;
+                if (hasTaskShader)
+                    stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
+                stages[meshStageIndex] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
+                stages[fragmentStageIndex] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
 
                 var vertexInputInfo = new PipelineVertexInputStateCreateInfo
                 {
@@ -1060,7 +1081,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 {
                     SType = StructureType.GraphicsPipelineCreateInfo,
                     PNext = &renderingInfo,
-                    StageCount = 3,
+                    StageCount = hasTaskShader ? 3u : 2u,
                     PStages = stages,
                     PVertexInputState = &vertexInputInfo,
                     PInputAssemblyState = &inputAssemblyInfo,
@@ -1148,6 +1169,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline(ref _shadowPipeline);
             DestroyPipeline(ref _authoredShadowPipeline);
             DestroyPipeline(ref _authoredMotionVectorPipeline);
+            DestroyPipeline(ref _authoredCompactedMotionVectorPipeline);
             _pipelinesPrepared = false;
         }
 

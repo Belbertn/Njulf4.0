@@ -1717,14 +1717,18 @@ public sealed unsafe class GiCausticVulkanRuntime : IDisposable
                 allocation.AllocationId != expected.AllocationId ||
                 !_allocator.TryGetNativeAllocation(expected.AllocationId, out GiCausticNativeAllocation nativeAllocation))
             {
-                _resourceManager.AbortBuild(
+                bool abortedCurrentBuild = _resourceManager.AbortBuild(
                     expected.Token,
                     "caustic-header-readback-allocation-no-longer-current");
                 publication = new GiCausticGpuPublicationResult(
                     false,
                     GiCausticGpuPublicationFailure.NotEnabled,
                     "caustic-header-readback-allocation-no-longer-current");
-                ClearPendingReadbacksNoLock();
+                // AbortBuild is token-bound.  If it rejected this stale token,
+                // another frame slot can already own the current replacement
+                // build and its readback must remain intact.
+                if (abortedCurrentBuild)
+                    ClearPendingReadbacksNoLock();
                 UpdateDiagnosticsNoLock(
                     GiCausticVulkanRuntimeCapabilityReason.HeaderReadbackRejected,
                     publication.Reason,
@@ -1744,7 +1748,12 @@ public sealed unsafe class GiCausticVulkanRuntime : IDisposable
                     header: header);
                 if (!publication.Published)
                 {
-                    ClearPendingReadbacksNoLock();
+                    // A semantic revision can replace an in-flight build before
+                    // this older fence completes.  CompleteBuild deliberately
+                    // returns TokenMismatch without cancelling the replacement;
+                    // retain its independently owned frame-slot readback too.
+                    if (!PreservesReplacementReadback(publication.Failure))
+                        ClearPendingReadbacksNoLock();
                     UpdateDiagnosticsNoLock(
                         GiCausticVulkanRuntimeCapabilityReason.HeaderReadbackRejected,
                         publication.Reason,
@@ -1763,12 +1772,14 @@ public sealed unsafe class GiCausticVulkanRuntime : IDisposable
             catch (Exception exception)
             {
                 string reason = "caustic-header-readback-failed:" + exception.GetType().Name;
-                _resourceManager.AbortBuild(expected.Token, reason);
+                bool abortedCurrentBuild =
+                    _resourceManager.AbortBuild(expected.Token, reason);
                 publication = new GiCausticGpuPublicationResult(
                     false,
                     GiCausticGpuPublicationFailure.GpuWorkIncomplete,
                     reason);
-                ClearPendingReadbacksNoLock();
+                if (abortedCurrentBuild)
+                    ClearPendingReadbacksNoLock();
                 UpdateDiagnosticsNoLock(
                     GiCausticVulkanRuntimeCapabilityReason.HeaderReadbackRejected,
                     reason,
@@ -1777,6 +1788,10 @@ public sealed unsafe class GiCausticVulkanRuntime : IDisposable
             }
         }
     }
+
+    internal static bool PreservesReplacementReadback(
+        GiCausticGpuPublicationFailure failure) =>
+        failure == GiCausticGpuPublicationFailure.TokenMismatch;
 
     /// <summary>
     /// Records reset, visible-receiver tile compaction, and an indirect

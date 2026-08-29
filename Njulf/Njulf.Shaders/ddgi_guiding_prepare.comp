@@ -15,7 +15,7 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-const uint SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION = 0x43330009u;
+const uint SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION = 0x4333000au;
 const uint SIMPLE_DDGI_GUIDING_PREPARE_BUILD_WORK = 1u << 0u;
 const uint SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_WORK = 1u << 1u;
 const uint SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_EXPAND = 1u << 2u;

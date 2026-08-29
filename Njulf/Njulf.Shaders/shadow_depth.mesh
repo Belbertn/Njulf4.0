@@ -72,5 +72,11 @@ void main()
             i1,
             i2,
             meshNegativeDeterminant != 0u);
+        gl_MeshPrimitivesEXT[triangleSlot].gl_CullPrimitiveEXT =
+            !MeshletLodTransitionTriangleVisible(
+                command.Flags,
+                command.InstanceId,
+                command.MeshletIndex,
+                triangleSlot);
     }
 }

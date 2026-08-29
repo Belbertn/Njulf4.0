@@ -49,20 +49,12 @@ public readonly record struct CookedFormatVersion(ushort Major, ushort Minor);
 
 public static class CookedFormatVersions
 {
-    // 1.4 defines ImportSettingsHash on model headers/manifests as the stable
-    // source-import semantic contract. Source-path resolution rejects older
-    // models because their import convention cannot be proven; direct
-    // .njmodel requests remain authoritative and retain legacy compatibility.
-    // 1.5 persists per-LOD geometric simplification error for projected-pixel
-    // selection without requiring authored distance bands.
-    public static CookedFormatVersion Model { get; } = new(1, 5);
-    // 1.3 appended a 64-byte meshlet tail using a sine cutoff and cutoff=1
-    // disabled sentinel. 1.4 corrects the tail to cos(maximum deviation) and
-    // the unique axis=0/cutoff=-1 sentinel. Readers convert 1.3 conservatively;
-    // 1.0-1.2 keep their 48-byte records and load disabled.
-    // 1.5 adds simplification error to each JSON LOD range; binary meshlet
-    // records remain unchanged.
-    public static CookedFormatVersion Mesh { get; } = new(1, 5);
+    // 2.0 is a deliberate hard recook boundary. LOD errors are absolute object-
+    // space values, meshlet spheres use the tight conservative builder, and LOD
+    // simplification includes appearance attributes. Loading any 1.x model or
+    // mesh would silently reinterpret quality metadata, so it is rejected.
+    public static CookedFormatVersion Model { get; } = new(2, 0);
+    public static CookedFormatVersion Mesh { get; } = new(2, 0);
     public static CookedFormatVersion Material { get; } = new(1, 2);
     public static CookedFormatVersion Texture { get; } = new(1, 3);
     public static CookedFormatVersion Animation { get; } = new(1, 1);
@@ -92,6 +84,10 @@ public static class CookedSectionIds
     public static readonly uint Meshlets0 = FourCc("MLT0");
     public static readonly uint Meshlets1 = FourCc("MLT1");
     public static readonly uint Meshlets2 = FourCc("MLT2");
+    public static readonly uint MeshletHierarchy = FourCc("MLTH");
+    public static readonly uint MeshletHierarchyNodes = FourCc("MHND");
+    public static readonly uint CoarseRayProxyIndices = FourCc("RPIX");
+    public static readonly uint MeshletStreamingManifest = FourCc("MSPM");
     public static readonly uint MeshletVertices = FourCc("MLVX");
     public static readonly uint MeshletTriangles = FourCc("MLTR");
     public static readonly uint DrawRanges = FourCc("DRWR");

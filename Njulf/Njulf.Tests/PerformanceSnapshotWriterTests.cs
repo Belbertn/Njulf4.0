@@ -91,6 +91,46 @@ public sealed class PerformanceSnapshotWriterTests
     }
 
     [Test]
+    public void GlobalIlluminationSnapshot_PreservesAllOnExecutionEvidence()
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            ForwardGiReceiverCacheGenerated = 1,
+            ForwardGiReceiverCacheConsumed = 1,
+            SimpleDdgiTransportAccelerationRuntimeAvailable = true,
+            SimpleDdgiTransportAcceleratedDispatchCount = 12,
+            SimpleDdgiTransportAcceleratedCanonicalPublicationCount = 6,
+            SimpleDdgiTransportAcceleratedFinalPublicationCount = 1,
+            GiCausticReceiverPayloadCompleted = 1,
+            GiCausticReceiverPayloadFrameSerial = 77UL
+        };
+
+        PerformanceGlobalIlluminationSnapshot snapshot =
+            PerformanceSnapshotWriter.CreateGlobalIlluminationSnapshot(
+                diagnostics);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.ForwardGiReceiverCacheGenerated, Is.True);
+            Assert.That(snapshot.ForwardGiReceiverCacheConsumed, Is.True);
+            Assert.That(
+                snapshot.SimpleDdgiTransportAccelerationRuntimeAvailable,
+                Is.True);
+            Assert.That(snapshot.SimpleDdgiTransportAcceleratedDispatchCount,
+                Is.EqualTo(12));
+            Assert.That(snapshot
+                    .SimpleDdgiTransportAcceleratedCanonicalPublicationCount,
+                Is.EqualTo(6));
+            Assert.That(snapshot
+                    .SimpleDdgiTransportAcceleratedFinalPublicationCount,
+                Is.EqualTo(1));
+            Assert.That(snapshot.GiCausticReceiverPayloadCompleted, Is.True);
+            Assert.That(snapshot.GiCausticReceiverPayloadFrameSerial,
+                Is.EqualTo(77UL));
+        });
+    }
+
+    [Test]
     public void SnapshotAndMemoryAudit_PreserveAuthoritativePackedStorageEvidence()
     {
         SimpleDdgiStorageDiagnostics storage =
@@ -1040,6 +1080,71 @@ public sealed class PerformanceSnapshotWriterTests
         }
     }
 
+    [Test]
+    public void SnapshotReader_MigratesSchemaElevenWithoutInferringAllOnExecution()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "NjulfPerformanceSnapshotTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            string path = new PerformanceSnapshotWriter().Write(
+                directory,
+                RendererDiagnostics.Empty with
+                {
+                    ForwardGiReceiverCacheGenerated = 1,
+                    SimpleDdgiTransportAccelerationRuntimeAvailable = true,
+                    SimpleDdgiTransportAcceleratedDispatchCount = 9,
+                    SimpleDdgiTransportAcceleratedCanonicalPublicationCount = 4,
+                    SimpleDdgiTransportAcceleratedFinalPublicationCount = 1,
+                    GiCausticReceiverPayloadCompleted = 1,
+                    GiCausticReceiverPayloadFrameSerial = 55UL
+                },
+                RenderBudgetSnapshot.Empty);
+            JsonNode root = JsonNode.Parse(File.ReadAllText(path))
+                ?? throw new InvalidOperationException(
+                    "Expected a snapshot JSON object.");
+            root["SchemaVersion"] = 11;
+            root["OriginalSchemaVersion"] = 11;
+            File.WriteAllText(path, root.ToJsonString());
+
+            PerformanceSnapshot snapshot =
+                new PerformanceSnapshotReader().Read(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(snapshot.SchemaVersion,
+                    Is.EqualTo(PerformanceSnapshot.CurrentSchemaVersion));
+                Assert.That(snapshot.OriginalSchemaVersion, Is.EqualTo(11));
+                Assert.That(snapshot.Diagnostics.ForwardGiReceiverCacheGenerated,
+                    Is.Zero);
+                Assert.That(snapshot.Diagnostics
+                        .SimpleDdgiTransportAccelerationRuntimeAvailable,
+                    Is.False);
+                Assert.That(snapshot.Diagnostics
+                        .SimpleDdgiTransportAcceleratedDispatchCount,
+                    Is.Zero);
+                Assert.That(snapshot.Diagnostics
+                        .SimpleDdgiTransportAcceleratedFinalPublicationCount,
+                    Is.Zero);
+                Assert.That(snapshot.Diagnostics
+                        .GiCausticReceiverPayloadCompleted,
+                    Is.Zero);
+                Assert.That(snapshot.GlobalIllumination
+                        .GiCausticReceiverPayloadCompleted,
+                    Is.False);
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static SimpleDdgiDirectionalGuidingDiagnostics
         CreateDirectionalGuidingTelemetry() => new()
         {
@@ -1084,6 +1189,7 @@ public sealed class PerformanceSnapshotWriterTests
                 SampleTelemetry = new SimpleDdgiGuidingSampleTelemetry(
                     RequestCount: 32U,
                     ValidSampleCount: 32U,
+                    BootstrapInvalidationCount: 0U,
                     MaintenanceSampleCount: 8U,
                     MixtureUniformSampleCount: 8U,
                     MixtureGuidedSampleCount: 16U,

@@ -16,7 +16,7 @@ public static class SimpleDdgiGuidingGpuAbi
     /// stable sampling payload meaning changes.  The value is written into
     /// every persistent distribution header and every sampled-ray payload.
     /// </summary>
-    public const uint Version = 0x4333_0009u;
+    public const uint Version = 0x4333_000au;
 
     public const uint HeaderWordCount = 8u;
     public const uint HeaderByteCount = HeaderWordCount * sizeof(uint);
@@ -54,6 +54,13 @@ public static class SimpleDdgiGuidingGpuAbi
     public const uint CounterUniformFallbackSamples = 8u;
     public const uint CounterMaximumInversePdfBits = 9u;
     public const uint CounterMaximumPdfBits = 10u;
+    /// <summary>
+    /// Requests whose probe intentionally had no published proposal yet. They
+    /// invalidate any stale trace sidecar payload and use the trace kernel's
+    /// uniform bootstrap path; they are neither valid guided samples nor
+    /// validation failures, but still participate in exact dispatch accounting.
+    /// </summary>
+    public const uint CounterBootstrapInvalidations = 11u;
     public const uint CounterInversePdfHistogramBase = 12u;
     public const uint InversePdfHistogramBinCount = 16u;
     public const uint CounterGpuWorkItemCount = 28u;

@@ -1275,7 +1275,14 @@ namespace Njulf.Rendering.Data
         public const float DefaultGpuLod2DistanceRatio = 10.0f;
         public const float DefaultGpuLodTargetPixelError = 1.0f;
         public const float GpuLodHysteresisFraction = 0.15f;
+        public const int DefaultGpuLodTransitionFrameCount = 8;
+        public const int MaximumGpuLodTransitionFrameCount = 16;
         public const int DefaultGpuShadowLodBias = 1;
+        public const int DefaultGpuMeshletStreamingPhysicalPageCount = 4096;
+        public const int DefaultGpuMeshletStreamingUploadBudgetMiB = 8;
+        public const int DefaultGpuMeshletStreamingMaximumRequestsPerFrame =
+            4096;
+        public const int DefaultGpuMeshletStreamingConcurrentReads = 4;
 
         private float _gpuLod1DistanceRatio = DefaultGpuLod1DistanceRatio;
         private float _gpuLod2DistanceRatio = DefaultGpuLod2DistanceRatio;
@@ -1284,10 +1291,69 @@ namespace Njulf.Rendering.Data
         private float _gpuLodTargetPixelError =
             DefaultGpuLodTargetPixelError;
         private int _gpuShadowLodBias = DefaultGpuShadowLodBias;
+        private int _gpuLodTransitionFrameCount =
+            DefaultGpuLodTransitionFrameCount;
+        private int _gpuMeshletStreamingPhysicalPageCount =
+            DefaultGpuMeshletStreamingPhysicalPageCount;
+        private int _gpuMeshletStreamingUploadBudgetMiB =
+            DefaultGpuMeshletStreamingUploadBudgetMiB;
+        private int _gpuMeshletStreamingMaximumRequestsPerFrame =
+            DefaultGpuMeshletStreamingMaximumRequestsPerFrame;
+        private int _gpuMeshletStreamingConcurrentReads =
+            DefaultGpuMeshletStreamingConcurrentReads;
 
         public bool GpuCompactionEnabled { get; set; } = true;
         public bool IndirectMeshletDispatchEnabled { get; set; } = true;
         public bool GpuLodSelectionEnabled { get; set; } = true;
+        public bool GpuLodDitherTransitionsEnabled { get; set; } = true;
+        /// <summary>
+        /// Enables per-cluster error traversal for meshes carrying the v2
+        /// hierarchy. Meshes without hierarchy data retain the flat LOD path.
+        /// </summary>
+        public bool GpuHierarchicalLodEnabled { get; set; } = true;
+        /// <summary>
+        /// Enables authenticated 64 KiB static-meshlet page admission. Missing,
+        /// corrupt, or over-budget sidecars retain the full-resident path.
+        /// Skinned and coarse fallback pages are always pinned.
+        /// </summary>
+        public bool GpuMeshletStreamingEnabled { get; set; } = true;
+
+        public int GpuMeshletStreamingPhysicalPageCount
+        {
+            get => _gpuMeshletStreamingPhysicalPageCount;
+            set => _gpuMeshletStreamingPhysicalPageCount =
+                Math.Clamp(value, 64, 16_384);
+        }
+
+        public int GpuMeshletStreamingUploadBudgetMiB
+        {
+            get => _gpuMeshletStreamingUploadBudgetMiB;
+            set => _gpuMeshletStreamingUploadBudgetMiB =
+                Math.Clamp(value, 1, 64);
+        }
+
+        public int GpuMeshletStreamingMaximumRequestsPerFrame
+        {
+            get => _gpuMeshletStreamingMaximumRequestsPerFrame;
+            set => _gpuMeshletStreamingMaximumRequestsPerFrame =
+                Math.Clamp(value, 256, 65_536);
+        }
+
+        public int GpuMeshletStreamingConcurrentReads
+        {
+            get => _gpuMeshletStreamingConcurrentReads;
+            set => _gpuMeshletStreamingConcurrentReads =
+                Math.Clamp(value, 1, 16);
+        }
+
+        public int GpuLodTransitionFrameCount
+        {
+            get => _gpuLodTransitionFrameCount;
+            set => _gpuLodTransitionFrameCount = Math.Clamp(
+                value,
+                1,
+                MaximumGpuLodTransitionFrameCount);
+        }
 
         public GpuLodSelectionMode GpuLodSelectionMode
         {
@@ -1347,6 +1413,27 @@ namespace Njulf.Rendering.Data
         }
 
         public bool ValidationCompareCpuGpuLists { get; set; }
+
+        /// <summary>
+        /// Restores the production-qualified meshlet submission path. Quality
+        /// presets call this before applying their tier-specific pixel-error
+        /// budget; persisted current-schema settings and explicit runtime
+        /// overrides remain authoritative when applied afterwards.
+        /// </summary>
+        public void EnableProductionMeshletFeatures()
+        {
+            GpuCompactionEnabled = true;
+            IndirectMeshletDispatchEnabled = true;
+            GpuLodSelectionEnabled = true;
+            GpuLodSelectionMode = GpuLodSelectionMode.ScreenSpaceError;
+            GpuLodDitherTransitionsEnabled = true;
+            GpuLodTransitionFrameCount =
+                DefaultGpuLodTransitionFrameCount;
+            GpuHierarchicalLodEnabled = true;
+            GpuMeshletStreamingEnabled = true;
+            GpuShadowCompactionEnabled = true;
+            GpuShadowLodBias = DefaultGpuShadowLodBias;
+        }
 
         internal static float ClampGpuLod1DistanceRatio(float value) =>
             ClampFinite(value, minimum: 1.0f, maximum: 64.0f, fallback: DefaultGpuLod1DistanceRatio);
@@ -2590,7 +2677,7 @@ namespace Njulf.Rendering.Data
                 SimpleDdgiNearFieldResidualQualityPreset.Balanced;
         public const SimpleDdgiReceiverCacheMode
             DefaultSimpleDdgiReceiverCacheMode =
-                SimpleDdgiReceiverCacheMode.Exact;
+                SimpleDdgiReceiverCacheMode.TemporalAdaptive;
 
         private float _indirectIntensity = 1.0f;
         private float _environmentFallbackIntensity = 1.0f;
@@ -4567,10 +4654,25 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportAlbedoClamp = 0.95f;
             SimpleDdgiTransportTailRelativeTolerance = 0.025f;
             SimpleDdgiTransportAcceleratedSweepCount = 2;
-            // Preserve the canonical Jacobi solve for every production tier.
-            // Tail-accelerated benchmark variants opt back in explicitly.
-            SimpleDdgiTransportAccelerationEnabled = false;
+            bool productionGiTier = tier != DdgiQualityTier.DdgiLow;
+            // Production tiers run the bounded red-black solve and retain the
+            // canonical Jacobi path as the automatic safety fallback. Low is
+            // the explicit no-GI profile and does not reserve accelerated or
+            // receiver-side resources.
+            SimpleDdgiTransportAccelerationEnabled = productionGiTier;
             SimpleDdgiTransportTailCertificationEnabled = true;
+            SimpleDdgiReceiverCacheMode = productionGiTier
+                ? DefaultSimpleDdgiReceiverCacheMode
+                : SimpleDdgiReceiverCacheMode.Exact;
+            DdgiOpacityMicromapMode = productionGiTier
+                ? DefaultDdgiOpacityMicromapMode
+                : DdgiOpacityMicromapMode.Off;
+            SimpleDdgiDirectionalGuidingMode = productionGiTier
+                ? DefaultSimpleDdgiDirectionalGuidingMode
+                : SimpleDdgiDirectionalGuidingMode.Off;
+            GiCausticMode = productionGiTier
+                ? DefaultGiCausticMode
+                : GiCausticMode.Off;
             bool highTier = tier is
                 DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra;
             SimpleDdgiRefinementBricksEnabled = highTier;
@@ -5496,7 +5598,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 23;
+        public const int SerializationVersion = 24;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5616,14 +5718,30 @@ namespace Njulf.Rendering.Data
             Fog.Volumetric.MultipleScatteringIterations =
                 preset == RenderQualityPreset.Ultra ? 2 : 0;
 
-            // Quality presets select the bounded C3 production path. Its
-            // publication handshake is transactional and preserves the
-            // canonical uniform DDGI proposal whenever guiding is unavailable.
-            // Callers can still opt out after applying a preset by selecting
-            // Off, and persisted settings retain that explicit intent.
+            // Applying a preset restores the complete production GI request.
+            // Runtime and persisted overrides are intentionally applied after
+            // this point and can still opt individual features out. Low is the
+            // sole no-GI profile and requests none of their resources.
+            bool productionGiProfile = preset != RenderQualityPreset.Low;
+            GlobalIllumination.DdgiOpacityMicromapMode = productionGiProfile
+                ? GlobalIlluminationSettings.DefaultDdgiOpacityMicromapMode
+                : DdgiOpacityMicromapMode.Off;
             GlobalIllumination.SimpleDdgiDirectionalGuidingMode =
-                GlobalIlluminationSettings
-                    .DefaultSimpleDdgiDirectionalGuidingMode;
+                productionGiProfile
+                    ? GlobalIlluminationSettings
+                        .DefaultSimpleDdgiDirectionalGuidingMode
+                    : SimpleDdgiDirectionalGuidingMode.Off;
+            GlobalIllumination.GiCausticMode = productionGiProfile
+                ? GlobalIlluminationSettings.DefaultGiCausticMode
+                : GiCausticMode.Off;
+            GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                productionGiProfile
+                    ? GlobalIlluminationSettings
+                        .DefaultSimpleDdgiReceiverCacheMode
+                    : SimpleDdgiReceiverCacheMode.Exact;
+            GlobalIllumination.SimpleDdgiTransportAccelerationEnabled =
+                productionGiProfile;
+            GlobalIllumination.SimpleDdgiTransportAcceleratedSweepCount = 2;
 
             // C5 is part of the High-class production profile. Lower tiers do
             // not reserve its immutable trace, history, filter, and composite
@@ -5638,10 +5756,9 @@ namespace Njulf.Rendering.Data
                         .DefaultSimpleDdgiNearFieldResidualMode
                     : SimpleDdgiNearFieldResidualMode.Off;
 
-            // Bent-normal irradiance is normal-dependent and remains paired
-            // with the exact receiver gather. The cache candidates stay
-            // available through explicit settings and benchmark variants, but
-            // supplied hardware captures did not pass their visual gate.
+            // High and Ultra retain their authored bent-normal quality. The
+            // receiver-cache variants consume the same normal-dependent
+            // environment and compact-directional inputs in the forward path.
             AmbientOcclusion.Mode = preset == RenderQualityPreset.Low
                 ? AmbientOcclusionMode.Disabled
                 : AmbientOcclusionMode.Gtao;
@@ -5653,17 +5770,15 @@ namespace Njulf.Rendering.Data
                     AmbientOcclusionBentNormalMode.EnvironmentAndDdgi,
                 _ => AmbientOcclusionBentNormalMode.Off
             };
-            GlobalIllumination.SimpleDdgiReceiverCacheMode =
-                SimpleDdgiReceiverCacheMode.Exact;
             GlobalIllumination
                 .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled =
                 preset is RenderQualityPreset.High or
                     RenderQualityPreset.DdgiHigh or
                     RenderQualityPreset.Ultra;
+            SceneSubmission.EnableProductionMeshletFeatures();
+            Foliage.IndirectMeshletDispatchEnabled = true;
             MeshletNormalConeCullingEnabled = true;
             Transparency.PipelinePartitioningEnabled = true;
-            SceneSubmission.GpuLodSelectionMode =
-                GpuLodSelectionMode.ScreenSpaceError;
             SceneSubmission.GpuLodTargetPixelError = preset switch
             {
                 RenderQualityPreset.Low => 2.0f,
@@ -6242,7 +6357,9 @@ namespace Njulf.Rendering.Data
             // meshlet cone, and transparency partition defaults while retaining
             // explicit current-schema overrides. Version 23 persists automatic,
             // resolution-aware cooked LOD selection and its pixel-error budget;
-            // older files retain their distance-based behavior.
+            // older files now promote that v2-only production behavior. Version
+            // 24 persists eight-frame LOD dithering, hierarchy traversal, and
+            // the bounded authenticated meshlet-streaming budgets.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -8312,6 +8429,14 @@ namespace Njulf.Rendering.Data
             public bool GpuLodSelectionEnabled { get; init; } = true;
             public GpuLodSelectionMode? GpuLodSelectionMode { get; init; }
             public float? GpuLodTargetPixelError { get; init; }
+            public bool? GpuLodDitherTransitionsEnabled { get; init; }
+            public int? GpuLodTransitionFrameCount { get; init; }
+            public bool? GpuHierarchicalLodEnabled { get; init; }
+            public bool? GpuMeshletStreamingEnabled { get; init; }
+            public int? GpuMeshletStreamingPhysicalPageCount { get; init; }
+            public int? GpuMeshletStreamingUploadBudgetMiB { get; init; }
+            public int? GpuMeshletStreamingMaximumRequestsPerFrame { get; init; }
+            public int? GpuMeshletStreamingConcurrentReads { get; init; }
             public float GpuLod1DistanceRatio { get; init; } = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio;
             public float GpuLod2DistanceRatio { get; init; } = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio;
             public bool GpuShadowCompactionEnabled { get; init; } = true;
@@ -8328,6 +8453,22 @@ namespace Njulf.Rendering.Data
                     GpuLodSelectionMode = settings.GpuLodSelectionMode,
                     GpuLodTargetPixelError =
                         settings.GpuLodTargetPixelError,
+                    GpuLodDitherTransitionsEnabled =
+                        settings.GpuLodDitherTransitionsEnabled,
+                    GpuLodTransitionFrameCount =
+                        settings.GpuLodTransitionFrameCount,
+                    GpuHierarchicalLodEnabled =
+                        settings.GpuHierarchicalLodEnabled,
+                    GpuMeshletStreamingEnabled =
+                        settings.GpuMeshletStreamingEnabled,
+                    GpuMeshletStreamingPhysicalPageCount =
+                        settings.GpuMeshletStreamingPhysicalPageCount,
+                    GpuMeshletStreamingUploadBudgetMiB =
+                        settings.GpuMeshletStreamingUploadBudgetMiB,
+                    GpuMeshletStreamingMaximumRequestsPerFrame =
+                        settings.GpuMeshletStreamingMaximumRequestsPerFrame,
+                    GpuMeshletStreamingConcurrentReads =
+                        settings.GpuMeshletStreamingConcurrentReads,
                     GpuLod1DistanceRatio = settings.GpuLod1DistanceRatio,
                     GpuLod2DistanceRatio = settings.GpuLod2DistanceRatio,
                     GpuShadowCompactionEnabled = settings.GpuShadowCompactionEnabled,
@@ -8346,11 +8487,46 @@ namespace Njulf.Rendering.Data
                 settings.GpuLodSelectionMode = serializationVersion >= 23
                     ? GpuLodSelectionMode ??
                         global::Njulf.Rendering.Data.GpuLodSelectionMode.ScreenSpaceError
-                    : global::Njulf.Rendering.Data.GpuLodSelectionMode.LegacyDistance;
+                    : global::Njulf.Rendering.Data.GpuLodSelectionMode.ScreenSpaceError;
                 settings.GpuLodTargetPixelError = serializationVersion >= 23
                     ? GpuLodTargetPixelError ??
                         SceneSubmissionSettings.DefaultGpuLodTargetPixelError
                     : SceneSubmissionSettings.DefaultGpuLodTargetPixelError;
+                settings.GpuLodDitherTransitionsEnabled =
+                    serializationVersion >= 24
+                        ? GpuLodDitherTransitionsEnabled ?? true
+                        : true;
+                settings.GpuLodTransitionFrameCount =
+                    serializationVersion >= 24
+                        ? GpuLodTransitionFrameCount ??
+                          SceneSubmissionSettings
+                              .DefaultGpuLodTransitionFrameCount
+                        : SceneSubmissionSettings
+                            .DefaultGpuLodTransitionFrameCount;
+                settings.GpuHierarchicalLodEnabled =
+                    serializationVersion >= 24
+                        ? GpuHierarchicalLodEnabled ?? true
+                        : true;
+                settings.GpuMeshletStreamingEnabled =
+                    serializationVersion >= 24
+                        ? GpuMeshletStreamingEnabled ?? true
+                        : true;
+                settings.GpuMeshletStreamingPhysicalPageCount =
+                    GpuMeshletStreamingPhysicalPageCount ??
+                    SceneSubmissionSettings
+                        .DefaultGpuMeshletStreamingPhysicalPageCount;
+                settings.GpuMeshletStreamingUploadBudgetMiB =
+                    GpuMeshletStreamingUploadBudgetMiB ??
+                    SceneSubmissionSettings
+                        .DefaultGpuMeshletStreamingUploadBudgetMiB;
+                settings.GpuMeshletStreamingMaximumRequestsPerFrame =
+                    GpuMeshletStreamingMaximumRequestsPerFrame ??
+                    SceneSubmissionSettings
+                        .DefaultGpuMeshletStreamingMaximumRequestsPerFrame;
+                settings.GpuMeshletStreamingConcurrentReads =
+                    GpuMeshletStreamingConcurrentReads ??
+                    SceneSubmissionSettings
+                        .DefaultGpuMeshletStreamingConcurrentReads;
                 settings.GpuLod1DistanceRatio = GpuLod1DistanceRatio;
                 settings.GpuLod2DistanceRatio = GpuLod2DistanceRatio;
                 settings.GpuShadowCompactionEnabled = GpuShadowCompactionEnabled;

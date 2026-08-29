@@ -284,7 +284,11 @@ foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControl
     $expectedCacheSamples = if ($isCacheModule) { 1 } else { 0 }
     $expectedExactReceiverConstants = if ($isCacheModule) { 4 } else { 0 }
     $expectedExactReceiverAccesses = if ($isCacheModule) { 3 } else { 0 }
-    $expectedAtomicInstructions = if ($isCacheModule) { 29 } else { 0 }
+    # Cache-capable opaque programs retain both independent fail-closed lanes:
+    # the canonical rejection gather and the exact B1 ownership producer used
+    # by accepted alpha-masked fragments. The latter contributes fourteen
+    # bounded atomic instructions to these six explicitly pinned artifacts.
+    $expectedAtomicInstructions = if ($isCacheModule) { 43 } else { 0 }
 
     if ($atomicInstructions -ne $expectedAtomicInstructions) {
         $violations.Add(

@@ -770,6 +770,8 @@ namespace Njulf.Rendering.Data
         public long GpuVolumetricFogCompositeMicroseconds { get; init; }
         public ulong StableSceneInputUploadBytes { get; init; }
         public ulong CpuCandidateListUploadBytes { get; init; }
+        public ulong SceneInstanceCandidateUploadBytes { get; init; }
+        public ulong SceneInstanceCandidateBufferSize { get; init; }
         public int CameraDrivenCpuDrawListRebuilt { get; init; }
         public int SolidObjectCount { get; init; }
         public int GeometryDecalObjectCount { get; init; }
@@ -1126,6 +1128,17 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuCompactionEnabled { get; init; }
         public int SceneSubmissionIndirectMeshletDispatchEnabled { get; init; }
         public int SceneSubmissionGpuLodSelectionEnabled { get; init; }
+        public int SceneSubmissionGpuInstanceExpansionEnabled { get; init; }
+        public int SceneSubmissionGpuInstanceExpansionActive { get; init; }
+        public int SceneSubmissionInstanceCandidateCount { get; init; }
+        public int SceneSubmissionGpuLodDitherTransitionsEnabled { get; init; }
+        public int SceneSubmissionGpuLodDitherTransitionsActive { get; init; }
+        public int SceneSubmissionGpuLodTransitionFrameCount { get; init; }
+        public int SceneSubmissionGpuHierarchicalLodEnabled { get; init; }
+        public int SceneSubmissionGpuHierarchicalLodActive { get; init; }
+        public int SceneSubmissionGpuHierarchicalInstanceCount { get; init; }
+        public int SceneSubmissionGpuHierarchySelectedNodeCount { get; init; }
+        public int SceneSubmissionGpuHierarchyTraversalFallbackCount { get; init; }
         public int SceneSubmissionGpuShadowCompactionEnabled { get; init; }
         public int SceneSubmissionValidationCompareCpuGpuLists { get; init; }
         public int SceneSubmissionGpuCompactionActive { get; init; }
@@ -1533,6 +1546,10 @@ namespace Njulf.Rendering.Data
         public float SimpleDdgiTransportTailRelativeTolerance { get; init; }
         public int SimpleDdgiTransportAcceleratedSweepCount { get; init; }
         public bool SimpleDdgiTransportAccelerationEnabled { get; init; }
+        public bool SimpleDdgiTransportAccelerationRuntimeAvailable { get; init; }
+        public int SimpleDdgiTransportAcceleratedDispatchCount { get; init; }
+        public int SimpleDdgiTransportAcceleratedCanonicalPublicationCount { get; init; }
+        public int SimpleDdgiTransportAcceleratedFinalPublicationCount { get; init; }
         public bool SimpleDdgiTransportTailCertificationEnabled { get; init; }
         public string SimpleDdgiTransportTailCertificationFallbackReason { get; init; } =
             string.Empty;
@@ -2228,6 +2245,11 @@ namespace Njulf.Rendering.Data
         public int ForwardGiBenchmarkForcedExact { get; init; }
         /// <summary>The opaque draw consumed the resolved half-resolution receiver cache.</summary>
         public int ForwardGiReceiverCacheConsumed { get; init; }
+        /// <summary>The temporal-adaptive receiver classify/gather/resolve graph recorded successfully.</summary>
+        public int ForwardGiReceiverCacheGenerated { get; init; }
+        /// <summary>The forward pass produced a generation-matched C4 receiver payload.</summary>
+        public int GiCausticReceiverPayloadCompleted { get; init; }
+        public ulong GiCausticReceiverPayloadFrameSerial { get; init; }
         public int ForwardGiDisabledPipelineUsed { get; init; }
         public int ForwardGiExactGatherUsed { get; init; }
         public ulong StagingBufferAllocatedBytes { get; init; }

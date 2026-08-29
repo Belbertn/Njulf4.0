@@ -120,6 +120,28 @@ const uint SIMPLE_DDGI_AUDIT_OBSERVED_CONTRACTION_B_WORD = 49u;
 const uint SIMPLE_DDGI_AUDIT_QUANTIZATION_FLOOR_R_WORD = 50u;
 const uint SIMPLE_DDGI_AUDIT_QUANTIZATION_FLOOR_G_WORD = 51u;
 const uint SIMPLE_DDGI_AUDIT_QUANTIZATION_FLOOR_B_WORD = 52u;
+// Optional stage-comparison words begin at the cache-line-aligned stage record
+// and are written only by the host-selected detailed witness invocation.
+const uint SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD = 64u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_WEIGHT_WORD = 42u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_ACCUMULATED_R_WORD = 43u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_ACTIVE_WORD = 46u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_VALID_WORD = 47u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_MAINTENANCE_WORD = 48u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_MIXTURE_WORD = 49u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_RAY_R_WORD = 50u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_DIRECTION_X_WORD = 53u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_PDF_WORD = 56u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_SOURCE_RAY_COUNT_WORD = 57u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_RAY_VALID_WORD = 58u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_RAY_BACKFACE_WORD = 59u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_SOURCE_R_WORD = 73u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_BOUNCE_R_WORD = 76u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_TOTAL_R_WORD = 79u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GATHER_COUNT_WORD = 82u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_OWNERSHIP_WORD = 83u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FALLBACK_WORD = 84u;
+const uint SIMPLE_DDGI_AUDIT_STAGE_AUDIT_RAY_SOLVE_EPOCH_WORD = 85u;
 const uint SIMPLE_DDGI_AUDIT_CHANNEL_EVIDENCE_VERSION = 1u;
 const uint SIMPLE_DDGI_AUDIT_WITNESS_ADDRESS_BITS = 20u;
 const uint SIMPLE_DDGI_AUDIT_WITNESS_ADDRESS_MASK =
@@ -961,6 +983,63 @@ void SimpleDdgiAuditRunRayPhase()
         return;
     }
 
+    if (probeIndex == pc.AuditWitnessProbeIndex && ray == 0u)
+    {
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_SOURCE_R_WORD + 0u,
+            floatBitsToUint(source.sourceRadiance.r));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_SOURCE_R_WORD + 1u,
+            floatBitsToUint(source.sourceRadiance.g));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_SOURCE_R_WORD + 2u,
+            floatBitsToUint(source.sourceRadiance.b));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_BOUNCE_R_WORD + 0u,
+            floatBitsToUint(bounce.r));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_BOUNCE_R_WORD + 1u,
+            floatBitsToUint(bounce.g));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_BOUNCE_R_WORD + 2u,
+            floatBitsToUint(bounce.b));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_TOTAL_R_WORD + 0u,
+            floatBitsToUint(radiance.r));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_TOTAL_R_WORD + 1u,
+            floatBitsToUint(radiance.g));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_TOTAL_R_WORD + 2u,
+            floatBitsToUint(radiance.b));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GATHER_COUNT_WORD,
+            gatherCount);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_OWNERSHIP_WORD,
+            floatBitsToUint(ownershipSum));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FALLBACK_WORD,
+            floatBitsToUint(fallbackWeightSum));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_RAY_SOLVE_EPOCH_WORD,
+            pc.AuditSolveEpoch);
+        memoryBarrierBuffer();
+    }
+
     WriteSimpleDdgiRayResultStorage(
         pc.RayResultScratchBufferIndex,
         chunkProbeIndex * auditParams.raysPerProbe + ray,
@@ -1333,6 +1412,101 @@ void SimpleDdgiAuditRunReducePhase()
         SimpleDdgiAuditWrite(
             SIMPLE_DDGI_AUDIT_DETAILED_WITNESS_PRIVATE_B_WORD,
             floatBitsToUint(privateTarget.b));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_WEIGHT_WORD,
+            floatBitsToUint(weightSum));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_ACCUMULATED_R_WORD + 0u,
+            floatBitsToUint(accumulated.r));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_ACCUMULATED_R_WORD + 1u,
+            floatBitsToUint(accumulated.g));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_ACCUMULATED_R_WORD + 2u,
+            floatBitsToUint(accumulated.b));
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_ACTIVE_WORD,
+            guidingActive ? 1u : 0u);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_VALID_WORD,
+            SharedAuditGuidingValidCount);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_MAINTENANCE_WORD,
+            SharedAuditGuidingMaintenanceCount);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_MIXTURE_WORD,
+            SharedAuditGuidingMixtureCount);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_PDF_WORD,
+            floatBitsToUint(SharedAuditGuidingPdf[0]));
+#else
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_ACTIVE_WORD,
+            0u);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_VALID_WORD,
+            0u);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_MAINTENANCE_WORD,
+            0u);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_GUIDING_MIXTURE_WORD,
+            0u);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_PDF_WORD,
+            0u);
+#endif
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_RAY_R_WORD + 0u,
+            floatBitsToUint(SharedAuditRadiance[0].r));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_RAY_R_WORD + 1u,
+            floatBitsToUint(SharedAuditRadiance[0].g));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_RAY_R_WORD + 2u,
+            floatBitsToUint(SharedAuditRadiance[0].b));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_DIRECTION_X_WORD + 0u,
+            floatBitsToUint(SharedAuditDirection[0].x));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_DIRECTION_X_WORD + 1u,
+            floatBitsToUint(SharedAuditDirection[0].y));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_DIRECTION_X_WORD + 2u,
+            floatBitsToUint(SharedAuditDirection[0].z));
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_SOURCE_RAY_COUNT_WORD,
+            context.sourceRayCount);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_RAY_VALID_WORD,
+            SharedAuditValid[0]);
+        SimpleDdgiAuditWrite(
+            SIMPLE_DDGI_AUDIT_STAGE_BASE_WORD +
+                SIMPLE_DDGI_AUDIT_STAGE_AUDIT_FIRST_RAY_BACKFACE_WORD,
+            SharedAuditBackface[0]);
         memoryBarrierBuffer();
         SimpleDdgiAuditWrite(
             SIMPLE_DDGI_AUDIT_DETAILED_WITNESS_VALID_WORD,

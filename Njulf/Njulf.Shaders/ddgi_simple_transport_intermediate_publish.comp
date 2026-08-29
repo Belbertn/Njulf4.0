@@ -45,6 +45,8 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint SchedulerUpdateRecordsOffsetWords;
 } pc;
 
+#include "ddgi_simple_transport_stage_evidence.glsl"
+
 void main()
 {
     SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
@@ -102,11 +104,59 @@ void main()
             update.physicalProbeIndex,
             texel,
             params.irradianceTexels);
+        bool stageWitness =
+            SimpleDdgiTransportStageMatchesWitness(
+                update.probeIndex,
+                texel) &&
+            SimpleDdgiSolveIsFinalSweep(
+                pc.Flags,
+                params.transportAcceleratedSweepCount);
+        uint stageMask = 0u;
+        if (stageWitness)
+        {
+            if (SimpleDdgiTransportStageContextMatches(
+                    update.probeIndex,
+                    update.physicalProbeIndex,
+                    texel))
+            {
+                stageMask = SimpleDdgiTransportStageRead(
+                    SIMPLE_DDGI_TRANSPORT_STAGE_MASK_WORD);
+                SimpleDdgiTransportStageWrite(
+                    SIMPLE_DDGI_TRANSPORT_STAGE_VERSION_WORD,
+                    0u);
+            }
+            else
+            {
+                SimpleDdgiTransportStageBegin(
+                    update.probeIndex,
+                    update.physicalProbeIndex,
+                    texel);
+            }
+            SimpleDdgiTransportStageWriteRgb(
+                SIMPLE_DDGI_TRANSPORT_STAGE_PUBLISH_INPUT_R_WORD,
+                value.rgb);
+        }
         WriteSimpleDdgiIrradianceTexel(
             pc.IrradianceAtlasBufferIndex,
             update.physicalProbeIndex,
             texel,
             params.irradianceTexels,
             value);
+        if (stageWitness)
+        {
+            memoryBarrierBuffer();
+            vec3 canonicalReadback = ReadSimpleDdgiIrradianceTexel(
+                pc.IrradianceAtlasBufferIndex,
+                update.physicalProbeIndex,
+                texel,
+                params.irradianceTexels).rgb;
+            SimpleDdgiTransportStageWriteRgb(
+                SIMPLE_DDGI_TRANSPORT_STAGE_CANONICAL_R_WORD,
+                canonicalReadback);
+            SimpleDdgiTransportStagePublish(
+                stageMask |
+                SIMPLE_DDGI_TRANSPORT_STAGE_INTERMEDIATE_PUBLISH |
+                SIMPLE_DDGI_TRANSPORT_STAGE_CANONICAL_READBACK);
+        }
     }
 }

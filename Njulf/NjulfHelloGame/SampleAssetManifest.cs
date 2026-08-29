@@ -16,11 +16,13 @@ internal sealed record SampleAssetReference(
     ModelImportBackend ExpectedBackend,
     AssimpMaterialTextureConvention AssimpMaterialTextureConvention =
         AssimpMaterialTextureConvention.Standard,
-    SampleAssetLoadTier LoadTier = SampleAssetLoadTier.Critical)
+    SampleAssetLoadTier LoadTier = SampleAssetLoadTier.Critical,
+    float MaximumSamplerAnisotropy = 16f)
 {
     public string CreateContentIdentity() =>
         $"{ExpectedBackend}\u001f" +
-        $"{AssimpMaterialTextureConvention}\u001f{Path}";
+        $"{AssimpMaterialTextureConvention}\u001f" +
+        $"{MaximumSamplerAnisotropy:R}\u001f{Path}";
 
     public ContentLoadOptions CreateLoadOptions()
     {
@@ -31,6 +33,7 @@ internal sealed record SampleAssetReference(
                 Backend = ExpectedBackend,
                 AssimpMaterialTextureConvention =
                     AssimpMaterialTextureConvention,
+                MaximumSamplerAnisotropy = MaximumSamplerAnisotropy,
                 ImportLights = true
             }
         };

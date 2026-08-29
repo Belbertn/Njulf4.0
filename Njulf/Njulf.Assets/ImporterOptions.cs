@@ -46,6 +46,13 @@ namespace Njulf.Assets
         public float DefaultImportedLightRange { get; set; } = 100f;
         public float MaximumImportedLightRange { get; set; } = 1000f;
         public float ImportedLightAttenuationCutoff { get; set; } = 1f / 256f;
+        /// <summary>
+        /// Maximum anisotropy authored into imported texture samplers. The
+        /// default preserves ordinary rendering quality; exact C1 mask assets
+        /// explicitly pin one so their bake and fixed-LOD runtime sampler are
+        /// bit-identical.
+        /// </summary>
+        public float MaximumSamplerAnisotropy { get; set; } = 16f;
 
         public ImporterOptions()
         {

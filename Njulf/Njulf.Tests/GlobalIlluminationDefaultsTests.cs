@@ -11,18 +11,29 @@ namespace Njulf.Tests;
 public sealed class GlobalIlluminationDefaultsTests
 {
     [Test]
-    public void ReceiverCacheMode_DdgiHighFailsClosedToExactAndCandidatesRemainSelectable()
+    public void ReceiverCacheMode_DdgiHighSelectsTemporalAdaptiveAndExactRemainsSelectable()
     {
         var settings = new RenderSettings();
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
-            Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
+            Is.EqualTo(SimpleDdgiReceiverCacheMode.TemporalAdaptive));
 
         settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
-            SimpleDdgiReceiverCacheMode.TemporalAdaptive;
+            SimpleDdgiReceiverCacheMode.Exact;
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
-            Is.EqualTo(SimpleDdgiReceiverCacheMode.TemporalAdaptive));
+            Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
+    }
+
+    [TestCase(SimpleDdgiReceiverCacheMode.Exact, false)]
+    [TestCase(SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark, false)]
+    [TestCase(SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial, true)]
+    [TestCase(SimpleDdgiReceiverCacheMode.TemporalAdaptive, true)]
+    public void ReceiverCacheMode_DeclaresDirectionalPayloadCapability(
+        SimpleDdgiReceiverCacheMode mode,
+        bool expected)
+    {
+        Assert.That(mode.CarriesDirectionalRadiancePayload(), Is.EqualTo(expected));
     }
 
     [TestCase(RenderQualityPreset.Low)]
@@ -74,14 +85,21 @@ public sealed class GlobalIlluminationDefaultsTests
 
             var presetSettings = new RenderSettings();
             presetSettings.ApplyQualityPreset(preset);
+            bool productionGiProfile = preset != RenderQualityPreset.Low;
             Assert.That(
                 presetSettings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
-                Is.EqualTo(SimpleDdgiReceiverCacheMode.Exact));
+                Is.EqualTo(productionGiProfile
+                    ? SimpleDdgiReceiverCacheMode.TemporalAdaptive
+                    : SimpleDdgiReceiverCacheMode.Exact));
             Assert.That(
                 presetSettings.GlobalIllumination
                     .SimpleDdgiTransportAccelerationEnabled,
-                Is.False,
-                "Production presets must retain the certified Jacobi fallback.");
+                Is.EqualTo(productionGiProfile),
+                "Every active GI preset must request the certified accelerated solver.");
+            Assert.That(
+                presetSettings.GlobalIllumination
+                    .SimpleDdgiTransportAcceleratedSweepCount,
+                Is.EqualTo(2));
         });
     }
 
@@ -187,17 +205,30 @@ public sealed class GlobalIlluminationDefaultsTests
         settings.ApplyQualityPreset(preset);
 
         GlobalIlluminationSettings gi = settings.GlobalIllumination;
+        bool productionGiProfile = preset != RenderQualityPreset.Low;
         Assert.Multiple(() =>
         {
             Assert.That(gi.SimpleDdgiReceiverFeedbackMode,
                 Is.EqualTo(SimpleDdgiReceiverFeedbackMode.ExactCompacted));
             Assert.That(gi.DdgiOpacityMicromapMode,
-                Is.EqualTo(DdgiOpacityMicromapMode.ExtFourStateExperiment));
+                Is.EqualTo(productionGiProfile
+                    ? DdgiOpacityMicromapMode.ExtFourStateExperiment
+                    : DdgiOpacityMicromapMode.Off));
             Assert.That(gi.SimpleDdgiDirectionalGuidingMode,
-                Is.EqualTo(SimpleDdgiDirectionalGuidingMode
-                    .PerProbeHistogramExperiment));
+                Is.EqualTo(productionGiProfile
+                    ? SimpleDdgiDirectionalGuidingMode
+                        .PerProbeHistogramExperiment
+                    : SimpleDdgiDirectionalGuidingMode.Off));
             Assert.That(gi.GiCausticMode,
-                Is.EqualTo(GiCausticMode.WorldCacheExperiment));
+                Is.EqualTo(productionGiProfile
+                    ? GiCausticMode.WorldCacheExperiment
+                    : GiCausticMode.Off));
+            Assert.That(gi.SimpleDdgiReceiverCacheMode,
+                Is.EqualTo(productionGiProfile
+                    ? SimpleDdgiReceiverCacheMode.TemporalAdaptive
+                    : SimpleDdgiReceiverCacheMode.Exact));
+            Assert.That(gi.SimpleDdgiTransportAccelerationEnabled,
+                Is.EqualTo(productionGiProfile));
             Assert.That(gi.SimpleDdgiNearFieldResidualMode,
                 Is.EqualTo(expectedNearFieldResidualMode));
             Assert.That(gi.DdgiRayTracingPipelineExperimentEnabled, Is.False,

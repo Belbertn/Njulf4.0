@@ -42,6 +42,10 @@ public static class SampleSmokeOptionsParser
         "--simple-ddgi-directional-guiding-mode",
         "--gi-caustic-mode",
         "--simple-ddgi-near-field-residual-mode",
+        "--simple-ddgi-receiver-cache-mode",
+        "--simple-ddgi-transport-acceleration",
+        "--simple-ddgi-transport-accelerated-sweeps",
+        "--gi-all-on-qualification-report",
         "--simple-ddgi-receiver-feedback-qualification-id",
         "--ddgi-opacity-micromap-qualification-id",
         "--simple-ddgi-directional-guiding-qualification-id",
@@ -198,6 +202,10 @@ public static class SampleSmokeOptionsParser
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
                     "NJULF_ADVANCED_GI_STARTUP_PROFILE"));
+        string? giAllOnQualificationReportPath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_GI_ALL_ON_QUALIFICATION_REPORT"));
         SimpleDdgiReceiverFeedbackMode? receiverFeedbackModeOverride =
             ParseOptionalEnum<SimpleDdgiReceiverFeedbackMode>(
                 Environment.GetEnvironmentVariable(
@@ -223,6 +231,25 @@ public static class SampleSmokeOptionsParser
                 Environment.GetEnvironmentVariable(
                     "NJULF_RENDERER_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_MODE"),
                 "NJULF_RENDERER_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_MODE");
+        SimpleDdgiReceiverCacheMode? receiverCacheModeOverride =
+            ParseOptionalEnum<SimpleDdgiReceiverCacheMode>(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_SIMPLE_DDGI_RECEIVER_CACHE_MODE"),
+                "NJULF_RENDERER_SIMPLE_DDGI_RECEIVER_CACHE_MODE");
+        string? transportAccelerationEnvironment =
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_SIMPLE_DDGI_TRANSPORT_ACCELERATION");
+        bool? transportAccelerationEnabledOverride =
+            string.IsNullOrWhiteSpace(transportAccelerationEnvironment)
+                ? null
+                : ParseBool(
+                    transportAccelerationEnvironment,
+                    "NJULF_RENDERER_SIMPLE_DDGI_TRANSPORT_ACCELERATION");
+        int? transportAcceleratedSweepCountOverride =
+            ParseOptionalTransportSweepCount(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_SIMPLE_DDGI_TRANSPORT_ACCELERATED_SWEEPS"),
+                "NJULF_RENDERER_SIMPLE_DDGI_TRANSPORT_ACCELERATED_SWEEPS");
         string? receiverFeedbackQualificationId = ParseOptionalStableToken(
             Environment.GetEnvironmentVariable(
                 "NJULF_SIMPLE_DDGI_RECEIVER_FEEDBACK_QUALIFICATION_ID"),
@@ -305,6 +332,9 @@ public static class SampleSmokeOptionsParser
         bool failOnValidationMessage = ParseBool(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE"),
             "NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE");
+        bool failOnValidationMessageSpecified = !string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE"));
         bool enableGpuTiming = ParseBool(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING"),
             "NJULF_RENDERER_GPU_TIMING");
@@ -794,6 +824,23 @@ public static class SampleSmokeOptionsParser
                     benchmarkRequireProduction = ParseBool(value, optionName);
                     enableBenchmark = true;
                     break;
+                case "--simple-ddgi-receiver-cache-mode":
+                    receiverCacheModeOverride =
+                        ParseRequiredEnum<SimpleDdgiReceiverCacheMode>(
+                            value, optionName);
+                    break;
+                case "--simple-ddgi-transport-acceleration":
+                    transportAccelerationEnabledOverride =
+                        ParseBool(value, optionName);
+                    break;
+                case "--simple-ddgi-transport-accelerated-sweeps":
+                    transportAcceleratedSweepCountOverride =
+                        ParseTransportSweepCount(value, optionName);
+                    break;
+                case "--gi-all-on-qualification-report":
+                    giAllOnQualificationReportPath =
+                        RequirePath(value, optionName);
+                    break;
                 case "--benchmark-require-1080p60":
                     benchmarkRequireRealtime1080p60 = ParseBool(value, optionName);
                     enableBenchmark = true;
@@ -946,6 +993,7 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--fail-on-validation-message":
                     failOnValidationMessage = ParseBool(value, optionName);
+                    failOnValidationMessageSpecified = true;
                     break;
                 case "--gpu-timing":
                     enableGpuTiming = ParseBool(value, optionName);
@@ -1364,11 +1412,12 @@ public static class SampleSmokeOptionsParser
             (!string.IsNullOrWhiteSpace(volumetricTemporalCaptureDirectory) ? 1 : 0) +
             (!string.IsNullOrWhiteSpace(volumetricTemporalAnalyzeDirectory) ? 1 : 0) +
             (!string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory) ? 1 : 0) +
+            (!string.IsNullOrWhiteSpace(giAllOnQualificationReportPath) ? 1 : 0) +
             (enableBenchmarkQualitySequence ? 1 : 0);
         if (standaloneCaptureModeCount > 1)
         {
             throw new ArgumentException(
-                "Material, Sponza GI, Sponza temporal, volumetric temporal, Bistro, analysis, and benchmark quality-sequence modes are independent and cannot be combined.");
+                "Material, Sponza GI, Sponza temporal, volumetric temporal, Bistro, all-on GI qualification, analysis, and benchmark quality-sequence modes are independent and cannot be combined.");
         }
 
         if (!string.IsNullOrWhiteSpace(sponzaTemporalAnalyzeDirectory))
@@ -1996,6 +2045,111 @@ public static class SampleSmokeOptionsParser
             throw new ArgumentException(
                 "Long-run report, sampling, and duration options require --smoke-mode long-run.");
         }
+        if (!string.IsNullOrWhiteSpace(giAllOnQualificationReportPath))
+        {
+            if (enableBenchmark || enableBenchmarkQualitySequence ||
+                tailDdgiLongSoak || longRunOptionsSpecified ||
+                !string.IsNullOrWhiteSpace(baselineSnapshotDirectory) ||
+                !string.IsNullOrWhiteSpace(advancedGiStartupProfilePath) ||
+                !string.IsNullOrWhiteSpace(advancedGiPrerequisiteManifestPath) ||
+                !string.IsNullOrWhiteSpace(advancedGiQualificationManifestPath) ||
+                !string.IsNullOrWhiteSpace(advancedGiRuntimeEvidenceBundlePath))
+            {
+                throw new ArgumentException(
+                    "--gi-all-on-qualification-report owns a standalone, explicit-mode runtime route and cannot consume another capture, benchmark, long-run, or promotion profile.");
+            }
+            if (smokeModeSpecified && mode != SampleSmokeMode.Startup)
+            {
+                throw new ArgumentException(
+                    "--gi-all-on-qualification-report accepts only --smoke-mode startup.");
+            }
+            if (performanceScenario != SamplePerformanceScenario.Normal ||
+                forceMissingAssets || enableDdgiContentConformance ||
+                enableAsyncCompute ||
+                asyncComputeModeOverride is not (null or AsyncComputeMode.Disabled) ||
+                asyncComputeValidationPath.HasValue)
+            {
+                throw new ArgumentException(
+                    "--gi-all-on-qualification-report requires the unmodified scene workload, ordinary content gates, and disabled async compute.");
+            }
+            if (qualityPresetOverride.HasValue &&
+                qualityPresetOverride != RenderQualityPreset.DdgiHigh)
+            {
+                throw new ArgumentException(
+                    "--gi-all-on-qualification-report requires the DDGI-high quality preset.");
+            }
+            if (validationSpecified &&
+                validationMode != RendererValidationMode.Standard)
+            {
+                throw new ArgumentException(
+                    "--gi-all-on-qualification-report requires --validation standard.");
+            }
+            if (failOnValidationMessageSpecified &&
+                !failOnValidationMessage)
+            {
+                throw new ArgumentException(
+                    "--gi-all-on-qualification-report requires --fail-on-validation-message=true.");
+            }
+            if (opacityMicromapModeOverride.HasValue &&
+                opacityMicromapModeOverride !=
+                    DdgiOpacityMicromapMode.ExtFourStateExperiment ||
+                directionalGuidingModeOverride.HasValue &&
+                directionalGuidingModeOverride !=
+                    SimpleDdgiDirectionalGuidingMode
+                        .PerProbeHistogramExperiment ||
+                giCausticModeOverride.HasValue &&
+                giCausticModeOverride != GiCausticMode.WorldCacheExperiment ||
+                receiverCacheModeOverride.HasValue &&
+                receiverCacheModeOverride !=
+                    SimpleDdgiReceiverCacheMode.TemporalAdaptive ||
+                transportAccelerationEnabledOverride.HasValue &&
+                !transportAccelerationEnabledOverride.Value ||
+                transportAcceleratedSweepCountOverride.HasValue &&
+                transportAcceleratedSweepCountOverride.Value != 2 ||
+                simpleDdgiSchedulerModeOverride.HasValue &&
+                simpleDdgiSchedulerModeOverride.Value !=
+                    SimpleDdgiSchedulerMode.GpuResident)
+            {
+                throw new ArgumentException(
+                    "--gi-all-on-qualification-report cannot be combined with an override that disables or changes its canonical all-on GI profile.");
+            }
+
+            if (!sceneSpecified)
+                sceneKind = SampleSceneKind.MaterialShowcase;
+            if (!SampleGiAllOnQualificationContract.IsSupportedScene(sceneKind))
+            {
+                throw new ArgumentException(
+                    "--gi-all-on-qualification-report requires the material-showcase, Sponza, or Bistro scene.");
+            }
+            if (frameCount is > 0 and < 3)
+            {
+                throw new ArgumentException(
+                    "--gi-all-on-qualification-report requires at least three rendered frames.");
+            }
+
+            mode = SampleSmokeMode.Startup;
+            frameCount = frameCount == 0
+                ? SampleGiAllOnQualificationContract.DefaultMaximumFrameCount
+                : frameCount;
+            qualityPresetOverride = RenderQualityPreset.DdgiHigh;
+            validationMode = RendererValidationMode.Standard;
+            failOnValidationMessage = true;
+            enableGpuTiming = true;
+            enableAsyncCompute = false;
+            asyncComputeModeOverride = AsyncComputeMode.Disabled;
+            simpleDdgiSchedulerModeOverride =
+                SimpleDdgiSchedulerMode.GpuResident;
+            opacityMicromapModeOverride =
+                DdgiOpacityMicromapMode.ExtFourStateExperiment;
+            directionalGuidingModeOverride =
+                SimpleDdgiDirectionalGuidingMode
+                    .PerProbeHistogramExperiment;
+            giCausticModeOverride = GiCausticMode.WorldCacheExperiment;
+            receiverCacheModeOverride =
+                SimpleDdgiReceiverCacheMode.TemporalAdaptive;
+            transportAccelerationEnabledOverride = true;
+            transportAcceleratedSweepCountOverride = 2;
+        }
         if (mode == SampleSmokeMode.SceneTransition)
         {
             if (sceneKind is not (
@@ -2204,7 +2358,11 @@ public static class SampleSmokeOptionsParser
             fogDebugSliceOverride,
             volumetricTemporalCaptureDirectory,
             volumetricTemporalAnalyzeDirectory,
-            sponzaFixtureMode);
+            sponzaFixtureMode,
+            receiverCacheModeOverride,
+            transportAccelerationEnabledOverride,
+            transportAcceleratedSweepCountOverride,
+            giAllOnQualificationReportPath);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -2389,6 +2547,23 @@ public static class SampleSmokeOptionsParser
             ? null
             : ParsePositiveInt(value, 1, name);
 
+    private static int? ParseOptionalTransportSweepCount(
+        string? value,
+        string name) => string.IsNullOrWhiteSpace(value)
+        ? null
+        : ParseTransportSweepCount(value, name);
+
+    private static int ParseTransportSweepCount(string? value, string name)
+    {
+        int count = ParsePositiveInt(value, 0, name);
+        if (count > 4)
+        {
+            throw new ArgumentException(
+                $"{name} requires an integer from 1 through 4.");
+        }
+        return count;
+    }
+
     private static int? ParseOptionalNonNegativeInt(string? value, string name) =>
         string.IsNullOrWhiteSpace(value)
             ? null
@@ -2410,6 +2585,7 @@ public static class SampleSmokeOptionsParser
             "--benchmark-require-shader-profile" or
             "--material-gi-qualification-candidate" or
             "--tail-ddgi-long-soak" or
+            "--simple-ddgi-transport-acceleration" or
             "--gpu-timing" or
             "--gpu-meshlet-counters" or
             "--ddgi-content-conformance" or

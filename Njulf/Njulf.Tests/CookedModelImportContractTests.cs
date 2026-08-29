@@ -104,7 +104,7 @@ public sealed class CookedModelImportContractTests
     }
 
     [Test]
-    public void Resolver_RejectsLegacyModelForSourceButAcceptsExplicitPackage()
+    public void Resolver_RejectsLegacyModelAtTheV2HardBoundary()
     {
         string source = CreateSource("BistroExterior.fbx");
         ImporterOptions options = BistroOptions();
@@ -128,8 +128,8 @@ public sealed class CookedModelImportContractTests
         Assert.Multiple(() =>
         {
             Assert.That(sourceRequest.Status, Is.EqualTo(CookedResolutionStatus.Invalid));
-            Assert.That(sourceRequest.Reason, Does.Contain("predates the import-semantic contract"));
-            Assert.That(directRequest.Status, Is.EqualTo(CookedResolutionStatus.Found));
+            Assert.That(sourceRequest.Reason, Does.Contain("format major"));
+            Assert.That(directRequest.Status, Is.EqualTo(CookedResolutionStatus.Invalid));
             Assert.That(directRequest.ExpectedImportContractHash, Is.Null);
         });
     }
@@ -186,6 +186,7 @@ public sealed class CookedModelImportContractTests
     private static void PatchModelMinorVersion(string packagePath, ushort minor)
     {
         byte[] bytes = File.ReadAllBytes(packagePath);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(6, 2), 1);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(8, 2), minor);
         File.WriteAllBytes(packagePath, bytes);
     }

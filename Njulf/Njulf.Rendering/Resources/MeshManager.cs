@@ -28,6 +28,9 @@ namespace Njulf.Rendering.Resources
         public uint VertexCount;
         public uint IndexOffset;
         public uint IndexCount;
+        public uint GpuIndexCount;
+        public uint CoarseRayProxyIndexOffset;
+        public uint CoarseRayProxyIndexCount;
         public uint MeshMetadataOffset;
         public uint MeshletOffset;
         public uint MeshletCount;
@@ -36,6 +39,10 @@ namespace Njulf.Rendering.Resources
         public uint MeshletLod2Offset;
         public uint MeshletLod2Count;
         public uint MeshletLodGeneratedCount;
+        public uint GpuMeshletRecordCount;
+        public uint HierarchyNodeOffset;
+        public uint HierarchyNodeCount;
+        public uint HierarchyRootNode;
         public float MeshletLod1SimplificationError;
         public float MeshletLod2SimplificationError;
         public uint LocalVertexIndexOffset;
@@ -53,6 +60,15 @@ namespace Njulf.Rendering.Resources
         public bool HasUv1;
         public bool HasTangents;
         public ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence;
+
+        public readonly uint EffectiveGpuMeshletRecordCount =>
+            GpuMeshletRecordCount == 0
+                ? MeshletLodGeneratedCount
+                : GpuMeshletRecordCount;
+        public readonly uint EffectiveGpuIndexCount =>
+            GpuIndexCount == 0 ? IndexCount : GpuIndexCount;
+        public readonly bool UsesCoarseRayProxy =>
+            !IsSkinned && CoarseRayProxyIndexCount >= 3;
     }
 
     public sealed unsafe class MeshManager : IDisposable
@@ -86,7 +102,8 @@ namespace Njulf.Rendering.Resources
         private static readonly ulong VertexUvColorStride = (ulong)Marshal.SizeOf<GPUVertexUvColorStream>();
         private static readonly ulong IndexStride = sizeof(uint);
         private static readonly ulong MeshMetadataStride = (ulong)Marshal.SizeOf<GPUMeshInfo>();
-        private static readonly ulong MeshletStride = (ulong)Marshal.SizeOf<Meshlet>();
+        private static readonly ulong MeshletStride =
+            (ulong)Marshal.SizeOf<GPUPackedMeshlet>();
         private static readonly ulong SkinningDataStride = (ulong)Marshal.SizeOf<GPUVertexSkinningData>();
         internal const BufferUsageFlags AccelerationStructureGeometryInputUsage =
             BufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKhr;
@@ -245,7 +262,10 @@ namespace Njulf.Rendering.Resources
                 GiPrimitiveTransportProfile? primitiveTransportProfile = null,
                 ModelGiCausticHeroTopologyEvidence causticTopologyEvidence = default,
                 float lod1SimplificationError = -1f,
-                float lod2SimplificationError = -1f)
+                float lod2SimplificationError = -1f,
+                MeshletHierarchyNode[]? hierarchyNodes = null,
+                int hierarchyRootNode = -1,
+                uint[]? coarseRayProxyIndices = null)
             {
                 Vertices = vertices ?? throw new ArgumentNullException(nameof(vertices));
                 Indices = indices ?? throw new ArgumentNullException(nameof(indices));
@@ -256,12 +276,29 @@ namespace Njulf.Rendering.Resources
                 Meshlets = meshlets ?? throw new ArgumentNullException(nameof(meshlets));
                 LocalVertexIndices = localVertexIndices ?? throw new ArgumentNullException(nameof(localVertexIndices));
                 LocalTriangleIndices = localTriangleIndices ?? throw new ArgumentNullException(nameof(localTriangleIndices));
+                int flatMeshletCount = checked(
+                    lod0MeshletCount + lod1MeshletCount +
+                    lod2MeshletCount);
                 if (lod0MeshletCount <= 0 || lod1MeshletCount <= 0 || lod2MeshletCount <= 0 ||
-                    checked(lod0MeshletCount + lod1MeshletCount + lod2MeshletCount) != meshlets.Length)
-                    throw new ArgumentException("Cooked meshlet LOD counts must describe three non-empty contiguous ranges.", nameof(meshlets));
+                    flatMeshletCount > meshlets.Length)
+                    throw new ArgumentException("Cooked meshlet LOD counts must describe three non-empty contiguous ranges at the start of the geometry stream.", nameof(meshlets));
                 Lod0MeshletCount = lod0MeshletCount;
                 Lod1MeshletCount = lod1MeshletCount;
                 Lod2MeshletCount = lod2MeshletCount;
+                HierarchyNodes = hierarchyNodes is null
+                    ? Array.Empty<MeshletHierarchyNode>()
+                    : (MeshletHierarchyNode[])hierarchyNodes.Clone();
+                HierarchyRootNode = hierarchyRootNode;
+                CoarseRayProxyIndices = coarseRayProxyIndices is null
+                    ? Array.Empty<uint>()
+                    : (uint[])coarseRayProxyIndices.Clone();
+                if (HierarchyNodes.Length == 0 &&
+                    flatMeshletCount != meshlets.Length)
+                {
+                    throw new ArgumentException(
+                        "Hierarchy geometry requires hierarchy nodes.",
+                        nameof(meshlets));
+                }
                 Lod1SimplificationError =
                     ValidateSimplificationError(lod1SimplificationError);
                 Lod2SimplificationError =
@@ -296,7 +333,10 @@ namespace Njulf.Rendering.Resources
                 GiPrimitiveTransportProfile? primitiveTransportProfile = null,
                 ModelGiCausticHeroTopologyEvidence causticTopologyEvidence = default,
                 float lod1SimplificationError = -1f,
-                float lod2SimplificationError = -1f)
+                float lod2SimplificationError = -1f,
+                MeshletHierarchyNode[]? hierarchyNodes = null,
+                int hierarchyRootNode = -1,
+                uint[]? coarseRayProxyIndices = null)
             {
                 VertexPositions = vertexPositions ?? throw new ArgumentNullException(nameof(vertexPositions));
                 VertexNormalTangents = vertexNormalTangents ?? throw new ArgumentNullException(nameof(vertexNormalTangents));
@@ -309,12 +349,29 @@ namespace Njulf.Rendering.Resources
                 Meshlets = meshlets ?? throw new ArgumentNullException(nameof(meshlets));
                 LocalVertexIndices = localVertexIndices ?? throw new ArgumentNullException(nameof(localVertexIndices));
                 LocalTriangleIndices = localTriangleIndices ?? throw new ArgumentNullException(nameof(localTriangleIndices));
+                int flatMeshletCount = checked(
+                    lod0MeshletCount + lod1MeshletCount +
+                    lod2MeshletCount);
                 if (lod0MeshletCount <= 0 || lod1MeshletCount <= 0 || lod2MeshletCount <= 0 ||
-                    checked(lod0MeshletCount + lod1MeshletCount + lod2MeshletCount) != meshlets.Length)
-                    throw new ArgumentException("Cooked meshlet LOD counts must describe three non-empty contiguous ranges.", nameof(meshlets));
+                    flatMeshletCount > meshlets.Length)
+                    throw new ArgumentException("Cooked meshlet LOD counts must describe three non-empty contiguous ranges at the start of the geometry stream.", nameof(meshlets));
                 Lod0MeshletCount = lod0MeshletCount;
                 Lod1MeshletCount = lod1MeshletCount;
                 Lod2MeshletCount = lod2MeshletCount;
+                HierarchyNodes = hierarchyNodes is null
+                    ? Array.Empty<MeshletHierarchyNode>()
+                    : (MeshletHierarchyNode[])hierarchyNodes.Clone();
+                HierarchyRootNode = hierarchyRootNode;
+                CoarseRayProxyIndices = coarseRayProxyIndices is null
+                    ? Array.Empty<uint>()
+                    : (uint[])coarseRayProxyIndices.Clone();
+                if (HierarchyNodes.Length == 0 &&
+                    flatMeshletCount != meshlets.Length)
+                {
+                    throw new ArgumentException(
+                        "Hierarchy geometry requires hierarchy nodes.",
+                        nameof(meshlets));
+                }
                 Lod1SimplificationError =
                     ValidateSimplificationError(lod1SimplificationError);
                 Lod2SimplificationError =
@@ -350,6 +407,11 @@ namespace Njulf.Rendering.Resources
             internal int Lod0MeshletCount { get; }
             internal int Lod1MeshletCount { get; }
             internal int Lod2MeshletCount { get; }
+            internal MeshletHierarchyNode[] HierarchyNodes { get; } =
+                Array.Empty<MeshletHierarchyNode>();
+            internal int HierarchyRootNode { get; } = -1;
+            internal uint[] CoarseRayProxyIndices { get; } =
+                Array.Empty<uint>();
             internal float Lod1SimplificationError { get; }
             internal float Lod2SimplificationError { get; }
             internal GiPrimitiveTransportProfile? PrimitiveTransportProfile { get; }
@@ -487,7 +549,284 @@ namespace Njulf.Rendering.Resources
                     }
                 }
 
+                if (CoarseRayProxyIndices.Length % 3 != 0 ||
+                    (IsSkinned && CoarseRayProxyIndices.Length != 0))
+                {
+                    throw new ArgumentException(
+                        "A coarse ray proxy must be a static triangle list.",
+                        nameof(CoarseRayProxyIndices));
+                }
+                for (int i = 0;
+                     i < CoarseRayProxyIndices.Length;
+                     i++)
+                {
+                    if (CoarseRayProxyIndices[i] >= Positions.Length)
+                    {
+                        throw new ArgumentException(
+                            "A coarse ray-proxy index exceeds the source vertex stream.",
+                            nameof(CoarseRayProxyIndices));
+                    }
+                }
+
+                ValidateHierarchyRegistration();
                 CookedValidationCompleted = true;
+            }
+
+            private void ValidateHierarchyRegistration()
+            {
+                int flatMeshletCount = checked(
+                    Lod0MeshletCount + Lod1MeshletCount +
+                    Lod2MeshletCount);
+                if (HierarchyNodes.Length == 0)
+                {
+                    if (HierarchyRootNode != -1 ||
+                        flatMeshletCount != Meshlets.Length)
+                    {
+                        throw new ArgumentException(
+                            "Cooked hierarchy metadata is incomplete.",
+                            nameof(HierarchyNodes));
+                    }
+                    return;
+                }
+
+                if ((uint)HierarchyRootNode >=
+                    (uint)HierarchyNodes.Length)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(HierarchyRootNode),
+                        "Cooked hierarchy root is outside its node stream.");
+                }
+
+                var visited = new bool[HierarchyNodes.Length];
+                var lod0Coverage = new byte[Lod0MeshletCount];
+                var hierarchyGeometryCoverage = new byte[
+                    Meshlets.Length - flatMeshletCount];
+                var stack = new Stack<int>();
+                stack.Push(HierarchyRootNode);
+                while (stack.Count > 0)
+                {
+                    int nodeIndex = stack.Pop();
+                    if (visited[nodeIndex])
+                    {
+                        throw new ArgumentException(
+                            "Cooked hierarchy contains a cycle or a multiply-owned node.",
+                            nameof(HierarchyNodes));
+                    }
+                    visited[nodeIndex] = true;
+                    MeshletHierarchyNode node =
+                        HierarchyNodes[nodeIndex];
+                    if (!float.IsFinite(node.BoundingSphereCenter.X) ||
+                        !float.IsFinite(node.BoundingSphereCenter.Y) ||
+                        !float.IsFinite(node.BoundingSphereCenter.Z) ||
+                        !float.IsFinite(node.BoundingSphereRadius) ||
+                        node.BoundingSphereRadius < 0f ||
+                        !float.IsFinite(node.GeometricError) ||
+                        node.GeometricError < 0f ||
+                        node.ChildCount >
+                            RendererMeshletLodBuilder.HierarchyFanout ||
+                        node.Depth >
+                            RendererMeshletLodBuilder.HierarchyMaximumDepth)
+                    {
+                        throw new ArgumentException(
+                            $"Cooked hierarchy node {nodeIndex} has invalid bounds, error, fanout, or depth.",
+                            nameof(HierarchyNodes));
+                    }
+                    const MeshletHierarchyNodeFlags knownFlags =
+                        MeshletHierarchyNodeFlags.Leaf |
+                        MeshletHierarchyNodeFlags.ForceRefine;
+                    if ((node.Flags & ~knownFlags) != 0)
+                    {
+                        throw new ArgumentException(
+                            $"Cooked hierarchy node {nodeIndex} contains unknown flags.",
+                            nameof(HierarchyNodes));
+                    }
+
+                    bool leaf = (node.Flags &
+                        MeshletHierarchyNodeFlags.Leaf) != 0;
+                    bool forceRefine = (node.Flags &
+                        MeshletHierarchyNodeFlags.ForceRefine) != 0;
+                    if (leaf != (node.ChildCount == 0) ||
+                        (leaf && forceRefine) ||
+                        (forceRefine && node.MeshletCount != 0) ||
+                        (!leaf && !forceRefine &&
+                         node.MeshletCount == 0))
+                    {
+                        throw new ArgumentException(
+                            $"Cooked hierarchy node {nodeIndex} has inconsistent flags and geometry.",
+                            nameof(HierarchyNodes));
+                    }
+
+                    ulong meshletEnd = (ulong)node.MeshletOffset +
+                        node.MeshletCount;
+                    if (meshletEnd > (ulong)Meshlets.Length)
+                    {
+                        throw new ArgumentException(
+                            $"Cooked hierarchy node {nodeIndex} has an out-of-range meshlet slice.",
+                            nameof(HierarchyNodes));
+                    }
+                    if (leaf)
+                    {
+                        if (node.MeshletCount == 0 ||
+                            node.MeshletOffset >= Lod0MeshletCount ||
+                            meshletEnd > (ulong)Lod0MeshletCount)
+                        {
+                            throw new ArgumentException(
+                                $"Cooked hierarchy leaf {nodeIndex} must reference only LOD0 geometry.",
+                                nameof(HierarchyNodes));
+                        }
+                        MarkUniqueCoverage(
+                            lod0Coverage,
+                            checked((int)node.MeshletOffset),
+                            checked((int)node.MeshletCount),
+                            "LOD0",
+                            nodeIndex);
+                    }
+                    else if (node.MeshletCount > 0)
+                    {
+                        if (node.MeshletOffset < flatMeshletCount)
+                        {
+                            throw new ArgumentException(
+                                $"Cooked hierarchy parent {nodeIndex} aliases a flat LOD range.",
+                                nameof(HierarchyNodes));
+                        }
+                        MarkUniqueCoverage(
+                            hierarchyGeometryCoverage,
+                            checked((int)node.MeshletOffset) -
+                                flatMeshletCount,
+                            checked((int)node.MeshletCount),
+                            "hierarchy geometry",
+                            nodeIndex);
+                    }
+
+                    if (node.ChildCount == 0)
+                        continue;
+                    ulong childEnd = (ulong)node.FirstChild +
+                        node.ChildCount;
+                    if (childEnd > (ulong)HierarchyNodes.Length)
+                    {
+                        throw new ArgumentException(
+                            $"Cooked hierarchy node {nodeIndex} has an out-of-range child slice.",
+                            nameof(HierarchyNodes));
+                    }
+                    for (uint childOffset = 0;
+                         childOffset < node.ChildCount;
+                         childOffset++)
+                    {
+                        int childIndex = checked(
+                            (int)(node.FirstChild + childOffset));
+                        MeshletHierarchyNode child =
+                            HierarchyNodes[childIndex];
+                        float containmentTolerance = MathF.Max(
+                            1e-4f,
+                            node.BoundingSphereRadius * 1e-4f);
+                        float centerDistance =
+                            (node.BoundingSphereCenter -
+                             child.BoundingSphereCenter).Length();
+                        if (child.ParentIndex != (uint)nodeIndex ||
+                            node.Depth != child.Depth + 1u ||
+                            node.GeometricError + 1e-6f <
+                                child.GeometricError ||
+                            centerDistance + child.BoundingSphereRadius >
+                                node.BoundingSphereRadius +
+                                containmentTolerance)
+                        {
+                            throw new ArgumentException(
+                                $"Cooked hierarchy parent/child contract fails for nodes {nodeIndex} and {childIndex}.",
+                                nameof(HierarchyNodes));
+                        }
+                        stack.Push(childIndex);
+                    }
+                }
+
+                var descendantLeafMeshlets =
+                    new int[HierarchyNodes.Length];
+                for (uint depth = 0;
+                     depth <=
+                         RendererMeshletLodBuilder.HierarchyMaximumDepth;
+                     depth++)
+                {
+                    for (int nodeIndex = 0;
+                         nodeIndex < HierarchyNodes.Length;
+                         nodeIndex++)
+                    {
+                        MeshletHierarchyNode node =
+                            HierarchyNodes[nodeIndex];
+                        if (node.Depth != depth)
+                            continue;
+                        int leafMeshletCount;
+                        if (node.ChildCount == 0)
+                        {
+                            leafMeshletCount = checked(
+                                (int)node.MeshletCount);
+                        }
+                        else
+                        {
+                            leafMeshletCount = 0;
+                            for (uint child = 0;
+                                 child < node.ChildCount;
+                                 child++)
+                            {
+                                leafMeshletCount = checked(
+                                    leafMeshletCount +
+                                    descendantLeafMeshlets[checked(
+                                        (int)(node.FirstChild +
+                                              child))]);
+                            }
+                        }
+                        if (node.MeshletCount >
+                            (uint)leafMeshletCount)
+                        {
+                            throw new ArgumentException(
+                                $"Cooked hierarchy node {nodeIndex} can emit more meshlets than its descendant LOD0 leaves, violating output-capacity bounds.",
+                                nameof(HierarchyNodes));
+                        }
+                        descendantLeafMeshlets[nodeIndex] =
+                            leafMeshletCount;
+                    }
+                }
+
+                if (HierarchyNodes[HierarchyRootNode].ParentIndex !=
+                    uint.MaxValue ||
+                    descendantLeafMeshlets[HierarchyRootNode] !=
+                        Lod0MeshletCount ||
+                    visited.Any(static value => !value) ||
+                    lod0Coverage.Any(static value => value != 1) ||
+                    hierarchyGeometryCoverage.Any(
+                        static value => value != 1))
+                {
+                    throw new ArgumentException(
+                        "Cooked hierarchy is disconnected or does not uniquely cover its geometry.",
+                        nameof(HierarchyNodes));
+                }
+            }
+
+            private static void MarkUniqueCoverage(
+                byte[] coverage,
+                int offset,
+                int count,
+                string rangeName,
+                int nodeIndex)
+            {
+                if (offset < 0 || count < 0 ||
+                    offset > coverage.Length ||
+                    count > coverage.Length - offset)
+                {
+                    throw new ArgumentException(
+                        $"Cooked hierarchy node {nodeIndex} has an out-of-range {rangeName} slice.",
+                        nameof(HierarchyNodes));
+                }
+                for (int index = offset;
+                     index < offset + count;
+                     index++)
+                {
+                    if (coverage[index] != 0)
+                    {
+                        throw new ArgumentException(
+                            $"Cooked hierarchy node {nodeIndex} overlaps another {rangeName} slice.",
+                            nameof(HierarchyNodes));
+                    }
+                    coverage[index] = 1;
+                }
             }
 
             internal void PrepareTransportGeometry()
@@ -543,10 +882,18 @@ namespace Njulf.Rendering.Resources
                 bytes = AddUploadStagingBytes(
                     bytes,
                     CheckedByteSize(Indices.Length, IndexStride));
+                bytes = AddUploadStagingBytes(
+                    bytes,
+                    CheckedByteSize(
+                        CoarseRayProxyIndices.Length,
+                        IndexStride));
                 bytes = AddUploadStagingBytes(bytes, MeshMetadataStride);
                 bytes = AddUploadStagingBytes(
                     bytes,
-                    CheckedByteSize(Meshlets.Length, MeshletStride));
+                    CheckedByteSize(
+                        checked(Meshlets.Length +
+                                HierarchyNodes.Length),
+                        MeshletStride));
                 bytes = AddUploadStagingBytes(
                     bytes,
                     CheckedByteSize(
@@ -870,13 +1217,25 @@ namespace Njulf.Rendering.Resources
                     meshInfo.HasVertexColor = mesh.HasVertexColor;
                     meshInfo.HasUv1 = mesh.HasUv1;
                     meshInfo.HasTangents = mesh.HasTangents;
+                    uint[] gpuIndices = BuildGpuIndexStream(
+                        mesh.Indices,
+                        mesh.CoarseRayProxyIndices);
+                    ConfigureCoarseRayProxy(
+                        ref meshInfo,
+                        mesh.Indices.Length,
+                        mesh.CoarseRayProxyIndices.Length);
                     Meshlet[] meshlets;
+                    MeshletHierarchyNode[] hierarchyNodes;
+                    int hierarchyRootNode;
                     uint[] localVertexIndices;
                     uint[] localTriangleIndices;
 
                     if (mesh.HasPrebuiltMeshlets)
                     {
                         meshlets = (Meshlet[])mesh.Meshlets.Clone();
+                        hierarchyNodes =
+                            (MeshletHierarchyNode[])mesh.HierarchyNodes.Clone();
+                        hierarchyRootNode = mesh.HierarchyRootNode;
                         localVertexIndices = mesh.LocalVertexIndices;
                         localTriangleIndices = mesh.LocalTriangleIndices;
                         meshInfo.MeshletCount = CheckedCount(mesh.Lod0MeshletCount);
@@ -934,7 +1293,9 @@ namespace Njulf.Rendering.Resources
                             mesh.Indices,
                             generatedMeshlets,
                             generatedLocalVertexIndices,
-                            generatedLocalTriangleIndices);
+                            generatedLocalTriangleIndices,
+                            out hierarchyNodes,
+                            out hierarchyRootNode);
                         ApplyMeshletQualityStats(
                             ref meshInfo,
                             generatedMeshlets);
@@ -955,9 +1316,22 @@ namespace Njulf.Rendering.Resources
                     else
                     {
                         meshlets = Array.Empty<Meshlet>();
+                        hierarchyNodes =
+                            Array.Empty<MeshletHierarchyNode>();
+                        hierarchyRootNode = -1;
                         localVertexIndices = Array.Empty<uint>();
                         localTriangleIndices = Array.Empty<uint>();
                     }
+                    ConfigureHierarchyMeshInfo(
+                        ref meshInfo,
+                        meshlets.Length,
+                        hierarchyNodes,
+                        hierarchyRootNode);
+                    GPUPackedMeshlet[] gpuMeshlets =
+                        PackGpuMeshlets(
+                            meshlets,
+                            hierarchyNodes,
+                            meshInfo);
 
                     var meshMetadata = CreateGpuMeshInfo(meshInfo);
                     if (CheckedElementOffset(finalVertexPositionBytesUsed, VertexPositionStride) != meshInfo.VertexOffset ||
@@ -973,8 +1347,12 @@ namespace Njulf.Rendering.Resources
                     ulong vertexPositionBytes = CheckedByteSize(vertexPositions.Length, VertexPositionStride);
                     ulong vertexNormalTangentBytes = CheckedByteSize(vertexNormalTangents.Length, VertexNormalTangentStride);
                     ulong vertexUvColorBytes = CheckedByteSize(vertexUvColors.Length, VertexUvColorStride);
-                    ulong indexBytes = CheckedByteSize(mesh.Indices.Length, IndexStride);
-                    ulong meshletBytes = CheckedByteSize(meshlets.Length, MeshletStride);
+                    ulong indexBytes = CheckedByteSize(
+                        gpuIndices.Length,
+                        IndexStride);
+                    ulong meshletBytes = CheckedByteSize(
+                        gpuMeshlets.Length,
+                        MeshletStride);
                     ulong localVertexIndexBytes = CheckedByteSize(localVertexIndices.Length, IndexStride);
                     ulong localTriangleIndexBytes = CheckedByteSize(localTriangleIndices.Length, IndexStride);
                     ulong skinningDataBytes = CheckedByteSize(mesh.SkinningData.Length, SkinningDataStride);
@@ -1015,10 +1393,11 @@ namespace Njulf.Rendering.Resources
                         vertexPositions,
                         vertexNormalTangents,
                         vertexUvColors,
-                        mesh.Indices,
+                        gpuIndices,
                         meshInfo,
                         meshMetadata,
                         meshlets,
+                        gpuMeshlets,
                         localVertexIndices,
                         localTriangleIndices,
                         mesh.SkinningData,
@@ -1385,6 +1764,7 @@ namespace Njulf.Rendering.Resources
                 IndexCount = CheckedCount(indexCount),
                 MeshMetadataOffset = CheckedCount(meshIndex),
                 MeshletOffset = CheckedElementOffset(meshletBytesUsed, MeshletStride),
+                HierarchyRootNode = uint.MaxValue,
                 LocalVertexIndexOffset = CheckedElementOffset(meshletVertexIndexBytesUsed, IndexStride),
                 LocalTriangleIndexOffset = CheckedElementOffset(meshletTriangleIndexBytesUsed, IndexStride),
                 SkinningDataOffset = CheckedElementOffset(skinningDataBytesUsed, SkinningDataStride),
@@ -1421,7 +1801,12 @@ namespace Njulf.Rendering.Resources
                         meshInfo.MeshletLod1SimplificationError)),
                 MeshletLod2ErrorBits = unchecked((uint)
                     BitConverter.SingleToInt32Bits(
-                        meshInfo.MeshletLod2SimplificationError))
+                        meshInfo.MeshletLod2SimplificationError)),
+                GpuMeshletRecordCount =
+                    meshInfo.EffectiveGpuMeshletRecordCount,
+                HierarchyNodeOffset = meshInfo.HierarchyNodeOffset,
+                HierarchyNodeCount = meshInfo.HierarchyNodeCount,
+                HierarchyRootNode = meshInfo.HierarchyRootNode
             };
         }
 
@@ -1439,12 +1824,53 @@ namespace Njulf.Rendering.Resources
                 ProcessedSubMeshAsset subMesh = asset.SubMeshes[i];
                 GPUVertex[] vertices = BuildGpuVertices(subMesh);
                 GPUVertexSkinningData[] skinningData = BuildGpuSkinningData(subMesh);
-                registrations[i] = new MeshRegistrationData(
-                    vertices,
-                    subMesh.Indices,
-                    generateMeshlets: generateRendererMeshlets,
-                    skinningData: skinningData.Length == 0 ? null : skinningData,
-                    causticTopologyEvidence: subMesh.CausticTopologyEvidence);
+                if (generateRendererMeshlets &&
+                    subMesh.LodRanges.Count == 3 &&
+                    subMesh.Meshlets.Length > 0)
+                {
+                    ProcessedMeshLodRange lod0 =
+                        subMesh.LodRanges.Single(
+                            static range => range.Level == 0);
+                    ProcessedMeshLodRange lod1 =
+                        subMesh.LodRanges.Single(
+                            static range => range.Level == 1);
+                    ProcessedMeshLodRange lod2 =
+                        subMesh.LodRanges.Single(
+                            static range => range.Level == 2);
+                    registrations[i] = new MeshRegistrationData(
+                        vertices,
+                        subMesh.Indices,
+                        subMesh.Meshlets,
+                        subMesh.MeshletVertices,
+                        subMesh.MeshletTriangles,
+                        lod0.MeshletCount,
+                        lod1.MeshletCount,
+                        lod2.MeshletCount,
+                        skinningData.Length == 0
+                            ? null
+                            : skinningData,
+                        causticTopologyEvidence:
+                            subMesh.CausticTopologyEvidence,
+                        lod1SimplificationError:
+                            lod1.SimplificationError,
+                        lod2SimplificationError:
+                            lod2.SimplificationError,
+                        hierarchyNodes: subMesh.HierarchyNodes,
+                        hierarchyRootNode:
+                            subMesh.HierarchyRootNode);
+                }
+                else
+                {
+                    registrations[i] = new MeshRegistrationData(
+                        vertices,
+                        subMesh.Indices,
+                        generateMeshlets: false,
+                        skinningData: skinningData.Length == 0
+                            ? null
+                            : skinningData,
+                        causticTopologyEvidence:
+                            subMesh.CausticTopologyEvidence);
+                }
             }
 
             return RegisterMeshes(registrations);
@@ -1851,11 +2277,13 @@ namespace Njulf.Rendering.Resources
                         VertexUvColorStride));
                 indexBytes = checked(
                     indexBytes + CheckedByteSize(
-                        registration.Indices.Length,
+                        checked(registration.Indices.Length +
+                                registration.CoarseRayProxyIndices.Length),
                         IndexStride));
                 meshletBytes = checked(
                     meshletBytes + CheckedByteSize(
-                        registration.Meshlets.Length,
+                        checked(registration.Meshlets.Length +
+                                registration.HierarchyNodes.Length),
                         MeshletStride));
                 meshletVertexIndexBytes = checked(
                     meshletVertexIndexBytes + CheckedByteSize(
@@ -1997,7 +2425,7 @@ namespace Njulf.Rendering.Resources
                     upload);
                 UploadConcatenatedArrays(
                     pendingUploads,
-                    static pending => pending.Meshlets,
+                    static pending => pending.GpuMeshlets,
                     static pending => pending.MeshInfo.MeshletOffset *
                                       MeshletStride,
                     buffers.Meshlet,
@@ -3586,9 +4014,11 @@ namespace Njulf.Rendering.Resources
                 ulong meshletStart = pending.MeshInfo.MeshletOffset;
                 ulong meshletEnd = checked(
                     meshletStart +
-                    pending.MeshInfo.MeshletLodGeneratedCount);
+                    pending.MeshInfo.EffectiveGpuMeshletRecordCount);
                 if (meshletStart < (ulong)_meshlets.Count ||
-                    meshletEnd > finalMeshletCount64)
+                    meshletEnd > finalMeshletCount64 ||
+                    pending.GpuMeshlets.Length !=
+                        pending.MeshInfo.EffectiveGpuMeshletRecordCount)
                 {
                     throw new InvalidOperationException(
                         "Pending meshlets overlap authoritative CPU state or exceed the prepared upload range.");
@@ -3787,7 +4217,8 @@ namespace Njulf.Rendering.Resources
 
         private void AppendCpuMeshlets(MeshInfo meshInfo, IReadOnlyList<Meshlet> meshlets)
         {
-            ulong requiredCount = (ulong)meshInfo.MeshletOffset + meshInfo.MeshletLodGeneratedCount;
+            ulong requiredCount = (ulong)meshInfo.MeshletOffset +
+                meshInfo.EffectiveGpuMeshletRecordCount;
             if (requiredCount > int.MaxValue)
                 throw new InvalidOperationException("CPU meshlet cache exceeded supported element count.");
 
@@ -3800,6 +4231,197 @@ namespace Njulf.Rendering.Resources
 
             for (int i = 0; i < meshlets.Count; i++)
                 _meshlets[(int)meshInfo.MeshletOffset + i] = meshlets[i];
+            int hierarchyStart = checked(
+                (int)meshInfo.MeshletOffset + meshlets.Count);
+            int hierarchyCount = checked(
+                (int)meshInfo.EffectiveGpuMeshletRecordCount -
+                meshlets.Count);
+            if (hierarchyCount > 0)
+            {
+                CollectionsMarshal.AsSpan(_meshlets)
+                    .Slice(hierarchyStart, hierarchyCount)
+                    .Clear();
+            }
+        }
+
+        internal static GPUPackedMeshlet[] PackGpuMeshlets(
+            ReadOnlySpan<Meshlet> meshlets)
+        {
+            if (meshlets.IsEmpty)
+                return Array.Empty<GPUPackedMeshlet>();
+
+            var packed = new GPUPackedMeshlet[meshlets.Length];
+            for (int i = 0; i < meshlets.Length; i++)
+                packed[i] = GPUPackedMeshlet.Pack(meshlets[i]);
+            return packed;
+        }
+
+        internal static GPUPackedMeshlet[] PackGpuMeshlets(
+            ReadOnlySpan<Meshlet> meshlets,
+            ReadOnlySpan<MeshletHierarchyNode> hierarchyNodes,
+            in MeshInfo meshInfo)
+        {
+            int recordCount = checked(
+                meshlets.Length + hierarchyNodes.Length);
+            if (recordCount == 0)
+                return Array.Empty<GPUPackedMeshlet>();
+            if (meshInfo.EffectiveGpuMeshletRecordCount !=
+                (uint)recordCount)
+            {
+                throw new InvalidOperationException(
+                    "GPU meshlet record count does not match geometry and hierarchy payloads.");
+            }
+
+            var packed = new GPUPackedMeshlet[recordCount];
+            for (int i = 0; i < meshlets.Length; i++)
+                packed[i] = GPUPackedMeshlet.Pack(meshlets[i]);
+            for (int i = 0; i < hierarchyNodes.Length; i++)
+            {
+                packed[meshlets.Length + i] =
+                    PackGpuHierarchyNode(hierarchyNodes[i], meshInfo);
+            }
+            return packed;
+        }
+
+        private static GPUPackedMeshlet PackGpuHierarchyNode(
+            in MeshletHierarchyNode node,
+            in MeshInfo meshInfo)
+        {
+            const uint hierarchyMarker = 1u << 31;
+            if (!float.IsFinite(node.BoundingSphereCenter.X) ||
+                !float.IsFinite(node.BoundingSphereCenter.Y) ||
+                !float.IsFinite(node.BoundingSphereCenter.Z) ||
+                !float.IsFinite(node.BoundingSphereRadius) ||
+                node.BoundingSphereRadius < 0f ||
+                !float.IsFinite(node.GeometricError) ||
+                node.GeometricError < 0f ||
+                node.ChildCount >
+                    RendererMeshletLodBuilder.HierarchyFanout ||
+                node.Depth >
+                    RendererMeshletLodBuilder.HierarchyMaximumDepth)
+            {
+                throw new InvalidOperationException(
+                    "Cannot pack an invalid meshlet hierarchy node.");
+            }
+
+            uint firstChild = node.ChildCount == 0
+                ? uint.MaxValue
+                : CheckedAdd(
+                    meshInfo.HierarchyNodeOffset,
+                    node.FirstChild);
+            uint meshletOffset = node.MeshletCount == 0
+                ? 0u
+                : CheckedAdd(
+                    meshInfo.MeshletOffset,
+                    node.MeshletOffset);
+            uint packedMetadata = hierarchyMarker |
+                (node.ChildCount & 0x0fu) |
+                ((node.Depth & 0x0fu) << 4) |
+                (((uint)node.Flags & 0x03u) << 8);
+            return new GPUPackedMeshlet
+            {
+                BoundingSphere = new CoreVector4(
+                    node.BoundingSphereCenter.X,
+                    node.BoundingSphereCenter.Y,
+                    node.BoundingSphereCenter.Z,
+                    node.BoundingSphereRadius),
+                VertexOffset = unchecked((uint)
+                    BitConverter.SingleToInt32Bits(
+                        node.GeometricError)),
+                LocalVertexOffset = firstChild,
+                LocalTriangleOffset = packedMetadata,
+                PackedCounts = meshletOffset,
+                PackedNormalCone = node.MeshletCount
+            };
+        }
+
+        private static void ConfigureHierarchyMeshInfo(
+            ref MeshInfo meshInfo,
+            int geometryMeshletCount,
+            IReadOnlyList<MeshletHierarchyNode> hierarchyNodes,
+            int hierarchyRootNode)
+        {
+            uint geometryCount = CheckedCount(geometryMeshletCount);
+            meshInfo.MeshletLodGeneratedCount = geometryCount;
+            meshInfo.GpuMeshletRecordCount = CheckedAdd(
+                geometryCount,
+                CheckedCount(hierarchyNodes.Count));
+            if (hierarchyNodes.Count == 0)
+            {
+                if (hierarchyRootNode != -1)
+                {
+                    throw new InvalidOperationException(
+                        "A hierarchy root cannot exist without hierarchy nodes.");
+                }
+                meshInfo.HierarchyNodeOffset = 0;
+                meshInfo.HierarchyNodeCount = 0;
+                meshInfo.HierarchyRootNode = uint.MaxValue;
+                return;
+            }
+
+            if ((uint)hierarchyRootNode >=
+                (uint)hierarchyNodes.Count)
+            {
+                throw new InvalidOperationException(
+                    "Meshlet hierarchy root is outside its node stream.");
+            }
+            meshInfo.HierarchyNodeOffset = CheckedAdd(
+                meshInfo.MeshletOffset,
+                geometryCount);
+            meshInfo.HierarchyNodeCount =
+                CheckedCount(hierarchyNodes.Count);
+            meshInfo.HierarchyRootNode = CheckedAdd(
+                meshInfo.HierarchyNodeOffset,
+                CheckedCount(hierarchyRootNode));
+        }
+
+        private static uint[] BuildGpuIndexStream(
+            uint[] sourceIndices,
+            uint[] coarseRayProxyIndices)
+        {
+            if (coarseRayProxyIndices.Length == 0)
+                return sourceIndices;
+            var combined = new uint[checked(
+                sourceIndices.Length +
+                coarseRayProxyIndices.Length)];
+            sourceIndices.CopyTo(combined, 0);
+            coarseRayProxyIndices.CopyTo(
+                combined,
+                sourceIndices.Length);
+            return combined;
+        }
+
+        private static void ConfigureCoarseRayProxy(
+            ref MeshInfo meshInfo,
+            int sourceIndexCount,
+            int coarseRayProxyIndexCount)
+        {
+            if (meshInfo.IndexCount != CheckedCount(sourceIndexCount))
+            {
+                throw new InvalidOperationException(
+                    "Mesh source index metadata diverged during ray-proxy setup.");
+            }
+            if (coarseRayProxyIndexCount < 0 ||
+                coarseRayProxyIndexCount % 3 != 0 ||
+                coarseRayProxyIndexCount > sourceIndexCount)
+            {
+                throw new InvalidOperationException(
+                    "A coarse ray proxy must be a triangle list no larger than its source mesh.");
+            }
+
+            meshInfo.GpuIndexCount = CheckedCount(checked(
+                sourceIndexCount + coarseRayProxyIndexCount));
+            if (coarseRayProxyIndexCount == 0 || meshInfo.IsSkinned)
+            {
+                meshInfo.CoarseRayProxyIndexOffset = 0;
+                meshInfo.CoarseRayProxyIndexCount = 0;
+                return;
+            }
+            meshInfo.CoarseRayProxyIndexOffset = CheckedAdd(
+                meshInfo.IndexOffset,
+                meshInfo.IndexCount);
+            meshInfo.CoarseRayProxyIndexCount =
+                CheckedCount(coarseRayProxyIndexCount);
         }
 
         private static void ValidateMeshInput(Vector3[] vertices, uint[] indices)
@@ -3824,7 +4446,9 @@ namespace Njulf.Rendering.Resources
             uint[] indices,
             List<Meshlet> meshlets,
             List<uint> localVertexIndices,
-            List<uint> localTriangleIndices)
+            List<uint> localTriangleIndices,
+            out MeshletHierarchyNode[] hierarchyNodes,
+            out int hierarchyRootNode)
         {
             uint baseMeshletOffset = meshInfo.MeshletOffset;
             var coreVertices = new CoreVector3[vertices.Length];
@@ -3858,6 +4482,8 @@ namespace Njulf.Rendering.Resources
             meshInfo.MeshletLod2SimplificationError =
                 built.SimplificationErrors[2];
             meshInfo.MeshletLodGeneratedCount = CheckedCount(built.Meshlets.Length);
+            hierarchyNodes = built.HierarchyNodes;
+            hierarchyRootNode = built.HierarchyRootNode;
         }
 
         private void GenerateMeshlets(
@@ -4386,9 +5012,9 @@ namespace Njulf.Rendering.Resources
                 ValidateElementRange(nameof(meshInfo.VertexOffset), meshInfo.VertexOffset, meshInfo.VertexCount, _vertexPositionBytesUsed / VertexPositionStride);
                 ValidateElementRange(nameof(meshInfo.VertexOffset), meshInfo.VertexOffset, meshInfo.VertexCount, _vertexNormalTangentBytesUsed / VertexNormalTangentStride);
                 ValidateElementRange(nameof(meshInfo.VertexOffset), meshInfo.VertexOffset, meshInfo.VertexCount, _vertexUvColorBytesUsed / VertexUvColorStride);
-                ValidateElementRange(nameof(meshInfo.IndexOffset), meshInfo.IndexOffset, meshInfo.IndexCount, _indexBytesUsed / IndexStride);
+                ValidateElementRange(nameof(meshInfo.IndexOffset), meshInfo.IndexOffset, meshInfo.EffectiveGpuIndexCount, _indexBytesUsed / IndexStride);
                 ValidateElementRange(nameof(meshInfo.MeshMetadataOffset), meshInfo.MeshMetadataOffset, 1, _meshMetadataBytesUsed / MeshMetadataStride);
-                ValidateElementRange(nameof(meshInfo.MeshletOffset), meshInfo.MeshletOffset, meshInfo.MeshletLodGeneratedCount, _meshletBytesUsed / MeshletStride);
+                ValidateElementRange(nameof(meshInfo.MeshletOffset), meshInfo.MeshletOffset, meshInfo.EffectiveGpuMeshletRecordCount, _meshletBytesUsed / MeshletStride);
                 ValidateElementRange(nameof(meshInfo.LocalVertexIndexOffset), meshInfo.LocalVertexIndexOffset, meshInfo.LocalVertexIndexCount, _meshletVertexIndexBytesUsed / IndexStride);
                 ValidateElementRange(nameof(meshInfo.LocalTriangleIndexOffset), meshInfo.LocalTriangleIndexOffset, meshInfo.LocalTriangleIndexCount, _meshletTriangleIndexBytesUsed / IndexStride);
                 ValidateElementRange(nameof(meshInfo.SkinningDataOffset), meshInfo.SkinningDataOffset, meshInfo.SkinningDataCount, _skinningDataBytesUsed / SkinningDataStride);
@@ -4570,13 +5196,13 @@ namespace Njulf.Rendering.Resources
             ValidateReleasedRange(
                 _indexBytesUsed,
                 meshInfo.IndexOffset,
-                meshInfo.IndexCount,
+                meshInfo.EffectiveGpuIndexCount,
                 IndexStride,
                 "index");
             ValidateReleasedRange(
                 _meshletBytesUsed,
                 meshInfo.MeshletOffset,
-                meshInfo.MeshletLodGeneratedCount,
+                meshInfo.EffectiveGpuMeshletRecordCount,
                 MeshletStride,
                 "meshlet");
             ValidateReleasedRange(
@@ -4626,7 +5252,7 @@ namespace Njulf.Rendering.Resources
 
             int meshletStart = checked((int)meshInfo.MeshletOffset);
             int meshletCount = checked(
-                (int)meshInfo.MeshletLodGeneratedCount);
+                (int)meshInfo.EffectiveGpuMeshletRecordCount);
             int meshletEnd = checked(meshletStart + meshletCount);
             if (meshletEnd > _meshlets.Count)
             {
@@ -4735,8 +5361,8 @@ namespace Njulf.Rendering.Resources
                         VertexNormalTangentStride +
                     (ulong)live.VertexCount *
                         VertexUvColorStride +
-                    (ulong)live.IndexCount * IndexStride +
-                    (ulong)live.MeshletLodGeneratedCount *
+                    (ulong)live.EffectiveGpuIndexCount * IndexStride +
+                    (ulong)live.EffectiveGpuMeshletRecordCount *
                         MeshletStride +
                     (ulong)live.LocalVertexIndexCount *
                         IndexStride +
@@ -5633,6 +6259,7 @@ namespace Njulf.Rendering.Resources
                 MeshInfo meshInfo,
                 GPUMeshInfo meshMetadata,
                 Meshlet[] meshlets,
+                GPUPackedMeshlet[] gpuMeshlets,
                 uint[] localVertexIndices,
                 uint[] localTriangleIndices,
                 GPUVertexSkinningData[] skinningData,
@@ -5647,6 +6274,7 @@ namespace Njulf.Rendering.Resources
                 MeshInfo = meshInfo;
                 MeshMetadata = meshMetadata;
                 Meshlets = meshlets;
+                GpuMeshlets = gpuMeshlets;
                 LocalVertexIndices = localVertexIndices;
                 LocalTriangleIndices = localTriangleIndices;
                 SkinningData = skinningData;
@@ -5662,6 +6290,7 @@ namespace Njulf.Rendering.Resources
             public MeshInfo MeshInfo { get; }
             public GPUMeshInfo MeshMetadata { get; }
             public Meshlet[] Meshlets { get; }
+            public GPUPackedMeshlet[] GpuMeshlets { get; }
             public uint[] LocalVertexIndices { get; }
             public uint[] LocalTriangleIndices { get; }
             public GPUVertexSkinningData[] SkinningData { get; }

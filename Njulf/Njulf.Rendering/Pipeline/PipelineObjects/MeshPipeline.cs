@@ -141,12 +141,24 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardSimpleFullInputGiCausticReceiverPipeline;
         private VkPipeline _forwardCompactedSimpleGiCausticReceiverPipeline;
         private VkPipeline _forwardCompactedSimpleFullInputGiCausticReceiverPipeline;
+        private VkPipeline _forwardReceiverCacheGiCausticReceiverPipeline;
+        private VkPipeline _forwardCompactedReceiverCacheGiCausticReceiverPipeline;
+        private VkPipeline _forwardSimpleReceiverCacheGiCausticReceiverPipeline;
+        private VkPipeline _forwardSimpleFullInputReceiverCacheGiCausticReceiverPipeline;
+        private VkPipeline _forwardCompactedSimpleReceiverCacheGiCausticReceiverPipeline;
+        private VkPipeline _forwardCompactedSimpleFullInputReceiverCacheGiCausticReceiverPipeline;
         private VkPipeline _forwardCombinedAdvancedGiPipeline;
         private VkPipeline _forwardCompactedCombinedAdvancedGiPipeline;
         private VkPipeline _forwardSimpleCombinedAdvancedGiPipeline;
         private VkPipeline _forwardSimpleFullInputCombinedAdvancedGiPipeline;
         private VkPipeline _forwardCompactedSimpleCombinedAdvancedGiPipeline;
         private VkPipeline _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardReceiverCacheCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardCompactedReceiverCacheCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardSimpleReceiverCacheCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardCompactedSimpleReceiverCacheCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardCompactedSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline;
         // [receiver-cache 0..1, C4/C5 combination 0..3,
         //  base pipeline family 0..5].
         private readonly VkPipeline[,,] _hybridReflectionPipelines =
@@ -214,6 +226,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _weightedOitReceiverFeedbackPipeline;
         private VkPipeline _motionVectorPipeline;
         private VkPipeline _maskedMotionVectorPipeline;
+        private VkPipeline _compactedMotionVectorPipeline;
+        private VkPipeline _compactedMaskedMotionVectorPipeline;
         private VkPipeline _sceneOpaqueCompactionPipeline;
         private VkPipeline _sceneOpaqueCompactionDiagnosticsPipeline;
         private VkPipeline _forwardVisibilityCompactionPipeline;
@@ -379,6 +393,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             "receiver-feedback-pipelines-not-admitted-at-startup";
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
         public VkPipeline MaskedMotionVectorPipeline => _maskedMotionVectorPipeline;
+        public VkPipeline CompactedMotionVectorPipeline =>
+            _compactedMotionVectorPipeline;
+        public VkPipeline CompactedMaskedMotionVectorPipeline =>
+            _compactedMaskedMotionVectorPipeline;
         public VkPipeline SceneOpaqueCompactionPipeline =>
             GpuMeshletCountersEnabled && _sceneOpaqueCompactionDiagnosticsPipeline.Handle != 0
                 ? _sceneOpaqueCompactionDiagnosticsPipeline
@@ -755,6 +773,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 resolved = TryResolveCombinedAdvancedGiPipeline(
                     exactPipeline,
+                    receiverCache,
                     out pipeline);
             }
             else if (nearField)
@@ -768,6 +787,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 resolved = TryResolveGiCausticReceiverPipeline(
                     exactPipeline,
+                    receiverCache,
                     out pipeline);
             }
             else
@@ -1108,7 +1128,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool globalIlluminationDisabled,
             bool alphaMaskReceiverFeedbackRequired = false)
         {
-            if (alphaMaskReceiverFeedbackRequired)
+            if (alphaMaskReceiverFeedbackRequired && !receiverCacheRequired)
             {
                 return ResolveOpaqueVariant(
                     exactPipeline,
@@ -1219,6 +1239,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         public bool TryResolveGiCausticReceiverPipeline(
             VkPipeline exactPipeline,
+            bool receiverCacheRequired,
             out VkPipeline causticPipeline)
         {
             causticPipeline = default;
@@ -1226,26 +1247,39 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 return false;
 
             if (RendererBuildConfiguration.FastPipelineStartup &&
-                !TryEnsureGiCausticReceiverPipeline(exactPipeline))
+                !TryEnsureGiCausticReceiverPipeline(
+                    exactPipeline,
+                    receiverCacheRequired))
             {
                 return false;
             }
 
             if (exactPipeline.Handle == _forwardPipeline.Handle)
-                causticPipeline = _forwardGiCausticReceiverPipeline;
+                causticPipeline = receiverCacheRequired
+                    ? _forwardReceiverCacheGiCausticReceiverPipeline
+                    : _forwardGiCausticReceiverPipeline;
             else if (exactPipeline.Handle == _forwardCompactedPipeline.Handle)
-                causticPipeline = _forwardCompactedGiCausticReceiverPipeline;
+                causticPipeline = receiverCacheRequired
+                    ? _forwardCompactedReceiverCacheGiCausticReceiverPipeline
+                    : _forwardCompactedGiCausticReceiverPipeline;
             else if (exactPipeline.Handle == _forwardSimplePipeline.Handle)
-                causticPipeline = _forwardSimpleGiCausticReceiverPipeline;
+                causticPipeline = receiverCacheRequired
+                    ? _forwardSimpleReceiverCacheGiCausticReceiverPipeline
+                    : _forwardSimpleGiCausticReceiverPipeline;
             else if (exactPipeline.Handle == _forwardSimpleFullInputPipeline.Handle)
-                causticPipeline = _forwardSimpleFullInputGiCausticReceiverPipeline;
+                causticPipeline = receiverCacheRequired
+                    ? _forwardSimpleFullInputReceiverCacheGiCausticReceiverPipeline
+                    : _forwardSimpleFullInputGiCausticReceiverPipeline;
             else if (exactPipeline.Handle == _forwardCompactedSimplePipeline.Handle)
-                causticPipeline = _forwardCompactedSimpleGiCausticReceiverPipeline;
+                causticPipeline = receiverCacheRequired
+                    ? _forwardCompactedSimpleReceiverCacheGiCausticReceiverPipeline
+                    : _forwardCompactedSimpleGiCausticReceiverPipeline;
             else if (exactPipeline.Handle ==
                 _forwardCompactedSimpleFullInputPipeline.Handle)
             {
-                causticPipeline =
-                    _forwardCompactedSimpleFullInputGiCausticReceiverPipeline;
+                causticPipeline = receiverCacheRequired
+                    ? _forwardCompactedSimpleFullInputReceiverCacheGiCausticReceiverPipeline
+                    : _forwardCompactedSimpleFullInputGiCausticReceiverPipeline;
             }
             else
             {
@@ -1261,6 +1295,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         /// </summary>
         public bool TryResolveCombinedAdvancedGiPipeline(
             VkPipeline exactPipeline,
+            bool receiverCacheRequired,
             out VkPipeline combinedPipeline)
         {
             combinedPipeline = default;
@@ -1274,26 +1309,39 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             }
 
             if (RendererBuildConfiguration.FastPipelineStartup &&
-                !TryEnsureCombinedAdvancedGiPipeline(exactPipeline))
+                !TryEnsureCombinedAdvancedGiPipeline(
+                    exactPipeline,
+                    receiverCacheRequired))
             {
                 return false;
             }
 
             if (exactPipeline.Handle == _forwardPipeline.Handle)
-                combinedPipeline = _forwardCombinedAdvancedGiPipeline;
+                combinedPipeline = receiverCacheRequired
+                    ? _forwardReceiverCacheCombinedAdvancedGiPipeline
+                    : _forwardCombinedAdvancedGiPipeline;
             else if (exactPipeline.Handle == _forwardCompactedPipeline.Handle)
-                combinedPipeline = _forwardCompactedCombinedAdvancedGiPipeline;
+                combinedPipeline = receiverCacheRequired
+                    ? _forwardCompactedReceiverCacheCombinedAdvancedGiPipeline
+                    : _forwardCompactedCombinedAdvancedGiPipeline;
             else if (exactPipeline.Handle == _forwardSimplePipeline.Handle)
-                combinedPipeline = _forwardSimpleCombinedAdvancedGiPipeline;
+                combinedPipeline = receiverCacheRequired
+                    ? _forwardSimpleReceiverCacheCombinedAdvancedGiPipeline
+                    : _forwardSimpleCombinedAdvancedGiPipeline;
             else if (exactPipeline.Handle == _forwardSimpleFullInputPipeline.Handle)
-                combinedPipeline = _forwardSimpleFullInputCombinedAdvancedGiPipeline;
+                combinedPipeline = receiverCacheRequired
+                    ? _forwardSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline
+                    : _forwardSimpleFullInputCombinedAdvancedGiPipeline;
             else if (exactPipeline.Handle == _forwardCompactedSimplePipeline.Handle)
-                combinedPipeline = _forwardCompactedSimpleCombinedAdvancedGiPipeline;
+                combinedPipeline = receiverCacheRequired
+                    ? _forwardCompactedSimpleReceiverCacheCombinedAdvancedGiPipeline
+                    : _forwardCompactedSimpleCombinedAdvancedGiPipeline;
             else if (exactPipeline.Handle ==
                 _forwardCompactedSimpleFullInputPipeline.Handle)
             {
-                combinedPipeline =
-                    _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline;
+                combinedPipeline = receiverCacheRequired
+                    ? _forwardCompactedSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline
+                    : _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline;
             }
             else
             {
@@ -1478,8 +1526,74 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         }
 
         private bool TryEnsureGiCausticReceiverPipeline(
-            VkPipeline exactPipeline)
+            VkPipeline exactPipeline,
+            bool receiverCacheRequired)
         {
+            if (receiverCacheRequired)
+            {
+                return
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardPipeline,
+                        ref _forwardReceiverCacheGiCausticReceiverPipeline,
+                        _forwardTaskShaderName,
+                        "forward.mesh.spv",
+                        ForwardGiCausticReceiverContract
+                            .ReceiverCacheOpaqueFragmentShader,
+                        "C4 receiver-cache full",
+                        AdvancedGiPipelineKind.Caustic) &&
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardCompactedPipeline,
+                        ref _forwardCompactedReceiverCacheGiCausticReceiverPipeline,
+                        null,
+                        "forward_compacted.mesh.spv",
+                        ForwardGiCausticReceiverContract
+                            .ReceiverCacheOpaqueFragmentShader,
+                        "C4 receiver-cache compacted full",
+                        AdvancedGiPipelineKind.Caustic) &&
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardSimplePipeline,
+                        ref _forwardSimpleReceiverCacheGiCausticReceiverPipeline,
+                        _forwardTaskShaderName,
+                        "forward_simple.mesh.spv",
+                        ForwardGiCausticReceiverContract
+                            .ReceiverCacheSimpleOpaqueFragmentShader,
+                        "C4 receiver-cache simple",
+                        AdvancedGiPipelineKind.Caustic) &&
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardSimpleFullInputPipeline,
+                        ref _forwardSimpleFullInputReceiverCacheGiCausticReceiverPipeline,
+                        _forwardTaskShaderName,
+                        "forward.mesh.spv",
+                        ForwardGiCausticReceiverContract
+                            .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
+                        "C4 receiver-cache simple full-input",
+                        AdvancedGiPipelineKind.Caustic) &&
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardCompactedSimplePipeline,
+                        ref _forwardCompactedSimpleReceiverCacheGiCausticReceiverPipeline,
+                        null,
+                        "forward_simple_compacted.mesh.spv",
+                        ForwardGiCausticReceiverContract
+                            .ReceiverCacheSimpleOpaqueFragmentShader,
+                        "C4 receiver-cache compacted simple",
+                        AdvancedGiPipelineKind.Caustic) &&
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardCompactedSimpleFullInputPipeline,
+                        ref _forwardCompactedSimpleFullInputReceiverCacheGiCausticReceiverPipeline,
+                        null,
+                        "forward_compacted.mesh.spv",
+                        ForwardGiCausticReceiverContract
+                            .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
+                        "C4 receiver-cache compacted simple full-input",
+                        AdvancedGiPipelineKind.Caustic);
+            }
+
             return
                 TryEnsureAdvancedGiPipeline(
                     exactPipeline,
@@ -1540,8 +1654,74 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         }
 
         private bool TryEnsureCombinedAdvancedGiPipeline(
-            VkPipeline exactPipeline)
+            VkPipeline exactPipeline,
+            bool receiverCacheRequired)
         {
+            if (receiverCacheRequired)
+            {
+                return
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardPipeline,
+                        ref _forwardReceiverCacheCombinedAdvancedGiPipeline,
+                        _forwardTaskShaderName,
+                        "forward.mesh.spv",
+                        ForwardAdvancedGiCombinedContract
+                            .ReceiverCacheOpaqueFragmentShader,
+                        "combined C4/C5 receiver-cache full",
+                        AdvancedGiPipelineKind.Combined) &&
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardCompactedPipeline,
+                        ref _forwardCompactedReceiverCacheCombinedAdvancedGiPipeline,
+                        null,
+                        "forward_compacted.mesh.spv",
+                        ForwardAdvancedGiCombinedContract
+                            .ReceiverCacheOpaqueFragmentShader,
+                        "combined C4/C5 receiver-cache compacted full",
+                        AdvancedGiPipelineKind.Combined) &&
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardSimplePipeline,
+                        ref _forwardSimpleReceiverCacheCombinedAdvancedGiPipeline,
+                        _forwardTaskShaderName,
+                        "forward_simple.mesh.spv",
+                        ForwardAdvancedGiCombinedContract
+                            .ReceiverCacheSimpleOpaqueFragmentShader,
+                        "combined C4/C5 receiver-cache simple",
+                        AdvancedGiPipelineKind.Combined) &&
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardSimpleFullInputPipeline,
+                        ref _forwardSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline,
+                        _forwardTaskShaderName,
+                        "forward.mesh.spv",
+                        ForwardAdvancedGiCombinedContract
+                            .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
+                        "combined C4/C5 receiver-cache simple full-input",
+                        AdvancedGiPipelineKind.Combined) &&
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardCompactedSimplePipeline,
+                        ref _forwardCompactedSimpleReceiverCacheCombinedAdvancedGiPipeline,
+                        null,
+                        "forward_simple_compacted.mesh.spv",
+                        ForwardAdvancedGiCombinedContract
+                            .ReceiverCacheSimpleOpaqueFragmentShader,
+                        "combined C4/C5 receiver-cache compacted simple",
+                        AdvancedGiPipelineKind.Combined) &&
+                    TryEnsureAdvancedGiPipeline(
+                        exactPipeline,
+                        _forwardCompactedSimpleFullInputPipeline,
+                        ref _forwardCompactedSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline,
+                        null,
+                        "forward_compacted.mesh.spv",
+                        ForwardAdvancedGiCombinedContract
+                            .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
+                        "combined C4/C5 receiver-cache compacted simple full-input",
+                        AdvancedGiPipelineKind.Combined);
+            }
+
             return
                 TryEnsureAdvancedGiPipeline(
                     exactPipeline,
@@ -2371,6 +2551,38 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _maskedMotionVectorPipeline.Handle,
                 ObjectType.Pipeline,
                 "Masked Motion Vector Mesh Pipeline");
+
+            _compactedMotionVectorPipeline = CreateGraphicsPipeline(
+                null,
+                "motion_vector_compacted.mesh.spv",
+                "motion_vector.frag.spv",
+                Njulf.Rendering.Resources.RenderTargetManager.MotionVectorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            _context.SetDebugName(
+                _compactedMotionVectorPipeline.Handle,
+                ObjectType.Pipeline,
+                "Compacted Mesh-Only Solid Motion Vector Pipeline");
+
+            _compactedMaskedMotionVectorPipeline = CreateGraphicsPipeline(
+                null,
+                "motion_vector_alpha_compacted.mesh.spv",
+                "motion_vector_alpha.frag.spv",
+                Njulf.Rendering.Resources.RenderTargetManager.MotionVectorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            _context.SetDebugName(
+                _compactedMaskedMotionVectorPipeline.Handle,
+                ObjectType.Pipeline,
+                "Compacted Mesh-Only Masked Motion Vector Pipeline");
 
         }
 
@@ -3326,13 +3538,39 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     secondaryColorFormat:
                         ForwardGiCausticReceiverContract.ReceiverPayloadFormat);
 
+                CreateOpaqueSpecializedPipelineSet(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    ForwardGiCausticReceiverContract
+                        .ReceiverCacheOpaqueFragmentShader,
+                    ForwardGiCausticReceiverContract
+                        .ReceiverCacheSimpleOpaqueFragmentShader,
+                    ForwardGiCausticReceiverContract
+                        .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
+                    "C4 Current Receiver Payload with DDGI Receiver Cache",
+                    out _forwardReceiverCacheGiCausticReceiverPipeline,
+                    out _forwardCompactedReceiverCacheGiCausticReceiverPipeline,
+                    out _forwardSimpleReceiverCacheGiCausticReceiverPipeline,
+                    out _forwardSimpleFullInputReceiverCacheGiCausticReceiverPipeline,
+                    out _forwardCompactedSimpleReceiverCacheGiCausticReceiverPipeline,
+                    out _forwardCompactedSimpleFullInputReceiverCacheGiCausticReceiverPipeline,
+                    secondaryColorFormat:
+                        ForwardGiCausticReceiverContract.ReceiverPayloadFormat);
+
                 if (_forwardCompactedGiCausticReceiverPipeline.Handle == 0 ||
                     _forwardCompactedSimpleGiCausticReceiverPipeline.Handle == 0 ||
                     _forwardCompactedSimpleFullInputGiCausticReceiverPipeline.Handle == 0 ||
+                    _forwardCompactedReceiverCacheGiCausticReceiverPipeline.Handle == 0 ||
+                    _forwardCompactedSimpleReceiverCacheGiCausticReceiverPipeline.Handle == 0 ||
+                    _forwardCompactedSimpleFullInputReceiverCacheGiCausticReceiverPipeline.Handle == 0 ||
                     (!RendererBuildConfiguration.FastPipelineStartup &&
                      (_forwardGiCausticReceiverPipeline.Handle == 0 ||
                       _forwardSimpleGiCausticReceiverPipeline.Handle == 0 ||
-                      _forwardSimpleFullInputGiCausticReceiverPipeline.Handle == 0)))
+                      _forwardSimpleFullInputGiCausticReceiverPipeline.Handle == 0 ||
+                      _forwardReceiverCacheGiCausticReceiverPipeline.Handle == 0 ||
+                      _forwardSimpleReceiverCacheGiCausticReceiverPipeline.Handle == 0 ||
+                      _forwardSimpleFullInputReceiverCacheGiCausticReceiverPipeline.Handle == 0)))
                 {
                     DestroyGiCausticReceiverPipelines();
                     GiCausticReceiverFailureReason =
@@ -3416,13 +3654,43 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     quaternaryColorFormat:
                         ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
 
+                CreateOpaqueSpecializedPipelineSet(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    ForwardAdvancedGiCombinedContract
+                        .ReceiverCacheOpaqueFragmentShader,
+                    ForwardAdvancedGiCombinedContract
+                        .ReceiverCacheSimpleOpaqueFragmentShader,
+                    ForwardAdvancedGiCombinedContract
+                        .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
+                    "Combined C4/C5 with DDGI Receiver Cache",
+                    out _forwardReceiverCacheCombinedAdvancedGiPipeline,
+                    out _forwardCompactedReceiverCacheCombinedAdvancedGiPipeline,
+                    out _forwardSimpleReceiverCacheCombinedAdvancedGiPipeline,
+                    out _forwardSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline,
+                    out _forwardCompactedSimpleReceiverCacheCombinedAdvancedGiPipeline,
+                    out _forwardCompactedSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline,
+                    secondaryColorFormat:
+                        ForwardGiCausticReceiverContract.ReceiverPayloadFormat,
+                    tertiaryColorFormat:
+                        ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
+                    quaternaryColorFormat:
+                        ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
+
                 if (_forwardCompactedCombinedAdvancedGiPipeline.Handle == 0 ||
                     _forwardCompactedSimpleCombinedAdvancedGiPipeline.Handle == 0 ||
                     _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline.Handle == 0 ||
+                    _forwardCompactedReceiverCacheCombinedAdvancedGiPipeline.Handle == 0 ||
+                    _forwardCompactedSimpleReceiverCacheCombinedAdvancedGiPipeline.Handle == 0 ||
+                    _forwardCompactedSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline.Handle == 0 ||
                     (!RendererBuildConfiguration.FastPipelineStartup &&
                      (_forwardCombinedAdvancedGiPipeline.Handle == 0 ||
                       _forwardSimpleCombinedAdvancedGiPipeline.Handle == 0 ||
-                      _forwardSimpleFullInputCombinedAdvancedGiPipeline.Handle == 0)))
+                      _forwardSimpleFullInputCombinedAdvancedGiPipeline.Handle == 0 ||
+                      _forwardReceiverCacheCombinedAdvancedGiPipeline.Handle == 0 ||
+                      _forwardSimpleReceiverCacheCombinedAdvancedGiPipeline.Handle == 0 ||
+                      _forwardSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline.Handle == 0)))
                 {
                     DestroyCombinedAdvancedGiPipelines();
                     CombinedAdvancedGiFailureReason =
@@ -4595,6 +4863,24 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _maskedMotionVectorPipeline = default;
             }
 
+            if (_compactedMotionVectorPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _compactedMotionVectorPipeline,
+                    null);
+                _compactedMotionVectorPipeline = default;
+            }
+
+            if (_compactedMaskedMotionVectorPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _compactedMaskedMotionVectorPipeline,
+                    null);
+                _compactedMaskedMotionVectorPipeline = default;
+            }
+
             if (_sceneOpaqueCompactionPipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(_context.Device, _sceneOpaqueCompactionPipeline, null);
@@ -4654,6 +4940,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 ref _forwardCompactedSimpleGiCausticReceiverPipeline);
             DestroyOptionalPipeline(
                 ref _forwardCompactedSimpleFullInputGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardReceiverCacheGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedReceiverCacheGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleReceiverCacheGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleFullInputReceiverCacheGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleReceiverCacheGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleFullInputReceiverCacheGiCausticReceiverPipeline);
         }
 
         private void DestroyCombinedAdvancedGiPipelines()
@@ -4670,6 +4968,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 ref _forwardCompactedSimpleCombinedAdvancedGiPipeline);
             DestroyOptionalPipeline(
                 ref _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardReceiverCacheCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedReceiverCacheCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleReceiverCacheCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleReceiverCacheCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline);
         }
 
         private void DestroyHybridReflectionPipelines()

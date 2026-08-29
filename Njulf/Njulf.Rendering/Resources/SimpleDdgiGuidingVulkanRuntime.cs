@@ -721,6 +721,7 @@ public readonly record struct SimpleDdgiGuidingInversePdfHistogram(
 public readonly record struct SimpleDdgiGuidingSampleTelemetry(
     uint RequestCount,
     uint ValidSampleCount,
+    uint BootstrapInvalidationCount,
     uint MaintenanceSampleCount,
     uint MixtureUniformSampleCount,
     uint MixtureGuidedSampleCount,
@@ -746,7 +747,8 @@ public readonly record struct SimpleDdgiGuidingSampleTelemetry(
             validation.InvalidHeaders + validation.InvalidPdfs;
         ulong branchTotal = (ulong)MaintenanceSampleCount +
             MixtureUniformSampleCount + MixtureGuidedSampleCount;
-        bool countsValid = (ulong)ValidSampleCount + invalid == RequestCount &&
+        bool countsValid = (ulong)ValidSampleCount + invalid +
+                BootstrapInvalidationCount == RequestCount &&
             branchTotal == ValidSampleCount &&
             UniformFallbackSampleCount <= ValidSampleCount &&
             InversePdfHistogram.Total == ValidSampleCount;
@@ -801,6 +803,8 @@ public readonly record struct SimpleDdgiGuidingSampleTelemetry(
             words[(int)SimpleDdgiGuidingGpuAbi.CounterMixtureGuidedSamples];
         uint uniformFallback =
             words[(int)SimpleDdgiGuidingGpuAbi.CounterUniformFallbackSamples];
+        uint bootstrapInvalidations = words[(int)SimpleDdgiGuidingGpuAbi
+            .CounterBootstrapInvalidations];
         var histogram = new SimpleDdgiGuidingInversePdfHistogram(
             words[12], words[13], words[14], words[15],
             words[16], words[17], words[18], words[19],
@@ -811,12 +815,13 @@ public readonly record struct SimpleDdgiGuidingSampleTelemetry(
             validation.InvalidHeaders + validation.InvalidPdfs;
         ulong branchTotal = (ulong)maintenance + mixtureUniform + mixtureGuided;
         bool reservedValid = gpuGenerated
-            ? words[11] == 0U && words[28] == 0U && words[29] == 0U &&
+            ? words[28] == 0U && words[29] == 0U &&
                 words[30] == requestCount &&
                 words[31] == SimpleDdgiGuidingGpuAbi.Version
-            : words[11] == 0U && words[28] == 0U && words[29] == 0U &&
+            : words[28] == 0U && words[29] == 0U &&
                 words[30] == 0U && words[31] == 0U;
-        if ((ulong)valid + invalid != requestCount || branchTotal != valid ||
+        if ((ulong)valid + invalid + bootstrapInvalidations != requestCount ||
+            branchTotal != valid ||
             histogram.Total != valid || uniformFallback > valid ||
             validation.PublicationRejections != 0U || !reservedValid)
         {
@@ -836,7 +841,7 @@ public readonly record struct SimpleDdgiGuidingSampleTelemetry(
                 return false;
             }
             telemetry = new SimpleDdgiGuidingSampleTelemetry(
-                requestCount, 0U, 0U, 0U, 0U, 0U,
+                requestCount, 0U, bootstrapInvalidations, 0U, 0U, 0U, 0U,
                 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
                 histogram);
             reason = "valid";
@@ -852,6 +857,7 @@ public readonly record struct SimpleDdgiGuidingSampleTelemetry(
         telemetry = new SimpleDdgiGuidingSampleTelemetry(
             requestCount,
             valid,
+            bootstrapInvalidations,
             maintenance,
             mixtureUniform,
             mixtureGuided,

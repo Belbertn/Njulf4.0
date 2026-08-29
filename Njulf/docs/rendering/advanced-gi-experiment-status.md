@@ -22,7 +22,7 @@ screen-space near-field complement to canonical DDGI.
 
 Requested, supported, admitted, effective, and qualified modes are separate.
 The editor shows those states together with live resource/publication status,
-and performance snapshot schema 10 persists them with exact central-memory
+and performance snapshot schema 12 persists them with exact central-memory
 ownership. A requested setting, compiled shader, successful unit test, or
 advertised extension is never treated as target-device qualification.
 
@@ -183,9 +183,10 @@ captures, equal-work measurements, or signed promotion records.
   boundaries.
 - Every checked-in advanced-GI compute shader is compiled as Vulkan 1.3 SPIR-V
   and validated by the shader build.
-- Performance snapshots preserve C5, C1, C3, C4, and B1 telemetry through
-  schema versions 5–10 with explicit legacy migrations that never infer live
-  work from a mode bit.
+- Performance snapshots preserve C5, C1, C3, C4, B1, receiver-cache
+  generation/consumption, accelerated-solver publication, and C4 receiver
+  completion through schema version 12. Explicit legacy migrations never
+  infer live work from a mode bit.
 - The Global Illumination editor panel exposes five ordinary switches plus
   requested/effective state, fallback, live bytes, runtime state, and whether
   the last observation is authoritative. A switch change automatically applies

@@ -74,6 +74,10 @@ public sealed class GiCausticHeroSourceSnapshot
     public ReadOnlyMemory<GiCausticHeroSourceRejection> Rejections => _rejections;
     public ulong SceneContentRevision { get; }
     public ulong RaySceneContentEpoch { get; }
+    /// <summary>
+    /// Stable semantic identity for the instance set represented by the TLAS.
+    /// Physical frame-slot and backing-buffer rotation is intentionally absent.
+    /// </summary>
     public ulong TopLevelInstanceSignature { get; }
     public bool HasEligibleHeroes => _heroes.Length > 0;
 }

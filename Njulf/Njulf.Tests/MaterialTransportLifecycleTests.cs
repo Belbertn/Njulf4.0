@@ -831,6 +831,10 @@ public sealed class MaterialTransportLifecycleTests
             Assert.That(HasLegacyFallback(manager.GetMaterialData(authored)), Is.True);
             Assert.That(HasLegacyFallback(manager.GetMaterialData(rawV1)), Is.True);
             Assert.That(authoredDisabled.Material, Is.GreaterThan(authoredBefore.Material));
+            Assert.That(authoredDisabled.AlphaCoverage,
+                Is.EqualTo(authoredBefore.AlphaCoverage));
+            Assert.That(authoredDisabled.Sidedness,
+                Is.EqualTo(authoredBefore.Sidedness));
             Assert.That(manager.GetMaterialAspectRevisions(rawV1), Is.EqualTo(rawBefore));
             Assert.That(disabledDataRevision, Is.GreaterThan(dataRevisionBefore));
             Assert.That(disabledGiTransportRevision, Is.GreaterThan(giTransportRevisionBefore));

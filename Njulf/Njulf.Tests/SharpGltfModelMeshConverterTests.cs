@@ -401,6 +401,37 @@ public sealed class SharpGltfModelMeshConverterTests
     }
 
     [Test]
+    public void Import_WithSharpGltfBackend_AppliesPinnedAnisotropyToEveryTextureSlot()
+    {
+        string path = CreateTexturedMaterialGltf();
+        using var importer = new ModelImporter();
+
+        ModelMaterial material = importer.Import(
+            path,
+            new ImporterOptions
+            {
+                Backend = ModelImportBackend.SharpGltf,
+                MaximumSamplerAnisotropy = 1f
+            }).Materials.Single();
+
+        ModelTextureSlot?[] slots =
+        [
+            material.BaseColorTexture,
+            material.NormalTexture,
+            material.MetallicRoughnessTexture,
+            material.OcclusionTexture,
+            material.EmissiveTexture
+        ];
+        Assert.Multiple(() =>
+        {
+            Assert.That(slots, Has.All.Not.Null);
+            Assert.That(
+                slots.Select(static slot => slot!.Sampler.MaxAnisotropy),
+                Has.All.EqualTo(1f));
+        });
+    }
+
+    [Test]
     public void Import_WithSharpGltfBackend_RejectsMalformedGeometryDecalMetadata()
     {
         string path = CreateTexturedMaterialGltf();

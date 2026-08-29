@@ -198,7 +198,11 @@ namespace Njulf.Rendering.Resources
         private CoreBoundingBox _publishedRaySceneBounds;
         private bool _publishedRaySceneBoundsValid;
         private ulong _publishedRaySceneContentRevision;
-        private ulong _publishedTlasInstanceSignature;
+        // Semantic identity for the exact current-pose instance set published
+        // with the TLAS. Unlike the build signature, this deliberately excludes
+        // rotating frame-slot and backing-buffer identities so downstream
+        // caches are invalidated only by scene, pose, or material changes.
+        private ulong _publishedCurrentPoseTlasSemanticSignature;
         private ulong _dynamicBlasBytes;
         private ulong _peakDynamicBlasBytes;
         private int _lastDynamicBlasFullBuildCount;
@@ -430,7 +434,7 @@ namespace Njulf.Rendering.Resources
             }
             if (!Active || _publishedRaySceneInstances.Length == 0 ||
                 _publishedRaySceneContentRevision == 0UL ||
-                _publishedTlasInstanceSignature == 0UL)
+                _publishedCurrentPoseTlasSemanticSignature == 0UL)
             {
                 reason = "caustic-hero-current-pose-tlas-snapshot-unavailable";
                 return false;
@@ -628,7 +632,7 @@ namespace Njulf.Rendering.Resources
                 rejections.ToArray(),
                 _publishedRaySceneContentRevision,
                 _raySceneContentEpoch,
-                _publishedTlasInstanceSignature);
+                _publishedCurrentPoseTlasSemanticSignature);
             reason = string.Empty;
             return true;
 
@@ -1117,7 +1121,7 @@ namespace Njulf.Rendering.Resources
                 PublishRaySceneInstances(
                     _instanceScratch,
                     sceneContentRevision,
-                    instanceSignature);
+                    _lastRaySceneContentSignature);
                 _lastBuildMicroseconds = ElapsedMicroseconds(buildStart);
                 return CreateStats(Active);
             }
@@ -1196,8 +1200,15 @@ namespace Njulf.Rendering.Resources
                         stableIdentity),
                     DecalDepthTolerance = materialContract.DecalDepthTolerance,
                     DecalDepthBias = materialContract.DecalDepthBias,
-                    GeometryClass = materialContract.ResolveGeometryClass(domain),
-                    GeometryFlags = materialContract.GeometryFlags,
+                    GeometryClass = meshInfo.UsesCoarseRayProxy &&
+                        domain == AccelerationStructureGeometryDomain.Static
+                            ? DdgiRayGeometryClass.ConservativeProxy
+                            : materialContract.ResolveGeometryClass(domain),
+                    GeometryFlags = meshInfo.UsesCoarseRayProxy &&
+                        domain == AccelerationStructureGeometryDomain.Static
+                            ? materialContract.GeometryFlags |
+                              DdgiRayGeometryFlags.ConservativeProxy
+                            : materialContract.GeometryFlags,
                     FrameSlot = frameSlot
                 };
                 if (renderObject is SkinnedRenderObject skinned &&
@@ -1274,9 +1285,14 @@ namespace Njulf.Rendering.Resources
                             stableIdentity),
                         DecalDepthTolerance = materialContract.DecalDepthTolerance,
                         DecalDepthBias = materialContract.DecalDepthBias,
-                        GeometryClass = materialContract.ResolveGeometryClass(
-                            AccelerationStructureGeometryDomain.Static),
-                        GeometryFlags = materialContract.GeometryFlags,
+                        GeometryClass = meshInfo.UsesCoarseRayProxy
+                            ? DdgiRayGeometryClass.ConservativeProxy
+                            : materialContract.ResolveGeometryClass(
+                                AccelerationStructureGeometryDomain.Static),
+                        GeometryFlags = meshInfo.UsesCoarseRayProxy
+                            ? materialContract.GeometryFlags |
+                              DdgiRayGeometryFlags.ConservativeProxy
+                            : materialContract.GeometryFlags,
                         FrameSlot = frameSlot
                     });
                 }
@@ -2095,7 +2111,7 @@ namespace Njulf.Rendering.Resources
         private void PublishRaySceneInstances(
             IReadOnlyList<StaticOpaqueInstance> instances,
             ulong sceneContentRevision,
-            ulong topLevelInstanceSignature)
+            ulong currentPoseTlasSemanticSignature)
         {
             _publishedRaySceneInstances = instances.ToArray();
             _publishedRaySceneBoundsValid = false;
@@ -2120,7 +2136,8 @@ namespace Njulf.Rendering.Resources
                     instanceBounds.Max);
             }
             _publishedRaySceneContentRevision = sceneContentRevision;
-            _publishedTlasInstanceSignature = topLevelInstanceSignature;
+            _publishedCurrentPoseTlasSemanticSignature =
+                currentPoseTlasSemanticSignature;
         }
 
         private void ClearPublishedRaySceneInstances()
@@ -2129,7 +2146,7 @@ namespace Njulf.Rendering.Resources
             _publishedRaySceneBounds = default;
             _publishedRaySceneBoundsValid = false;
             _publishedRaySceneContentRevision = 0UL;
-            _publishedTlasInstanceSignature = 0UL;
+            _publishedCurrentPoseTlasSemanticSignature = 0UL;
         }
 
         private static float DistanceSquaredToBounds(CoreVector3 position, CoreBoundingBox bounds)
@@ -2182,7 +2199,7 @@ namespace Njulf.Rendering.Resources
                 if (meshInfo.VertexCount == 0 || meshInfo.IndexCount < 3)
                     return false;
 
-                return TryGetRayQueryMaterial(
+                if (!TryGetRayQueryMaterial(
                     material,
                     ownerName,
                     meshInfo.IsSkinned,
@@ -2194,13 +2211,75 @@ namespace Njulf.Rendering.Resources
                     transparentGeometryMode,
                     geometryDecalsEnabled,
                     skinnedGeometryMode,
-                    foliageGeometryMode);
+                    foliageGeometryMode))
+                {
+                    return false;
+                }
+
+                bool hasMatchingOpacityMicromap =
+                    HasMatchingOpacityMicromapRegistration(
+                        meshHandle,
+                        materialIndex);
+                if (ShouldUseCoarseRayProxyForInstance(
+                        meshInfo.UsesCoarseRayProxy,
+                        domain,
+                        _opacityMicromapGpuRuntimeEnabled,
+                        hasMatchingOpacityMicromap))
+                {
+                    meshInfo.IndexOffset =
+                        meshInfo.CoarseRayProxyIndexOffset;
+                    meshInfo.IndexCount =
+                        meshInfo.CoarseRayProxyIndexCount;
+                }
+                else if (hasMatchingOpacityMicromap)
+                {
+                    // An EXT_opacity_micromap payload is indexed against the
+                    // authored triangle stream. Mark this frame-local copy as
+                    // exact so instance classification and the ordinary BLAS
+                    // fallback use that same topology until the OMM BLAS is
+                    // transactionally published.
+                    meshInfo.CoarseRayProxyIndexOffset = 0U;
+                    meshInfo.CoarseRayProxyIndexCount = 0U;
+                }
+
+                return meshInfo.IndexCount >= 3;
             }
             catch (InvalidOperationException)
             {
                 return false;
             }
         }
+
+        private bool HasMatchingOpacityMicromapRegistration(
+            MeshHandle mesh,
+            uint materialIndex)
+        {
+            if (!_opacityMicromapGpuRuntimeEnabled)
+                return false;
+
+            if (_synchronizedOpacityMicromapRegistrationsByMesh.TryGetValue(
+                    mesh,
+                    out OpacityMicromapRuntimeMeshRegistration synchronized))
+            {
+                return synchronized.Material.Index == checked((int)materialIndex);
+            }
+
+            return _opacityMicromapRuntimeRegistrations is not null &&
+                   _opacityMicromapRuntimeRegistrations.TryGet(
+                       mesh,
+                       out OpacityMicromapRuntimeMeshRegistration registered) &&
+                   registered.Material.Index == checked((int)materialIndex);
+        }
+
+        internal static bool ShouldUseCoarseRayProxyForInstance(
+            bool coarseProxyAvailable,
+            AccelerationStructureGeometryDomain domain,
+            bool opacityMicromapRuntimeEnabled,
+            bool hasMatchingOpacityMicromapRegistration) =>
+            coarseProxyAvailable &&
+            domain == AccelerationStructureGeometryDomain.Static &&
+            !(opacityMicromapRuntimeEnabled &&
+              hasMatchingOpacityMicromapRegistration);
 
         private static bool IsFinite(CoreVector3 value) =>
             float.IsFinite(value.X) &&
@@ -3328,15 +3407,18 @@ namespace Njulf.Rendering.Resources
             try
             {
                 MeshInfo meshInfo = _meshManager.GetMeshInfo(mesh);
-                if (meshInfo.IsSkinned || meshInfo.IndexCount == 0U ||
-                    meshInfo.IndexCount % 3U != 0U)
+                uint primitiveIndexCount = meshInfo.UsesCoarseRayProxy
+                    ? meshInfo.CoarseRayProxyIndexCount
+                    : meshInfo.IndexCount;
+                if (meshInfo.IsSkinned || primitiveIndexCount == 0U ||
+                    primitiveIndexCount % 3U != 0U)
                 {
                     return default;
                 }
 
                 return new OpacityMicromapExtOrdinaryFallback(
                     Mesh: mesh,
-                    PrimitiveCount: meshInfo.IndexCount / 3U,
+                    PrimitiveCount: primitiveIndexCount / 3U,
                     BlasHandle: blas.Handle.Handle,
                     ResidentBytes: blas.Size,
                     IsStaticTriangleGeometry: true,
@@ -3396,9 +3478,12 @@ namespace Njulf.Rendering.Resources
                 {
                     _ = _materialManager.GetMaterialDefinition(
                         registration.Material);
-                    if (_materialManager.GetMaterialContentRevision(
-                            registration.Material.Index) !=
-                        registration.MaterialContentRevision)
+                    MaterialAspectRevisions materialRevisions =
+                        _materialManager.GetMaterialAspectRevisions(
+                            registration.Material);
+                    if (OpacityMicromapMaterialRevision.From(
+                            materialRevisions) !=
+                        registration.MaterialOpacityRevision)
                     {
                         staleMaterialCount++;
                         continue;

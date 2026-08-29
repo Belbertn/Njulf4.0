@@ -2,6 +2,7 @@ using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 
 namespace Njulf.Rendering.Resources;
@@ -659,10 +660,12 @@ public struct GPUCausticPhotonTaskV1
     private readonly bool HeroModeIsValid(GiCausticGpuTaskFlags heroFlags) =>
         heroFlags switch
         {
-            GiCausticGpuTaskFlags.MirrorHero => HeroOptics.Y <= 0.04f,
+            GiCausticGpuTaskFlags.MirrorHero => HeroOptics.Y <=
+                GiCausticHeroContractValidator.MaximumMirrorRoughness,
             GiCausticGpuTaskFlags.ClosedDielectricHero =>
-                HeroOptics.Y <= 0.04f && HeroOptics.X > 1.0f,
-            GiCausticGpuTaskFlags.RoughSpecularReference => HeroOptics.Y > 0.04f,
+                HeroOptics.X > 1.0f,
+            GiCausticGpuTaskFlags.RoughSpecularReference => HeroOptics.Y >
+                GiCausticHeroContractValidator.MinimumRoughSpecularRoughness,
             _ => false
         };
 

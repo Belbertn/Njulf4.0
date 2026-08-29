@@ -221,6 +221,35 @@ public sealed class OpacityMicromapExtRuntimeTests
         });
     }
 
+    [Test]
+    public void CompactionQueryMiss_IsFatalOnlyWhenCompactionIsRequired()
+    {
+        OpacityMicromapExtBuildPolicy optional =
+            OpacityMicromapExtBuildPolicy.Default;
+        OpacityMicromapExtBuildPolicy required = optional with
+        {
+            RequireCompaction = true
+        };
+        OpacityMicromapExtBuildPolicy disabled = required with
+        {
+            EnableCompaction = false
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AccelerationStructureManager
+                    .IsRequiredCompactionQueryFailure(optional),
+                Is.False,
+                "A valid uncompacted result remains authoritative under the default policy.");
+            Assert.That(AccelerationStructureManager
+                    .IsRequiredCompactionQueryFailure(required),
+                Is.True);
+            Assert.That(AccelerationStructureManager
+                    .IsRequiredCompactionQueryFailure(disabled),
+                Is.False);
+        });
+    }
+
     private static VulkanExtOpacityMicromapFeatureSnapshot Snapshot() => new(
         ExtensionAdvertised: true,
         ExtensionEnabled: true,

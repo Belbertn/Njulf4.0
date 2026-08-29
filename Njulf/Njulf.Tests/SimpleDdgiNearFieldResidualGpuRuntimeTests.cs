@@ -668,6 +668,8 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(passSource, Does.Contain(
                 "images[3] = Sampled(validityRead, _bindlessHeap.HiZSampler)"));
             Assert.That(passSource, Does.Contain(
+                "images[9] = Sampled(normalRead, _bindlessHeap.HiZSampler)"));
+            Assert.That(passSource, Does.Contain(
                 "DescriptorImageInfo* images = stackalloc DescriptorImageInfo[8];"));
             Assert.That(runtimeSource, Does.Contain(
                 "return _frameAdmission && CanExecuteNoLock(sceneData);"));

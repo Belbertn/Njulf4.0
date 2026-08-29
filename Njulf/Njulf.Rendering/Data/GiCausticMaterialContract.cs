@@ -127,6 +127,10 @@ public readonly record struct GiCausticHeroValidation(
 
 public static class GiCausticHeroContractValidator
 {
+    public const float MaximumMirrorRoughness = 0.04f;
+    public const float MinimumRoughSpecularRoughness =
+        DielectricTransportMath.DeltaRoughnessThreshold;
+
     /// <summary>
     /// Validates the authored contract without allocating or querying device
     /// state. Callers retain the ordinary path for every rejection.
@@ -161,7 +165,8 @@ public static class GiCausticHeroContractValidator
         switch (casterPolicy)
         {
             case GiCausticCasterPolicy.Mirror:
-                if (material.Roughness < 0.0f || material.Roughness > 0.04f ||
+                if (material.Roughness < 0.0f ||
+                    material.Roughness > MaximumMirrorRoughness ||
                     material.Ior <= 0.0f)
                 {
                     return Reject(GiCausticHeroRejectionReason.UnsupportedRoughness);
@@ -192,8 +197,7 @@ public static class GiCausticHeroContractValidator
                 return GiCausticHeroValidation.Accepted;
 
             case GiCausticCasterPolicy.RoughSpecular:
-                if (material.Roughness <=
-                        DielectricTransportMath.DeltaRoughnessThreshold ||
+                if (material.Roughness <= MinimumRoughSpecularRoughness ||
                     material.Roughness > 1.0f)
                     return Reject(GiCausticHeroRejectionReason.UnsupportedRoughness);
 

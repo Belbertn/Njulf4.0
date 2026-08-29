@@ -73,7 +73,11 @@ public sealed class OpacityMicromapRuntimeRegistrationStoreTests
         OpacityMicromapRuntimeMeshRegistration first = Registration();
         OpacityMicromapRuntimeMeshRegistration conflict = first with
         {
-            MaterialContentRevision = first.MaterialContentRevision + 1U
+            MaterialOpacityRevision = first.MaterialOpacityRevision with
+            {
+                AlphaCoverage =
+                    first.MaterialOpacityRevision.AlphaCoverage + 1U
+            }
         };
 
         Assert.That(store.TryRegisterInitialReference(first, out _), Is.True);
@@ -87,8 +91,8 @@ public sealed class OpacityMicromapRuntimeRegistrationStoreTests
             Assert.That(detail,
                 Is.EqualTo("omm-runtime-registration-mesh-conflict"));
             Assert.That(store.TryGet(first.Mesh, out var retained), Is.True);
-            Assert.That(retained.MaterialContentRevision,
-                Is.EqualTo(first.MaterialContentRevision));
+            Assert.That(retained.MaterialOpacityRevision,
+                Is.EqualTo(first.MaterialOpacityRevision));
             Assert.That(store.GetSnapshot().RejectedRegistrationCount,
                 Is.EqualTo(1UL));
         });
@@ -130,7 +134,8 @@ public sealed class OpacityMicromapRuntimeRegistrationStoreTests
         {
             Mesh = new MeshHandle(51, 9U),
             Material = new MaterialHandle(71, 11U),
-            MaterialContentRevision = 19U
+            MaterialOpacityRevision =
+                new OpacityMicromapMaterialRevision(19U, 20U)
         };
         OpacityMicromapRuntimeMeshRegistration differentPolicy = shared with
         {
@@ -420,7 +425,7 @@ public sealed class OpacityMicromapRuntimeRegistrationStoreTests
         return new OpacityMicromapRuntimeMeshRegistration(
             new MeshHandle(5, 1U),
             new MaterialHandle(7, 2U),
-            3U,
+            new OpacityMicromapMaterialRevision(3U, 4U),
             OpacityMicromapRuntimeRegistrationStore.ComputeMeshGeometryKey(
                 positions,
                 indices),

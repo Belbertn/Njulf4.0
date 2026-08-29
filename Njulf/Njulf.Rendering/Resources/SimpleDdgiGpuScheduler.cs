@@ -818,7 +818,7 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 commandBuffer,
                 arena,
                 _layout.AuditSummary.Offset,
-                _layout.AuditSummary.ByteSize,
+                SimpleDdgiGpuSchedulerLayout.TransportAuditCertificateBytes,
                 0u);
             BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
                 arena,
@@ -828,7 +828,7 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 AccessFlags2.ShaderStorageReadBit |
                 AccessFlags2.ShaderStorageWriteBit,
                 _layout.AuditSummary.Offset,
-                _layout.AuditSummary.ByteSize);
+                SimpleDdgiGpuSchedulerLayout.TransportAuditCertificateBytes);
             ExecuteBufferBarrier(commandBuffer, barrier);
             return true;
         }

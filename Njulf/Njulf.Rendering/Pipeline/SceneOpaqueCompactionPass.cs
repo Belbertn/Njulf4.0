@@ -16,6 +16,8 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class SceneOpaqueCompactionPass : RenderPassBase
     {
         private const uint WorkgroupSize = 64;
+        private const int MaximumLodTransitionStateCount = 4096;
+        private const int LodTransitionOutputCapacityMultiplier = 2;
         private const int MaxValidationSampleCommands = 4096;
         private const int DirectionalShadowCascadeCapacity = ShadowSettings.MaxDirectionalCascades;
         private const int OpaqueIndirectDispatchSlot = 0;
@@ -181,10 +183,64 @@ namespace Njulf.Rendering.Pipeline
             int directionalDynamicShadowCandidateCount = compactDirectionalDynamicShadows
                 ? sceneData.DirectionalDynamicShadowMeshletCount
                 : 0;
-            int dispatchCandidateCount = Math.Max(
+            bool instanceExpansion = CanUseInstanceExpansion(sceneData);
+            sceneData.SceneSubmissionGpuInstanceExpansionActive =
+                instanceExpansion;
+            sceneData.SceneSubmissionGpuHierarchicalLodActive =
+                instanceExpansion &&
+                sceneData.SceneSubmissionGpuHierarchicalLodEnabled &&
+                sceneData.SceneSubmissionGpuLodSelectionEnabled &&
+                sceneData.SceneSubmissionGpuLodSelectionMode ==
+                    GpuLodSelectionMode.ScreenSpaceError &&
+                !sceneData.SceneSubmissionValidationCompareCpuGpuLists;
+            bool lodDitherTransitions = instanceExpansion &&
+                sceneData.SceneSubmissionGpuLodSelectionEnabled &&
+                sceneData.SceneSubmissionGpuLodDitherTransitionsEnabled &&
+                !sceneData.SceneSubmissionValidationCompareCpuGpuLists;
+            sceneData.SceneSubmissionGpuLodDitherTransitionsActive =
+                lodDitherTransitions;
+            int transitionCapacityMultiplier = lodDitherTransitions
+                ? LodTransitionOutputCapacityMultiplier
+                : 1;
+            int opaqueOutputCapacity = checked(
+                candidateCount * transitionCapacityMultiplier);
+            int simpleOutputCandidateCapacity = checked(
+                sceneData.SimpleOpaqueMeshletCount *
+                transitionCapacityMultiplier);
+            int simpleNormalOutputCandidateCapacity = checked(
+                sceneData.SimpleNormalOpaqueMeshletCount *
+                transitionCapacityMultiplier);
+            int fullOutputCandidateCapacity = checked(
+                sceneData.FullOpaqueMeshletCount *
+                transitionCapacityMultiplier);
+            int solidDepthOutputCandidateCapacity = checked(
+                solidDepthCandidateCount * transitionCapacityMultiplier);
+            int maskedDepthOutputCandidateCapacity = checked(
+                maskedDepthCandidateCount * transitionCapacityMultiplier);
+            int directionalStaticShadowOutputCandidateCapacity = checked(
+                directionalStaticShadowCandidateCount *
+                transitionCapacityMultiplier);
+            int directionalDynamicShadowOutputCandidateCapacity = checked(
+                directionalDynamicShadowCandidateCount *
+                transitionCapacityMultiplier);
+            int perInvocationDispatchCandidateCount = Math.Max(
                 Math.Max(candidateCount, Math.Max(solidDepthCandidateCount, maskedDepthCandidateCount)),
                 Math.Max(directionalStaticShadowCandidateCount, directionalDynamicShadowCandidateCount));
-            if (dispatchCandidateCount <= 0)
+            if (instanceExpansion)
+            {
+                perInvocationDispatchCandidateCount = 0;
+            }
+            uint perInvocationGroupCount = perInvocationDispatchCandidateCount > 0
+                ? (checked((uint)perInvocationDispatchCandidateCount) + WorkgroupSize - 1u) /
+                  WorkgroupSize
+                : 0u;
+            uint instanceGroupCount = instanceExpansion
+                ? checked((uint)sceneData.SceneInstanceCandidateCount)
+                : 0u;
+            uint dispatchGroupCount = Math.Max(
+                perInvocationGroupCount,
+                instanceGroupCount);
+            if (dispatchGroupCount == 0u)
             {
                 sceneData.SceneSubmissionCompactionSkipReason =
                     "no dispatch candidates for GPU scene submission";
@@ -193,23 +249,23 @@ namespace Njulf.Rendering.Pipeline
 
             bool sidedStreams = CanUseSidedStreams(
                 sceneData,
-                sceneData.SimpleOpaqueMeshletCount,
-                sceneData.SimpleNormalOpaqueMeshletCount,
-                sceneData.FullOpaqueMeshletCount);
+                simpleOutputCandidateCapacity,
+                simpleNormalOutputCandidateCapacity,
+                fullOutputCandidateCapacity);
             sceneData.SceneSubmissionSidedRasterSpecializationActive =
                 sidedStreams;
 
             EnsureRuntimeBuffers(
                 frameIndex,
                 sceneData.ObjectCount,
-                candidateCount,
-                sceneData.SimpleOpaqueMeshletCount,
-                sceneData.SimpleNormalOpaqueMeshletCount,
-                sceneData.FullOpaqueMeshletCount,
-                solidDepthCandidateCount,
-                maskedDepthCandidateCount,
-                directionalStaticShadowCandidateCount,
-                directionalDynamicShadowCandidateCount,
+                opaqueOutputCapacity,
+                simpleOutputCandidateCapacity,
+                simpleNormalOutputCandidateCapacity,
+                fullOutputCandidateCapacity,
+                solidDepthOutputCandidateCapacity,
+                maskedDepthOutputCandidateCapacity,
+                directionalStaticShadowOutputCandidateCapacity,
+                directionalDynamicShadowOutputCandidateCapacity,
                 sidedStreams);
             RuntimeBuffer drawBuffer = _compactedDrawBuffers[frameIndex];
             RuntimeBuffer simpleDrawBuffer = _simpleCompactedDrawBuffers[frameIndex];
@@ -238,31 +294,31 @@ namespace Njulf.Rendering.Pipeline
             sceneData.SceneSubmissionGpuOpaqueCandidateCount = candidateCount;
             uint simpleOutputCapacity = ResolveStreamCapacity(
                 simpleDrawBuffer,
-                sceneData.SimpleOpaqueMeshletCount,
+                simpleOutputCandidateCapacity,
                 sidedStreams);
             uint simpleNormalOutputCapacity = ResolveStreamCapacity(
                 simpleNormalDrawBuffer,
-                sceneData.SimpleNormalOpaqueMeshletCount,
+                simpleNormalOutputCandidateCapacity,
                 sidedStreams);
             uint fullOutputCapacity = ResolveStreamCapacity(
                 fullDrawBuffer,
-                sceneData.FullOpaqueMeshletCount,
+                fullOutputCandidateCapacity,
                 sidedStreams);
             uint solidDepthOutputCapacity = ResolveStreamCapacity(
                 solidDepthDrawBuffer,
-                solidDepthCandidateCount,
+                solidDepthOutputCandidateCapacity,
                 sidedStreams);
             uint maskedDepthOutputCapacity = ResolveStreamCapacity(
                 maskedDepthDrawBuffer,
-                maskedDepthCandidateCount,
+                maskedDepthOutputCandidateCapacity,
                 sidedStreams);
             uint directionalStaticOutputCapacity = ResolveStreamCapacity(
                 _directionalStaticShadowCompactedDrawBuffers[frameIndex, 0],
-                directionalStaticShadowCandidateCount,
+                directionalStaticShadowOutputCandidateCapacity,
                 sidedStreams);
             uint directionalDynamicOutputCapacity = ResolveStreamCapacity(
                 _directionalDynamicShadowCompactedDrawBuffers[frameIndex, 0],
-                directionalDynamicShadowCandidateCount,
+                directionalDynamicShadowOutputCandidateCapacity,
                 sidedStreams);
 
             sceneData.SceneSubmissionGpuCompactedOpaqueCapacity = (int)Math.Min(drawBuffer.ElementCapacity, int.MaxValue);
@@ -283,6 +339,8 @@ namespace Njulf.Rendering.Pipeline
                 frameIndex,
                 directionalStaticShadowCandidateCount,
                 directionalDynamicShadowCandidateCount,
+                directionalStaticShadowOutputCandidateCapacity,
+                directionalDynamicShadowOutputCandidateCapacity,
                 directionalStaticShadowCascadeMask,
                 sidedStreams);
             sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBuffer = drawBuffer.Handle;
@@ -351,7 +409,9 @@ namespace Njulf.Rendering.Pipeline
                     directionalDynamicOutputCapacity,
                 OutputBufferBaseIndex = (uint)BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase,
                 CounterBufferBaseIndex = (uint)BindlessIndex.SceneSubmissionCounterBufferBase,
-                Flags = BuildCompactionFlags(sceneData),
+                Flags = BuildCompactionFlags(
+                    sceneData,
+                    compactDirectionalShadows),
                 IndirectDispatchBufferBaseIndex = (uint)BindlessIndex.SceneOpaqueIndirectDispatchBufferBase,
                 SolidDepthOutputBufferBaseIndex = (uint)BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase,
                 MaskedDepthOutputBufferBaseIndex = (uint)BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase,
@@ -382,14 +442,29 @@ namespace Njulf.Rendering.Pipeline
                     (uint)BindlessIndex.SceneGpuLodHistoryBufferBase,
                 GpuLodHistoryCapacity = checked((uint)Math.Max(
                     1,
-                    sceneData.ObjectCount)),
+                    Math.Min(
+                        sceneData.ObjectCount,
+                        MaximumLodTransitionStateCount))),
                 GpuShadowLodBias = checked((uint)Math.Clamp(sceneData.SceneSubmissionGpuShadowLodBias, 0, 2)),
                 DirectionalStaticShadowCascadeMask = directionalStaticShadowCascadeMask,
                 DirectionalShadowLightDirection = new Njulf.Core.Math.Vector4(
                     sceneData.DirectionalShadowLightDirection.X,
                     sceneData.DirectionalShadowLightDirection.Y,
                     sceneData.DirectionalShadowLightDirection.Z,
-                    0.0f)
+                    0.0f),
+                InstanceCandidateCount = instanceExpansion
+                    ? checked((uint)sceneData.SceneInstanceCandidateCount)
+                    : 0u,
+                InstanceCandidateBufferBaseIndex =
+                    (uint)BindlessIndex.SceneInstanceCandidateBufferBase,
+                TemporalFrameIndex = sceneData.TemporalSampleIndex,
+                LodTransitionFrameCount = lodDitherTransitions
+                    ? checked((uint)Math.Clamp(
+                        sceneData.SceneSubmissionGpuLodTransitionFrameCount,
+                        1,
+                        SceneSubmissionSettings
+                            .MaximumGpuLodTransitionFrameCount))
+                    : 0u
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -399,8 +474,7 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>(),
                 &pushConstants);
 
-            uint groupCountX = Math.Max(1u, (checked((uint)dispatchCandidateCount) + WorkgroupSize - 1u) / WorkgroupSize);
-            _context.Api.CmdDispatch(cmd, groupCountX, 1, 1);
+            _context.Api.CmdDispatch(cmd, dispatchGroupCount, 1, 1);
             RecordOutputBarrier(cmd, frameIndex, drawBuffer, simpleDrawBuffer, simpleNormalDrawBuffer, fullDrawBuffer, solidDepthDrawBuffer, maskedDepthDrawBuffer, counterBuffer, indirectDispatchBuffer);
             RecordLodHistoryBarrier(cmd, frameIndex);
             RecordCounterReadback(cmd, frameIndex, counterBuffer);
@@ -496,7 +570,10 @@ namespace Njulf.Rendering.Pipeline
                 IndirectDispatchStride,
                 $"SceneSubmission.OpaqueIndirectDispatch.Frame{frameIndex}",
                 BufferUsageFlags.IndirectBufferBit);
-            uint requiredLodHistory = checked((uint)Math.Max(1, objectCount));
+            uint requiredLodHistory = checked((uint)Math.Clamp(
+                objectCount,
+                1,
+                MaximumLodTransitionStateCount));
             int latestSubmittedFrame =
                 (frameIndex + RenderingConstants.FramesInFlight - 1) %
                 RenderingConstants.FramesInFlight;
@@ -509,23 +586,47 @@ namespace Njulf.Rendering.Pipeline
                 EnsureCapacity(
                     ref _lodHistoryBuffers[historyFrame],
                     requiredLodHistory,
-                    sizeof(uint),
+                    (ulong)Marshal.SizeOf<GPUSceneLodTransitionState>(),
                     $"SceneSubmission.GpuLodHistory.Frame{historyFrame}",
                     retirementFence: lodHistoryRetirementFence);
             }
             UpdateRegisteredBindlessBuffers(frameIndex);
         }
 
-        private static uint BuildCompactionFlags(SceneRenderingData sceneData)
+        private static uint BuildCompactionFlags(
+            SceneRenderingData sceneData,
+            bool compactDirectionalShadows)
         {
             uint flags = 1u;
             if (sceneData.SceneSubmissionGpuLodSelectionEnabled)
                 flags |= 1u << 1;
-            if (sceneData.SceneSubmissionGpuShadowCompactionEnabled)
+            if (compactDirectionalShadows)
                 flags |= 1u << 2;
             if (sceneData.SceneSubmissionSidedRasterSpecializationActive)
                 flags |= 1u << 3;
+            if (sceneData.SceneSubmissionGpuInstanceExpansionActive)
+                flags |= 1u << 4;
+            if (sceneData.SceneSubmissionGpuLodDitherTransitionsActive)
+                flags |= 1u << 5;
+            if (sceneData.SceneSubmissionGpuHierarchicalLodActive)
+                flags |= 1u << 6;
             return flags;
+        }
+
+        private static bool CanUseInstanceExpansion(
+            SceneRenderingData sceneData)
+        {
+            if (!sceneData.SceneSubmissionGpuInstanceExpansionEnabled ||
+                sceneData.SceneInstanceCandidateCount <= 0 ||
+                !sceneData.SceneInstanceCandidateBuffer.IsValid)
+            {
+                return false;
+            }
+
+            ulong requiredBytes = checked(
+                (ulong)sceneData.SceneInstanceCandidateCount *
+                (ulong)Marshal.SizeOf<GPUSceneInstanceCandidate>());
+            return sceneData.SceneInstanceCandidateBufferSize >= requiredBytes;
         }
 
         private static bool CanUseSidedStreams(
@@ -660,9 +761,10 @@ namespace Njulf.Rendering.Pipeline
             CommandBuffer cmd,
             SceneRenderingData sceneData)
         {
-            uint logicalCapacity = checked((uint)Math.Max(
+            uint logicalCapacity = checked((uint)Math.Clamp(
+                sceneData.ObjectCount,
                 1,
-                sceneData.ObjectCount));
+                MaximumLodTransitionStateCount));
             bool reset = !_lodHistoryInitialized ||
                          _lodHistorySceneRevision !=
                          sceneData.SceneContentRevision ||
@@ -721,6 +823,8 @@ namespace Njulf.Rendering.Pipeline
             int frameIndex,
             int staticCandidateCount,
             int dynamicCandidateCount,
+            int staticOutputCandidateCapacity,
+            int dynamicOutputCandidateCapacity,
             uint staticCascadeMask,
             bool sidedStreams)
         {
@@ -736,12 +840,12 @@ namespace Njulf.Rendering.Pipeline
                 sceneData.SceneSubmissionGpuDirectionalStaticShadowCapacities[cascade] =
                     checked((int)ResolveStreamCapacity(
                         staticBuffer,
-                        staticCandidateCount,
+                        staticOutputCandidateCapacity,
                         sidedStreams));
                 sceneData.SceneSubmissionGpuDirectionalDynamicShadowCapacities[cascade] =
                     checked((int)ResolveStreamCapacity(
                         dynamicBuffer,
-                        dynamicCandidateCount,
+                        dynamicOutputCandidateCapacity,
                         sidedStreams));
             }
         }
@@ -1572,6 +1676,9 @@ namespace Njulf.Rendering.Pipeline
         public uint NormalConeTestedCount { get; init; }
         public uint NormalConeRejectedCount { get; init; }
         public uint NormalConeInvalidCount { get; init; }
+        public uint HierarchicalInstanceCount { get; init; }
+        public uint HierarchySelectedNodeCount { get; init; }
+        public uint HierarchyTraversalFallbackCount { get; init; }
 
         public bool IsValid =>
             CandidateCount != 0 ||
@@ -1586,6 +1693,9 @@ namespace Njulf.Rendering.Pipeline
             NormalConeTestedCount != 0 ||
             NormalConeRejectedCount != 0 ||
             NormalConeInvalidCount != 0 ||
+            HierarchicalInstanceCount != 0 ||
+            HierarchySelectedNodeCount != 0 ||
+            HierarchyTraversalFallbackCount != 0 ||
             SolidDepthCandidateCount != 0 ||
             SolidDepthEmittedCount != 0 ||
             SolidDepthOverflowCount != 0 ||
@@ -1685,7 +1795,13 @@ namespace Njulf.Rendering.Pipeline
                 NormalConeCandidateCount = counters.NormalConeCandidateCount,
                 NormalConeTestedCount = counters.NormalConeTestedCount,
                 NormalConeRejectedCount = counters.NormalConeRejectedCount,
-                NormalConeInvalidCount = counters.NormalConeInvalidCount
+                NormalConeInvalidCount = counters.NormalConeInvalidCount,
+                HierarchicalInstanceCount =
+                    counters.HierarchicalInstanceCount,
+                HierarchySelectedNodeCount =
+                    counters.HierarchySelectedNodeCount,
+                HierarchyTraversalFallbackCount =
+                    counters.HierarchyTraversalFallbackCount
             };
         }
 

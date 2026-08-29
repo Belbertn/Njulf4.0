@@ -294,9 +294,12 @@ const int SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_BASE_INDEX = 226;
 const int SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_FRAME1_INDEX = 227;
 const int SCENE_GPU_LOD_HISTORY_BUFFER_BASE_INDEX = 228;
 const int SCENE_GPU_LOD_HISTORY_BUFFER_FRAME1_INDEX = 229;
-// Keep synchronized with BindlessIndex.StaticBufferCount. The final 512 slots
-// are a frame-partitioned arena for 128 DDGI dynamic-geometry submissions.
-const int STATIC_BUFFER_COUNT = 742;
+// Slots 230..741 are the frame-partitioned arena for 128 DDGI dynamic-geometry
+// submissions. Scene instance candidates are append-only so all published
+// descriptors remain numerically stable.
+const int SCENE_INSTANCE_CANDIDATE_BUFFER_BASE_INDEX = 742;
+const int SCENE_INSTANCE_CANDIDATE_BUFFER_FRAME1_INDEX = 743;
+const int STATIC_BUFFER_COUNT = 744;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -309,6 +312,37 @@ const uint MESHLET_DRAW_FLAG_MATERIAL_DOUBLE_SIDED = 1u << 6;
 const uint MESHLET_DRAW_FLAG_NORMAL_CONE_CULL_ELIGIBLE = 1u << 7;
 const uint MESHLET_COMMAND_FLAG_MATERIAL_DOUBLE_SIDED = 1u << 0;
 const uint MESHLET_COMMAND_FLAG_NORMAL_CONE_CULL_ELIGIBLE = 1u << 1;
+const uint MESHLET_COMMAND_FLAG_LOD_DITHER_TRANSITION = 1u << 2;
+const uint MESHLET_COMMAND_FLAG_LOD_DITHER_TARGET = 1u << 3;
+const uint MESHLET_COMMAND_FLAG_LOD_DITHER_THRESHOLD_SHIFT = 4u;
+const uint MESHLET_COMMAND_FLAG_LOD_DITHER_THRESHOLD_MASK = 0x0fu <<
+    MESHLET_COMMAND_FLAG_LOD_DITHER_THRESHOLD_SHIFT;
+
+bool MeshletLodTransitionTriangleVisible(
+    uint commandFlags,
+    uint instanceId,
+    uint meshletIndex,
+    uint triangleIndex)
+{
+    if ((commandFlags & MESHLET_COMMAND_FLAG_LOD_DITHER_TRANSITION) == 0u)
+        return true;
+
+    uint value = instanceId * 0x9e3779b9u;
+    value ^= meshletIndex * 0x85ebca6bu;
+    value ^= triangleIndex * 0xc2b2ae35u;
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    uint hashSample = value & 0x0fu;
+    uint threshold = (commandFlags &
+        MESHLET_COMMAND_FLAG_LOD_DITHER_THRESHOLD_MASK) >>
+        MESHLET_COMMAND_FLAG_LOD_DITHER_THRESHOLD_SHIFT;
+    bool target = (commandFlags &
+        MESHLET_COMMAND_FLAG_LOD_DITHER_TARGET) != 0u;
+    return target ? hashSample <= threshold : hashSample > threshold;
+}
 
 const uint FOLIAGE_PROTOTYPE_FLAG_CAST_SHADOWS = 1u << 0;
 const uint FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR = 1u << 1;
@@ -446,6 +480,10 @@ struct GPUMeshInfo
     uint MeshletLodGeneratedCount;
     uint MeshletLod1ErrorBits;
     uint MeshletLod2ErrorBits;
+    uint GpuMeshletRecordCount;
+    uint HierarchyNodeOffset;
+    uint HierarchyNodeCount;
+    uint HierarchyRootNode;
 };
 
 struct GPUVertexSkinningData
@@ -665,6 +703,23 @@ struct GPUMeshlet
     float NormalConeCutoff;
 };
 
+// Logical view of a hierarchy node encoded in one 36-byte meshlet record.
+// Geometry records and node records never overlap; GPUMeshInfo publishes the
+// exact node range and root record.
+struct GPUMeshletHierarchyNode
+{
+    vec3 BoundingSphereCenter;
+    float BoundingSphereRadius;
+    float GeometricError;
+    uint FirstChild;
+    uint ChildCount;
+    uint MeshletOffset;
+    uint MeshletCount;
+    uint Depth;
+    uint Flags;
+    uint Valid;
+};
+
 struct GPUObjectData
 {
     mat4 WorldMatrix;
@@ -823,6 +878,22 @@ struct GPUMeshletDrawCommand
     uint InstanceId;
     uint MaterialIndex;
     uint Flags;
+};
+
+struct GPUSceneInstanceCandidate
+{
+    uint InstanceId;
+    uint MaterialIndex;
+    uint CommandFlags;
+    uint Classification;
+};
+
+struct GPUSceneLodTransitionState
+{
+    uint SourceLod;
+    uint TargetLod;
+    uint TransitionStartFrame;
+    uint LastUpdatedFrame;
 };
 
 struct GPUPackedMeshletDrawCommand
@@ -1107,6 +1178,10 @@ struct GPUSceneOpaqueCompactionPushConstants
     uint GpuShadowLodBias;
     uint DirectionalStaticShadowCascadeMask;
     vec4 DirectionalShadowLightDirection;
+    uint InstanceCandidateCount;
+    uint InstanceCandidateBufferBaseIndex;
+    uint TemporalFrameIndex;
+    uint LodTransitionFrameCount;
 };
 
 struct GPUForwardVisibilityCompactionPushConstants
@@ -1291,6 +1366,7 @@ struct GPUMotionVectorPushConstants
     uint PreviousFrameValid;
     float Time;
     float PreviousTime;
+    uint FirstDraw;
 };
 
 struct GPULightCullPushConstants
@@ -1585,7 +1661,7 @@ const int SIZEOF_GPU_VERTEX = 80;
 const int SIZEOF_GPU_VERTEX_POSITION_STREAM = 16;
 const int SIZEOF_GPU_VERTEX_NORMAL_TANGENT_STREAM = 32;
 const int SIZEOF_GPU_VERTEX_UV_COLOR_STREAM = 32;
-const int SIZEOF_GPU_MESH_INFO = 64;
+const int SIZEOF_GPU_MESH_INFO = 80;
 const int SIZEOF_GPU_VERTEX_SKINNING_DATA = 32;
 const int SIZEOF_GPU_SKINNING_DISPATCH = 32;
 const int SIZEOF_GPU_SKINNING_PUSH_CONSTANTS = 16;
@@ -1602,7 +1678,8 @@ const int SIZEOF_GPU_PARTICLE_SORT_KEY = 8;
 const int SIZEOF_GPU_PARTICLE_RESET_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_PARTICLE_SIMULATE_PUSH_CONSTANTS = 48;
 const int SIZEOF_GPU_PARTICLE_SORT_PUSH_CONSTANTS = 32;
-const int SIZEOF_GPU_MESHLET = 64;
+const int GPU_MESHLET_ABI_VERSION = 2;
+const int SIZEOF_GPU_MESHLET = 36;
 const int SIZEOF_GPU_OBJECT_DATA = 224;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
 const int SIZEOF_GPU_MATERIAL_DATA = 320;
@@ -1611,6 +1688,8 @@ const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
 const int SIZEOF_GPU_LIGHT = 112;
 const int SIZEOF_GPU_SCENE_DATA = 400;
 const int SIZEOF_GPU_MESHLET_DRAW_COMMAND = 16;
+const int SIZEOF_GPU_SCENE_INSTANCE_CANDIDATE = 16;
+const int SIZEOF_GPU_SCENE_LOD_TRANSITION_STATE = 16;
 const int SIZEOF_GPU_PACKED_MESHLET_DRAW_COMMAND = 32;
 const int SIZEOF_GPU_MESHLET_TASK_FRAME_DATA = 376;
 const int SIZEOF_GPU_FOLIAGE_PROTOTYPE = 96;
@@ -1622,8 +1701,8 @@ const int SIZEOF_GPU_FOLIAGE_COUNTERS = 40;
 const int SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS = 16;
 const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_PATCH = 80;
 const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_GENERATION_PUSH_CONSTANTS = 32;
-const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 348;
-const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 208;
+const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 360;
+const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 224;
 const int SIZEOF_GPU_FORWARD_VISIBILITY_COMPACTION_PUSH_CONSTANTS = 92;
 const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 52;
 const int SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS = 128;
@@ -1633,7 +1712,7 @@ const int SIZEOF_GPU_SCREEN_TO_VIEW_PARAMS = 32;
 const int SIZEOF_GPU_LIGHT_CULLING_PARAMS = 192;
 const int SIZEOF_GPU_DEPTH_PUSH_CONSTANTS = 96;
 const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 256;
-const int SIZEOF_GPU_MOTION_VECTOR_PUSH_CONSTANTS = 160;
+const int SIZEOF_GPU_MOTION_VECTOR_PUSH_CONSTANTS = 164;
 const int SIZEOF_GPU_LIGHT_CULL_PUSH_CONSTANTS = 208;
 const int SIZEOF_GPU_SHADOW_DATA = 320;
 const int SIZEOF_GPU_DIRECTIONAL_SHADOW_PARAMETERS = 112;
@@ -1974,6 +2053,7 @@ const int OFFSET_GPU_MOTION_VECTOR_PUSH_MESHLET_DRAW_BUFFER_BASE_INDEX = 144;
 const int OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_FRAME_VALID = 148;
 const int OFFSET_GPU_MOTION_VECTOR_PUSH_TIME = 152;
 const int OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_TIME = 156;
+const int OFFSET_GPU_MOTION_VECTOR_PUSH_FIRST_DRAW = 160;
 
 const int OFFSET_GPU_LIGHT_CULL_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_INVERSE_VIEW_PROJECTION_MATRIX = 64;
@@ -3379,16 +3459,74 @@ GPUMeshlet ReadMeshlet(uint meshletIndex)
     meshlet.BoundingSphereCenter = ReadStorageVec3(uint(MESHLET_BUFFER_INDEX), baseWord + 0u);
     meshlet.BoundingSphereRadius = ReadStorageFloat(uint(MESHLET_BUFFER_INDEX), baseWord + 3u);
     meshlet.VertexOffset = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 4u);
-    meshlet.VertexCount = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 5u);
-    meshlet.IndexOffset = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 6u);
-    meshlet.IndexCount = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 7u);
-    meshlet.LocalVertexOffset = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 8u);
-    meshlet.LocalVertexCount = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 9u);
-    meshlet.LocalTriangleOffset = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 10u);
-    meshlet.LocalTriangleCount = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 11u);
-    meshlet.NormalConeAxis = ReadStorageVec3(uint(MESHLET_BUFFER_INDEX), baseWord + 12u);
-    meshlet.NormalConeCutoff = ReadStorageFloat(uint(MESHLET_BUFFER_INDEX), baseWord + 15u);
+    meshlet.LocalVertexOffset = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 5u);
+    meshlet.LocalTriangleOffset = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 6u);
+    uint packedCounts = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 7u);
+    meshlet.LocalVertexCount = packedCounts & 0x7fu;
+    meshlet.LocalTriangleCount = (packedCounts >> 7u) & 0x7fu;
+    meshlet.VertexCount = meshlet.LocalVertexCount;
+    meshlet.IndexOffset = 0u;
+    meshlet.IndexCount = meshlet.LocalTriangleCount * 3u;
+
+    uint packedCone = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 8u);
+    const uint packedConeAbiMarker = 1u << 31u;
+    const uint packedConeValidFlag = 1u << 30u;
+    if ((packedCone & (packedConeAbiMarker | packedConeValidFlag)) ==
+        (packedConeAbiMarker | packedConeValidFlag))
+    {
+        vec2 oct = vec2(
+            float(packedCone & 0x3ffu),
+            float((packedCone >> 10u) & 0x3ffu)) / 1023.0 * 2.0 - 1.0;
+        vec3 axis = vec3(
+            oct,
+            1.0 - abs(oct.x) - abs(oct.y));
+        float fold = clamp(-axis.z, 0.0, 1.0);
+        axis.xy += vec2(
+            axis.x >= 0.0 ? -fold : fold,
+            axis.y >= 0.0 ? -fold : fold);
+        float axisLengthSquared = dot(axis, axis);
+        meshlet.NormalConeAxis = axisLengthSquared > 1e-12
+            ? axis * inversesqrt(axisLengthSquared)
+            : vec3(0.0);
+        float decodedCutoff =
+            float((packedCone >> 20u) & 0x3ffu) / 1023.0 - 0.01;
+        meshlet.NormalConeCutoff = decodedCutoff > 0.0
+            ? decodedCutoff
+            : -1.0;
+    }
+    else
+    {
+        meshlet.NormalConeAxis = vec3(0.0);
+        meshlet.NormalConeCutoff = -1.0;
+    }
     return meshlet;
+}
+
+GPUMeshletHierarchyNode ReadMeshletHierarchyNode(uint nodeRecordIndex)
+{
+    uint baseWord = nodeRecordIndex * uint(SIZEOF_GPU_MESHLET / 4);
+    GPUMeshletHierarchyNode node;
+    node.BoundingSphereCenter = ReadStorageVec3(
+        uint(MESHLET_BUFFER_INDEX), baseWord + 0u);
+    node.BoundingSphereRadius = ReadStorageFloat(
+        uint(MESHLET_BUFFER_INDEX), baseWord + 3u);
+    node.GeometricError = ReadStorageFloat(
+        uint(MESHLET_BUFFER_INDEX), baseWord + 4u);
+    node.FirstChild = ReadStorageWord(
+        uint(MESHLET_BUFFER_INDEX), baseWord + 5u);
+    uint packedMetadata = ReadStorageWord(
+        uint(MESHLET_BUFFER_INDEX), baseWord + 6u);
+    node.ChildCount = packedMetadata & 0x0fu;
+    node.Depth = (packedMetadata >> 4u) & 0x0fu;
+    node.Flags = (packedMetadata >> 8u) & 0x03u;
+    node.Valid = (packedMetadata & (1u << 31u)) != 0u
+        ? 1u
+        : 0u;
+    node.MeshletOffset = ReadStorageWord(
+        uint(MESHLET_BUFFER_INDEX), baseWord + 7u);
+    node.MeshletCount = ReadStorageWord(
+        uint(MESHLET_BUFFER_INDEX), baseWord + 8u);
+    return node;
 }
 
 bool MeshletNormalConeValid(GPUMeshlet meshlet)

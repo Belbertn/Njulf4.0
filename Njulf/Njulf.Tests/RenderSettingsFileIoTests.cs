@@ -117,7 +117,7 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(23));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(24));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));
@@ -259,6 +259,147 @@ public sealed class RenderSettingsFileIoTests
                 Assert.That(loaded.DirectionalSoftAngularDiameterScale,
                     Is.EqualTo(1f));
             });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void SaveLoad_PreservesGpuLodDitherTransitionControls()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "lod-transitions.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.SceneSubmission.GpuLodDitherTransitionsEnabled = false;
+            settings.SceneSubmission.GpuLodTransitionFrameCount = 13;
+            settings.SceneSubmission.GpuHierarchicalLodEnabled = false;
+            settings.SceneSubmission.GpuMeshletStreamingEnabled = false;
+            settings.SceneSubmission.GpuMeshletStreamingPhysicalPageCount =
+                2048;
+            settings.SceneSubmission.GpuMeshletStreamingUploadBudgetMiB = 12;
+            settings.SceneSubmission
+                .GpuMeshletStreamingMaximumRequestsPerFrame = 8192;
+            settings.SceneSubmission.GpuMeshletStreamingConcurrentReads = 6;
+
+            settings.Save(path);
+            RenderSettings loaded = RenderSettings.Load(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    loaded.SceneSubmission.GpuLodDitherTransitionsEnabled,
+                    Is.False);
+                Assert.That(
+                    loaded.SceneSubmission.GpuLodTransitionFrameCount,
+                    Is.EqualTo(13));
+                Assert.That(
+                    loaded.SceneSubmission.GpuHierarchicalLodEnabled,
+                    Is.False);
+                Assert.That(
+                    loaded.SceneSubmission.GpuMeshletStreamingEnabled,
+                    Is.False);
+                Assert.That(
+                    loaded.SceneSubmission
+                        .GpuMeshletStreamingPhysicalPageCount,
+                    Is.EqualTo(2048));
+                Assert.That(
+                    loaded.SceneSubmission
+                        .GpuMeshletStreamingUploadBudgetMiB,
+                    Is.EqualTo(12));
+                Assert.That(
+                    loaded.SceneSubmission
+                        .GpuMeshletStreamingMaximumRequestsPerFrame,
+                    Is.EqualTo(8192));
+                Assert.That(
+                    loaded.SceneSubmission
+                        .GpuMeshletStreamingConcurrentReads,
+                    Is.EqualTo(6));
+                Assert.That(
+                    File.ReadAllText(path),
+                    Does.Contain("\"GpuMeshletStreamingEnabled\""));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_PreVersion24PromotesProductionMeshletFeatures()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "version-23.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 23,
+                  "SceneSubmission": {
+                    "GpuLodSelectionEnabled": true
+                  }
+                }
+                """);
+
+            SceneSubmissionSettings loaded =
+                RenderSettings.Load(path).SceneSubmission;
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    loaded.GpuLodDitherTransitionsEnabled,
+                    Is.True);
+                Assert.That(
+                    loaded.GpuLodTransitionFrameCount,
+                    Is.EqualTo(SceneSubmissionSettings
+                        .DefaultGpuLodTransitionFrameCount));
+                Assert.That(
+                    loaded.GpuHierarchicalLodEnabled,
+                    Is.True);
+                Assert.That(
+                    loaded.GpuMeshletStreamingEnabled,
+                    Is.True);
+                Assert.That(
+                    loaded.GpuLodSelectionMode,
+                    Is.EqualTo(GpuLodSelectionMode.ScreenSpaceError));
+                Assert.That(
+                    loaded.GpuMeshletStreamingPhysicalPageCount,
+                    Is.EqualTo(SceneSubmissionSettings
+                        .DefaultGpuMeshletStreamingPhysicalPageCount));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_PreVersion23PromotesScreenSpaceErrorLod()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "version-22.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 22,
+                  "SceneSubmission": {
+                    "GpuLodSelectionEnabled": true,
+                    "GpuLodSelectionMode": "LegacyDistance"
+                  }
+                }
+                """);
+
+            SceneSubmissionSettings loaded =
+                RenderSettings.Load(path).SceneSubmission;
+
+            Assert.That(
+                loaded.GpuLodSelectionMode,
+                Is.EqualTo(GpuLodSelectionMode.ScreenSpaceError));
         }
         finally
         {

@@ -52,6 +52,7 @@ public sealed unsafe partial class AccelerationStructureManager
     private ulong _opacityMicromapCompactionCount;
     private ulong _opacityMicromapBlasCompactionCount;
     private ulong _opacityMicromapQueryFailureCount;
+    private ulong _opacityMicromapOptionalCompactionQueryMissCount;
     private ulong _opacityMicromapVariantCacheHitCount;
     private ulong _opacityMicromapVariantCacheMissCount;
     private ulong _opacityMicromapVariantEvictionCount;
@@ -113,6 +114,8 @@ public sealed unsafe partial class AccelerationStructureManager
                 VariantEvictionCount = _opacityMicromapVariantEvictionCount,
                 VariantCapFallbackCount =
                     _opacityMicromapVariantCapFallbackCount,
+                OptionalCompactionQueryMissCount =
+                    _opacityMicromapOptionalCompactionQueryMissCount,
                 Content = _opacityMicromapContentDiagnostics,
                 Memory = CreateOpacityMicromapCentralMemoryPlan()
             };
@@ -391,7 +394,12 @@ public sealed unsafe partial class AccelerationStructureManager
                 _opacityMicromapCompactionQueryPools[frameIndex],
                 out compactedBytes))
         {
-            _opacityMicromapQueryFailureCount++;
+            if (RecordCompactionQueryMiss(
+                    variant,
+                    "opacity-micromap-required-compaction-query-failed"))
+            {
+                return;
+            }
             compactedBytes = 0UL;
         }
 
@@ -424,7 +432,12 @@ public sealed unsafe partial class AccelerationStructureManager
                 _opacityMicromapBlasCompactionQueryPools[frameIndex],
                 out compactedBytes))
         {
-            _opacityMicromapQueryFailureCount++;
+            if (RecordCompactionQueryMiss(
+                    variant,
+                    "opacity-micromap-required-blas-compaction-query-failed"))
+            {
+                return;
+            }
             compactedBytes = 0UL;
         }
 
@@ -445,6 +458,32 @@ public sealed unsafe partial class AccelerationStructureManager
 
         PublishOpacityMicromapGpuVariant(variant);
     }
+
+    private bool RecordCompactionQueryMiss(
+        OpacityMicromapGpuVariant variant,
+        string requiredFailureDetail)
+    {
+        if (!IsRequiredCompactionQueryFailure(_opacityMicromapBuildPolicy))
+        {
+            // Compaction is a best-effort memory optimization in the default
+            // production policy.  The uncompacted OMM/BLAS is already valid
+            // and remains the authoritative result when its size query is not
+            // available; retain a separate observability counter without
+            // reporting a false transport failure.
+            _opacityMicromapOptionalCompactionQueryMissCount++;
+            return false;
+        }
+
+        _opacityMicromapQueryFailureCount++;
+        variant.Cancelled = true;
+        variant.Stage = OpacityMicromapGpuVariantStage.Failed;
+        variant.Detail = requiredFailureDetail;
+        return true;
+    }
+
+    internal static bool IsRequiredCompactionQueryFailure(
+        in OpacityMicromapExtBuildPolicy policy) =>
+        policy.EnableCompaction && policy.RequireCompaction;
 
     private void ResolveCompletedOpacityBlasCompaction(
         OpacityMicromapGpuVariant variant)
@@ -760,13 +799,15 @@ public sealed unsafe partial class AccelerationStructureManager
                 return true;
             }
 
-            if (buildSizes.CompactionAllowed &&
+            bool micromapCompactionQueryReady =
+                buildSizes.CompactionAllowed &&
                 TryResetOpacityMicromapQueryPool(
                     _opacityMicromapCompactionQueryPools,
                     QueryType.MicromapCompactedSizeExt,
                     frameIndex,
                     commandBuffer,
-                    "OMM Compacted Size"))
+                    "OMM Compacted Size");
+            if (micromapCompactionQueryReady)
             {
                 VulkanExtOpacityMicromapNativeCommandRecorder
                     .RecordCompactedSizeQuery(
@@ -778,6 +819,16 @@ public sealed unsafe partial class AccelerationStructureManager
                         buildSizes,
                         0U);
                 created.MicromapCompactionQueryRecorded = true;
+            }
+            else if (buildSizes.CompactionAllowed &&
+                     IsRequiredCompactionQueryFailure(
+                         _opacityMicromapBuildPolicy))
+            {
+                created.Cancelled = true;
+                created.Detail =
+                    "opacity-micromap-required-compaction-query-pool-unavailable";
+                variant = created;
+                return true;
             }
             else
             {
@@ -878,12 +929,14 @@ public sealed unsafe partial class AccelerationStructureManager
             }
 
             InsertAccelerationStructureBuildBarrier(commandBuffer);
-            if (TryResetOpacityMicromapQueryPool(
+            bool blasCompactionQueryReady =
+                TryResetOpacityMicromapQueryPool(
                     _opacityMicromapBlasCompactionQueryPools,
                     QueryType.AccelerationStructureCompactedSizeKhr,
                     frameIndex,
                     commandBuffer,
-                    "OMM BLAS Compacted Size"))
+                    "OMM BLAS Compacted Size");
+            if (blasCompactionQueryReady)
             {
                 AccelerationStructureKHR handle =
                     variant.CandidateBlas!.Handle;
@@ -896,6 +949,14 @@ public sealed unsafe partial class AccelerationStructureManager
                         _opacityMicromapBlasCompactionQueryPools[frameIndex],
                         0U);
                 variant.BlasCompactionQueryRecorded = true;
+            }
+            else if (IsRequiredCompactionQueryFailure(
+                         _opacityMicromapBuildPolicy))
+            {
+                variant.Cancelled = true;
+                variant.Detail =
+                    "opacity-micromap-required-blas-compaction-query-pool-unavailable";
+                return true;
             }
 
             variant.Detail = "opacity-micromap-attached-blas-build-recorded";
@@ -1275,7 +1336,15 @@ public sealed unsafe partial class AccelerationStructureManager
                 out QueryPool pool);
             if (result != Result.Success)
             {
-                _opacityMicromapQueryFailureCount++;
+                if (IsRequiredCompactionQueryFailure(
+                        _opacityMicromapBuildPolicy))
+                {
+                    _opacityMicromapQueryFailureCount++;
+                }
+                else
+                {
+                    _opacityMicromapOptionalCompactionQueryMissCount++;
+                }
                 return false;
             }
             pools[frameIndex] = pool;
@@ -1325,7 +1394,8 @@ public sealed unsafe partial class AccelerationStructureManager
             usage,
             requireDeviceAddress,
             MemoryBudgetCategory.GlobalIllumination,
-            debugName);
+            debugName,
+            minimumAlignment: OpacityMicromapScratchAddressAlignment);
         AddTrackedOpacityMicromapBytes(bytes);
         return buffer;
     }
@@ -1674,7 +1744,7 @@ public sealed unsafe partial class AccelerationStructureManager
         in OpacityMicromapRuntimeMeshRegistration right) =>
         left.Mesh == right.Mesh &&
         left.Material == right.Material &&
-        left.MaterialContentRevision == right.MaterialContentRevision &&
+        left.MaterialOpacityRevision == right.MaterialOpacityRevision &&
         left.MeshGeometryKey == right.MeshGeometryKey &&
         left.Payload.SourceContentHash == right.Payload.SourceContentHash &&
         left.AccelerationStructureBuildAbi ==
@@ -2166,6 +2236,7 @@ public sealed unsafe partial class AccelerationStructureManager
         WaitingForBlasBuild,
         AwaitingBlasCompaction,
         WaitingForBlasCompaction,
+        Failed,
         Published
     }
 
@@ -2257,6 +2328,7 @@ public readonly record struct OpacityMicromapGpuRuntimeSnapshot(
     public ulong VariantCacheMissCount { get; init; }
     public ulong VariantEvictionCount { get; init; }
     public ulong VariantCapFallbackCount { get; init; }
+    public ulong OptionalCompactionQueryMissCount { get; init; }
     public OpacityMicromapContentDiagnostics Content { get; init; } =
         OpacityMicromapContentDiagnostics.Unavailable;
     public SimpleDdgiAdvancedExperimentMemoryPlan Memory { get; init; } =

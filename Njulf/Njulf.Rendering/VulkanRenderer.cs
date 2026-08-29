@@ -3802,6 +3802,15 @@ namespace Njulf.Rendering
             bool sceneGpuShadowCompactionActive =
                 Settings.SceneSubmission.GpuCompactionEnabled &&
                 Settings.SceneSubmission.GpuShadowCompactionEnabled;
+            bool captureSceneSubmissionValidationLists =
+                Settings.SceneSubmission.ValidationCompareCpuGpuLists ||
+                Settings.HiZOcclusion.ValidateAgainstLegacyPath;
+            bool buildGpuInstanceCandidates =
+                Settings.SceneSubmission.GpuCompactionEnabled &&
+                SceneSubmissionDiagnosticsPolicy.BuildPreviousFailureReason(
+                    _completedSceneSubmissionCounters,
+                    _completedSceneSubmissionValidation,
+                    captureSceneSubmissionValidationLists).Length == 0;
             uint forwardDebugViewMode = ResolveForwardDebugViewMode();
             bool geometryDecalsEnabled =
                 Settings.Decals.GeometryDecalsEnabled &&
@@ -3831,7 +3840,9 @@ namespace Njulf.Rendering
                                               !sceneGpuShadowCompactionActive,
                 useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling && !sceneGpuLodSelectionActive,
                 meshletNormalConeCullingEnabled: Settings.MeshletNormalConeCullingEnabled,
-                captureSceneSubmissionValidationLists: Settings.SceneSubmission.ValidationCompareCpuGpuLists,
+                buildGpuInstanceCandidates: buildGpuInstanceCandidates,
+                captureSceneSubmissionValidationLists:
+                    captureSceneSubmissionValidationLists,
                 gpuLod1DistanceRatio: Settings.SceneSubmission.GpuLod1DistanceRatio,
                 gpuLod2DistanceRatio: Settings.SceneSubmission.GpuLod2DistanceRatio);
             long sceneBuildCallMicroseconds =
@@ -3938,6 +3949,12 @@ namespace Njulf.Rendering
                 Settings.SceneSubmission.GpuLodSelectionMode;
             sceneData.SceneSubmissionGpuLodTargetPixelError =
                 Settings.SceneSubmission.GpuLodTargetPixelError;
+            sceneData.SceneSubmissionGpuLodDitherTransitionsEnabled =
+                Settings.SceneSubmission.GpuLodDitherTransitionsEnabled;
+            sceneData.SceneSubmissionGpuLodTransitionFrameCount =
+                Settings.SceneSubmission.GpuLodTransitionFrameCount;
+            sceneData.SceneSubmissionGpuHierarchicalLodEnabled =
+                Settings.SceneSubmission.GpuHierarchicalLodEnabled;
             sceneData.SceneSubmissionGpuLod1DistanceRatio = Settings.SceneSubmission.GpuLod1DistanceRatio;
             sceneData.SceneSubmissionGpuLod2DistanceRatio = Settings.SceneSubmission.GpuLod2DistanceRatio;
             sceneData.SceneSubmissionGpuShadowCompactionEnabled = Settings.SceneSubmission.GpuShadowCompactionEnabled;
@@ -5748,6 +5765,7 @@ namespace Njulf.Rendering
         {
             ulong hash = HashStart;
             hash = HashAdd(hash, enabled);
+            hash = HashAdd(hash, sceneData.SceneContentRevision);
             hash = HashAdd(hash, settings.DirectionalShadowMapSize);
             hash = HashAdd(hash, settings.DirectionalCascadeCount);
             hash = HashAdd(hash, sceneData.OpaqueMeshletCount);
@@ -8888,17 +8906,24 @@ namespace Njulf.Rendering
                     ? runtime.Detail
                     : mode.FallbackDetail;
             }
+            else if (frame.SampleReadbackValid &&
+                     !frame.SampleValidationCounters.AreZero)
+            {
+                state = SimpleDdgiGuidingTelemetryState.Faulted;
+                reason = "directional-guiding-sample-validation-reported-errors";
+            }
             else if (frame.SampleReadbackValid)
             {
                 state = SimpleDdgiGuidingTelemetryState.Available;
-                reason = frame.SampleValidationCounters.AreZero
-                    ? "directional-guiding-fence-complete-sample-available"
-                    : "directional-guiding-sample-validation-reported-errors";
+                reason = "directional-guiding-fence-complete-sample-available";
             }
-            else if (frame.CompletedFrameSerial != 0UL && frame.SampleRecorded)
+            else if (IsFatalSimpleDdgiGuidingRuntimeCapability(
+                         runtime.CapabilityReason))
             {
                 state = SimpleDdgiGuidingTelemetryState.Faulted;
-                reason = frame.State;
+                reason = string.IsNullOrWhiteSpace(runtime.LastCompletionDetail)
+                    ? runtime.Detail
+                    : runtime.LastCompletionDetail;
             }
             else
             {
@@ -8916,6 +8941,14 @@ namespace Njulf.Rendering
                 Reason = reason
             }.NormalizeForPersistence();
         }
+
+        internal static bool IsFatalSimpleDdgiGuidingRuntimeCapability(
+            SimpleDdgiGuidingGpuCapabilityReason reason) => reason is
+            SimpleDdgiGuidingGpuCapabilityReason.BuildRecordingRejected or
+            SimpleDdgiGuidingGpuCapabilityReason.HeaderReadbackRejected or
+            SimpleDdgiGuidingGpuCapabilityReason.SampleRecordingRejected or
+            SimpleDdgiGuidingGpuCapabilityReason.SampleReadbackRejected or
+            SimpleDdgiGuidingGpuCapabilityReason.Disposed;
 
         private GiCausticDiagnostics CreateGiCausticDiagnostics(
             in SimpleDdgiAdvancedExperimentMemoryPlan memory,
@@ -10652,6 +10685,13 @@ namespace Njulf.Rendering
                     ClampUIntToInt(counters.OpaqueLodDecimatedCount);
                 sceneData.SceneSubmissionGpuDirectionalShadowLodFallbackCount =
                     ClampUIntToInt(counters.DirectionalShadowLodFallbackCount);
+                sceneData.SceneSubmissionGpuHierarchicalInstanceCount =
+                    ClampUIntToInt(counters.HierarchicalInstanceCount);
+                sceneData.SceneSubmissionGpuHierarchySelectedNodeCount =
+                    ClampUIntToInt(counters.HierarchySelectedNodeCount);
+                sceneData.SceneSubmissionGpuHierarchyTraversalFallbackCount =
+                    ClampUIntToInt(
+                        counters.HierarchyTraversalFallbackCount);
                 sceneData.SceneSubmissionGpuDepthSolidCandidateCount =
                     ClampUIntToInt(counters.SolidDepthCandidateCount);
                 sceneData.SceneSubmissionGpuDepthMaskedCandidateCount =

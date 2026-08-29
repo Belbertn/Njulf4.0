@@ -244,11 +244,17 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
         if (deferredRadiometricPublication)
             baseFlags |= SolveSingleSweepFlag;
         uint solveEpoch = _volumeManager.TransportTailSolveEpoch;
+        ConfigureTransportStageEvidence(
+            ref pushConstants,
+            layout,
+            solveEpoch);
         int startingColor = solveEpoch != 0u
             ? (int)(solveEpoch & 1u)
             : (int)(_volumeManager.FrameSerial & 1u);
         ReadOnlySpan<int> volumeOrder = _volumeManager.TransportSolveVolumeOrder;
         bool recordedWork = false;
+        int dispatchCount = 0;
+        int canonicalPublicationCount = 0;
         for (int volumeOrderIndex = 0;
              volumeOrderIndex < volumeOrder.Length;
              volumeOrderIndex++)
@@ -274,6 +280,7 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
                     pushConstants.Flags = phaseFlags;
                     pushConstants.PrimaryDirectionalLightIndex = checked((uint)volumeIndex);
                     DispatchTransport(cmd, pushConstants);
+                    dispatchCount++;
                     InsertStorageBarrier(cmd);
                     DispatchBlend(cmd, pushConstants);
                     InsertStorageBarrier(cmd);
@@ -285,6 +292,7 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
                     if (!deferredRadiometricPublication)
                     {
                         DispatchIntermediatePublication(cmd, pushConstants, layout);
+                        canonicalPublicationCount++;
                         InsertStorageBarrier(cmd);
                     }
                 }
@@ -295,6 +303,14 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
         {
             sceneData.SimpleDdgiTransportCachedSweepCount = checked(
                 sceneData.SimpleDdgiTransportCachedSweepCount + sweepCount);
+            sceneData.SimpleDdgiTransportAcceleratedDispatchCount = checked(
+                sceneData.SimpleDdgiTransportAcceleratedDispatchCount +
+                dispatchCount);
+            sceneData.SimpleDdgiTransportAcceleratedCanonicalPublicationCount =
+                checked(
+                    sceneData
+                        .SimpleDdgiTransportAcceleratedCanonicalPublicationCount +
+                    canonicalPublicationCount);
         }
 
         if (_volumeManager.SchedulerMode != SimpleDdgiSchedulerMode.GpuResident)
@@ -588,6 +604,39 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
                 ? _volumeManager.GpuScheduler.Layout!.UpdateRecords.OffsetWords
                 : 0u
         };
+    }
+
+    private void ConfigureTransportStageEvidence(
+        ref GPUSimpleDdgiPushConstants pushConstants,
+        SimpleDdgiGpuSchedulerLayout? layout,
+        uint solveEpoch)
+    {
+        uint witnessProbe = _volumeManager.TransportAuditWitnessProbeIndex;
+        uint witnessTexel = _volumeManager.TransportAuditWitnessTexelIndex;
+        if (_volumeManager.SchedulerMode !=
+                SimpleDdgiSchedulerMode.GpuResident ||
+            layout == null ||
+            solveEpoch == 0u ||
+            witnessProbe >= (uint)Math.Max(0, _volumeManager.ProbeCount) ||
+            witnessTexel >= 64u)
+        {
+            return;
+        }
+
+        // These lighting/far-field fields are unused by all three cached-solve
+        // modules. Reusing them keeps the shared push ABI fixed at 136 bytes;
+        // the magic prevents urgent or non-instrumented dispatches from being
+        // mistaken for an armed witness.
+        pushConstants.LightCount =
+            SimpleDdgiGpuSchedulerLayout.TransportAuditStageEvidenceMagic;
+        pushConstants.DirectionalLightCount =
+            SimpleDdgiGpuSchedulerLayout.TransportAuditStageEvidenceVersion;
+        pushConstants.LocalLightCount = checked(
+            layout.AuditSummary.OffsetWords +
+            SimpleDdgiGpuSchedulerLayout.TransportAuditStageEvidenceBaseWord);
+        pushConstants.MaxShadedLights = witnessProbe;
+        pushConstants.EmissiveSourceCount = witnessTexel;
+        pushConstants.FarFieldParamsBufferIndex = solveEpoch;
     }
 
     private void PushConstants(CommandBuffer cmd, GPUSimpleDdgiPushConstants pushConstants)

@@ -118,6 +118,12 @@ internal static class Program
             options.KhronosMaterialGiRenderedGate is { } gateOptions
                 ? new SampleKhronosMaterialGiRenderedGateHostFailureGuard(gateOptions)
                 : null;
+        using var allOnFailureGuard =
+            options.GiAllOnQualificationReportPath is { } allOnReportPath
+                ? new SampleGiAllOnQualificationHostFailureGuard(
+                    allOnReportPath,
+                    options.SceneKind)
+                : null;
         try
         {
             while (true)
@@ -159,16 +165,26 @@ internal static class Program
                 Environment.ExitCode = 0;
             }
         }
-        catch (Exception exception) when (options.KhronosMaterialGiRenderedGate is not null)
+        catch (Exception exception) when (
+            options.KhronosMaterialGiRenderedGate is not null ||
+            options.GiAllOnQualificationReportPath is not null)
         {
-            string failure =
-                $"Khronos rendered-gate host failed: {exception.GetType().Name}: {exception.Message}";
-            gateFailureGuard?.RecordHostFailure(failure);
+            string description =
+                $"{exception.GetType().Name}: {exception.Message}";
+            gateFailureGuard?.RecordHostFailure(
+                "Khronos rendered-gate host failed: " + description);
+            allOnFailureGuard?.RecordHostFailure(
+                "All-on GI qualification host failed: " + description);
             Environment.ExitCode = 1;
-            Console.Error.WriteLine(failure);
+            Console.Error.WriteLine(description);
         }
         if (gateFailureGuard is not null &&
             !gateFailureGuard.CompleteHostRun(Environment.ExitCode))
+        {
+            Environment.ExitCode = 1;
+        }
+        if (allOnFailureGuard is not null &&
+            !allOnFailureGuard.CompleteHostRun(Environment.ExitCode))
         {
             Environment.ExitCode = 1;
         }
@@ -190,6 +206,9 @@ internal static class Program
         SimpleDdgiDirectionalGuidingModeOverride = null,
         GiCausticModeOverride = null,
         SimpleDdgiNearFieldResidualModeOverride = null,
+        SimpleDdgiReceiverCacheModeOverride = null,
+        SimpleDdgiTransportAccelerationEnabledOverride = null,
+        SimpleDdgiTransportAcceleratedSweepCountOverride = null,
         SimpleDdgiReceiverFeedbackQualificationId = null,
         DdgiOpacityMicromapQualificationId = null,
         SimpleDdgiDirectionalGuidingQualificationId = null,
@@ -236,6 +255,12 @@ internal static class Program
                 ? SimpleDdgiNearFieldResidualMode
                     .HiZAdaptive
                 : SimpleDdgiNearFieldResidualMode.Off,
+        SimpleDdgiReceiverCacheModeOverride = selection.ReceiverCacheEnabled
+            ? SimpleDdgiReceiverCacheMode.TemporalAdaptive
+            : SimpleDdgiReceiverCacheMode.Exact,
+        SimpleDdgiTransportAccelerationEnabledOverride =
+            selection.AcceleratedTransportSolverEnabled,
+        SimpleDdgiTransportAcceleratedSweepCountOverride = 2,
         SimpleDdgiReceiverFeedbackQualificationId = null,
         DdgiOpacityMicromapQualificationId = null,
         SimpleDdgiDirectionalGuidingQualificationId = null,
@@ -341,6 +366,7 @@ internal sealed class HelloGame : Game
         _volumetricTemporalCaptureRunner;
     private SampleKhronosMaterialGiRenderedSceneBuild? _khronosMaterialGiRenderedScene;
     private SampleKhronosMaterialGiRenderedGateRunner? _khronosMaterialGiRenderedGateRunner;
+    private SampleGiAllOnQualificationRunner? _giAllOnQualificationRunner;
     private string? _lastSuccessfulStartupStep;
     private string? _startupFailure;
     private string? _runtimeSmokeFailure;
@@ -411,6 +437,8 @@ internal sealed class HelloGame : Game
                   (_smokeOptions.Benchmark.Enabled &&
                    _smokeOptions.Benchmark.DisableVSync) ||
                   _smokeOptions.BenchmarkQualitySequence.Enabled ||
+                  !string.IsNullOrWhiteSpace(
+                      _smokeOptions.GiAllOnQualificationReportPath) ||
                   sponzaTemporalCapture ||
                   volumetricTemporalCapture ||
                   !string.IsNullOrWhiteSpace(
@@ -424,6 +452,8 @@ internal sealed class HelloGame : Game
         return options.Benchmark.Enabled ||
                options.BenchmarkQualitySequence.Enabled ||
                options.TailDdgiLongSoak ||
+               !string.IsNullOrWhiteSpace(
+                   options.GiAllOnQualificationReportPath) ||
                !string.IsNullOrWhiteSpace(options.SponzaGiCaptureDirectory) ||
                !string.IsNullOrWhiteSpace(options.BistroQualityCaptureDirectory);
     }
@@ -612,6 +642,20 @@ internal sealed class HelloGame : Game
             materialManager,
             services.GetService<IModelRenderUploadService>());
         _diagnosticsReporter = diagnosticsReporter;
+        if (_smokeOptions.GiAllOnQualificationReportPath is { } allOnReportPath)
+        {
+            _giAllOnQualificationRunner =
+                new SampleGiAllOnQualificationRunner(
+                    allOnReportPath,
+                    _sceneKind,
+                    GetRendererDeviceIdentity(renderer),
+                    SampleRenderSettingsFingerprint.Capture(renderer.Settings),
+                    Exit);
+            Console.WriteLine(
+                "All-on GI runtime qualification armed: " +
+                $"scene={_sceneKind}, maxFrames={_smokeOptions.FrameCount}, " +
+                $"report='{Path.GetFullPath(allOnReportPath)}'.");
+        }
         ConfigureSceneLighting(lightManager);
         SamplePerformanceScenario startupScenario = ResolveStartupScenario();
         if (startupScenario != SamplePerformanceScenario.Normal)
@@ -1275,6 +1319,23 @@ internal sealed class HelloGame : Game
             gi.SimpleDdgiNearFieldResidualMode =
                 _smokeOptions.SimpleDdgiNearFieldResidualModeOverride.Value;
         }
+        if (_smokeOptions.SimpleDdgiReceiverCacheModeOverride.HasValue)
+        {
+            gi.SimpleDdgiReceiverCacheMode =
+                _smokeOptions.SimpleDdgiReceiverCacheModeOverride.Value;
+        }
+        if (_smokeOptions.SimpleDdgiTransportAccelerationEnabledOverride
+                .HasValue)
+        {
+            gi.SimpleDdgiTransportAccelerationEnabled = _smokeOptions
+                .SimpleDdgiTransportAccelerationEnabledOverride.Value;
+        }
+        if (_smokeOptions.SimpleDdgiTransportAcceleratedSweepCountOverride
+                .HasValue)
+        {
+            gi.SimpleDdgiTransportAcceleratedSweepCount = _smokeOptions
+                .SimpleDdgiTransportAcceleratedSweepCountOverride.Value;
+        }
 
         if (_smokeOptions.SimpleDdgiReceiverFeedbackQualificationId is { } b1Id)
             gi.SimpleDdgiReceiverFeedbackQualificationId = b1Id;
@@ -1727,6 +1788,8 @@ internal sealed class HelloGame : Game
         CaptureBaselineSnapshotIfRequested();
         if (Renderer is VulkanRenderer benchmarkRenderer)
         {
+            _giAllOnQualificationRunner?.OnFrameRendered(
+                benchmarkRenderer.LastDiagnostics);
             _benchmarkQualitySequenceRunner?.OnFrameRendered(
                 _drawnFrames,
                 benchmarkRenderer.LastDiagnostics);
@@ -1863,6 +1926,31 @@ internal sealed class HelloGame : Game
         VulkanRenderer? renderer = Renderer as VulkanRenderer;
         RendererDiagnostics diagnostics =
             renderer?.LastDiagnostics ?? RendererDiagnostics.Empty;
+        bool allOnQualificationPassed = false;
+        if (_giAllOnQualificationRunner != null)
+        {
+            try
+            {
+                SampleGiAllOnQualificationReport allOnReport =
+                    _giAllOnQualificationRunner.Complete();
+                allOnQualificationPassed = allOnReport.Passed;
+                if (!allOnReport.Passed)
+                {
+                    _runtimeSmokeFailure ??=
+                        "All-on GI runtime qualification failed: " +
+                        string.Join(
+                            " ",
+                            allOnReport.Failures.Select(static failure =>
+                                $"{failure.Name}: {failure.Detail}"));
+                }
+            }
+            catch (Exception ex)
+            {
+                _runtimeSmokeFailure ??=
+                    "All-on GI qualification report finalization failed: " +
+                    ex.Message;
+            }
+        }
         if (_longRunMonitor != null)
         {
             try
@@ -1895,7 +1983,10 @@ internal sealed class HelloGame : Game
             _runtimeSmokeFailure ??=
                 failedOperation.Detail ?? $"{failedOperation.Name} failed.";
         }
-        else if (SampleHealthReportEvaluation.FindIncompleteSmokeOperation(
+        else if (SampleGiAllOnQualificationContract
+                     .RequiresGeneralSmokeCompletion(
+                         allOnQualificationPassed) &&
+                 SampleHealthReportEvaluation.FindIncompleteSmokeOperation(
                      _smokeOptions,
                      smokeOperations,
                      _drawnFrames) is { } incompleteOperation)
@@ -2200,6 +2291,28 @@ internal sealed class HelloGame : Game
 
         SampleSceneBuild Finish(Model model)
         {
+            if (!string.IsNullOrWhiteSpace(
+                    _smokeOptions.GiAllOnQualificationReportPath) &&
+                SampleGiAllOnQualificationContract.IsSupportedScene(sceneKind))
+            {
+                ContentManager qualificationContent =
+                    Services?.GetRequiredService<ContentManager>() ??
+                    throw new InvalidOperationException(
+                        "All-on GI scene qualification requires ContentManager.");
+                SampleGiAllOnSceneRigSummary rig =
+                    SampleGiAllOnSceneRig.Configure(
+                        targetScene,
+                        sceneKind,
+                        qualificationContent,
+                        meshManager,
+                        materialManager);
+                Console.WriteLine(
+                    "All-on GI scene rig attached: " +
+                    $"c1Asset='{rig.C1AssetPath}', " +
+                    $"c1Objects={rig.C1RenderObjectCount}, " +
+                    $"injectedC4HeroObjects={rig.C4HeroRenderObjectCount}, " +
+                    $"scale={rig.FixtureScale:R}.");
+            }
             SampleReflectionPolicy.EnsureProbeFree(targetScene);
             return new SampleSceneBuild(
                 model,
@@ -2497,6 +2610,13 @@ internal sealed class HelloGame : Game
     private void ApplyScenePostOverrides(RenderSettings settings)
     {
         UpdateVfxVolumetricDemoOverrideOwnership(settings);
+        if (!string.IsNullOrWhiteSpace(
+                _smokeOptions.GiAllOnQualificationReportPath))
+        {
+            SampleGiAllOnQualificationContract.ApplyIsolationSettings(
+                settings,
+                _sceneKind);
+        }
     }
 
     private static SamplePlazaGpuMemoryProfile ResolveSponzaGpuMemoryProfile(VulkanRenderer renderer)

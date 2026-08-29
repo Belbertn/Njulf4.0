@@ -18,6 +18,9 @@ public static class CookedMeshBuilder
         var meshletsLod0 = new List<Meshlet>();
         var meshletsLod1 = new List<Meshlet>();
         var meshletsLod2 = new List<Meshlet>();
+        var hierarchyMeshlets = new List<Meshlet>();
+        var hierarchyNodes = new List<MeshletHierarchyNode>();
+        var coarseRayProxyIndices = new List<uint>();
         var meshletVertices = new List<uint>();
         var meshletTriangles = new List<uint>();
         var records = new List<CookedSubMeshRecord>(asset.SubMeshes.Count);
@@ -30,6 +33,10 @@ public static class CookedMeshBuilder
             int meshletOffset = meshletsLod0.Count;
             int meshletLod1Offset = meshletsLod1.Count;
             int meshletLod2Offset = meshletsLod2.Count;
+            int hierarchyMeshletOffset = hierarchyMeshlets.Count;
+            int hierarchyNodeOffset = hierarchyNodes.Count;
+            int coarseRayProxyIndexOffset =
+                coarseRayProxyIndices.Count;
             int meshletVertexOffset = meshletVertices.Count;
             int meshletTriangleOffset = meshletTriangles.Count;
 
@@ -99,6 +106,30 @@ public static class CookedMeshBuilder
                     destination.Add(cookedMeshlet);
                 }
             }
+            int flatMeshletCount = subMesh.LodRanges.Sum(
+                static range => range.MeshletCount);
+            if (flatMeshletCount > subMesh.Meshlets.Length)
+            {
+                throw new InvalidOperationException(
+                    $"Submesh '{subMesh.Name}' flat LOD ranges exceed its meshlet stream.");
+            }
+            foreach (Meshlet sourceMeshlet in
+                     subMesh.Meshlets.AsSpan(flatMeshletCount))
+            {
+                Meshlet cookedMeshlet = sourceMeshlet;
+                cookedMeshlet.VertexOffset = 0;
+                cookedMeshlet.IndexOffset = 0;
+                hierarchyMeshlets.Add(cookedMeshlet);
+            }
+            hierarchyNodes.AddRange(subMesh.HierarchyNodes);
+            if (subMesh.SkinIndex < 0)
+            {
+                AppendCoarseRayProxyIndices(
+                    subMesh,
+                    subMesh.LodRanges.Single(
+                        static range => range.Level == 2),
+                    coarseRayProxyIndices);
+            }
             meshletVertices.AddRange(subMesh.MeshletVertices);
             meshletTriangles.AddRange(subMesh.MeshletTriangles);
             ProcessedMeshLodRange lod0 = subMesh.LodRanges.Single(item => item.Level == 0);
@@ -132,6 +163,21 @@ public static class CookedMeshBuilder
                 MeshletLod1Count = lod1.MeshletCount,
                 MeshletLod2Offset = meshletLod2Offset,
                 MeshletLod2Count = lod2.MeshletCount,
+                HierarchyMeshletOffset = hierarchyMeshletOffset,
+                HierarchyMeshletCount =
+                    subMesh.Meshlets.Length - flatMeshletCount,
+                HierarchyNodeOffset = hierarchyNodeOffset,
+                HierarchyNodeCount = subMesh.HierarchyNodes.Length,
+                HierarchyRootNode = subMesh.HierarchyRootNode < 0
+                    ? -1
+                    : checked(
+                        hierarchyNodeOffset +
+                        subMesh.HierarchyRootNode),
+                CoarseRayProxyIndexOffset =
+                    coarseRayProxyIndexOffset,
+                CoarseRayProxyIndexCount =
+                    coarseRayProxyIndices.Count -
+                    coarseRayProxyIndexOffset,
                 CausticTopologyEvidence = subMesh.CausticTopologyEvidence,
                 CausticAuthoringValidation = subMesh.CausticAuthoringValidation,
                 CausticTopologyDetail = subMesh.CausticTopologyDetail
@@ -149,7 +195,54 @@ public static class CookedMeshBuilder
             meshletsLod1.ToArray(),
             meshletsLod2.ToArray(),
             meshletVertices.ToArray(),
-            meshletTriangles.ToArray());
+            meshletTriangles.ToArray())
+        {
+            HierarchyMeshlets = hierarchyMeshlets.ToArray(),
+            HierarchyNodes = hierarchyNodes.ToArray(),
+            CoarseRayProxyIndices =
+                coarseRayProxyIndices.ToArray()
+        };
+    }
+
+    private static void AppendCoarseRayProxyIndices(
+        ProcessedSubMeshAsset subMesh,
+        ProcessedMeshLodRange range,
+        ICollection<uint> destination)
+    {
+        int end = checked(range.FirstMeshlet + range.MeshletCount);
+        for (int meshletIndex = range.FirstMeshlet;
+             meshletIndex < end;
+             meshletIndex++)
+        {
+            Meshlet meshlet = subMesh.Meshlets[meshletIndex];
+            for (uint triangle = 0;
+                 triangle < meshlet.LocalTriangleCount;
+                 triangle++)
+            {
+                int triangleOffset = checked(
+                    (int)meshlet.LocalTriangleOffset +
+                    (int)triangle * 3);
+                for (int corner = 0; corner < 3; corner++)
+                {
+                    uint localVertex = subMesh.MeshletTriangles[
+                        triangleOffset + corner];
+                    if (localVertex >= meshlet.LocalVertexCount)
+                    {
+                        throw new InvalidOperationException(
+                            $"Submesh '{subMesh.Name}' LOD2 meshlet contains an invalid local triangle index.");
+                    }
+                    uint sourceVertex = subMesh.MeshletVertices[checked(
+                        (int)meshlet.LocalVertexOffset +
+                        (int)localVertex)];
+                    if (sourceVertex >= subMesh.Vertices.Length)
+                    {
+                        throw new InvalidOperationException(
+                            $"Submesh '{subMesh.Name}' LOD2 meshlet references an invalid source vertex.");
+                    }
+                    destination.Add(sourceVertex);
+                }
+            }
+        }
     }
 
     private static Vector3[] ComputeNormals(Vector3[] positions, uint[] indices)

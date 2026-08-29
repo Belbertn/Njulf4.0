@@ -4,9 +4,19 @@
 
 #include "common.glsl"
 
-layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
-layout(triangles, max_vertices = 64, max_primitives = 126) out;
+#ifdef FOLIAGE_MOTION_COMPACTED_MESH
+#define FOLIAGE_MOTION_LOCAL_SIZE 64
+#define FOLIAGE_MOTION_MAX_VERTICES 48
+#define FOLIAGE_MOTION_MAX_PRIMITIVES 64
+#else
+#define FOLIAGE_MOTION_LOCAL_SIZE 128
+#define FOLIAGE_MOTION_MAX_VERTICES 64
+#define FOLIAGE_MOTION_MAX_PRIMITIVES 126
+#endif
+layout(local_size_x = FOLIAGE_MOTION_LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = FOLIAGE_MOTION_MAX_VERTICES, max_primitives = FOLIAGE_MOTION_MAX_PRIMITIVES) out;
 
+#ifndef FOLIAGE_MOTION_COMPACTED_MESH
 struct FoliageMotionPayload
 {
     uint DrawCommandIndex;
@@ -14,6 +24,7 @@ struct FoliageMotionPayload
 };
 
 taskPayloadSharedEXT FoliageMotionPayload foliageMotionPayload;
+#endif
 
 layout(location = 0) noperspective out vec2 meshCurrentUv[];
 layout(location = 1) noperspective out vec2 meshPreviousUv[];
@@ -64,16 +75,27 @@ vec3 TransformFoliagePointAtTime(vec3 localPosition, GPUFoliageInstance instance
 
 void main()
 {
+#ifdef FOLIAGE_MOTION_COMPACTED_MESH
+    uint drawCommandIndex = gl_WorkGroupID.x + pc.Push.FirstDraw;
+    if (gl_WorkGroupID.x >= pc.Push.MeshletDrawCount)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
+#else
     if (foliageMotionPayload.Visible == 0u)
     {
         if (gl_LocalInvocationIndex == 0u)
             SetMeshOutputsEXT(0u, 0u);
         return;
     }
+    uint drawCommandIndex = foliageMotionPayload.DrawCommandIndex;
+#endif
 
     GPUFoliageMeshletDrawCommand command = ReadFoliageMeshletDrawCommand(
         pc.Push.CurrentFrameIndex,
-        foliageMotionPayload.DrawCommandIndex);
+        drawCommandIndex);
     if (command.MeshletIndex == 0xffffffffu)
     {
         if (gl_LocalInvocationIndex == 0u)

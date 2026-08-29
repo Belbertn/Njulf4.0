@@ -25,6 +25,12 @@ public sealed class ShaderBuildTests
         "opaque_scene_color_snapshot.comp",
         "area_ray_shadow.comp",
         "forward.frag",
+        "forward_opaque_ddgi_c4_receiver_cache_required.frag",
+        "forward_opaque_simple_ddgi_c4_receiver_cache_required.frag",
+        "forward_opaque_simple_full_input_ddgi_c4_receiver_cache_required.frag",
+        "forward_opaque_ddgi_c4_c5_cache_required.frag",
+        "forward_opaque_simple_ddgi_c4_c5_cache_required.frag",
+        "forward_opaque_simple_full_input_ddgi_c4_c5_cache_required.frag",
         "geometry_decal.frag",
         "forward_transparent_thin_glass.frag",
         "forward_transparent_thin_glass_ddgi_b1.frag",
@@ -62,6 +68,9 @@ public sealed class ShaderBuildTests
         "froxel_composite.comp",
         "motion_vector_alpha.mesh",
         "motion_vector_alpha.frag",
+        "motion_vector_compacted.mesh",
+        "motion_vector_alpha_compacted.mesh",
+        "foliage_motion_compacted.mesh",
         "depth_compacted.mesh",
         "depth_alpha_compacted.mesh",
         "shadow_depth_alpha_compacted.mesh"
@@ -82,7 +91,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(356));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(365));
 
         foreach (string shaderName in RequiredShaders)
         {

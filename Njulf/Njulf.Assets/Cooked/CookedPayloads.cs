@@ -64,6 +64,13 @@ public sealed record CookedSubMeshRecord(
     public int MeshletLod1Count { get; init; }
     public int MeshletLod2Offset { get; init; }
     public int MeshletLod2Count { get; init; }
+    public int HierarchyMeshletOffset { get; init; }
+    public int HierarchyMeshletCount { get; init; }
+    public int HierarchyNodeOffset { get; init; }
+    public int HierarchyNodeCount { get; init; }
+    public int HierarchyRootNode { get; init; } = -1;
+    public int CoarseRayProxyIndexOffset { get; init; }
+    public int CoarseRayProxyIndexCount { get; init; }
     /// <summary>
     /// Optional C4 topology evidence. A zero/default value is the only valid
     /// representation for legacy or untagged content and never admits a hero.
@@ -84,7 +91,15 @@ public sealed record CookedMeshPayload(
     Meshlet[] MeshletsLod1,
     Meshlet[] MeshletsLod2,
     uint[] MeshletVertices,
-    uint[] MeshletTriangles);
+    uint[] MeshletTriangles)
+{
+    public Meshlet[] HierarchyMeshlets { get; init; } = Array.Empty<Meshlet>();
+    public MeshletHierarchyNode[] HierarchyNodes { get; init; } =
+        Array.Empty<MeshletHierarchyNode>();
+    public uint[] CoarseRayProxyIndices { get; init; } =
+        Array.Empty<uint>();
+    public MeshletStreamingManifest? StreamingManifest { get; init; }
+}
 
 public enum CookedMaterialPipeline
 {
@@ -200,6 +215,13 @@ public sealed record CookedModelAsset(
     string PackagePath,
     long BytesRead)
 {
+    /// <summary>
+    /// Absolute path of the independently authenticated mesh package. The
+    /// model package path is not sufficient to resolve meshlet page sidecars
+    /// when model and mesh packages live in different directories.
+    /// </summary>
+    public string MeshPackagePath { get; init; } = string.Empty;
+
     /// <summary>
     /// Optional, backend-specific EXT four-state payload.  A null value never
     /// blocks the base model and selects ordinary alpha-candidate traversal.

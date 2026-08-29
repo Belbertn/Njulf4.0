@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using Njulf.Assets;
 using Njulf.Core.Geometry;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
@@ -46,7 +47,7 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_PARTICLE_RESET_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUParticleResetPushConstants>(),
                 ["SIZEOF_GPU_PARTICLE_SIMULATE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUParticleSimulatePushConstants>(),
                 ["SIZEOF_GPU_PARTICLE_SORT_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUParticleSortPushConstants>(),
-                ["SIZEOF_GPU_MESHLET"] = Marshal.SizeOf<GPUMeshlet>(),
+                ["SIZEOF_GPU_MESHLET"] = Marshal.SizeOf<GPUPackedMeshlet>(),
                 ["SIZEOF_GPU_OBJECT_DATA"] = Marshal.SizeOf<GPUObjectData>(),
                 ["SIZEOF_GPU_DEBUG_LINE_VERTEX"] = Marshal.SizeOf<GPUDebugLineVertex>(),
                 ["SIZEOF_GPU_MATERIAL_DATA"] = Marshal.SizeOf<GPUMaterialData>(),
@@ -55,6 +56,8 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_LIGHT"] = Marshal.SizeOf<GPULight>(),
                 ["SIZEOF_GPU_SCENE_DATA"] = Marshal.SizeOf<GPUSceneData>(),
                 ["SIZEOF_GPU_MESHLET_DRAW_COMMAND"] = Marshal.SizeOf<GPUMeshletDrawCommand>(),
+                ["SIZEOF_GPU_SCENE_INSTANCE_CANDIDATE"] = Marshal.SizeOf<GPUSceneInstanceCandidate>(),
+                ["SIZEOF_GPU_SCENE_LOD_TRANSITION_STATE"] = Marshal.SizeOf<GPUSceneLodTransitionState>(),
                 ["SIZEOF_GPU_PACKED_MESHLET_DRAW_COMMAND"] = Marshal.SizeOf<GPUPackedMeshletDrawCommand>(),
                 ["SIZEOF_GPU_MESHLET_TASK_FRAME_DATA"] = Marshal.SizeOf<GPUMeshletTaskFrameData>(),
                 ["SIZEOF_GPU_FOLIAGE_PROTOTYPE"] = Marshal.SizeOf<GPUFoliagePrototype>(),
@@ -119,7 +122,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUVertexPositionStream>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUVertexNormalTangentStream>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUVertexUvColorStream>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUVertexSkinningData>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningDispatch>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningPushConstants>(), Is.EqualTo(16));
@@ -145,6 +148,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUParticleSimulatePushConstants>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUParticleSortPushConstants>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUPackedMeshlet>(), Is.EqualTo(36));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(224));
                 Assert.That(Marshal.OffsetOf<GPUObjectData>(
                     nameof(GPUObjectData.NearFieldStableObjectId)).ToInt32(),
@@ -159,6 +163,8 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
                 Assert.That(Marshal.SizeOf<GPUMeshletDrawCommand>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUSceneInstanceCandidate>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUSceneLodTransitionState>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUPackedMeshletDrawCommand>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMeshletTaskFrameData>(), Is.EqualTo(376));
                 Assert.That(Marshal.SizeOf<GPUFoliagePrototype>(), Is.EqualTo(96));
@@ -177,7 +183,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPULightCullingParams>(), Is.EqualTo(192));
                 Assert.That(Marshal.SizeOf<GPUDepthPushConstants>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUForwardPushConstants>(), Is.EqualTo(256));
-                Assert.That(Marshal.SizeOf<GPUMotionVectorPushConstants>(), Is.EqualTo(160));
+                Assert.That(Marshal.SizeOf<GPUMotionVectorPushConstants>(), Is.EqualTo(164));
                 Assert.That(Marshal.SizeOf<GPULightCullPushConstants>(), Is.EqualTo(208));
                 Assert.That(Marshal.SizeOf<GPUShadowData>(), Is.EqualTo(320));
                 Assert.That(Marshal.SizeOf<GPUDirectionalShadowParameters>(), Is.EqualTo(112));
@@ -910,6 +916,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.PreviousFrameValid), "OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_FRAME_VALID");
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.Time), "OFFSET_GPU_MOTION_VECTOR_PUSH_TIME");
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.PreviousTime), "OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_TIME");
+                AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.FirstDraw), "OFFSET_GPU_MOTION_VECTOR_PUSH_FIRST_DRAW");
                 AssertFieldOffset<GPUParticleFrameData>(nameof(GPUParticleFrameData.ViewProjectionMatrix), "OFFSET_GPU_PARTICLE_FRAME_DATA_VIEW_PROJECTION_MATRIX");
                 AssertFieldOffset<GPUParticleFrameData>(nameof(GPUParticleFrameData.InverseViewMatrix), "OFFSET_GPU_PARTICLE_FRAME_DATA_INVERSE_VIEW_MATRIX");
                 AssertFieldOffset<GPUParticleFrameData>(nameof(GPUParticleFrameData.InverseProjectionMatrix), "OFFSET_GPU_PARTICLE_FRAME_DATA_INVERSE_PROJECTION_MATRIX");
@@ -1072,6 +1079,189 @@ namespace Njulf.Tests
                 Assert.That(
                     ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_OVERFLOW"),
                     Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.FullOpaqueOverflowCount))));
+            });
+        }
+
+        [Test]
+        public void PackedGpuMeshlet_PreservesRangesAndWidensNormalCone()
+        {
+            var axis = new Njulf.Core.Math.Vector3(0.3f, -0.4f, 0.8660254f)
+                .Normalized();
+            var meshlet = new Meshlet(
+                new Njulf.Core.Math.Vector3(2f, -3f, 4f),
+                5f,
+                vertexOffset: 101,
+                vertexCount: 48,
+                indexOffset: 303,
+                indexCount: 96,
+                localVertexOffset: 707,
+                localVertexCount: 48,
+                localTriangleOffset: 909,
+                localTriangleCount: 32,
+                normalConeAxis: axis,
+                normalConeCutoff: 0.75f);
+
+            GPUPackedMeshlet packed = GPUPackedMeshlet.Pack(meshlet);
+            packed.UnpackNormalCone(out Njulf.Core.Math.Vector3 decodedAxis,
+                out float decodedCutoff);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(GPUPackedMeshlet.AbiVersion, Is.EqualTo(2u));
+                Assert.That(
+                    ReadShaderIntConstant("GPU_MESHLET_ABI_VERSION"),
+                    Is.EqualTo((int)GPUPackedMeshlet.AbiVersion));
+                Assert.That(packed.BoundingSphere.X, Is.EqualTo(2f));
+                Assert.That(packed.BoundingSphere.W, Is.EqualTo(5f));
+                Assert.That(packed.VertexOffset, Is.EqualTo(101u));
+                Assert.That(packed.LocalVertexOffset, Is.EqualTo(707u));
+                Assert.That(packed.LocalTriangleOffset, Is.EqualTo(909u));
+                Assert.That(packed.LocalVertexCount, Is.EqualTo(48u));
+                Assert.That(packed.LocalTriangleCount, Is.EqualTo(32u));
+                Assert.That(
+                    Njulf.Core.Math.Vector3.Dot(axis, decodedAxis),
+                    Is.GreaterThan(0.999f));
+                Assert.That(decodedCutoff, Is.LessThanOrEqualTo(0.75f));
+                Assert.That(decodedCutoff, Is.GreaterThan(0.73f));
+            });
+        }
+
+        [Test]
+        public void PackedGpuMeshlet_HierarchyRecordUsesVersionedSharedStride()
+        {
+            var meshlet = new Meshlet(
+                Njulf.Core.Math.Vector3.Zero,
+                2f,
+                0,
+                3,
+                0,
+                3,
+                0,
+                3,
+                0,
+                1);
+            var node = new MeshletHierarchyNode
+            {
+                BoundingSphereCenter =
+                    new Njulf.Core.Math.Vector3(1f, 2f, 3f),
+                BoundingSphereRadius = 4f,
+                GeometricError = 0.25f,
+                FirstChild = uint.MaxValue,
+                MeshletOffset = 0,
+                MeshletCount = 1,
+                ParentIndex = uint.MaxValue,
+                Flags = MeshletHierarchyNodeFlags.Leaf
+            };
+            var meshInfo = new MeshInfo
+            {
+                MeshletOffset = 100,
+                MeshletLodGeneratedCount = 1,
+                GpuMeshletRecordCount = 2,
+                HierarchyNodeOffset = 101,
+                HierarchyNodeCount = 1,
+                HierarchyRootNode = 101
+            };
+
+            GPUPackedMeshlet[] records = MeshManager.PackGpuMeshlets(
+                [meshlet],
+                [node],
+                meshInfo);
+            GPUPackedMeshlet packedNode = records[1];
+            Assert.Multiple(() =>
+            {
+                Assert.That(records, Has.Length.EqualTo(2));
+                Assert.That(
+                    Marshal.SizeOf<GPUPackedMeshlet>(),
+                    Is.EqualTo(36));
+                Assert.That(packedNode.BoundingSphere.X, Is.EqualTo(1f));
+                Assert.That(packedNode.BoundingSphere.W, Is.EqualTo(4f));
+                Assert.That(
+                    BitConverter.UInt32BitsToSingle(
+                        packedNode.VertexOffset),
+                    Is.EqualTo(0.25f));
+                Assert.That(
+                    packedNode.LocalVertexOffset,
+                    Is.EqualTo(uint.MaxValue));
+                Assert.That(
+                    packedNode.LocalTriangleOffset & (1u << 31),
+                    Is.Not.Zero);
+                Assert.That(
+                    (packedNode.LocalTriangleOffset >> 8) & 0x3u,
+                    Is.EqualTo((uint)MeshletHierarchyNodeFlags.Leaf));
+                Assert.That(packedNode.PackedCounts, Is.EqualTo(100u));
+                Assert.That(packedNode.PackedNormalCone, Is.EqualTo(1u));
+            });
+        }
+
+        [Test]
+        public void HierarchicalLodShader_UsesBoundedTraversalAndTemporalCuts()
+        {
+            string shader = ReadShaderFile("scene_opaque_compact.comp");
+            Assert.Multiple(() =>
+            {
+                Assert.That(shader, Does.Contain(
+                    "SCENE_OPAQUE_COMPACTION_FLAG_HIERARCHICAL_LOD"));
+                Assert.That(shader, Does.Contain(
+                    "MESHLET_HIERARCHY_STACK_CAPACITY = 96u"));
+                Assert.That(shader, Does.Contain(
+                    "ResolveHierarchyProjectionTransition("));
+                Assert.That(shader, Does.Contain(
+                    "ProcessHierarchicalInstance("));
+                Assert.That(shader, Does.Contain(
+                    "ReadMeshletHierarchyNode("));
+                Assert.That(shader, Does.Contain(
+                    "SCENE_SUBMISSION_COUNTER_HIERARCHY_TRAVERSAL_FALLBACK"));
+            });
+        }
+
+        [Test]
+        public void SceneSubmissionInstanceExpansion_UsesOneWorkgroupPerInstanceAndSubgroupReservations()
+        {
+            string shader = ReadShaderFile("scene_opaque_compact.comp");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(shader, Does.Contain(
+                    "ProcessInstanceCandidate(gl_WorkGroupID.x, frustumPlanes)"));
+                Assert.That(shader, Does.Contain(
+                    "subgroupBallotExclusiveBitCount"));
+                Assert.That(shader, Does.Contain(
+                    "SCENE_OPAQUE_COMPACTION_FLAG_INSTANCE_EXPANSION"));
+                Assert.That(shader, Does.Contain(
+                    "EmitExpandedDepthCommand(command, masked, visible)"));
+                Assert.That(shader, Does.Contain(
+                    "EmitExpandedOpaqueCommand("));
+                Assert.That(shader, Does.Contain(
+                    "ProcessExpandedDirectionalShadowRange("));
+                Assert.That(shader, Does.Contain(
+                    "SCENE_INSTANCE_CLASSIFICATION_CASTS_DIRECTIONAL_SHADOW"));
+            });
+        }
+
+        [Test]
+        public void MeshletLodTransitions_AreConsumedByEveryCompactedTrianglePath()
+        {
+            string[] shaders =
+            {
+                "depth.mesh",
+                "depth_alpha.mesh",
+                "forward.mesh",
+                "forward_simple.mesh",
+                "motion_vector.mesh",
+                "motion_vector_alpha.mesh",
+                "shadow_depth.mesh",
+                "shadow_depth_alpha.mesh"
+            };
+
+            Assert.Multiple(() =>
+            {
+                foreach (string shaderName in shaders)
+                {
+                    Assert.That(
+                        ReadShaderFile(shaderName),
+                        Does.Contain("MeshletLodTransitionTriangleVisible("),
+                        shaderName);
+                }
             });
         }
 

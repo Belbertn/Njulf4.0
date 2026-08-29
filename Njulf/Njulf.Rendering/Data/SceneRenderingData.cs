@@ -55,6 +55,7 @@ namespace Njulf.Rendering.Data
         public string CaptureScenario { get; set; } = string.Empty;
         public int ObjectCount { get; set; }
         public int MeshletCount { get; set; }
+        public int SceneInstanceCandidateCount { get; set; }
         public int StaticInstanceBatchCount { get; set; }
         public int StaticInstanceCount { get; set; }
         public int VisibleStaticInstanceCount { get; set; }
@@ -529,12 +530,22 @@ namespace Njulf.Rendering.Data
             GpuLodSelectionMode.ScreenSpaceError;
         public float SceneSubmissionGpuLodTargetPixelError { get; set; } =
             SceneSubmissionSettings.DefaultGpuLodTargetPixelError;
+        public bool SceneSubmissionGpuLodDitherTransitionsEnabled { get; set; } =
+            true;
+        public int SceneSubmissionGpuLodTransitionFrameCount { get; set; } =
+            SceneSubmissionSettings.DefaultGpuLodTransitionFrameCount;
+        public bool SceneSubmissionGpuLodDitherTransitionsActive { get; set; }
+        public bool SceneSubmissionGpuHierarchicalLodEnabled { get; set; } =
+            true;
+        public bool SceneSubmissionGpuHierarchicalLodActive { get; set; }
         public float SceneSubmissionGpuLod1DistanceRatio { get; set; } = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio;
         public float SceneSubmissionGpuLod2DistanceRatio { get; set; } = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio;
         public bool SceneSubmissionGpuShadowCompactionEnabled { get; set; }
         public int SceneSubmissionGpuShadowLodBias { get; set; } = SceneSubmissionSettings.DefaultGpuShadowLodBias;
         public bool SceneSubmissionValidationCompareCpuGpuLists { get; set; }
         public bool SceneSubmissionGpuCompactionActive { get; set; }
+        public bool SceneSubmissionGpuInstanceExpansionEnabled { get; set; }
+        public bool SceneSubmissionGpuInstanceExpansionActive { get; set; }
         /// <summary>
         /// The current GPU-compacted opaque/depth/shadow lists contain dense
         /// one-sided and double-sided ranges and may use fixed-function culling
@@ -572,6 +583,9 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuLod2EmittedCount { get; set; }
         public int SceneSubmissionGpuMissingLodFallbackCount { get; set; }
         public int SceneSubmissionGpuOpaqueLodDecimatedCount { get; set; }
+        public int SceneSubmissionGpuHierarchicalInstanceCount { get; set; }
+        public int SceneSubmissionGpuHierarchySelectedNodeCount { get; set; }
+        public int SceneSubmissionGpuHierarchyTraversalFallbackCount { get; set; }
         public int SceneSubmissionValidationValid { get; set; }
         public string SceneSubmissionValidationStatus { get; set; } = string.Empty;
         public int SceneSubmissionValidationCpuOpaqueCount { get; set; }
@@ -600,6 +614,7 @@ namespace Njulf.Rendering.Data
         public int ScenePayloadRebuilt { get; set; }
         public ulong ObjectUploadBytes { get; set; }
         public ulong InstanceUploadBytes { get; set; }
+        public ulong SceneInstanceCandidateUploadBytes { get; set; }
         public ulong MeshletDrawUploadBytes { get; set; }
         public ulong SolidDepthMeshletDrawUploadBytes { get; set; }
         public ulong MaskedDepthMeshletDrawUploadBytes { get; set; }
@@ -1216,6 +1231,14 @@ namespace Njulf.Rendering.Data
         public float SimpleDdgiTransportTailRelativeTolerance { get; set; }
         public int SimpleDdgiTransportAcceleratedSweepCount { get; set; }
         public bool SimpleDdgiTransportAccelerationEnabled { get; set; }
+        /// <summary>The optional accelerated-solve pipelines were created for the active storage/guiding ABI.</summary>
+        public bool SimpleDdgiTransportAccelerationRuntimeAvailable { get; set; }
+        /// <summary>Cached transport dispatches recorded by the accelerated solver in this frame.</summary>
+        public int SimpleDdgiTransportAcceleratedDispatchCount { get; set; }
+        /// <summary>Intermediate canonical SSBO publications recorded between accelerated colors/sweeps.</summary>
+        public int SimpleDdgiTransportAcceleratedCanonicalPublicationCount { get; set; }
+        /// <summary>Final canonical/receiver publication recorded for accelerated work in this frame.</summary>
+        public int SimpleDdgiTransportAcceleratedFinalPublicationCount { get; set; }
         public bool SimpleDdgiTransportTailCertificationEnabled { get; set; }
         public string SimpleDdgiTransportTailCertificationFallbackReason { get; set; } =
             string.Empty;
@@ -1628,6 +1651,7 @@ namespace Njulf.Rendering.Data
         public ulong ForwardMaterialBufferSize { get; set; }
         public ulong MaterialExtensionBufferSize { get; set; }
         public ulong InstanceBufferSize { get; set; }
+        public ulong SceneInstanceCandidateBufferSize { get; set; }
         public ulong MeshletDrawBufferSize { get; set; }
         public ulong FullOpaqueMeshletDrawBufferSize { get; set; }
         public ulong SimpleNormalOpaqueMeshletDrawBufferSize { get; set; }
@@ -1652,6 +1676,8 @@ namespace Njulf.Rendering.Data
             BufferHandle.Invalid;
         public BufferHandle MaterialExtensionDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle InstanceBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle SceneInstanceCandidateBuffer { get; set; } =
+            BufferHandle.Invalid;
         public BufferHandle MeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle FullOpaqueMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle SimpleNormalOpaqueMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
@@ -1733,6 +1759,8 @@ namespace Njulf.Rendering.Data
         public List<TransparentMaterialRun> TransparentMaterialRuns { get; } =
             new();
         public List<GPUObjectData> ObjectData { get; } = new();
+        public List<GPUSceneInstanceCandidate> SceneInstanceCandidates { get; } =
+            new();
         public List<GPUMaterialData> MaterialData { get; } = new();
         public List<GPUMaterialExtensionData> MaterialExtensionData { get; } = new();
         public List<GPUSkinningDispatch> SkinningDispatches { get; } = new();
@@ -1758,6 +1786,7 @@ namespace Njulf.Rendering.Data
             TransparentMeshletDrawCommands.Clear();
             TransparentMaterialRuns.Clear();
             ObjectData.Clear();
+            SceneInstanceCandidates.Clear();
             MaterialData.Clear();
             MaterialExtensionData.Clear();
             SkinningDispatches.Clear();
@@ -1779,6 +1808,7 @@ namespace Njulf.Rendering.Data
             ImageIndex = 0;
             ObjectCount = 0;
             MeshletCount = 0;
+            SceneInstanceCandidateCount = 0;
             StaticInstanceBatchCount = 0;
             StaticInstanceCount = 0;
             VisibleStaticInstanceCount = 0;
@@ -2181,12 +2211,20 @@ namespace Njulf.Rendering.Data
                 GpuLodSelectionMode.ScreenSpaceError;
             SceneSubmissionGpuLodTargetPixelError =
                 SceneSubmissionSettings.DefaultGpuLodTargetPixelError;
+            SceneSubmissionGpuLodDitherTransitionsEnabled = true;
+            SceneSubmissionGpuLodTransitionFrameCount =
+                SceneSubmissionSettings.DefaultGpuLodTransitionFrameCount;
+            SceneSubmissionGpuLodDitherTransitionsActive = false;
+            SceneSubmissionGpuHierarchicalLodEnabled = true;
+            SceneSubmissionGpuHierarchicalLodActive = false;
             SceneSubmissionGpuLod1DistanceRatio = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio;
             SceneSubmissionGpuLod2DistanceRatio = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio;
             SceneSubmissionGpuShadowCompactionEnabled = false;
             SceneSubmissionGpuShadowLodBias = SceneSubmissionSettings.DefaultGpuShadowLodBias;
             SceneSubmissionValidationCompareCpuGpuLists = false;
             SceneSubmissionGpuCompactionActive = false;
+            SceneSubmissionGpuInstanceExpansionEnabled = false;
+            SceneSubmissionGpuInstanceExpansionActive = false;
             SceneSubmissionSidedRasterSpecializationActive = false;
             SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
             SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
@@ -2219,6 +2257,9 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuLod2EmittedCount = 0;
             SceneSubmissionGpuMissingLodFallbackCount = 0;
             SceneSubmissionGpuOpaqueLodDecimatedCount = 0;
+            SceneSubmissionGpuHierarchicalInstanceCount = 0;
+            SceneSubmissionGpuHierarchySelectedNodeCount = 0;
+            SceneSubmissionGpuHierarchyTraversalFallbackCount = 0;
             SceneSubmissionValidationValid = 0;
             SceneSubmissionValidationStatus = string.Empty;
             SceneSubmissionValidationCpuOpaqueCount = 0;
@@ -2253,6 +2294,7 @@ namespace Njulf.Rendering.Data
             ScenePayloadRebuilt = 0;
             ObjectUploadBytes = 0;
             InstanceUploadBytes = 0;
+            SceneInstanceCandidateUploadBytes = 0;
             MeshletDrawUploadBytes = 0;
             SolidDepthMeshletDrawUploadBytes = 0;
             MaskedDepthMeshletDrawUploadBytes = 0;
@@ -2836,6 +2878,10 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportTailRelativeTolerance = 0;
             SimpleDdgiTransportAcceleratedSweepCount = 0;
             SimpleDdgiTransportAccelerationEnabled = false;
+            SimpleDdgiTransportAccelerationRuntimeAvailable = false;
+            SimpleDdgiTransportAcceleratedDispatchCount = 0;
+            SimpleDdgiTransportAcceleratedCanonicalPublicationCount = 0;
+            SimpleDdgiTransportAcceleratedFinalPublicationCount = 0;
             SimpleDdgiTransportTailCertificationEnabled = false;
             SimpleDdgiTransportTailCertificationFallbackReason = string.Empty;
             SimpleDdgiTransportResidualThreshold = 0;

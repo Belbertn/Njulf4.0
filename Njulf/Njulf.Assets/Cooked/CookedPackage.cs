@@ -80,18 +80,55 @@ public static class CookedPackage
         WriteModel(path, manifest, toolVersion, chunk);
     }
 
-    public static void WriteMesh(string path, CookedMeshPayload mesh, ulong sourceHash, ulong settingsHash, ulong dependencyHash, uint toolVersion = 1, bool useMeshOptimizer = true)
+    public static void WriteMesh(
+        string path,
+        CookedMeshPayload mesh,
+        ulong sourceHash,
+        ulong settingsHash,
+        ulong dependencyHash,
+        uint toolVersion = 1,
+        bool useMeshOptimizer = true) =>
+        _ = WriteMeshWithSidecar(
+            path,
+            mesh,
+            sourceHash,
+            settingsHash,
+            dependencyHash,
+            toolVersion,
+            useMeshOptimizer);
+
+    internal static string WriteMeshWithSidecar(
+        string path,
+        CookedMeshPayload mesh,
+        ulong sourceHash,
+        ulong settingsHash,
+        ulong dependencyHash,
+        uint toolVersion = 1,
+        bool useMeshOptimizer = true)
     {
         ArgumentNullException.ThrowIfNull(mesh);
         ValidateMeshRanges(path, mesh.SubMeshes, mesh.VertexPositions.Length,
             mesh.Indices.Length, mesh.VertexSkinning.Length,
             mesh.MeshletsLod0.Length, mesh.MeshletsLod1.Length,
-            mesh.MeshletsLod2.Length, mesh.MeshletVertices.Length,
+            mesh.MeshletsLod2.Length, mesh.HierarchyMeshlets.Length,
+            mesh.HierarchyNodes, mesh.CoarseRayProxyIndices,
+            mesh.MeshletVertices.Length,
             mesh.MeshletTriangles.Length);
         ValidateCausticTopologyEvidence(
             path, mesh.SubMeshes, mesh.VertexPositions, mesh.Indices);
+        MeshletStreamingPageBundle streamingBundle =
+            MeshletStreamingPageBundle.Build(mesh, "pending.pages")
+                .WithContentAddressedSidecarName(Path.GetFileName(path));
+        ValidateStreamingManifestAgainstMesh(
+            path,
+            mesh.SubMeshes,
+            streamingBundle.Manifest);
         using var writer = new CookedAssetWriter(path, CookedAssetKind.Mesh, sourceHash, settingsHash, dependencyHash, toolVersion);
         writer.WriteSection(CookedSectionIds.SubMeshes, Required | CookedSectionFlags.Zstd, CookedJson.Serialize(mesh.SubMeshes));
+        writer.WriteSection(
+            CookedSectionIds.MeshletStreamingManifest,
+            Required | CookedSectionFlags.Zstd,
+            CookedJson.Serialize(streamingBundle.Manifest));
         WriteVertexSection(writer, CookedSectionIds.VertexPositions, Required, mesh.VertexPositions, useMeshOptimizer);
         WriteVertexSection(writer, CookedSectionIds.VertexNormals, Required, mesh.VertexNormalTangents, useMeshOptimizer);
         WriteVertexSection(writer, CookedSectionIds.VertexUvColors, Required, mesh.VertexUvColors, useMeshOptimizer);
@@ -105,9 +142,44 @@ public static class CookedPackage
             WriteVertexSection(writer, CookedSectionIds.Meshlets1, CookedSectionFlags.None, mesh.MeshletsLod1, useMeshOptimizer);
         if (mesh.MeshletsLod2.Length > 0)
             WriteVertexSection(writer, CookedSectionIds.Meshlets2, CookedSectionFlags.None, mesh.MeshletsLod2, useMeshOptimizer);
+        if (mesh.HierarchyMeshlets.Length > 0)
+            WriteVertexSection(writer, CookedSectionIds.MeshletHierarchy, CookedSectionFlags.None, mesh.HierarchyMeshlets, useMeshOptimizer);
+        if (mesh.HierarchyNodes.Length > 0)
+            WriteVertexSection(writer, CookedSectionIds.MeshletHierarchyNodes, CookedSectionFlags.None, mesh.HierarchyNodes, useMeshOptimizer);
+        if (mesh.CoarseRayProxyIndices.Length > 0)
+            WriteIndexSequenceSection(writer, CookedSectionIds.CoarseRayProxyIndices, CookedSectionFlags.None, mesh.CoarseRayProxyIndices, mesh.VertexPositions.Length, useMeshOptimizer);
         WriteIndexSequenceSection(writer, CookedSectionIds.MeshletVertices, Required, mesh.MeshletVertices, mesh.VertexPositions.Length, useMeshOptimizer);
         WriteIndexSequenceSection(writer, CookedSectionIds.MeshletTriangles, Required, mesh.MeshletTriangles, RendererMeshletLodBuilder.MaxVerticesPerMeshlet, useMeshOptimizer);
-        writer.Complete();
+        string packagePath = Path.GetFullPath(path);
+        string sidecarPath = Path.Combine(
+            Path.GetDirectoryName(packagePath)!,
+            streamingBundle.Manifest.SidecarFileName);
+        bool sidecarExisted = File.Exists(sidecarPath);
+        try
+        {
+            streamingBundle.WriteSidecar(sidecarPath);
+            writer.Complete();
+            return sidecarPath;
+        }
+        catch
+        {
+            if (!sidecarExisted)
+            {
+                try
+                {
+                    File.Delete(sidecarPath);
+                }
+                catch (IOException)
+                {
+                    // Preserve the authoritative write failure.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Preserve the authoritative write failure.
+                }
+            }
+            throw;
+        }
     }
 
     private static void WriteVertexSection<T>(CookedAssetWriter writer, uint id, CookedSectionFlags flags, ReadOnlySpan<T> data, bool useMeshOptimizer)
@@ -336,6 +408,7 @@ public static class CookedPackage
             modelPath,
             bytesRead + meshBytes + materialBytes + animationBytes)
         {
+            MeshPackagePath = meshPath,
             OpacityMicromapPayload = opacityMicromapPayload,
             OpacityMicromapLoadStatus = opacityMicromapLoadStatus
         };
@@ -434,6 +507,13 @@ public static class CookedPackage
             flags,
             expectedContentHash: expectedContentHash);
         var subMeshes = CookedJson.Deserialize<CookedSubMeshRecord[]>(reader.GetRequiredSection(CookedSectionIds.SubMeshes).Span, path, "submesh");
+        MeshletStreamingManifest streamingManifest =
+            CookedJson.Deserialize<MeshletStreamingManifest>(
+                reader.GetRequiredSection(
+                    CookedSectionIds.MeshletStreamingManifest).Span,
+                path,
+                "meshlet streaming manifest");
+        streamingManifest.Validate(path);
         var positions = reader.ReadSection<CookedVertexPositionStream>(CookedSectionIds.VertexPositions);
         var normals = reader.ReadSection<CookedVertexNormalTangentStream>(CookedSectionIds.VertexNormals);
         var uvColors = reader.ReadSection<CookedVertexUvColorStream>(CookedSectionIds.VertexUvColors);
@@ -450,12 +530,45 @@ public static class CookedPackage
             reader,
             CookedSectionIds.Meshlets2,
             out Meshlet[] lod2);
+        _ = CookedMeshletCompatibility.TryRead(
+            reader,
+            CookedSectionIds.MeshletHierarchy,
+            out Meshlet[] hierarchyMeshlets);
+        _ = reader.TryReadSection(
+            CookedSectionIds.MeshletHierarchyNodes,
+            out MeshletHierarchyNode[] hierarchyNodes);
+        _ = reader.TryReadSection(
+            CookedSectionIds.CoarseRayProxyIndices,
+            out uint[] coarseRayProxyIndices);
         var meshletVertices = reader.ReadSection<uint>(CookedSectionIds.MeshletVertices);
         var meshletTriangles = reader.ReadSection<uint>(CookedSectionIds.MeshletTriangles);
         bytesRead = reader.BytesRead;
-        ValidateMeshRanges(path, subMeshes, positions.Length, indices.Length, skinning.Length, lod0.Length, lod1.Length, lod2.Length, meshletVertices.Length, meshletTriangles.Length);
+        ValidateMeshRanges(
+            path,
+            subMeshes,
+            positions.Length,
+            indices.Length,
+            skinning.Length,
+            lod0.Length,
+            lod1.Length,
+            lod2.Length,
+            hierarchyMeshlets.Length,
+            hierarchyNodes,
+            coarseRayProxyIndices,
+            meshletVertices.Length,
+            meshletTriangles.Length);
+        ValidateStreamingManifestAgainstMesh(
+            path,
+            subMeshes,
+            streamingManifest);
         ValidateCausticTopologyEvidence(path, subMeshes, positions, indices);
-        return new CookedMeshPayload(subMeshes, positions, normals, uvColors, skinning, indices, lod0, lod1, lod2, meshletVertices, meshletTriangles);
+        return new CookedMeshPayload(subMeshes, positions, normals, uvColors, skinning, indices, lod0, lod1, lod2, meshletVertices, meshletTriangles)
+        {
+            HierarchyMeshlets = hierarchyMeshlets,
+            HierarchyNodes = hierarchyNodes,
+            CoarseRayProxyIndices = coarseRayProxyIndices,
+            StreamingManifest = streamingManifest
+        };
     }
 
     public static CookedMaterialTable LoadMaterials(string path, CookedAssetReaderFlags flags, out long bytesRead)
@@ -839,7 +952,157 @@ public static class CookedPackage
         return path;
     }
 
-    private static void ValidateMeshRanges(string path, IReadOnlyList<CookedSubMeshRecord> meshes, int vertices, int indices, int skinning, int meshletsLod0, int meshletsLod1, int meshletsLod2, int meshletVertices, int meshletTriangles)
+    private static void ValidateStreamingManifestAgainstMesh(
+        string path,
+        IReadOnlyList<CookedSubMeshRecord> meshes,
+        MeshletStreamingManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        manifest.Validate(path);
+        var coveredMeshlets = new int[meshes.Count];
+        const MeshletStreamingPageFlags geometryMask =
+            MeshletStreamingPageFlags.Lod0 |
+            MeshletStreamingPageFlags.Lod1 |
+            MeshletStreamingPageFlags.Lod2 |
+            MeshletStreamingPageFlags.HierarchyGeometry;
+
+        foreach (MeshletStreamingPageRecord page in manifest.Pages)
+        {
+            if ((uint)page.SubMeshIndex >= (uint)meshes.Count)
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"meshlet streaming page {page.PageId} references a missing submesh");
+            }
+            CookedSubMeshRecord mesh = meshes[page.SubMeshIndex];
+            int lod0End = mesh.MeshletCount;
+            int lod1End = checked(lod0End + mesh.MeshletLod1Count);
+            int lod2End = checked(lod1End + mesh.MeshletLod2Count);
+            int hierarchyEnd = checked(
+                lod2End + mesh.HierarchyMeshletCount);
+            int pageEnd = checked(
+                page.LogicalFirstMeshlet + page.MeshletCount);
+            MeshletStreamingPageFlags expectedGeometry;
+            int rangeEnd;
+            if (page.LogicalFirstMeshlet < lod0End)
+            {
+                expectedGeometry = MeshletStreamingPageFlags.Lod0;
+                rangeEnd = lod0End;
+            }
+            else if (page.LogicalFirstMeshlet < lod1End)
+            {
+                expectedGeometry = MeshletStreamingPageFlags.Lod1;
+                rangeEnd = lod1End;
+            }
+            else if (page.LogicalFirstMeshlet < lod2End)
+            {
+                expectedGeometry = MeshletStreamingPageFlags.Lod2;
+                rangeEnd = lod2End;
+            }
+            else if (page.LogicalFirstMeshlet < hierarchyEnd)
+            {
+                expectedGeometry =
+                    MeshletStreamingPageFlags.HierarchyGeometry;
+                rangeEnd = hierarchyEnd;
+            }
+            else
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"meshlet streaming page {page.PageId} starts outside its submesh meshlet ranges");
+            }
+            if (pageEnd > rangeEnd ||
+                (page.Flags & geometryMask) != expectedGeometry)
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"meshlet streaming page {page.PageId} crosses or mislabels a cooked LOD range");
+            }
+
+            bool skinned = mesh.SkinIndex >= 0 || mesh.SkinningCount != 0;
+            bool actualSkinned =
+                (page.Flags & MeshletStreamingPageFlags.Skinned) != 0;
+            bool expectedPinned = skinned ||
+                expectedGeometry is MeshletStreamingPageFlags.Lod2 or
+                    MeshletStreamingPageFlags.HierarchyGeometry ||
+                expectedGeometry == MeshletStreamingPageFlags.Lod1 &&
+                    mesh.MeshletLod2Count == 0 ||
+                expectedGeometry == MeshletStreamingPageFlags.Lod0 &&
+                    mesh.MeshletLod1Count == 0 &&
+                    mesh.MeshletLod2Count == 0;
+            bool actualPinned =
+                (page.Flags & MeshletStreamingPageFlags.Pinned) != 0;
+            if (actualSkinned != skinned || actualPinned != expectedPinned)
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"meshlet streaming page {page.PageId} violates static/skinned residency policy");
+            }
+            coveredMeshlets[page.SubMeshIndex] = checked(
+                coveredMeshlets[page.SubMeshIndex] + page.MeshletCount);
+        }
+
+        for (int subMeshIndex = 0;
+             subMeshIndex < meshes.Count;
+             subMeshIndex++)
+        {
+            CookedSubMeshRecord mesh = meshes[subMeshIndex];
+            int expectedMeshlets = checked(
+                mesh.MeshletCount + mesh.MeshletLod1Count +
+                mesh.MeshletLod2Count + mesh.HierarchyMeshletCount);
+            if (coveredMeshlets[subMeshIndex] != expectedMeshlets)
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"meshlet streaming pages do not cover submesh {subMeshIndex}'s complete meshlet stream");
+            }
+
+            MeshletStreamingPageFlags coarseGeometry =
+                mesh.MeshletLod2Count != 0
+                    ? MeshletStreamingPageFlags.Lod2
+                    : mesh.MeshletLod1Count != 0
+                        ? MeshletStreamingPageFlags.Lod1
+                        : MeshletStreamingPageFlags.Lod0;
+            MeshletStreamingPageRecord[] coarsePages = manifest.Pages
+                .Where(page => page.SubMeshIndex == subMeshIndex &&
+                    (page.Flags & coarseGeometry) != 0)
+                .ToArray();
+            if (coarsePages.Length == 0)
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"submesh {subMeshIndex} has no complete coarse streaming cut");
+            }
+            foreach (MeshletStreamingPageRecord page in manifest.Pages.Where(
+                         page => page.SubMeshIndex == subMeshIndex &&
+                             (page.Flags &
+                              MeshletStreamingPageFlags.Streamable) != 0))
+            {
+                if (page.FallbackPageId != coarsePages[0].PageId ||
+                    page.FallbackPageCount != coarsePages.Length)
+                {
+                    throw new CookedAssetFormatException(
+                        path,
+                        $"meshlet streaming page {page.PageId} does not reference the complete coarsest LOD cut");
+                }
+            }
+        }
+    }
+
+    private static void ValidateMeshRanges(
+        string path,
+        IReadOnlyList<CookedSubMeshRecord> meshes,
+        int vertices,
+        int indices,
+        int skinning,
+        int meshletsLod0,
+        int meshletsLod1,
+        int meshletsLod2,
+        int hierarchyMeshlets,
+        IReadOnlyList<MeshletHierarchyNode> hierarchyNodeData,
+        IReadOnlyList<uint> coarseRayProxyIndices,
+        int meshletVertices,
+        int meshletTriangles)
     {
         foreach (CookedSubMeshRecord mesh in meshes)
         {
@@ -849,8 +1112,120 @@ public static class CookedPackage
             ValidateRange(path, mesh.Name, "LOD0 meshlets", mesh.MeshletOffset, mesh.MeshletCount, meshletsLod0);
             ValidateRange(path, mesh.Name, "LOD1 meshlets", mesh.MeshletLod1Offset, mesh.MeshletLod1Count, meshletsLod1);
             ValidateRange(path, mesh.Name, "LOD2 meshlets", mesh.MeshletLod2Offset, mesh.MeshletLod2Count, meshletsLod2);
+            ValidateRange(path, mesh.Name, "hierarchy meshlets", mesh.HierarchyMeshletOffset, mesh.HierarchyMeshletCount, hierarchyMeshlets);
+            ValidateRange(path, mesh.Name, "hierarchy nodes", mesh.HierarchyNodeOffset, mesh.HierarchyNodeCount, hierarchyNodeData.Count);
+            ValidateRange(path, mesh.Name, "coarse ray-proxy indices", mesh.CoarseRayProxyIndexOffset, mesh.CoarseRayProxyIndexCount, coarseRayProxyIndices.Count);
             ValidateRange(path, mesh.Name, "meshlet vertices", mesh.MeshletVertexOffset, mesh.MeshletVertexCount, meshletVertices);
             ValidateRange(path, mesh.Name, "meshlet triangles", mesh.MeshletTriangleOffset, mesh.MeshletTriangleCount, meshletTriangles);
+
+            if (mesh.CoarseRayProxyIndexCount % 3 != 0 ||
+                (mesh.SkinIndex >= 0 &&
+                 mesh.CoarseRayProxyIndexCount != 0))
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"submesh '{mesh.Name}' has an invalid coarse ray-proxy topology");
+            }
+            int proxyEnd = checked(
+                mesh.CoarseRayProxyIndexOffset +
+                mesh.CoarseRayProxyIndexCount);
+            for (int proxyIndex = mesh.CoarseRayProxyIndexOffset;
+                 proxyIndex < proxyEnd;
+                 proxyIndex++)
+            {
+                if (coarseRayProxyIndices[proxyIndex] >=
+                    mesh.VertexCount)
+                {
+                    throw new CookedAssetFormatException(
+                        path,
+                        $"submesh '{mesh.Name}' coarse ray proxy references vertex {coarseRayProxyIndices[proxyIndex]}, but the local vertex count is {mesh.VertexCount}");
+                }
+            }
+
+            if (mesh.HierarchyNodeCount == 0)
+            {
+                if (mesh.HierarchyRootNode != -1 || mesh.HierarchyMeshletCount != 0)
+                {
+                    throw new CookedAssetFormatException(
+                        path,
+                        $"submesh '{mesh.Name}' has hierarchy data without a hierarchy root");
+                }
+                continue;
+            }
+
+            int hierarchyNodeEnd = checked(
+                mesh.HierarchyNodeOffset + mesh.HierarchyNodeCount);
+            if (mesh.HierarchyRootNode < mesh.HierarchyNodeOffset ||
+                mesh.HierarchyRootNode >= hierarchyNodeEnd)
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"submesh '{mesh.Name}' has an out-of-range hierarchy root {mesh.HierarchyRootNode}");
+            }
+
+            int flatMeshletCount = checked(
+                mesh.MeshletCount +
+                mesh.MeshletLod1Count +
+                mesh.MeshletLod2Count);
+            int localGeometryCount = checked(
+                flatMeshletCount + mesh.HierarchyMeshletCount);
+            for (int nodeIndex = mesh.HierarchyNodeOffset;
+                 nodeIndex < hierarchyNodeEnd;
+                 nodeIndex++)
+            {
+                MeshletHierarchyNode node = hierarchyNodeData[nodeIndex];
+                ValidateHierarchyNode(
+                    path,
+                    mesh.Name,
+                    nodeIndex - mesh.HierarchyNodeOffset,
+                    node,
+                    mesh.HierarchyNodeCount,
+                    localGeometryCount);
+            }
+        }
+    }
+
+    private static void ValidateHierarchyNode(
+        string path,
+        string meshName,
+        int nodeIndex,
+        in MeshletHierarchyNode node,
+        int nodeCount,
+        int meshletCount)
+    {
+        if (!float.IsFinite(node.BoundingSphereCenter.X) ||
+            !float.IsFinite(node.BoundingSphereCenter.Y) ||
+            !float.IsFinite(node.BoundingSphereCenter.Z) ||
+            !float.IsFinite(node.BoundingSphereRadius) ||
+            node.BoundingSphereRadius < 0f ||
+            !float.IsFinite(node.GeometricError) ||
+            node.GeometricError < 0f)
+        {
+            throw new CookedAssetFormatException(
+                path,
+                $"submesh '{meshName}' hierarchy node {nodeIndex} has invalid bounds or error");
+        }
+        if (node.ChildCount > RendererMeshletLodBuilder.HierarchyFanout ||
+            node.Depth > RendererMeshletLodBuilder.HierarchyMaximumDepth ||
+            (node.ChildCount != 0 &&
+             (ulong)node.FirstChild + node.ChildCount >
+             (ulong)nodeCount) ||
+            (ulong)node.MeshletOffset + node.MeshletCount > (ulong)meshletCount)
+        {
+            throw new CookedAssetFormatException(
+                path,
+                $"submesh '{meshName}' hierarchy node {nodeIndex} has an invalid child, depth, or meshlet range");
+        }
+        bool leaf = (node.Flags & MeshletHierarchyNodeFlags.Leaf) != 0;
+        bool forceRefine =
+            (node.Flags & MeshletHierarchyNodeFlags.ForceRefine) != 0;
+        if (leaf != (node.ChildCount == 0) ||
+            (forceRefine && node.ChildCount == 0) ||
+            (!leaf && !forceRefine && node.MeshletCount == 0))
+        {
+            throw new CookedAssetFormatException(
+                path,
+                $"submesh '{meshName}' hierarchy node {nodeIndex} has inconsistent flags and payload");
         }
     }
 

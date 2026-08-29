@@ -491,18 +491,41 @@ public sealed class ModelAssetCooker : IDisposable
         string stem = SanitizeName(Path.GetFileNameWithoutExtension(sourcePath));
         string modelPath = Path.Combine(modelDirectory, stem + ".njmodel");
         string reportPath = Path.Combine(reportDirectory, stem + ".cook-report.json");
+        string databaseKey = NormalizeRelative(outputRoot, sourcePath);
+        CookedAssetDatabaseEntry? previousEntry =
+            session.GetEntry(databaseKey);
         if (File.Exists(modelPath))
         {
-            using var existingReader = new CookedAssetReader(modelPath, CookedAssetKind.Model);
-            CookedModelManifest existingManifest = CookedJson.Deserialize<CookedModelManifest>(
-                existingReader.GetRequiredSection(CookedSectionIds.Manifest).Span,
-                modelPath,
-                "manifest");
-            if (!Path.GetFullPath(existingManifest.SourcePath).Equals(sourcePath, StringComparison.OrdinalIgnoreCase))
+            try
             {
-                throw new InvalidOperationException(
-                    $"Cook output collision: source '{sourcePath}' and '{existingManifest.SourcePath}' both map to '{modelPath}'. " +
-                    "Cook them to separate output roots or give the source files distinct base names.");
+                using var existingReader = new CookedAssetReader(
+                    modelPath,
+                    CookedAssetKind.Model);
+                CookedModelManifest existingManifest =
+                    CookedJson.Deserialize<CookedModelManifest>(
+                        existingReader.GetRequiredSection(
+                            CookedSectionIds.Manifest).Span,
+                        modelPath,
+                        "manifest");
+                if (!Path.GetFullPath(existingManifest.SourcePath).Equals(
+                        sourcePath,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"Cook output collision: source '{sourcePath}' and '{existingManifest.SourcePath}' both map to '{modelPath}'. " +
+                        "Cook them to separate output roots or give the source files distinct base names.");
+                }
+            }
+            catch (CookedAssetFormatException) when (
+                PreviousEntryOwnsModelOutput(
+                    previousEntry,
+                    sourcePath,
+                    outputRoot,
+                    modelPath))
+            {
+                // A hard format boundary must reject the old package at
+                // runtime, but a source-backed cook still needs to replace it.
+                // Database ownership preserves the output-collision guard.
             }
         }
         long prepareMs = stageTimer.ElapsedMilliseconds;
@@ -520,8 +543,6 @@ public sealed class ModelAssetCooker : IDisposable
             ("cook-settings", session.SettingsHash),
             ("model-import-contract", importContractHash)
         });
-        string databaseKey = NormalizeRelative(outputRoot, sourcePath);
-        CookedAssetDatabaseEntry? previousEntry = session.GetEntry(databaseKey);
         var dependencies = new SortedDictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
         foreach ((string path, ulong hash) in DiscoverDependencies(sourcePath))
             dependencies[path] = hash;
@@ -661,7 +682,7 @@ public sealed class ModelAssetCooker : IDisposable
 
         progress.ReportStageStart(AssetCookStage.Serialize);
         timer.Restart();
-        CookedPackage.WriteMesh(
+        string meshletSidecarPath = CookedPackage.WriteMeshWithSidecar(
             meshPath,
             mesh,
             sourceHash,
@@ -669,7 +690,9 @@ public sealed class ModelAssetCooker : IDisposable
             dependencyHash,
             options.ToolVersion,
             CookedPlatform.SupportsMeshOptimizer(options.Platform));
+        generationArtifacts.Add(meshletSidecarPath);
         session.InvalidateArtifactHash(meshPath);
+        session.InvalidateArtifactHash(meshletSidecarPath);
         ulong meshContentHash = session.GetOrRecordArtifactHash(meshPath);
         CookedPackage.WriteMaterials(materialPath, materials, sourceHash, settingsHash, dependencyHash, options.ToolVersion);
         session.InvalidateArtifactHash(materialPath);
@@ -726,7 +749,12 @@ public sealed class ModelAssetCooker : IDisposable
         progress.ReportStageCompleted(AssetCookStage.Serialize, serializationMs);
         progress.ThrowIfCancellationRequested();
 
-        var outputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { meshPath, materialPath };
+        var outputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            meshPath,
+            meshletSidecarPath,
+            materialPath
+        };
         if (animationReference is not null)
             outputPaths.Add(animationPath);
         foreach (ModelMaterial material in materials.Materials)
@@ -1170,20 +1198,65 @@ public sealed class ModelAssetCooker : IDisposable
             .ToArray();
         foreach (string key in removedSources)
             database.Assets.Remove(key);
-        var referenced = database.Assets.Values.SelectMany(entry => entry.Outputs.Keys).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool databaseChanged = removedSources.Length > 0;
+        var referenced = database.Assets.Values
+            .SelectMany(entry => entry.Outputs.Keys)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach ((string key, CookedAssetDatabaseEntry entry) in
+                 database.Assets.ToArray())
+        {
+            var outputs = new SortedDictionary<string, ulong>(
+                StringComparer.Ordinal);
+            foreach ((string path, ulong hash) in entry.Outputs)
+                outputs.Add(path, hash);
+            if (outputs.Keys.Any(path => path.EndsWith(
+                    ".pages",
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            foreach (string relativeMeshPath in outputs.Keys
+                         .Where(path => path.EndsWith(
+                             ".njmesh",
+                             StringComparison.OrdinalIgnoreCase))
+                         .ToArray())
+            {
+                string meshPath = Path.GetFullPath(Path.Combine(
+                    outputRoot,
+                    relativeMeshPath));
+                if (!File.Exists(meshPath))
+                    continue;
+                string sidecarPath = ResolveMeshletSidecarPath(meshPath);
+                string relativeSidecarPath = NormalizeRelative(
+                    outputRoot,
+                    sidecarPath);
+                outputs[relativeSidecarPath] = CookedHash.File(sidecarPath);
+                referenced.Add(relativeSidecarPath);
+                databaseChanged = true;
+            }
+
+            if (outputs.Count != entry.Outputs.Count)
+            {
+                database.Assets[key] = entry with
+                {
+                    Outputs = outputs
+                };
+            }
+        }
         int deleted = 0;
         foreach (string file in Directory.EnumerateFiles(outputRoot, "*", SearchOption.AllDirectories))
         {
             string relative = NormalizeRelative(outputRoot, file);
             if (relative.EndsWith(".njassetdb", StringComparison.OrdinalIgnoreCase) || relative.EndsWith(".cook-report.json", StringComparison.OrdinalIgnoreCase) || referenced.Contains(relative))
                 continue;
-            if (Path.GetExtension(file) is ".njmodel" or ".njmesh" or ".njmat" or ".njanim" or ".njtex" or ".ktx2" or ".sig")
+            if (Path.GetExtension(file) is ".njmodel" or ".njmesh" or ".njmat" or ".njanim" or ".njtex" or ".ktx2" or ".pages" or ".sig")
             {
                 File.Delete(file);
                 deleted++;
             }
         }
-        if (removedSources.Length > 0)
+        if (databaseChanged)
             database.SaveAtomic(databasePath);
         return deleted;
     }
@@ -2048,6 +2121,23 @@ public sealed class ModelAssetCooker : IDisposable
             string path = Path.Combine(outputRoot, relativePath);
             if (!File.Exists(path))
                 return CookedOutputsCurrentState.Missing;
+            string extension = Path.GetExtension(path);
+            if (extension.Equals(
+                    ".njmodel",
+                    StringComparison.OrdinalIgnoreCase) ||
+                extension.Equals(
+                    ".njmesh",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    using var reader = new CookedAssetReader(path);
+                }
+                catch (CookedAssetFormatException)
+                {
+                    return CookedOutputsCurrentState.HashMismatch;
+                }
+            }
             if (CookedHash.File(path) != expectedHash)
                 return CookedOutputsCurrentState.HashMismatch;
         }
@@ -2116,6 +2206,49 @@ public sealed class ModelAssetCooker : IDisposable
     }
 
     private static string NormalizeRelative(string root, string path) => Path.GetRelativePath(root, path).Replace('\\', '/');
+
+    private static string ResolveMeshletSidecarPath(string meshPath)
+    {
+        using var reader = new CookedAssetReader(
+            meshPath,
+            CookedAssetKind.Mesh);
+        MeshletStreamingManifest manifest =
+            CookedJson.Deserialize<MeshletStreamingManifest>(
+                reader.GetRequiredSection(
+                    CookedSectionIds.MeshletStreamingManifest).Span,
+                meshPath,
+                "meshlet streaming manifest");
+        manifest.Validate(meshPath);
+        using var pageFile = MeshletStreamingPageFile.Open(
+            meshPath,
+            manifest);
+        return Path.GetFullPath(Path.Combine(
+            Path.GetDirectoryName(meshPath)!,
+            manifest.SidecarFileName));
+    }
+
+    private static bool PreviousEntryOwnsModelOutput(
+        CookedAssetDatabaseEntry? previousEntry,
+        string sourcePath,
+        string outputRoot,
+        string modelPath)
+    {
+        if (previousEntry is null ||
+            !Path.GetFullPath(previousEntry.SourcePath).Equals(
+                sourcePath,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string relativeModelPath = NormalizeRelative(
+            outputRoot,
+            modelPath);
+        return previousEntry.Outputs.Keys.Any(output =>
+            output.Equals(
+                relativeModelPath,
+                StringComparison.OrdinalIgnoreCase));
+    }
 
     private static AssetCookReport CreateSkippedReport(string sourcePath, IReadOnlyDictionary<string, ulong> outputs) => new(
         sourcePath, CookedPackage.StableAssetId(sourcePath), "Succeeded", ModelImportBackend.Auto,

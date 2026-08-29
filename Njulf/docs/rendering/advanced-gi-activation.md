@@ -40,6 +40,12 @@ reason.
 The remaining sections describe the separate qualification-automation path.
 Normal editor use does not require it.
 
+For a strict scene run that proves the receiver cache, accelerated transport
+solver, C1, C3, and C4 were simultaneously effective, executed, and consumed,
+use the fail-closed workflow in
+[`gi-all-on-qualification.md`](gi-all-on-qualification.md). It is deliberately
+stricter than an editor switch or requested/effective mode display.
+
 The standalone launch equivalent is:
 
 ```text

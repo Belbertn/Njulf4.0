@@ -69,6 +69,9 @@ internal interface IModelRenderUploadBackend
 
     uint GetMaterialContentRevision(MaterialHandle handle) => 1U;
 
+    OpacityMicromapMaterialRevision GetOpacityMicromapMaterialRevision(
+        MaterialHandle handle) => new(1U, 1U);
+
     IReadOnlyList<TextureHandle> GetMaterialTextures(MaterialHandle handle);
 
     void RetainMaterial(MaterialHandle handle);
@@ -215,6 +218,16 @@ internal sealed class ModelRenderUploadBackend : IModelRenderUploadBackend
         if (!handle.IsValid)
             throw new ArgumentOutOfRangeException(nameof(handle));
         return _materialManager.GetMaterialContentRevision(handle.Index);
+    }
+
+    public OpacityMicromapMaterialRevision
+        GetOpacityMicromapMaterialRevision(MaterialHandle handle)
+    {
+        if (!handle.IsValid)
+            throw new ArgumentOutOfRangeException(nameof(handle));
+        MaterialAspectRevisions revisions =
+            _materialManager.GetMaterialAspectRevisions(handle);
+        return OpacityMicromapMaterialRevision.From(revisions);
     }
 
     public IReadOnlyList<TextureHandle> GetMaterialTextures(MaterialHandle handle)

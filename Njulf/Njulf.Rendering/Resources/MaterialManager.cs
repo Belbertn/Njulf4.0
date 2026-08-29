@@ -466,6 +466,11 @@ namespace Njulf.Rendering.Resources
         /// </summary>
         public void SetTransportV2Enabled(bool enabled)
         {
+            const MaterialChangeMask transportInterpretationChange =
+                MaterialChangeMask.DiffuseTransport |
+                MaterialChangeMask.Emission |
+                MaterialChangeMask.ShadingModel |
+                MaterialChangeMask.FarField;
             MaterialChangedEvent[] changes;
             lock (_lock)
             {
@@ -498,12 +503,12 @@ namespace Njulf.Rendering.Resources
                     slot.Data = data;
                     slot.AspectRevisions = AdvanceAspectRevisions(
                         slot.AspectRevisions,
-                        MaterialChangeMask.All,
+                        transportInterpretationChange,
                         slot.ContentRevision);
                     _materials[index] = slot;
                     published.Add(new MaterialChangedEvent(
                         new MaterialHandle(index, slot.Generation),
-                        MaterialChangeMask.All,
+                        transportInterpretationChange,
                         slot.AspectRevisions));
                     AddActiveProfileClassificationLocked(slot);
                 }
@@ -511,7 +516,8 @@ namespace Njulf.Rendering.Resources
                 if (published.Count > 0)
                 {
                     MarkMaterialDataDirtyLocked();
-                    AdvanceGiTransportInputRevisionLocked(MaterialChangeMask.All);
+                    AdvanceGiTransportInputRevisionLocked(
+                        transportInterpretationChange);
                 }
                 changes = published.ToArray();
             }

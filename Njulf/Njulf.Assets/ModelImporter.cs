@@ -37,6 +37,7 @@ namespace Njulf.Assets
         {
             options ??= ImporterOptions.Default!;
             ModelLightImportUtilities.ValidateOptions(options);
+            ValidateSamplerOptions(options);
 
             ModelImportBackend backend = ResolveBackend(path, options);
             if (backend == ModelImportBackend.SharpGltf)
@@ -51,6 +52,7 @@ namespace Njulf.Assets
         {
             options ??= ImporterOptions.Default!;
             ModelLightImportUtilities.ValidateOptions(options);
+            ValidateSamplerOptions(options);
             string fullPath = Path.GetFullPath(path);
             ModelImportBackend backend = ResolveBackend(fullPath, options);
 
@@ -499,6 +501,17 @@ namespace Njulf.Assets
             mesh.BoundingSphere = bsphere;
 
             return mesh;
+        }
+
+        private static void ValidateSamplerOptions(ImporterOptions options)
+        {
+            if (!float.IsFinite(options.MaximumSamplerAnisotropy) ||
+                options.MaximumSamplerAnisotropy is < 1f or > 16f)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(options.MaximumSamplerAnisotropy),
+                    "Maximum sampler anisotropy must be finite and in [1, 16].");
+            }
         }
 
         private static unsafe void ImportAssimpLights(

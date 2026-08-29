@@ -953,8 +953,20 @@ namespace Njulf.Rendering.Descriptors
             DdgiDynamicGeometryDescriptorsPerFrame *
             RenderingConstants.FramesInFlight;
 
-        public const int StaticBufferCount =
+        /// <summary>
+        /// Compact mesh-level scene work candidates for frame 0. Appended after
+        /// the published DDGI descriptor arena so every existing index remains
+        /// stable.
+        /// </summary>
+        public const int SceneInstanceCandidateBufferBase =
             DdgiDynamicGeometryBufferBase + DdgiDynamicGeometryBufferCount;
+
+        /// <summary>Compact mesh-level scene work candidates for frame 1.</summary>
+        public const int SceneInstanceCandidateBufferFrame1 =
+            SceneInstanceCandidateBufferBase + 1;
+
+        public const int StaticBufferCount =
+            SceneInstanceCandidateBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1018,8 +1030,10 @@ namespace Njulf.Rendering.Descriptors
                     SimpleDdgiReceiverGatherSurfaceBufferFrame1 => nameof(SimpleDdgiReceiverGatherSurfaceBufferFrame1),
                     SceneGpuLodHistoryBufferBase => nameof(SceneGpuLodHistoryBufferBase),
                     SceneGpuLodHistoryBufferFrame1 => nameof(SceneGpuLodHistoryBufferFrame1),
-                    >= DdgiDynamicGeometryBufferBase and < StaticBufferCount =>
+                    >= DdgiDynamicGeometryBufferBase and < SceneInstanceCandidateBufferBase =>
                         nameof(DdgiDynamicGeometryBufferBase),
+                    SceneInstanceCandidateBufferBase => nameof(SceneInstanceCandidateBufferBase),
+                    SceneInstanceCandidateBufferFrame1 => nameof(SceneInstanceCandidateBufferFrame1),
                     SceneMeshMetadataBuffer => nameof(SceneMeshMetadataBuffer),
                     VertexBuffer => nameof(VertexBuffer),
                     IndexBuffer => nameof(IndexBuffer),

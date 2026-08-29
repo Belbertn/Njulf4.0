@@ -85,6 +85,9 @@ internal static class SharpGltfModelMeshConverter
         model.Materials.AddRange(CreateMaterials(root, fullPath, diagnostics, imageSourceHints));
         if (model.Materials.Count == 0)
             model.Materials.Add(ModelMaterial.Default);
+        ApplyMaximumSamplerAnisotropy(
+            model.Materials,
+            options.MaximumSamplerAnisotropy);
 
         SkinImportContext skinContext = ImportSkins(root, model, options.GlobalScale);
         ImportAnimations(root, model, options.GlobalScale, skinContext.AnimationJointByNode);
@@ -537,6 +540,46 @@ internal static class SharpGltfModelMeshConverter
             }
             imported.WaterNormalUvScale0 = scales.X;
             imported.WaterNormalUvScale1 = scales.Y;
+        }
+    }
+
+    private static void ApplyMaximumSamplerAnisotropy(
+        IEnumerable<ModelMaterial> materials,
+        float maximumAnisotropy)
+    {
+        if (BitConverter.SingleToUInt32Bits(maximumAnisotropy) ==
+            BitConverter.SingleToUInt32Bits(
+                TextureSamplerDescription.Default.MaxAnisotropy))
+        {
+            return;
+        }
+
+        System.Reflection.PropertyInfo[] slotProperties =
+            typeof(ModelMaterial).GetProperties()
+                .Where(static property =>
+                    property.CanRead && property.CanWrite &&
+                    property.PropertyType == typeof(ModelTextureSlot))
+                .ToArray();
+        foreach (ModelMaterial material in materials)
+        {
+            foreach (System.Reflection.PropertyInfo property in slotProperties)
+            {
+                if (property.GetValue(material) is not ModelTextureSlot slot)
+                    continue;
+                property.SetValue(material, new ModelTextureSlot
+                {
+                    Source = slot.Source,
+                    Sampler = slot.Sampler with
+                    {
+                        MaxAnisotropy = maximumAnisotropy
+                    },
+                    ColorSpace = slot.ColorSpace,
+                    TexCoordSet = slot.TexCoordSet,
+                    Offset = slot.Offset,
+                    Scale = slot.Scale,
+                    RotationRadians = slot.RotationRadians
+                });
+            }
         }
     }
 

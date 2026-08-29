@@ -110,6 +110,18 @@ public sealed class SampleSmokeOptionsParserTests
             "NJULF_RENDERER_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_MODE",
             null);
         Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_SIMPLE_DDGI_RECEIVER_CACHE_MODE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_SIMPLE_DDGI_TRANSPORT_ACCELERATION",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_SIMPLE_DDGI_TRANSPORT_ACCELERATED_SWEEPS",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_GI_ALL_ON_QUALIFICATION_REPORT",
+            null);
+        Environment.SetEnvironmentVariable(
             "NJULF_SIMPLE_DDGI_RECEIVER_FEEDBACK_QUALIFICATION_ID",
             null);
         Environment.SetEnvironmentVariable(
@@ -2060,6 +2072,87 @@ public sealed class SampleSmokeOptionsParserTests
                 Throws.ArgumentException.With.Message.Contains(
                     "at most 256"));
         });
+    }
+
+    [Test]
+    public void AllOnGiQualificationPinsCanonicalActiveProfile()
+    {
+        string report = Path.Combine(
+            Path.GetTempPath(),
+            "gi-all-on-runtime-qualification.json");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--gi-all-on-qualification-report", report
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.GiAllOnQualificationReportPath,
+                Is.EqualTo(Path.GetFullPath(report)));
+            Assert.That(options.SceneKind,
+                Is.EqualTo(SampleSceneKind.MaterialShowcase));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount,
+                Is.EqualTo(
+                    SampleGiAllOnQualificationContract
+                        .DefaultMaximumFrameCount));
+            Assert.That(options.QualityPresetOverride,
+                Is.EqualTo(RenderQualityPreset.DdgiHigh));
+            Assert.That(options.ValidationMode,
+                Is.EqualTo(RendererValidationMode.Standard));
+            Assert.That(options.FailOnValidationMessage, Is.True);
+            Assert.That(options.SimpleDdgiSchedulerModeOverride,
+                Is.EqualTo(SimpleDdgiSchedulerMode.GpuResident));
+            Assert.That(options.SimpleDdgiReceiverCacheModeOverride,
+                Is.EqualTo(SimpleDdgiReceiverCacheMode.TemporalAdaptive));
+            Assert.That(options.SimpleDdgiTransportAccelerationEnabledOverride,
+                Is.True);
+            Assert.That(options.SimpleDdgiTransportAcceleratedSweepCountOverride,
+                Is.EqualTo(2));
+            Assert.That(options.DdgiOpacityMicromapModeOverride,
+                Is.EqualTo(
+                    DdgiOpacityMicromapMode.ExtFourStateExperiment));
+            Assert.That(options.SimpleDdgiDirectionalGuidingModeOverride,
+                Is.EqualTo(SimpleDdgiDirectionalGuidingMode
+                    .PerProbeHistogramExperiment));
+            Assert.That(options.GiCausticModeOverride,
+                Is.EqualTo(GiCausticMode.WorldCacheExperiment));
+            Assert.That(options.UsesDeterministicSimulationClock, Is.True);
+            Assert.That(
+                HelloGame.RequiresControlledProductionWindow(options),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void AllOnGiQualificationRejectsDisabledFeatureOverride()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(
+            [
+                "--gi-all-on-qualification-report", "all-on.json",
+                "--simple-ddgi-transport-acceleration=false"
+            ]),
+            Throws.ArgumentException.With.Message.Contains(
+                "canonical all-on GI profile"));
+    }
+
+    [TestCase("--validation=off", "requires --validation standard")]
+    [TestCase("--validation=all", "requires --validation standard")]
+    [TestCase("--fail-on-validation-message=false",
+        "requires --fail-on-validation-message=true")]
+    public void AllOnGiQualificationRejectsNonCanonicalValidation(
+        string option,
+        string expectedMessage)
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(
+            [
+                "--gi-all-on-qualification-report", "all-on.json",
+                option
+            ]),
+            Throws.ArgumentException.With.Message.Contains(expectedMessage));
     }
 
     [Test]

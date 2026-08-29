@@ -612,6 +612,10 @@ public sealed unsafe class AccelerationStructureManagerTests
                 sceneContentRevision: 5,
                 policy,
                 new[] { rotatedFrameResources });
+        ulong baselineBuildSignature = AccelerationStructureManager
+            .CreateInstanceSignature(new[] { instance });
+        ulong rotatedBuildSignature = AccelerationStructureManager
+            .CreateInstanceSignature(new[] { rotatedFrameResources });
         ulong poseChanged = AccelerationStructureManager
             .CreateRaySceneContentSignature(
                 enabled: true,
@@ -627,6 +631,9 @@ public sealed unsafe class AccelerationStructureManagerTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(rotatedBuildSignature,
+                Is.Not.EqualTo(baselineBuildSignature),
+                "The TLAS must still rebuild when rotating physical frame resources.");
             Assert.That(frameRotated, Is.EqualTo(baseline));
             Assert.That(poseChanged, Is.Not.EqualTo(baseline));
             Assert.That(materialChanged, Is.Not.EqualTo(baseline));
@@ -701,6 +708,27 @@ public sealed unsafe class AccelerationStructureManagerTests
                 .EffectiveDynamicStorageBudgetBytes,
                 Is.Zero);
         });
+    }
+
+    [TestCase(true, 0, true, true, false)]
+    [TestCase(true, 0, true, false, true)]
+    [TestCase(true, 0, false, true, true)]
+    [TestCase(true, 1, true, false, false)]
+    [TestCase(false, 0, true, false, false)]
+    public void CoarseRayProxyPolicy_PreservesExactOpacityMicromapTopology(
+        bool proxyAvailable,
+        int domainValue,
+        bool ommEnabled,
+        bool matchingRegistration,
+        bool expected)
+    {
+        Assert.That(
+            AccelerationStructureManager.ShouldUseCoarseRayProxyForInstance(
+                proxyAvailable,
+                (AccelerationStructureGeometryDomain)domainValue,
+                ommEnabled,
+                matchingRegistration),
+            Is.EqualTo(expected));
     }
 
     [Test]

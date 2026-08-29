@@ -145,7 +145,26 @@ public sealed class ProcessedMeshAssetBuilderTests
                 nextFirstMeshlet += range.MeshletCount;
             }
 
-            Assert.That(nextFirstMeshlet, Is.EqualTo(subMesh.Meshlets.Length), subMesh.Name);
+            Assert.That(
+                nextFirstMeshlet,
+                Is.LessThanOrEqualTo(subMesh.Meshlets.Length),
+                subMesh.Name);
+            int hierarchyMeshletCount =
+                subMesh.Meshlets.Length - nextFirstMeshlet;
+            if (hierarchyMeshletCount != 0)
+            {
+                Assert.That(
+                    subMesh.HierarchyNodes,
+                    Is.Not.Empty,
+                    $"{subMesh.Name} hierarchy geometry requires nodes");
+            }
+            if (subMesh.HierarchyNodes.Length != 0)
+            {
+                Assert.That(
+                    subMesh.HierarchyRootNode,
+                    Is.InRange(0, subMesh.HierarchyNodes.Length - 1),
+                    $"{subMesh.Name} hierarchy root");
+            }
         });
     }
 

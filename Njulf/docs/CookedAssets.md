@@ -54,9 +54,34 @@ increasing `sequence`, stable event/stage/outcome names, and separate
 fields. Progress configuration is diagnostic only: it is not included in cook
 identity, reports, or the asset database.
 
-Mesh payloads contain renderer-ready streams plus deterministic meshlet LOD0/1/2, simplified to approximately 100%, 50%, and 20% triangle density. Mesh format 1.4 stores a 64-byte meshlet record with a full-precision cosine geometric-normal cone and the unique `(axis = 0, cutoff = -1)` disabled sentinel. Format 1.3's earlier sine cutoff is converted conservatively while loading; versions 1.0-1.2 retain their 48-byte record and are expanded with disabled cones. Recooking is required to obtain the corrected authored cone directly. Win-x64 and linux-x64 use meshoptimizer encoding; other RIDs use zstd until a compatible native decoder is available.
+Model/Mesh 2.0 payloads contain renderer-ready streams plus deterministic
+meshlet LOD0/1/2, absolute object-space simplification errors,
+appearance-aware simplification, conservative normal cones, bottom-up
+hierarchy nodes, and a conservative static ray-query proxy. Each mesh package
+owns a content-addressed, independently authenticated 64 KiB page sidecar.
+Model/Mesh 1.x is a hard recook boundary because its quality metadata cannot be
+reinterpreted safely. Win-x64 and linux-x64 use meshoptimizer encoding; other
+RIDs use zstd until a compatible native decoder is available. See
+[the Meshlet System v2 contract](rendering/meshlet-system-v2.md) for the full
+runtime and residency invariants.
 
 Textures default to semantic BC formats in plain, non-supercompressed KTX2 containers: BC7 for color/data, BC5 for normal maps, BC4 for scalar maps, and BC6H for HDR. Full mip chains and color-correct filtering are generated offline. macOS currently selects RGBA8 pending an ASTC target profile. Use `--texture-format rgba8` when an uncompressed diagnostic output is useful.
+
+## C1 opacity-micromap fixture
+
+The all-on GI fixture uses a real alpha-masked grass asset and must not source-
+fallback during qualification. Run `tools/cook-gi-all-on-c1.ps1` to force a
+SharpGLTF RGBA8 cook with sampler anisotropy fixed to 1, the reviewed native
+OMM bridge, and its provenance record. The script then calls
+`Njulf.AssetTool advanced-gi verify-c1-model` and rejects a missing, rejected,
+empty, or non-four-state optional section. Maximum sampler anisotropy is part
+of the importer options and therefore the cook settings identity.
+
+The NVIDIA OMM 1.9.2 CPU API treats a nonzero mip `rowPitch` as a texel count,
+not a byte count. The pinned bridge supplies the canonical zero sentinel for
+tightly packed FP32 alpha data; using `width * sizeof(float)` would stride four
+times too far and read outside the pinned texture after row 255 of a 1024-wide
+image.
 
 The output layout is:
 
@@ -64,7 +89,7 @@ The output layout is:
 Cooked/
   win-x64/
     assetdb.njassetdb
-    models/*.njmodel, *.njmesh, *.njanim
+    models/*.njmodel, *.njmesh, *.njmesh.meshlets-*.pages, *.njanim
     materials/*.njmat
     textures/*.ktx2, *.njtex
     reports/*.cook-report.json

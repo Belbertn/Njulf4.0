@@ -152,6 +152,8 @@ internal sealed unsafe class GiCausticScreenGpuPass : IDisposable
         ValidateRecordInputs(commandBuffer, sceneData, pushConstants,
             scratchBuffer);
 
+        RepublishStorageRead(_targets.GiCausticRadiance!, commandBuffer);
+        RepublishStorageRead(_targets.GiCausticMoments!, commandBuffer);
         RepublishStorageReadWrite(_targets.SceneColor, commandBuffer);
         DescriptorSet descriptorSet = _descriptorSets[frameIndex];
         BindAndPush(commandBuffer, _compositePipeline, descriptorSet,
@@ -738,6 +740,15 @@ internal sealed unsafe class GiCausticScreenGpuPass : IDisposable
         ImageLayout.General,
         PipelineStageFlags2.ComputeShaderBit,
         AccessFlags2.ShaderStorageWriteBit,
+        force: true);
+
+    private static void RepublishStorageRead(
+        RenderTarget target,
+        CommandBuffer commandBuffer) => target.TransitionToLayout(
+        commandBuffer,
+        ImageLayout.General,
+        PipelineStageFlags2.ComputeShaderBit,
+        AccessFlags2.ShaderStorageReadBit,
         force: true);
 
     private static void RepublishStorageReadWrite(

@@ -610,6 +610,10 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.GpuHybridReflectionCompositeMicroseconds,
             StableSceneInputUploadBytes = sceneData.StableSceneInputUploadBytes,
             CpuCandidateListUploadBytes = sceneData.CpuCandidateListUploadBytes,
+            SceneInstanceCandidateUploadBytes =
+                sceneData.SceneInstanceCandidateUploadBytes,
+            SceneInstanceCandidateBufferSize =
+                sceneData.SceneInstanceCandidateBufferSize,
             CameraDrivenCpuDrawListRebuilt = sceneData.CameraDrivenCpuDrawListRebuilt,
             SolidObjectCount = sceneData.SolidObjectCount,
             GeometryDecalObjectCount = sceneData.GeometryDecalObjectCount,
@@ -778,6 +782,17 @@ internal sealed class RendererDiagnosticsAssembler
             SimpleDdgiTransportTailRelativeTolerance = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportTailRelativeTolerance : 0.0f,
             SimpleDdgiTransportAcceleratedSweepCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportAcceleratedSweepCount : 0,
             SimpleDdgiTransportAccelerationEnabled = giUsesSimpleDdgi && sceneData.SimpleDdgiTransportAccelerationEnabled,
+            SimpleDdgiTransportAccelerationRuntimeAvailable = giUsesSimpleDdgi &&
+                sceneData.SimpleDdgiTransportAccelerationRuntimeAvailable,
+            SimpleDdgiTransportAcceleratedDispatchCount = giUsesSimpleDdgi
+                ? sceneData.SimpleDdgiTransportAcceleratedDispatchCount
+                : 0,
+            SimpleDdgiTransportAcceleratedCanonicalPublicationCount = giUsesSimpleDdgi
+                ? sceneData.SimpleDdgiTransportAcceleratedCanonicalPublicationCount
+                : 0,
+            SimpleDdgiTransportAcceleratedFinalPublicationCount = giUsesSimpleDdgi
+                ? sceneData.SimpleDdgiTransportAcceleratedFinalPublicationCount
+                : 0,
             SimpleDdgiTransportTailCertificationEnabled = giUsesSimpleDdgi && sceneData.SimpleDdgiTransportTailCertificationEnabled,
             SimpleDdgiTransportTailCertificationFallbackReason = giUsesSimpleDdgi
                 ? sceneData.SimpleDdgiTransportTailCertificationFallbackReason
@@ -2190,6 +2205,28 @@ internal sealed class RendererDiagnosticsAssembler
             SceneSubmissionGpuCompactionEnabled = sceneData.SceneSubmissionGpuCompactionEnabled ? 1 : 0,
             SceneSubmissionIndirectMeshletDispatchEnabled = sceneData.SceneSubmissionIndirectMeshletDispatchEnabled ? 1 : 0,
             SceneSubmissionGpuLodSelectionEnabled = sceneData.SceneSubmissionGpuLodSelectionEnabled ? 1 : 0,
+            SceneSubmissionGpuInstanceExpansionEnabled =
+                sceneData.SceneSubmissionGpuInstanceExpansionEnabled ? 1 : 0,
+            SceneSubmissionGpuInstanceExpansionActive =
+                sceneData.SceneSubmissionGpuInstanceExpansionActive ? 1 : 0,
+            SceneSubmissionInstanceCandidateCount =
+                sceneData.SceneInstanceCandidateCount,
+            SceneSubmissionGpuLodDitherTransitionsEnabled =
+                sceneData.SceneSubmissionGpuLodDitherTransitionsEnabled ? 1 : 0,
+            SceneSubmissionGpuLodDitherTransitionsActive =
+                sceneData.SceneSubmissionGpuLodDitherTransitionsActive ? 1 : 0,
+            SceneSubmissionGpuLodTransitionFrameCount =
+                sceneData.SceneSubmissionGpuLodTransitionFrameCount,
+            SceneSubmissionGpuHierarchicalLodEnabled =
+                sceneData.SceneSubmissionGpuHierarchicalLodEnabled ? 1 : 0,
+            SceneSubmissionGpuHierarchicalLodActive =
+                sceneData.SceneSubmissionGpuHierarchicalLodActive ? 1 : 0,
+            SceneSubmissionGpuHierarchicalInstanceCount =
+                sceneData.SceneSubmissionGpuHierarchicalInstanceCount,
+            SceneSubmissionGpuHierarchySelectedNodeCount =
+                sceneData.SceneSubmissionGpuHierarchySelectedNodeCount,
+            SceneSubmissionGpuHierarchyTraversalFallbackCount =
+                sceneData.SceneSubmissionGpuHierarchyTraversalFallbackCount,
             SceneSubmissionGpuShadowCompactionEnabled = sceneData.SceneSubmissionGpuShadowCompactionEnabled ? 1 : 0,
             SceneSubmissionValidationCompareCpuGpuLists = sceneData.SceneSubmissionValidationCompareCpuGpuLists ? 1 : 0,
             SceneSubmissionGpuCompactionActive = sceneData.SceneSubmissionGpuCompactionActive ? 1 : 0,
@@ -2658,6 +2695,14 @@ internal sealed class RendererDiagnosticsAssembler
                  _forwardPlusPass?.ConsumedSimpleDdgiReceiverCacheForCurrentView == true
                      ? 1
                      : 0,
+            ForwardGiReceiverCacheGenerated =
+                 _forwardPlusPass?.GeneratedSimpleDdgiReceiverCacheForCurrentView == true
+                     ? 1
+                     : 0,
+            GiCausticReceiverPayloadCompleted =
+                 sceneData.GiCausticReceiverPayloadCompleted ? 1 : 0,
+            GiCausticReceiverPayloadFrameSerial =
+                 sceneData.GiCausticReceiverPayloadFrameSerial,
             ForwardGiDisabledPipelineUsed =
                  _forwardPlusPass?.UsedForwardGiDisabledPipelineForCurrentView == true
                      ? 1

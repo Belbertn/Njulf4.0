@@ -61,8 +61,16 @@ namespace Njulf.Rendering.Memory
             MemoryUsage memoryUsage,
             AllocationCreateFlags allocFlags = default,
             string? debugName = null,
-            MemoryBudgetCategory category = MemoryBudgetCategory.Unknown)
+            MemoryBudgetCategory category = MemoryBudgetCategory.Unknown,
+            ulong minimumAlignment = 0UL)
         {
+            if (minimumAlignment != 0UL &&
+                (minimumAlignment & (minimumAlignment - 1UL)) != 0UL)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(minimumAlignment),
+                    "A requested buffer allocation alignment must be a power of two.");
+            }
             lock (_lock)
             {
                 int index = _freeIndices.Count > 0 ? _freeIndices.Pop() : _buffers.Count;
@@ -91,13 +99,22 @@ namespace Njulf.Rendering.Memory
                 Buffer buffer;
                 Allocation* allocation;
                 AllocationInfo allocationInfo;
-                Result result = GpuAllocator.Apis.CreateBuffer(
-                    _context.Allocator,
-                    &bufferCreateInfo,
-                    &allocCreateInfo,
-                    &buffer,
-                    &allocation,
-                    &allocationInfo);
+                Result result = minimumAlignment == 0UL
+                    ? GpuAllocator.Apis.CreateBuffer(
+                        _context.Allocator,
+                        &bufferCreateInfo,
+                        &allocCreateInfo,
+                        &buffer,
+                        &allocation,
+                        &allocationInfo)
+                    : GpuAllocator.Apis.CreateBufferWithAlignment(
+                        _context.Allocator,
+                        &bufferCreateInfo,
+                        &allocCreateInfo,
+                        minimumAlignment,
+                        &buffer,
+                        &allocation,
+                        &allocationInfo);
                 
                 if (result != Result.Success)
                 {
@@ -358,7 +375,8 @@ namespace Njulf.Rendering.Memory
             BufferUsageFlags usage,
             bool requireDeviceAddress = false,
             MemoryBudgetCategory category = MemoryBudgetCategory.Unknown,
-            string? debugName = null)
+            string? debugName = null,
+            ulong minimumAlignment = 0UL)
         {
             var allocFlags = default(AllocationCreateFlags);
             
@@ -369,7 +387,14 @@ namespace Njulf.Rendering.Memory
             if (requireDeviceAddress)
                 usage |= BufferUsageFlags.ShaderDeviceAddressBit;
             
-            return CreateBuffer(size, usage, memoryUsage, allocFlags, debugName, category);
+            return CreateBuffer(
+                size,
+                usage,
+                memoryUsage,
+                allocFlags,
+                debugName,
+                category,
+                minimumAlignment);
         }
         
         public void Dispose()

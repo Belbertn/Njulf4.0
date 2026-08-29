@@ -177,9 +177,51 @@ public sealed class GiCausticTaskGenerationTests
     }
 
     [Test]
+    public void TaskValidation_MatchesRoughDielectricAndSpecularAuthoringPolicy()
+    {
+        const uint generation = 7u;
+        const uint taskCount = 16u;
+        var task = new GPUCausticPhotonTaskV1
+        {
+            AbiVersion = GiCausticGpuAbi.Version,
+            CacheGeneration = generation,
+            StableTaskIdLow = 1u,
+            StableTaskIdHigh = 2u,
+            HeroInstanceId = 3u,
+            HeroMaterialRevisionLow = 4u,
+            SourceId = 5u,
+            Flags = GiCausticGpuTaskFlags.AuthoredHero |
+                GiCausticGpuTaskFlags.ClosedDielectricHero,
+            OriginAndSelectionPdf = new Vector4(Vector3.Zero, 0.5f),
+            DirectionAndPathPdf = new Vector4(Vector3.UnitZ, 0.25f),
+            EmittedContributionAndPositionPdf = new Vector4(
+                1.0f, 0.5f, 0.25f, 0.5f),
+            InitialFluxAndDirectionPdf = new Vector4(
+                4.0f, 2.0f, 1.0f, 0.25f),
+            HeroOptics = new Vector4(1.5f, 0.65f, 0.01f, 0.001f),
+            AbsorptionAndMaximumDistance = new Vector4(
+                0.0f, 0.0f, 0.0f, 100.0f)
+        };
+        GPUCausticPhotonTaskV1 roughSpecular = task;
+        roughSpecular.Flags = GiCausticGpuTaskFlags.AuthoredHero |
+            GiCausticGpuTaskFlags.RoughSpecularReference;
+        roughSpecular.HeroOptics.Y = 0.03f;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(task.IsInputValid(generation, taskCount), Is.True,
+                "The trace backend supports rough closed-dielectric interfaces.");
+            Assert.That(roughSpecular.IsInputValid(generation, taskCount),
+                Is.True,
+                "Task validation must use the dielectric transport delta threshold.");
+        });
+    }
+
+    [Test]
     public void ShaderContracts_GenerateOnGpuAndApplyReceiverBrdfExactlyOnce()
     {
         string tasks = ReadRepoText("Njulf.Shaders", "gi_caustic_tasks.comp");
+        string shared = ReadRepoText("Njulf.Shaders", "gi_caustic_shared.glsl");
         string resolve = ReadRepoText("Njulf.Shaders", "gi_caustic_resolve.comp");
 
         Assert.Multiple(() =>
@@ -190,6 +232,16 @@ public sealed class GiCausticTaskGenerationTests
             Assert.That(tasks, Does.Contain("targetPdf"));
             Assert.That(tasks, Does.Contain("emitterPdf * casterPdf"));
             Assert.That(tasks, Does.Contain("positionPdf * directionPdf"));
+            Assert.That(tasks, Does.Contain(
+                "bool insideTargetSupport = targetBranch ||"),
+                "A sample drawn from the target proposal must remain in that " +
+                "proposal's support after finite-precision normalization.");
+            Assert.That(shared, Does.Contain(
+                "GI_CAUSTIC_ROUGH_SPECULAR_MINIMUM_ROUGHNESS"));
+            Assert.That(shared, Does.Not.Contain(
+                "roughness <= 0.04 && ior > 1.0"),
+                "Closed-dielectric roughness is handled by the microfacet " +
+                "interface sampler and must not be constrained to mirror scope.");
             Assert.That(resolve,
                 Does.Contain("flux * kernelWeight * diffuseBrdf"));
             Assert.That(resolve, Does.Contain("dot(photonNormal, receiverNormal)"));

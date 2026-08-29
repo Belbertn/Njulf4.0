@@ -106,26 +106,39 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_full_input_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_weighted_oit.frag.spv' = 26
     # Surface-aware cache programs retain the canonical exact gather behind a
-    # fail-closed rejection branch. The 14 pinned sparse receiver operations
-    # are therefore present in SPIR-V but execute only for rejected fragments.
-    'forward_opaque_ddgi_cache_required.frag.spv' = 14
-    'forward_opaque_simple_ddgi_cache_required.frag.spv' = 14
-    'forward_opaque_simple_full_input_ddgi_cache_required.frag.spv' = 14
-    'forward_opaque_ddgi_near_field_direct_source_cache_required.frag.spv' = 14
-    'forward_opaque_simple_ddgi_near_field_direct_source_cache_required.frag.spv' = 14
-    'forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag.spv' = 14
-    'forward_opaque_ddgi_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_ddgi_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_full_input_ddgi_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_full_input_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_full_input_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 14
+    # fail-closed rejection branch. They also retain the seven bounded B1
+    # ownership operations needed by alpha-masked fragments. The former only
+    # execute for rejected cache samples; the latter only execute for accepted
+    # B1 producers, allowing cache consumption and exact ownership in one draw.
+    'forward_opaque_ddgi_cache_required.frag.spv' = 21
+    'forward_opaque_simple_ddgi_cache_required.frag.spv' = 21
+    'forward_opaque_simple_full_input_ddgi_cache_required.frag.spv' = 21
+    'forward_opaque_ddgi_near_field_direct_source_cache_required.frag.spv' = 21
+    'forward_opaque_simple_ddgi_near_field_direct_source_cache_required.frag.spv' = 21
+    'forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag.spv' = 21
+    'forward_opaque_ddgi_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_simple_ddgi_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_simple_full_input_ddgi_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_ddgi_c4_receiver_cache_required.frag.spv' = 21
+    'forward_opaque_simple_ddgi_c4_receiver_cache_required.frag.spv' = 21
+    'forward_opaque_simple_full_input_ddgi_c4_receiver_cache_required.frag.spv' = 21
+    'forward_opaque_ddgi_c4_c5_cache_required.frag.spv' = 21
+    'forward_opaque_simple_ddgi_c4_c5_cache_required.frag.spv' = 21
+    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required.frag.spv' = 21
+    'forward_opaque_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_simple_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_simple_full_input_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_simple_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_simple_full_input_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 21
+    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 21
+    # Legacy cache variants do not compile the canonical rejection gather, but
+    # still carry the same seven exact B1 ownership operations.
+    'forward_opaque_ddgi_cache_legacy.frag.spv' = 7
+    'forward_opaque_simple_ddgi_cache_legacy.frag.spv' = 7
+    'forward_opaque_simple_full_input_ddgi_cache_legacy.frag.spv' = 7
     # The transparent compatibility artifact retains its 12 reflection-source
     # operations plus the same 14 exact rejection-path receiver operations.
     'forward_transparent_ddgi_cache_required.frag.spv' = 26
@@ -201,9 +214,9 @@ $algorithmicAtomicCounts = @{
     # artifacts. Pin their complete static add count here so no diagnostic
     # operation can leak into the zero-add production/cache-debug siblings.
     'ddgi_simple_receiver_cache_resolve_diagnostics.comp.spv' = 6
-    'forward_opaque_ddgi_cache_required_diagnostics.frag.spv' = 18
-    'forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv' = 18
-    'forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv' = 18
+    'forward_opaque_ddgi_cache_required_diagnostics.frag.spv' = 25
+    'forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv' = 25
+    'forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv' = 25
 
     # Sparse page classification, reconciliation, fixed feedback reduction,
     # and generation-safe update lifecycle attribution.

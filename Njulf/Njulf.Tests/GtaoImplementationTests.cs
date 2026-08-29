@@ -64,6 +64,18 @@ public sealed class GtaoImplementationTests
         foreach (var entry in expected)
         {
             var settings = new RenderSettings();
+            settings.SceneSubmission.GpuCompactionEnabled = false;
+            settings.SceneSubmission.IndirectMeshletDispatchEnabled = false;
+            settings.SceneSubmission.GpuLodSelectionEnabled = false;
+            settings.SceneSubmission.GpuLodSelectionMode =
+                GpuLodSelectionMode.LegacyDistance;
+            settings.SceneSubmission.GpuLodDitherTransitionsEnabled = false;
+            settings.SceneSubmission.GpuLodTransitionFrameCount = 2;
+            settings.SceneSubmission.GpuHierarchicalLodEnabled = false;
+            settings.SceneSubmission.GpuMeshletStreamingEnabled = false;
+            settings.SceneSubmission.GpuShadowCompactionEnabled = false;
+            settings.Foliage.IndirectMeshletDispatchEnabled = false;
+            settings.MeshletNormalConeCullingEnabled = false;
             settings.ApplyQualityPreset(entry.Item1);
             Assert.Multiple(() =>
             {
@@ -80,6 +92,35 @@ public sealed class GtaoImplementationTests
                         .SimpleDdgiNearFieldResidualLocalAdaptiveSchedulingEnabled,
                     Is.EqualTo(entry.Item6), entry.Item1.ToString());
                 Assert.That(settings.MeshletNormalConeCullingEnabled,
+                    Is.True, entry.Item1.ToString());
+                Assert.That(settings.SceneSubmission.GpuCompactionEnabled,
+                    Is.True, entry.Item1.ToString());
+                Assert.That(settings.SceneSubmission
+                        .IndirectMeshletDispatchEnabled,
+                    Is.True, entry.Item1.ToString());
+                Assert.That(settings.SceneSubmission.GpuLodSelectionEnabled,
+                    Is.True, entry.Item1.ToString());
+                Assert.That(settings.SceneSubmission.GpuLodSelectionMode,
+                    Is.EqualTo(GpuLodSelectionMode.ScreenSpaceError),
+                    entry.Item1.ToString());
+                Assert.That(settings.SceneSubmission
+                        .GpuLodDitherTransitionsEnabled,
+                    Is.True, entry.Item1.ToString());
+                Assert.That(settings.SceneSubmission
+                        .GpuLodTransitionFrameCount,
+                    Is.EqualTo(SceneSubmissionSettings
+                        .DefaultGpuLodTransitionFrameCount),
+                    entry.Item1.ToString());
+                Assert.That(settings.SceneSubmission
+                        .GpuHierarchicalLodEnabled,
+                    Is.True, entry.Item1.ToString());
+                Assert.That(settings.SceneSubmission
+                        .GpuMeshletStreamingEnabled,
+                    Is.True, entry.Item1.ToString());
+                Assert.That(settings.SceneSubmission
+                        .GpuShadowCompactionEnabled,
+                    Is.True, entry.Item1.ToString());
+                Assert.That(settings.Foliage.IndirectMeshletDispatchEnabled,
                     Is.True, entry.Item1.ToString());
                 Assert.That(settings.Transparency.PipelinePartitioningEnabled,
                     Is.True, entry.Item1.ToString());

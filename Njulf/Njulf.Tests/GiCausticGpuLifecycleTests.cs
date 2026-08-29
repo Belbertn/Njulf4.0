@@ -155,6 +155,78 @@ public sealed class GiCausticGpuLifecycleTests
     }
 
     [Test]
+    public void FirstBuild_ReadabilityProbeDoesNotCancelPendingPublication()
+    {
+        GiCausticGpuResourceLayout layout = CreateValidLayout();
+        using var manager = new GiCausticGpuResourceManager();
+        manager.Reconcile(
+            new GiCausticGpuRuntimeRequest(true, layout, FullySupported()),
+            new FakeAllocator());
+        GiCausticCacheRevision revision = CreateRevision(73UL);
+        GiCausticGpuBuildBeginResult begin = manager.BeginBuild(
+            revision, 4, new Vector4(0.0f, 0.0f, 0.0f, 0.5f));
+
+        bool prematurelyReadable = manager.TryGetReadable(
+            revision, out _, out _, out _);
+        GiCausticGpuRuntimeSnapshot pending = manager.Snapshot;
+        GiCausticGpuPublicationResult publication = manager.CompleteBuild(
+            begin.Token,
+            true,
+            CreateCompleteHeader(begin.Token, layout));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(begin.Started, Is.True, begin.Reason);
+            Assert.That(prematurelyReadable, Is.False);
+            Assert.That(pending.State,
+                Is.EqualTo(GiCausticGpuResourceState.Building));
+            Assert.That(pending.PendingGeneration,
+                Is.EqualTo(begin.Token.CacheGeneration));
+            Assert.That(publication.Published, Is.True, publication.Reason);
+            Assert.That(manager.TryGetReadable(
+                revision, out _, out _, out _), Is.True);
+            Assert.That(manager.InvalidationCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void StaleReadBankRejection_PreservesMatchingReplacementBuild()
+    {
+        GiCausticGpuResourceLayout layout = CreateValidLayout();
+        using var manager = new GiCausticGpuResourceManager();
+        manager.Reconcile(
+            new GiCausticGpuRuntimeRequest(true, layout, FullySupported()),
+            new FakeAllocator());
+        GiCausticCacheRevision original = CreateRevision(81UL);
+        GiCausticGpuBuildBeginResult first = manager.BeginBuild(
+            original, 4, new Vector4(0.0f, 0.0f, 0.0f, 0.5f));
+        Assert.That(manager.CompleteBuild(
+            first.Token,
+            true,
+            CreateCompleteHeader(first.Token, layout)).Published,
+            Is.True);
+
+        GiCausticCacheRevision replacement = CreateRevision(82UL);
+        GiCausticGpuBuildBeginResult second = manager.BeginBuild(
+            replacement, 4, new Vector4(0.0f, 0.0f, 0.0f, 0.5f));
+        Assert.That(manager.TryGetReadable(
+            replacement, out _, out _, out _), Is.False);
+        GiCausticGpuPublicationResult publication = manager.CompleteBuild(
+            second.Token,
+            true,
+            CreateCompleteHeader(second.Token, layout));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Started, Is.True, second.Reason);
+            Assert.That(publication.Published, Is.True, publication.Reason);
+            Assert.That(manager.TryGetReadable(
+                replacement, out _, out _, out _), Is.True);
+            Assert.That(manager.InvalidationCount, Is.EqualTo(1UL));
+        });
+    }
+
+    [Test]
     public void Lifecycle_PublishesOnlyValidatedHeaderAndInvalidatesOnRevisionChange()
     {
         GiCausticGpuResourceLayout layout = CreateValidLayout();

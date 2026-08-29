@@ -166,6 +166,35 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void BuildMeshlets_UsesTightConservativeSphereBounds()
+        {
+            Vector3[] vertices =
+            [
+                new(-10f, 0f, 0f),
+                new(1f, 0f, 0f),
+                new(1f, 1f, 0f)
+            ];
+
+            Meshlet meshlet = new MeshletBuilder(
+                maxTrianglesPerMeshlet: 4).BuildMeshlets(
+                vertices,
+                [0u, 1u, 2u]).Meshlets.Single();
+
+            Vector3 centroid = (vertices[0] + vertices[1] + vertices[2]) / 3f;
+            float centroidRadius = vertices.Max(vertex => Vector3.Distance(centroid, vertex));
+            Assert.Multiple(() =>
+            {
+                Assert.That(meshlet.BoundingSphereRadius, Is.LessThan(centroidRadius));
+                foreach (Vector3 vertex in vertices)
+                {
+                    Assert.That(
+                        Vector3.Distance(meshlet.BoundingSphereCenter, vertex),
+                        Is.LessThanOrEqualTo(meshlet.BoundingSphereRadius + 1e-6f));
+                }
+            });
+        }
+
         private static void AssertMeshletOutputIsValid(MeshletMesh mesh, int expectedTriangleCount)
         {
             Assert.Multiple(() =>

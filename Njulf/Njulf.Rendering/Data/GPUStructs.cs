@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using Njulf.Core.Geometry;
 using Njulf.Core.Math;
 using Njulf.Rendering.Resources;
 
@@ -61,6 +62,10 @@ namespace Njulf.Rendering.Data
         public uint MeshletLodGeneratedCount;
         public uint MeshletLod1ErrorBits;
         public uint MeshletLod2ErrorBits;
+        public uint GpuMeshletRecordCount;
+        public uint HierarchyNodeOffset;
+        public uint HierarchyNodeCount;
+        public uint HierarchyRootNode;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -295,6 +300,184 @@ namespace Njulf.Rendering.Data
         public uint LocalTriangleCount;
         public Vector3 NormalConeAxis;
         public float NormalConeCutoff;
+    }
+
+    /// <summary>
+    /// Runtime-only meshlet descriptor. Cooked v2 assets retain the lossless
+    /// <see cref="Meshlet"/> representation; upload compacts fields that mesh
+    /// shaders consume and conservatively quantizes the normal cone.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUPackedMeshlet
+    {
+        public const uint AbiVersion = 2;
+        public const int MaximumPackedCount = 127;
+        public const float NormalConeCutoffSafetyMargin = 0.01f;
+
+        private const uint CountMask = 0x7fu;
+        private const int TriangleCountShift = 7;
+        private const uint ConeComponentMask = 0x3ffu;
+        private const int ConeYShift = 10;
+        private const int ConeCutoffShift = 20;
+        private const uint ConeValidFlag = 1u << 30;
+        private const uint AbiMarker = 1u << 31;
+
+        public Vector4 BoundingSphere;
+        public uint VertexOffset;
+        public uint LocalVertexOffset;
+        public uint LocalTriangleOffset;
+        public uint PackedCounts;
+        public uint PackedNormalCone;
+
+        public readonly uint LocalVertexCount => PackedCounts & CountMask;
+        public readonly uint LocalTriangleCount =>
+            (PackedCounts >> TriangleCountShift) & CountMask;
+        public readonly bool HasValidNormalCone =>
+            (PackedNormalCone & (AbiMarker | ConeValidFlag)) ==
+            (AbiMarker | ConeValidFlag);
+
+        public static GPUPackedMeshlet Pack(in Meshlet meshlet)
+        {
+            ValidateFiniteSphere(meshlet);
+            if (meshlet.LocalVertexCount > MaximumPackedCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(meshlet),
+                    $"Meshlet local vertex count {meshlet.LocalVertexCount} exceeds packed ABI limit {MaximumPackedCount}.");
+            }
+            if (meshlet.LocalTriangleCount > MaximumPackedCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(meshlet),
+                    $"Meshlet local triangle count {meshlet.LocalTriangleCount} exceeds packed ABI limit {MaximumPackedCount}.");
+            }
+
+            return new GPUPackedMeshlet
+            {
+                BoundingSphere = new Vector4(
+                    meshlet.BoundingSphereCenter.X,
+                    meshlet.BoundingSphereCenter.Y,
+                    meshlet.BoundingSphereCenter.Z,
+                    meshlet.BoundingSphereRadius),
+                VertexOffset = meshlet.VertexOffset,
+                LocalVertexOffset = meshlet.LocalVertexOffset,
+                LocalTriangleOffset = meshlet.LocalTriangleOffset,
+                PackedCounts = meshlet.LocalVertexCount |
+                    (meshlet.LocalTriangleCount << TriangleCountShift),
+                PackedNormalCone = PackNormalCone(
+                    meshlet.NormalConeAxis,
+                    meshlet.NormalConeCutoff)
+            };
+        }
+
+        public readonly void UnpackNormalCone(
+            out Vector3 axis,
+            out float cutoff)
+        {
+            if (!HasValidNormalCone)
+            {
+                axis = Vector3.Zero;
+                cutoff = -1f;
+                return;
+            }
+
+            float x = DecodeUnorm10(PackedNormalCone) * 2f - 1f;
+            float y = DecodeUnorm10(
+                PackedNormalCone >> ConeYShift) * 2f - 1f;
+            axis = DecodeOctahedral(x, y);
+            uint quantizedCutoff =
+                (PackedNormalCone >> ConeCutoffShift) &
+                ConeComponentMask;
+            cutoff = MathF.Max(
+                -1f,
+                quantizedCutoff / 1023f -
+                NormalConeCutoffSafetyMargin);
+            if (cutoff <= 0f)
+            {
+                axis = Vector3.Zero;
+                cutoff = -1f;
+            }
+        }
+
+        private static uint PackNormalCone(Vector3 axis, float cutoff)
+        {
+            if (!float.IsFinite(axis.X) ||
+                !float.IsFinite(axis.Y) ||
+                !float.IsFinite(axis.Z) ||
+                !float.IsFinite(cutoff) ||
+                cutoff <= 0f || cutoff > 1f ||
+                axis.LengthSquared() <= 1e-12f)
+            {
+                return AbiMarker;
+            }
+
+            Vector3 normalized = axis.Normalized();
+            float inverseL1 = 1f /
+                (MathF.Abs(normalized.X) +
+                 MathF.Abs(normalized.Y) +
+                 MathF.Abs(normalized.Z));
+            float x = normalized.X * inverseL1;
+            float y = normalized.Y * inverseL1;
+            if (normalized.Z < 0f)
+            {
+                float foldedX = (1f - MathF.Abs(y)) * SignNotZero(x);
+                float foldedY = (1f - MathF.Abs(x)) * SignNotZero(y);
+                x = foldedX;
+                y = foldedY;
+            }
+
+            uint encodedX = EncodeUnorm10(x * 0.5f + 0.5f);
+            uint encodedY = EncodeUnorm10(y * 0.5f + 0.5f);
+            uint encodedCutoff = (uint)Math.Clamp(
+                (int)MathF.Floor(cutoff * 1023f),
+                0,
+                1023);
+            return AbiMarker |
+                ConeValidFlag |
+                encodedX |
+                (encodedY << ConeYShift) |
+                (encodedCutoff << ConeCutoffShift);
+        }
+
+        private static Vector3 DecodeOctahedral(float x, float y)
+        {
+            var value = new Vector3(
+                x,
+                y,
+                1f - MathF.Abs(x) - MathF.Abs(y));
+            float fold = Math.Clamp(-value.Z, 0f, 1f);
+            value.X += value.X >= 0f ? -fold : fold;
+            value.Y += value.Y >= 0f ? -fold : fold;
+            return value.Normalized();
+        }
+
+        private static uint EncodeUnorm10(float value) =>
+            (uint)Math.Clamp(
+                (int)MathF.Round(
+                    Math.Clamp(value, 0f, 1f) * 1023f,
+                    MidpointRounding.AwayFromZero),
+                0,
+                1023);
+
+        private static float DecodeUnorm10(uint value) =>
+            (value & ConeComponentMask) / 1023f;
+
+        private static float SignNotZero(float value) =>
+            value >= 0f ? 1f : -1f;
+
+        private static void ValidateFiniteSphere(in Meshlet meshlet)
+        {
+            if (!float.IsFinite(meshlet.BoundingSphereCenter.X) ||
+                !float.IsFinite(meshlet.BoundingSphereCenter.Y) ||
+                !float.IsFinite(meshlet.BoundingSphereCenter.Z) ||
+                !float.IsFinite(meshlet.BoundingSphereRadius) ||
+                meshlet.BoundingSphereRadius < 0f)
+            {
+                throw new ArgumentException(
+                    "Meshlet bounding sphere must be finite with a non-negative radius.",
+                    nameof(meshlet));
+            }
+        }
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -694,6 +877,41 @@ namespace Njulf.Rendering.Data
         public uint Flags;
     }
 
+    /// <summary>
+    /// Compact, mesh-level input consumed by the GPU scene work expander.  The
+    /// mesh index and transform remain authoritative in <see cref="GPUObjectData"/>
+    /// so this stream stays at one 16-byte record per render instance.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSceneInstanceCandidate
+    {
+        public uint InstanceId;
+        public uint MaterialIndex;
+        public uint CommandFlags;
+        public uint Classification;
+    }
+
+    [Flags]
+    public enum GPUSceneInstanceClassification : uint
+    {
+        SimpleOpaque = 0,
+        SimpleNormalOpaque = 1,
+        FullOpaque = 2,
+        ForwardBucketMask = 3,
+        Masked = 1u << 2,
+        CastsDirectionalShadow = 1u << 3,
+        DynamicDirectionalShadow = 1u << 4
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSceneLodTransitionState
+    {
+        public uint SourceLod;
+        public uint TargetLod;
+        public uint TransitionStartFrame;
+        public uint LastUpdatedFrame;
+    }
+
     [Flags]
     public enum GPUMeshletDrawFlags : uint
     {
@@ -713,7 +931,10 @@ namespace Njulf.Rendering.Data
     {
         None = 0,
         MaterialDoubleSided = 1u << 0,
-        NormalConeCullEligible = 1u << 1
+        NormalConeCullEligible = 1u << 1,
+        LodDitherTransition = 1u << 2,
+        LodDitherTarget = 1u << 3,
+        LodDitherThresholdMask = 0x0fu << 4
     }
 
     public enum HiZTestMode : uint
@@ -948,6 +1169,9 @@ namespace Njulf.Rendering.Data
         public uint DirectionalDynamicShadowCascade1DoubleSidedAppendCount;
         public uint DirectionalDynamicShadowCascade2DoubleSidedAppendCount;
         public uint DirectionalDynamicShadowCascade3DoubleSidedAppendCount;
+        public uint HierarchicalInstanceCount;
+        public uint HierarchySelectedNodeCount;
+        public uint HierarchyTraversalFallbackCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -998,6 +1222,10 @@ namespace Njulf.Rendering.Data
         public uint GpuShadowLodBias;
         public uint DirectionalStaticShadowCascadeMask;
         public Vector4 DirectionalShadowLightDirection;
+        public uint InstanceCandidateCount;
+        public uint InstanceCandidateBufferBaseIndex;
+        public uint TemporalFrameIndex;
+        public uint LodTransitionFrameCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1539,6 +1767,8 @@ namespace Njulf.Rendering.Data
         public uint PreviousFrameValid;
         public float Time;
         public float PreviousTime;
+        /// <summary>First command in a partitioned compacted draw list.</summary>
+        public uint FirstDraw;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -2734,6 +2964,108 @@ namespace Njulf.Rendering.Data
         public uint CanonicalQuantizationFloorRBits;
         public uint CanonicalQuantizationFloorGBits;
         public uint CanonicalQuantizationFloorBBits;
+        // Words 53..63 are intentionally reserved. The stage record starts at
+        // word 64 so ResetTransportAuditSummary can clear only certificate
+        // reduction state while preserving the immediately preceding solve's
+        // one-witness publication trace for the frozen audit readback.
+        public uint Reserved53;
+        public uint Reserved54;
+        public uint Reserved55;
+        public uint Reserved56;
+        public uint Reserved57;
+        public uint Reserved58;
+        public uint Reserved59;
+        public uint Reserved60;
+        public uint Reserved61;
+        public uint Reserved62;
+        public uint Reserved63;
+        public uint StageEvidenceVersion;
+        public uint StageSolveEpoch;
+        public uint StageVirtualProbeIndex;
+        public uint StagePhysicalProbeIndex;
+        public uint StageTexelIndex;
+        public uint StageSweepIndex;
+        public uint StageTargetColor;
+        public uint StageMask;
+        public uint StagePreviousRBits;
+        public uint StagePreviousGBits;
+        public uint StagePreviousBBits;
+        public uint StageCandidateRBits;
+        public uint StageCandidateGBits;
+        public uint StageCandidateBBits;
+        public uint StageBlendedRBits;
+        public uint StageBlendedGBits;
+        public uint StageBlendedBBits;
+        public uint StagePrivateRBits;
+        public uint StagePrivateGBits;
+        public uint StagePrivateBBits;
+        public uint StagePublishInputRBits;
+        public uint StagePublishInputGBits;
+        public uint StagePublishInputBBits;
+        public uint StageCanonicalRBits;
+        public uint StageCanonicalGBits;
+        public uint StageCanonicalBBits;
+        public uint StageSolverWeightSumBits;
+        public uint StageSolverAccumulatedRBits;
+        public uint StageSolverAccumulatedGBits;
+        public uint StageSolverAccumulatedBBits;
+        public uint StageSolverRayCount;
+        public uint StageSolverGuidingBacked;
+        public uint StageSolverGuidingValidCount;
+        public uint StageSolverGuidingMaintenanceCount;
+        public uint StageSolverGuidingMixtureCount;
+        public uint StageSolverFirstRayRBits;
+        public uint StageSolverFirstRayGBits;
+        public uint StageSolverFirstRayBBits;
+        public uint StageSolverFirstDirectionXBits;
+        public uint StageSolverFirstDirectionYBits;
+        public uint StageSolverFirstDirectionZBits;
+        public uint StageSolverFirstGuidingPdfBits;
+        public uint StageAuditWeightSumBits;
+        public uint StageAuditAccumulatedRBits;
+        public uint StageAuditAccumulatedGBits;
+        public uint StageAuditAccumulatedBBits;
+        public uint StageAuditGuidingActive;
+        public uint StageAuditGuidingValidCount;
+        public uint StageAuditGuidingMaintenanceCount;
+        public uint StageAuditGuidingMixtureCount;
+        public uint StageAuditFirstRayRBits;
+        public uint StageAuditFirstRayGBits;
+        public uint StageAuditFirstRayBBits;
+        public uint StageAuditFirstDirectionXBits;
+        public uint StageAuditFirstDirectionYBits;
+        public uint StageAuditFirstDirectionZBits;
+        public uint StageAuditFirstGuidingPdfBits;
+        public uint StageAuditSourceRayCount;
+        public uint StageAuditFirstRayValid;
+        public uint StageAuditFirstRayBackface;
+        public uint StageTransportSolveEpoch;
+        public uint StageTransportSourceRBits;
+        public uint StageTransportSourceGBits;
+        public uint StageTransportSourceBBits;
+        public uint StageTransportBounceRBits;
+        public uint StageTransportBounceGBits;
+        public uint StageTransportBounceBBits;
+        public uint StageTransportTotalRBits;
+        public uint StageTransportTotalGBits;
+        public uint StageTransportTotalBBits;
+        public uint StageTransportGatherCount;
+        public uint StageTransportOwnershipSumBits;
+        public uint StageTransportFallbackWeightSumBits;
+        public uint StageAuditSourceRBits;
+        public uint StageAuditSourceGBits;
+        public uint StageAuditSourceBBits;
+        public uint StageAuditBounceRBits;
+        public uint StageAuditBounceGBits;
+        public uint StageAuditBounceBBits;
+        public uint StageAuditTotalRBits;
+        public uint StageAuditTotalGBits;
+        public uint StageAuditTotalBBits;
+        public uint StageAuditGatherCount;
+        public uint StageAuditOwnershipSumBits;
+        public uint StageAuditFallbackWeightSumBits;
+        public uint StageAuditRaySolveEpoch;
+        public uint StageEvidenceReserved;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

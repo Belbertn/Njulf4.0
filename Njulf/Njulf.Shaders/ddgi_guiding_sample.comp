@@ -534,6 +534,8 @@ void main()
     if (bootstrapInvalidation)
     {
         SimpleDdgiGuidingInvalidateBootstrapPayload(payloadIndex, request);
+        atomicAdd(guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_BOOTSTRAP_INVALIDATIONS], 1u);
         return;
     }
 

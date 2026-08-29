@@ -19,6 +19,8 @@ const uint GI_CAUSTIC_RESOLVE_REQUEST_WORDS = 16u;
 const uint GI_CAUSTIC_RESOLVE_RESULT_WORDS = 12u;
 const uint GI_CAUSTIC_REQUIRED_BANK_COUNT = 2u;
 const float GI_CAUSTIC_PI = 3.14159265358979323846;
+const float GI_CAUSTIC_MIRROR_MAXIMUM_ROUGHNESS = 0.04;
+const float GI_CAUSTIC_ROUGH_SPECULAR_MINIMUM_ROUGHNESS = 0.02;
 
 const uint GI_CAUSTIC_TASK_AUTHORED_HERO = 1u << 0u;
 const uint GI_CAUSTIC_TASK_MIRROR_HERO = 1u << 1u;
@@ -345,11 +347,11 @@ bool GiCausticTaskInputValid(uint taskIndex)
         GiCausticFinite(maximumDistance) && maximumDistance > 0.0;
     bool heroModeValid =
         ((heroFlags & GI_CAUSTIC_TASK_MIRROR_HERO) != 0u &&
-            roughness <= 0.04) ||
+            roughness <= GI_CAUSTIC_MIRROR_MAXIMUM_ROUGHNESS) ||
         ((heroFlags & GI_CAUSTIC_TASK_CLOSED_DIELECTRIC_HERO) != 0u &&
-            roughness <= 0.04 && ior > 1.0) ||
+            ior > 1.0) ||
         ((heroFlags & GI_CAUSTIC_TASK_ROUGH_SPECULAR_REFERENCE) != 0u &&
-            roughness > 0.04);
+            roughness > GI_CAUSTIC_ROUGH_SPECULAR_MINIMUM_ROUGHNESS);
     return ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base) ==
             GI_CAUSTIC_ABI_VERSION &&
         ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 1u) ==

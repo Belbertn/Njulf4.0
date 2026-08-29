@@ -707,6 +707,80 @@ internal static class SampleMaterialShowcaseScene
             2.4f);
     }
 
+    /// <summary>
+    /// Adds a small, scene-portable C4 caster/receiver pair. Imported sample
+    /// scenes use this only in the all-on qualification route so C4 cannot be
+    /// credited from an allocated but empty cache.
+    /// </summary>
+    internal static int ConfigurePortableGiAllOnHero(
+        Scene scene,
+        MeshManager meshManager,
+        MaterialManager materialManager,
+        CoreVector3 anchor,
+        float scale = 1f)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        ArgumentNullException.ThrowIfNull(meshManager);
+        ArgumentNullException.ThrowIfNull(materialManager);
+        if (!float.IsFinite(scale) || scale <= 0f)
+            throw new ArgumentOutOfRangeException(nameof(scale));
+
+        GPUVertex[] sphereVertices = SampleUvSphereMesh.CreateVertices();
+        uint[] sphereIndices = SampleUvSphereMesh.CreateIndices();
+        MeshHandle sphereMesh = RegisterMeshWithCausticTopology(
+            meshManager,
+            sphereVertices,
+            sphereIndices,
+            "portable all-on GI caustic sphere");
+        MeshHandle boxMesh = meshManager.RegisterMesh(
+            CreateBoxVertices(),
+            CreateBoxIndices());
+
+        MaterialHandle receiver = CreateMaterial(
+            materialManager,
+            new CoreVector3(0.42f, 0.44f, 0.46f),
+            metallic: 0f,
+            roughness: 0.7f);
+        MaterialHandle caster = CreateExtensionMaterial(
+            materialManager,
+            "GiAllOn.C4.DielectricCaster",
+            new CoreVector3(0.92f, 0.98f, 1.0f),
+            metallic: 0f,
+            roughness: 0.02f,
+            MaterialFeatureFlags.Transmission |
+            MaterialFeatureFlags.VolumeApproximation |
+            MaterialFeatureFlags.Ior,
+            extension => extension with
+            {
+                TransmissionFactor = 0.97f,
+                TransmissionPolicy = GiTransmissionPolicy.Volume,
+                OpticalBoundary = OpticalBoundaryKind.ClosedVolume,
+                CausticCasterPolicy =
+                    GiCausticCasterPolicy.DielectricPriority,
+                Ior = 1.52f,
+                ThicknessFactor = 0.72f,
+                AttenuationDistance = 8f,
+                AttenuationColor = new CoreVector3(0.86f, 0.96f, 1f)
+            },
+            blendMode: null);
+
+        AddBox(
+            scene,
+            boxMesh,
+            receiver,
+            "GiAllOn.C4.Receiver",
+            anchor + new CoreVector3(0f, 0.05f * scale, 0f),
+            new CoreVector3(1.7f, 0.1f, 1.7f) * scale);
+        AddScaledSphere(
+            scene,
+            sphereMesh,
+            caster,
+            "GiAllOn.C4.DielectricCaster",
+            anchor + new CoreVector3(0f, 0.68f * scale, 0f),
+            0.52f * scale);
+        return 2;
+    }
+
     private static void AddObject(
         Scene scene,
         MeshHandle mesh,

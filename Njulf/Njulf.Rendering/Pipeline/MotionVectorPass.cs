@@ -17,6 +17,11 @@ namespace Njulf.Rendering.Pipeline
 {
     public sealed unsafe class MotionVectorPass : RenderPassBase
     {
+        internal const ShaderStageFlags MeshPipelinePushConstantStages =
+            ShaderStageFlags.TaskBitExt |
+            ShaderStageFlags.MeshBitExt |
+            ShaderStageFlags.FragmentBit;
+
         private readonly MeshPipeline _meshPipeline;
         private readonly FoliagePipeline? _foliagePipeline;
         private readonly BufferManager? _bufferManager;
@@ -181,24 +186,56 @@ namespace Njulf.Rendering.Pipeline
             };
 
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
-            DrawMotionVectorBucket(
-                cmd,
-                sceneData,
-                previousViewProjection,
-                previousTime,
-                previousFrameValid,
-                _meshPipeline.MotionVectorPipeline,
-                sceneData.SolidMeshletCount,
-                BindlessIndex.SolidDepthMeshletDrawBufferBase);
-            DrawMotionVectorBucket(
-                cmd,
-                sceneData,
-                previousViewProjection,
-                previousTime,
-                previousFrameValid,
-                _meshPipeline.MaskedMotionVectorPipeline,
-                sceneData.MaskedMeshletCount,
-                BindlessIndex.MaskedDepthMeshletDrawBufferBase);
+            if (CanUseSceneCompactedMotionVectors(sceneData))
+            {
+                DrawCompactedMotionVectorBucket(
+                    cmd,
+                    sceneData,
+                    previousViewProjection,
+                    previousTime,
+                    previousFrameValid,
+                    _meshPipeline.CompactedMotionVectorPipeline,
+                    Math.Min(
+                        sceneData.SceneSubmissionGpuDepthSolidCandidateCount,
+                        sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity),
+                    BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase,
+                    SceneOpaqueCompactionPass.GetSolidDepthIndirectDispatchOffset(),
+                    SceneOpaqueCompactionPass.GetSolidDepthDoubleSidedIndirectDispatchOffset());
+                DrawCompactedMotionVectorBucket(
+                    cmd,
+                    sceneData,
+                    previousViewProjection,
+                    previousTime,
+                    previousFrameValid,
+                    _meshPipeline.CompactedMaskedMotionVectorPipeline,
+                    Math.Min(
+                        sceneData.SceneSubmissionGpuDepthMaskedCandidateCount,
+                        sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity),
+                    BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase,
+                    SceneOpaqueCompactionPass.GetMaskedDepthIndirectDispatchOffset(),
+                    SceneOpaqueCompactionPass.GetMaskedDepthDoubleSidedIndirectDispatchOffset());
+            }
+            else
+            {
+                DrawMotionVectorBucket(
+                    cmd,
+                    sceneData,
+                    previousViewProjection,
+                    previousTime,
+                    previousFrameValid,
+                    _meshPipeline.MotionVectorPipeline,
+                    sceneData.SolidMeshletCount,
+                    BindlessIndex.SolidDepthMeshletDrawBufferBase);
+                DrawMotionVectorBucket(
+                    cmd,
+                    sceneData,
+                    previousViewProjection,
+                    previousTime,
+                    previousFrameValid,
+                    _meshPipeline.MaskedMotionVectorPipeline,
+                    sceneData.MaskedMeshletCount,
+                    BindlessIndex.MaskedDepthMeshletDrawBufferBase);
+            }
             DrawFoliageMotionVectors(cmd, sceneData, previousViewProjection, previousTime, previousFrameValid);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
 
@@ -243,12 +280,156 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdPushConstants(
                 cmd,
                 _meshPipeline.Layout,
-                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
+                MeshPipelinePushConstantStages,
                 0,
                 (uint)Marshal.SizeOf<GPUMotionVectorPushConstants>(),
                 &pushConstants);
 
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
+        }
+
+        private bool CanUseSceneCompactedMotionVectors(
+            SceneRenderingData sceneData)
+        {
+            if (_bufferManager == null ||
+                !sceneData.SceneSubmissionGpuCompactionActive ||
+                !sceneData.SceneSubmissionIndirectMeshletDispatchEnabled ||
+                sceneData.SceneSubmissionFallbackReason.Length != 0 ||
+                !sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer.IsValid)
+            {
+                return false;
+            }
+
+            bool hasSolid =
+                sceneData.SceneSubmissionGpuDepthSolidCandidateCount > 0;
+            bool hasMasked =
+                sceneData.SceneSubmissionGpuDepthMaskedCandidateCount > 0;
+            if (!hasSolid && !hasMasked)
+                return false;
+
+            bool solidReady = !hasSolid ||
+                (sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBuffer.IsValid &&
+                 sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity > 0);
+            bool maskedReady = !hasMasked ||
+                (sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer.IsValid &&
+                 sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity > 0);
+            if (!solidReady || !maskedReady)
+                return false;
+
+            ulong requiredOffset = 0;
+            if (hasSolid)
+            {
+                requiredOffset = sceneData.SceneSubmissionSidedRasterSpecializationActive
+                    ? SceneOpaqueCompactionPass.GetSolidDepthDoubleSidedIndirectDispatchOffset()
+                    : SceneOpaqueCompactionPass.GetSolidDepthIndirectDispatchOffset();
+            }
+            if (hasMasked)
+            {
+                ulong maskedOffset = sceneData.SceneSubmissionSidedRasterSpecializationActive
+                    ? SceneOpaqueCompactionPass.GetMaskedDepthDoubleSidedIndirectDispatchOffset()
+                    : SceneOpaqueCompactionPass.GetMaskedDepthIndirectDispatchOffset();
+                requiredOffset = Math.Max(requiredOffset, maskedOffset);
+            }
+
+            ulong requiredBytes = checked(
+                requiredOffset +
+                (ulong)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+            return sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize >=
+                   requiredBytes;
+        }
+
+        private void DrawCompactedMotionVectorBucket(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            Matrix4x4 previousViewProjection,
+            float previousTime,
+            bool previousFrameValid,
+            Silk.NET.Vulkan.Pipeline pipeline,
+            int meshletCapacity,
+            int meshletDrawBufferBaseIndex,
+            ulong indirectDispatchOffset,
+            ulong doubleSidedIndirectDispatchOffset)
+        {
+            if (meshletCapacity <= 0 || _bufferManager == null)
+                return;
+
+            DrawCompactedMotionVectorPartition(
+                cmd,
+                sceneData,
+                previousViewProjection,
+                previousTime,
+                previousFrameValid,
+                pipeline,
+                meshletCapacity,
+                meshletDrawBufferBaseIndex,
+                indirectDispatchOffset,
+                firstDraw: 0u);
+            if (sceneData.SceneSubmissionSidedRasterSpecializationActive)
+            {
+                DrawCompactedMotionVectorPartition(
+                    cmd,
+                    sceneData,
+                    previousViewProjection,
+                    previousTime,
+                    previousFrameValid,
+                    pipeline,
+                    meshletCapacity,
+                    meshletDrawBufferBaseIndex,
+                    doubleSidedIndirectDispatchOffset,
+                    firstDraw: checked((uint)meshletCapacity));
+            }
+        }
+
+        private void DrawCompactedMotionVectorPartition(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            Matrix4x4 previousViewProjection,
+            float previousTime,
+            bool previousFrameValid,
+            Silk.NET.Vulkan.Pipeline pipeline,
+            int meshletCapacity,
+            int meshletDrawBufferBaseIndex,
+            ulong indirectDispatchOffset,
+            uint firstDraw)
+        {
+            BufferManager bufferManager = _bufferManager ??
+                throw new InvalidOperationException(
+                    "Compacted motion-vector drawing requires a buffer manager.");
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+            var pushConstants = new GPUMotionVectorPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                PreviousViewProjectionMatrix = previousViewProjection,
+                ScreenDimensions = new Vector2(
+                    sceneData.ScreenWidth,
+                    sceneData.ScreenHeight),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                MeshletDrawCount = checked((uint)meshletCapacity),
+                MeshletDrawBufferBaseIndex =
+                    checked((uint)meshletDrawBufferBaseIndex),
+                PreviousFrameValid = PackHistoryFlags(
+                    previousFrameValid,
+                    sceneData),
+                Time = sceneData.Time,
+                PreviousTime = previousTime,
+                FirstDraw = firstDraw
+            };
+            _context.Api.CmdPushConstants(
+                cmd,
+                _meshPipeline.Layout,
+                MeshPipelinePushConstantStages,
+                0,
+                (uint)Marshal.SizeOf<GPUMotionVectorPushConstants>(),
+                &pushConstants);
+
+            VkBuffer indirect = bufferManager.GetBuffer(
+                sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
+            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                cmd,
+                indirect,
+                indirectDispatchOffset,
+                1,
+                (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
         }
 
         private void DrawFoliageMotionVectors(
@@ -272,7 +453,14 @@ namespace Njulf.Rendering.Pipeline
             if (!buffers.IndirectDispatchBuffer.IsValid || buffers.MeshletDrawCapacity <= 0)
                 return;
 
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _foliagePipeline.AuthoredMotionVectorPipeline);
+            bool useCompactedMeshOnly =
+                sceneData.FoliageIndirectMeshletDispatchEnabled;
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Graphics,
+                useCompactedMeshOnly
+                    ? _foliagePipeline.AuthoredCompactedMotionVectorPipeline
+                    : _foliagePipeline.AuthoredMotionVectorPipeline);
             BindFoliageDescriptorSets(cmd);
 
             var pushConstants = new GPUMotionVectorPushConstants
@@ -291,12 +479,12 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdPushConstants(
                 cmd,
                 _foliagePipeline.GraphicsLayout,
-                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
+                MeshPipelinePushConstantStages,
                 0,
                 (uint)Marshal.SizeOf<GPUMotionVectorPushConstants>(),
                 &pushConstants);
 
-            if (sceneData.FoliageIndirectMeshletDispatchEnabled)
+            if (useCompactedMeshOnly)
             {
                 VkBuffer indirect = _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer);
                 _context.ExtMeshShader.CmdDrawMeshTasksIndirect(

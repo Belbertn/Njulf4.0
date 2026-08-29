@@ -75,7 +75,7 @@ public enum SimpleDdgiNearFieldResidualQualityPreset : uint
 }
 
 /// <summary>
-/// The five user-facing Advanced GI switches.  This is deliberately a small,
+/// The user-facing Advanced GI switches. This is deliberately a small,
 /// persistence-free command model: an editor host can carry it across a cold
 /// renderer restart without manufacturing a qualification profile.
 /// </summary>
@@ -84,21 +84,27 @@ public readonly record struct AdvancedGiFeatureSelection(
     bool OpacityMicromapsEnabled,
     bool DirectionalGuidingEnabled,
     bool TaggedCausticsEnabled,
-    bool NearFieldResidualEnabled)
+    bool NearFieldResidualEnabled,
+    bool ReceiverCacheEnabled = true,
+    bool AcceleratedTransportSolverEnabled = true)
 {
     public static AdvancedGiFeatureSelection AllEnabled { get; } = new(
         ReceiverFeedbackEnabled: true,
         OpacityMicromapsEnabled: true,
         DirectionalGuidingEnabled: true,
         TaggedCausticsEnabled: true,
-        NearFieldResidualEnabled: true);
+        NearFieldResidualEnabled: true,
+        ReceiverCacheEnabled: true,
+        AcceleratedTransportSolverEnabled: true);
 
     public bool AreAllEnabled =>
         ReceiverFeedbackEnabled &&
         OpacityMicromapsEnabled &&
         DirectionalGuidingEnabled &&
         TaggedCausticsEnabled &&
-        NearFieldResidualEnabled;
+        NearFieldResidualEnabled &&
+        ReceiverCacheEnabled &&
+        AcceleratedTransportSolverEnabled;
 
     public static AdvancedGiFeatureSelection From(
         GlobalIlluminationSettings settings)
@@ -112,7 +118,9 @@ public readonly record struct AdvancedGiFeatureSelection(
                 SimpleDdgiDirectionalGuidingMode.Off,
             settings.GiCausticMode != GiCausticMode.Off,
             settings.SimpleDdgiNearFieldResidualMode !=
-                SimpleDdgiNearFieldResidualMode.Off);
+                SimpleDdgiNearFieldResidualMode.Off,
+            settings.SimpleDdgiReceiverCacheMode.UsesCache(),
+            settings.SimpleDdgiTransportAccelerationEnabled);
     }
 
     /// <summary>
@@ -138,6 +146,12 @@ public readonly record struct AdvancedGiFeatureSelection(
         settings.SimpleDdgiNearFieldResidualMode = NearFieldResidualEnabled
             ? SimpleDdgiNearFieldResidualMode.HiZAdaptive
             : SimpleDdgiNearFieldResidualMode.Off;
+        settings.SimpleDdgiReceiverCacheMode = ReceiverCacheEnabled
+            ? SimpleDdgiReceiverCacheMode.TemporalAdaptive
+            : SimpleDdgiReceiverCacheMode.Exact;
+        settings.SimpleDdgiTransportAccelerationEnabled =
+            AcceleratedTransportSolverEnabled;
+        settings.SimpleDdgiTransportAcceleratedSweepCount = 2;
 
         // A normal switch never inherits promotion credentials from a prior
         // AutoQualified run.

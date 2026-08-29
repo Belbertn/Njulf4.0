@@ -1,3 +1,4 @@
+using Njulf.Assets.Cooked;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 
@@ -11,7 +12,8 @@ internal static class AdvancedGiQualificationCommand
         {
             throw new ArgumentException(
                 "advanced-gi requires pin-corpus, verify-corpus, " +
-                "create-startup, verify-startup, or verify-qualification.");
+                "create-startup, verify-startup, verify-qualification, " +
+                "or verify-c1-model.");
         }
         return args[0] switch
         {
@@ -20,6 +22,7 @@ internal static class AdvancedGiQualificationCommand
             "create-startup" => RunCreateStartup(args[1..]),
             "verify-startup" => RunVerifyStartup(args[1..]),
             "verify-qualification" => RunVerifyQualification(args[1..]),
+            "verify-c1-model" => RunVerifyC1Model(args[1..]),
             _ => throw new ArgumentException(
                 $"Unknown Advanced-GI operation '{args[0]}'.")
         };
@@ -243,6 +246,57 @@ internal static class AdvancedGiQualificationCommand
         Console.WriteLine(
             $"Advanced-GI qualification manifest verified: " +
             $"features={qualification.Count}, manifest='{Path.GetFullPath(manifest)}'.");
+        return 0;
+    }
+
+    private static int RunVerifyC1Model(string[] args)
+    {
+        string modelPath = ReadSinglePathOption(
+            args, "--model", "C1 cooked-model verification");
+        CookedModelAsset model = CookedPackage.LoadModel(modelPath);
+        CookedOpacityMicromapPayloadLoadStatus status =
+            model.OpacityMicromapLoadStatus;
+        OpacityMicromapCookedPayload? payload = model.OpacityMicromapPayload;
+        if (!status.SectionPresent || !status.Accepted || payload is null)
+        {
+            Console.Error.WriteLine(
+                "C1 cooked model rejected: " +
+                $"sectionPresent={status.SectionPresent}, " +
+                $"accepted={status.Accepted}, failure={status.Failure}, " +
+                $"detail='{status.Detail}', " +
+                $"model='{Path.GetFullPath(modelPath)}'.");
+            return 1;
+        }
+
+        bool complete =
+            payload.PayloadKind == OpacityMicromapPayloadKind.VulkanExtFourState &&
+            payload.Format == OpacityMicromapFormat.FourState &&
+            payload.CookAbi != 0u &&
+            !payload.SourceContentHash.IsZero &&
+            !payload.SdkProvenanceHash.IsZero &&
+            payload.MaximumSubdivisionLevel != 0u &&
+            payload.PrimitiveCount != 0u &&
+            payload.DescriptorCount != 0u &&
+            payload.MaterialContracts.Count != 0 &&
+            payload.UsageHistogram.Count != 0 &&
+            !payload.OmmData.IsEmpty &&
+            !payload.IndexData.IsEmpty &&
+            !payload.DescriptorData.IsEmpty;
+        if (!complete)
+        {
+            Console.Error.WriteLine(
+                "C1 cooked model rejected: the accepted optional section is " +
+                "not a resource-complete Vulkan EXT four-state payload.");
+            return 1;
+        }
+
+        Console.WriteLine(
+            "C1 cooked model verified: " +
+            $"primitives={payload.PrimitiveCount}, " +
+            $"descriptors={payload.DescriptorCount}, " +
+            $"materials={payload.MaterialContracts.Count}, " +
+            $"ommBytes={payload.OmmData.Length}, " +
+            $"model='{Path.GetFullPath(modelPath)}'.");
         return 0;
     }
 

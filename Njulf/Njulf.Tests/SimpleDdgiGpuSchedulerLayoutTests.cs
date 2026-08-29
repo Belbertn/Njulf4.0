@@ -505,7 +505,7 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(256));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(136));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditPushConstants>(), Is.EqualTo(128));
-            Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>(), Is.EqualTo(212));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>(), Is.EqualTo(604));
             Assert.That(
                 Marshal.OffsetOf<GPUSimpleDdgiTransportAuditSummary>(
                     nameof(GPUSimpleDdgiTransportAuditSummary.ChannelEvidenceVersion))
@@ -516,6 +516,18 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
                     nameof(GPUSimpleDdgiTransportAuditSummary.CanonicalQuantizationFloorBBits))
                     .ToInt32(),
                 Is.EqualTo(208));
+            Assert.That(
+                Marshal.OffsetOf<GPUSimpleDdgiTransportAuditSummary>(
+                    nameof(GPUSimpleDdgiTransportAuditSummary.StageEvidenceVersion))
+                    .ToInt32(),
+                Is.EqualTo(
+                    SimpleDdgiGpuSchedulerLayout
+                        .TransportAuditStageEvidenceBaseWord * sizeof(uint)));
+            Assert.That(
+                Marshal.OffsetOf<GPUSimpleDdgiTransportAuditSummary>(
+                    nameof(GPUSimpleDdgiTransportAuditSummary.StageEvidenceReserved))
+                    .ToInt32(),
+                Is.EqualTo(600));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulePushConstants>(), Is.EqualTo(124));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiPublishPushConstants>(), Is.EqualTo(56));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulerFeedback>(), Is.EqualTo(256));

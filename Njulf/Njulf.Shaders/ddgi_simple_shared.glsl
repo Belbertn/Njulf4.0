@@ -6142,13 +6142,17 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         uint irradianceBufferIndex =
             p.publishedIrradianceAtlasBufferIndex;
 #if SIMPLE_DDGI_PRIVATE_SOLVER_GATHER
+        uint privateIrradianceBufferIndex;
         uint privateProbeBaseWord;
         if (TryResolveSimpleDdgiPrivateSolverIrradiance(
                 probeIndex,
                 p.irradianceTexels,
-                irradianceBufferIndex,
+                privateIrradianceBufferIndex,
                 privateProbeBaseWord))
         {
+            // Resolve into temporaries so an inactive or out-of-cohort lookup
+            // cannot clobber the canonical fallback selected above.
+            irradianceBufferIndex = privateIrradianceBufferIndex;
             atlasAddress.irradianceBaseWord = privateProbeBaseWord;
             atlasAddress.sampledStatusFlags &=
                 ~SIMPLE_DDGI_CACHE_IRRADIANCE_MIRROR_BIT;
