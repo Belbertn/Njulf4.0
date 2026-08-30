@@ -27,6 +27,13 @@ namespace Njulf.Core
         private bool _isRenderingFrame = false;
         private bool _exitRequestedAfterFrame = false;
         private bool _firstFrameLogged = false;
+        private bool _scenePresentLatencyReported;
+        private bool _fullQualityLatencyReported;
+        private CancellationTokenSource? _pipelinePreparationCancellation;
+        private Task? _pipelinePreparationTask;
+        private bool _progressiveContentLoadPending;
+        private bool _progressiveScenePreparationPending;
+        private bool _contentLoaded;
         private long _runStartedTimestamp;
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "IDE0052:Remove unread private members", Justification = "Used for initialization tracking")]
         private bool _isInitialized = false;
@@ -51,6 +58,10 @@ namespace Njulf.Core
         {
             _scene = new Scene.Scene();
         }
+
+        protected long RunElapsedMicroseconds => _runStartedTimestamp == 0
+            ? 0
+            : GetElapsedMicroseconds(_runStartedTimestamp);
 
         public void Run()
         {
@@ -143,6 +154,16 @@ namespace Njulf.Core
 
         /// <summary>Called after a frame has been submitted and presented.</summary>
         protected virtual void OnFramePresented()
+        {
+        }
+
+        /// <summary>
+        /// Called once after the first successful present, including the
+        /// pipeline-free progressive bootstrap frame. Automation can use this
+        /// milestone without forcing initial content or fallback resources to
+        /// load first.
+        /// </summary>
+        protected virtual void OnBootstrapFramePresented()
         {
         }
 
@@ -249,8 +270,32 @@ namespace Njulf.Core
         {
             Initialize();
             _isInitialized = true;
+            if (_renderer is IProgressiveScenePipelinePreparer
+                { IsProgressiveStartupEnabled: true } progressivePreparer)
+            {
+                RunStartupStep(
+                    "Renderer.BeginProductionPreparation",
+                    progressivePreparer.BeginProductionPreparation);
+                _progressiveContentLoadPending = true;
+                return;
+            }
+
+            LoadInitialContentAndPreparePipelines();
+        }
+
+        private void LoadInitialContentAndPreparePipelines()
+        {
             RunStartupStep("Content.LoadInitialScene", Load);
-            if (_renderer is IScenePipelinePreparer pipelinePreparer &&
+            _contentLoaded = true;
+            if (_renderer is IProgressiveScenePipelinePreparer
+                    { IsProgressiveStartupEnabled: true }
+                    &&
+                _camera != null)
+            {
+                _progressiveScenePreparationPending = true;
+                BeginProgressiveScenePreparation(_renderer);
+            }
+            else if (_renderer is IScenePipelinePreparer pipelinePreparer &&
                 _camera != null)
             {
                 RunStartupStep(
@@ -264,11 +309,18 @@ namespace Njulf.Core
             if (!_isRunning)
                 return;
 
+            ObservePipelinePreparation();
+            if (_progressiveContentLoadPending && _firstFrameLogged)
+            {
+                _progressiveContentLoadPending = false;
+                LoadInitialContentAndPreparePipelines();
+            }
+
             _isUpdatingFrame = true;
             try
             {
                 _input?.Update();
-                if (_isRunning)
+                if (_isRunning && _contentLoaded)
                     Update((float)deltaSeconds);
             }
             finally
@@ -288,6 +340,8 @@ namespace Njulf.Core
             if (!_isRunning || _renderer == null)
                 return;
 
+            ObservePipelinePreparation();
+
             IRenderer renderer = _renderer;
             long frameStarted = Stopwatch.GetTimestamp();
             if (renderer.BeginFrame() != true)
@@ -302,7 +356,10 @@ namespace Njulf.Core
                 {
                     if (!_firstFrameLogged)
                         RunStartupStep("FirstFrame.Begin", () => { });
-                    Draw();
+                    if (_contentLoaded)
+                        Draw();
+                    else
+                        renderer.Clear(Color.Black);
                 }
                 catch (Exception drawFailure)
                 {
@@ -337,7 +394,8 @@ namespace Njulf.Core
                 renderer.EndFrame();
                 long endFrameMicroseconds =
                     GetElapsedMicroseconds(endFrameStarted);
-                OnFramePresented();
+                if (_contentLoaded)
+                    OnFramePresented();
                 long frameMicroseconds =
                     GetElapsedMicroseconds(frameStarted);
                 if (_firstFrameLogged && frameMicroseconds > 100_000)
@@ -363,7 +421,11 @@ namespace Njulf.Core
                             () => latencyReporter.ReportFirstPresent(
                                 firstPresentElapsedMicroseconds));
                     }
+                    OnBootstrapFramePresented();
                 }
+                ReportProgressiveStartupMilestones(renderer);
+                if (_isRunning)
+                    BeginProgressiveScenePreparation(renderer);
             }
             finally
             {
@@ -384,6 +446,34 @@ namespace Njulf.Core
             checked((long)System.Math.Round(
                 Stopwatch.GetElapsedTime(startedTimestamp)
                     .TotalMicroseconds));
+
+        private void ReportProgressiveStartupMilestones(IRenderer renderer)
+        {
+            if (renderer is not IProgressiveScenePipelinePreparer progressive ||
+                renderer is not IStartupMilestoneLatencyReporter reporter)
+            {
+                return;
+            }
+
+            RendererStartupSnapshot snapshot = progressive.StartupSnapshot;
+            long elapsed = GetElapsedMicroseconds(_runStartedTimestamp);
+            if (snapshot.ScenePresented &&
+                !_scenePresentLatencyReported)
+            {
+                _scenePresentLatencyReported = true;
+                reporter.ReportStartupMilestone(
+                    RendererStartupMilestone.ScenePresent,
+                    elapsed);
+            }
+            if (snapshot.FullQualityPresented &&
+                !_fullQualityLatencyReported)
+            {
+                _fullQualityLatencyReported = true;
+                reporter.ReportStartupMilestone(
+                    RendererStartupMilestone.FullQualityPresent,
+                    elapsed);
+            }
+        }
 
         private void OnWindowFramebufferResize(Vector2D<int> size)
         {
@@ -408,11 +498,18 @@ namespace Njulf.Core
             _isShuttingDown = true;
             try
             {
+                _pipelinePreparationCancellation?.Cancel();
                 if (_isInitialized)
                     Unload();
             }
             finally
             {
+                _pipelinePreparationTask = null;
+                _pipelinePreparationCancellation?.Dispose();
+                _pipelinePreparationCancellation = null;
+                _progressiveContentLoadPending = false;
+                _progressiveScenePreparationPending = false;
+                _contentLoaded = false;
                 _isInitialized = false;
                 if (_services is IDisposable disposableServices)
                     disposableServices.Dispose();
@@ -434,6 +531,49 @@ namespace Njulf.Core
 
                 _isShuttingDown = false;
             }
+        }
+
+        private void ObservePipelinePreparation()
+        {
+            Task? task = _pipelinePreparationTask;
+            if (task == null || !task.IsCompleted)
+                return;
+
+            _pipelinePreparationTask = null;
+            if (task.IsCanceled &&
+                _pipelinePreparationCancellation?.IsCancellationRequested == true)
+            {
+                return;
+            }
+            if (task.Exception == null)
+                return;
+
+            Exception failure = task.Exception.InnerExceptions.Count == 1
+                ? task.Exception.InnerException!
+                : task.Exception;
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+
+        private void BeginProgressiveScenePreparation(IRenderer renderer)
+        {
+            if (!_progressiveScenePreparationPending ||
+                renderer is not IProgressiveScenePipelinePreparer
+                {
+                    IsProgressiveStartupEnabled: true
+                } progressivePreparer ||
+                _camera == null)
+            {
+                return;
+            }
+
+            _progressiveScenePreparationPending = false;
+            _pipelinePreparationCancellation =
+                new CancellationTokenSource();
+            _pipelinePreparationTask =
+                progressivePreparer.PrepareSceneAsync(
+                    _scene,
+                    _camera,
+                    _pipelinePreparationCancellation.Token);
         }
 
         private void RunStartupStep(string name, Action action)

@@ -214,6 +214,87 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
     }
 
     [Test]
+    public void FirstPresentProducerSet_IncludesFeatureCriticalGraphicsProducers()
+    {
+        var firstPresent = new SceneRenderingData
+        {
+            PostFirstPresentPipelineSpecializationsReady = false,
+            MaskedMeshletCount = 1,
+            FoliageClusterCount = 1,
+            TransparentPassEnabled = true,
+            TransparentObjectCount = 1,
+            TransparentMeshletCount = 1,
+            TransparentReceiveGlobalIllumination = true,
+            ParticleDdgiSampleCount = 1,
+            FogEnabled = true,
+            ReflectionProbeCapturesQueued = 1
+        };
+
+        uint mask = ForwardPlusPass.ResolveRequiredReceiverFeedbackProducerMask(
+            firstPresent);
+        uint featureCritical =
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                SimpleDdgiReceiverFeedbackProducer.AlphaMaskOrFoliage) |
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                SimpleDdgiReceiverFeedbackProducer.TransparentWeightedOit) |
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                SimpleDdgiReceiverFeedbackProducer.ReflectionCapture);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mask & featureCritical, Is.EqualTo(featureCritical));
+            Assert.That(
+                mask & SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                    SimpleDdgiReceiverFeedbackProducer.OpaqueForward),
+                Is.Not.Zero);
+            Assert.That(
+                mask & SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                    SimpleDdgiReceiverFeedbackProducer.Particles),
+                Is.Not.Zero);
+            Assert.That(
+                mask & SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                    SimpleDdgiReceiverFeedbackProducer.Fog),
+                Is.Not.Zero);
+        });
+    }
+
+    [Test]
+    public void ThickRayTransmission_KeepsCanonicalColorPipeline()
+    {
+        var sceneData = new SceneRenderingData
+        {
+            TransparentPassEnabled = true,
+            TransparentObjectCount = 1,
+            TransparentMeshletCount = 1,
+            TransparentReceiveGlobalIllumination = true,
+            EffectiveThickTransmissionMode = ThickTransmissionMode.RayQuery
+        };
+        sceneData.TransparentMaterialRuns.Add(new TransparentMaterialRun(
+            0,
+            1,
+            new TransparentDrawClassification(
+                TransparentMaterialClass.ThickTransmission,
+                ReceivesSceneReflections: false)));
+
+        uint mask = ForwardPlusPass.ResolveRequiredReceiverFeedbackProducerMask(
+            sceneData,
+            fogEnabled: false,
+            reflectionCaptureFeedbackEnabled: false);
+        uint transparent =
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                SimpleDdgiReceiverFeedbackProducer.TransparentWeightedOit);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                TransparentForwardPass.RequiresCanonicalRayColorPipeline(
+                    sceneData),
+                Is.True);
+            Assert.That(mask & transparent, Is.Zero);
+        });
+    }
+
+    [Test]
     public void DecalOnlyDraws_DoNotClaimTheTransparentExactFeedbackProducer()
     {
         var decalOnly = new SceneRenderingData

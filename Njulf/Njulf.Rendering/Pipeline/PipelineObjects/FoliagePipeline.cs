@@ -233,13 +233,25 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             int combination = (giCausticReceiver ? 1 : 0) |
                 (nearFieldDirectSource ? 2 : 0);
             int family = authored ? 1 : 0;
-            if (_hybridReflectionPipelines[combination, family].Handle == 0 &&
-                !TryCreateHybridReflectionPipeline(combination, family))
-            {
-                return false;
-            }
             pipeline = _hybridReflectionPipelines[combination, family];
             return pipeline.Handle != 0;
+        }
+
+        public bool AreHybridReflectionPipelinesReady(
+            bool nearFieldDirectSource,
+            bool giCausticReceiver)
+        {
+            if (!HybridReflectionPipelinesAvailable)
+                return false;
+
+            int combination = (giCausticReceiver ? 1 : 0) |
+                (nearFieldDirectSource ? 2 : 0);
+            for (int family = 0; family < 2; family++)
+            {
+                if (_hybridReflectionPipelines[combination, family].Handle == 0)
+                    return false;
+            }
+            return true;
         }
 
         public bool TryPrepareHybridReflectionPipelines(

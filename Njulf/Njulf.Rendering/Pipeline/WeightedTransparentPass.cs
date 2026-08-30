@@ -259,11 +259,19 @@ namespace Njulf.Rendering.Pipeline
                 return false;
             }
 
-            bool exactFeedbackRequired =
+            bool exactFeedbackRequested =
                 _receiverFeedbackRuntime?.IsPendingOwnedProducerRequired(
                     frameIndex,
                     SimpleDdgiReceiverFeedbackProducer
                         .TransparentWeightedOit) == true;
+            bool exactFeedbackRequired = exactFeedbackRequested &&
+                !TransparentForwardPass.RequiresCanonicalRayColorPipeline(
+                    sceneData);
+            if (exactFeedbackRequested && !exactFeedbackRequired)
+            {
+                _receiverFeedbackRuntime!.AbortCapture(
+                    "receiver-feedback-weighted-oit-deferred-to-preserve-full-thick-transmission");
+            }
             bool transparentLayeredRayRequired =
                 sceneData.DirectionalShadowFramePlan
                     .TransparentReceiverPolicy ==
@@ -527,6 +535,14 @@ namespace Njulf.Rendering.Pipeline
                     frameIndex,
                     SimpleDdgiReceiverFeedbackProducer.TransparentWeightedOit))
             {
+                return false;
+            }
+            if (rayVariant &&
+                TransparentForwardPass.RequiresCanonicalRayColorPipeline(
+                    sceneData))
+            {
+                _receiverFeedbackRuntime.AbortCapture(
+                    "receiver-feedback-weighted-oit-deferred-to-preserve-full-thick-transmission");
                 return false;
             }
 

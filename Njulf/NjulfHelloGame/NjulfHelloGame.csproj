@@ -42,6 +42,14 @@
       <None Update="textures\IvyLeaf_*.png" CopyToOutputDirectory="Never" />
       <None Update="Cooked\**\*.*" CopyToOutputDirectory="IfDifferent" />
       <None Update="Scenes\**\*.njscene.json" CopyToOutputDirectory="IfDifferent" />
+      <!-- Qualified seeds are optional. When present, preserve their runtime
+           directory contract in both build output and publish output. -->
+      <None Update="PipelineCacheSeeds\**\*.*"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+      <None Update="PipelineBinarySeeds\**\*.*"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
 
     <!-- StbImageSharp remains a deliberate runtime dependency: the supported

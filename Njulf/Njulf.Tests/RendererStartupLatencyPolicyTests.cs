@@ -1,3 +1,4 @@
+using Njulf.Core.Interfaces;
 using Njulf.Rendering.Pipeline;
 using NUnit.Framework;
 
@@ -62,6 +63,45 @@ public sealed class RendererStartupLatencyPolicyTests
             Is.EqualTo(expectedFailure));
     }
 
+    [TestCase(RendererStartupMilestone.BootstrapPresent, false, false,
+        3_000_000L, 5_000_000L, true)]
+    [TestCase(RendererStartupMilestone.ScenePresent, false, false,
+        0L, 0L, false)]
+    [TestCase(RendererStartupMilestone.FullQualityPresent, true, false,
+        0L, 0L, false)]
+    [TestCase(RendererStartupMilestone.VisibleContentPresent, true, false,
+        5_000_000L, 10_000_000L, true)]
+    [TestCase(RendererStartupMilestone.VisibleContentPresent, false, true,
+        15_000_000L, 30_000_000L, true)]
+    [TestCase(RendererStartupMilestone.VisibleContentPresent, false, false,
+        15_000_000L, 30_000_000L, true)]
+    public void ProgressiveMilestonesHaveIndependentBudgets(
+        RendererStartupMilestone milestone,
+        bool warm,
+        bool seed,
+        long expectedTarget,
+        long expectedHardLimit,
+        bool gateApplies)
+    {
+        RendererStartupMilestoneLatencyEvaluation evaluation =
+            RendererStartupLatencyPolicy.EvaluateMilestone(
+                milestone,
+                elapsedMicroseconds: 1,
+                warm,
+                seed);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                evaluation.AspirationalTargetMicroseconds,
+                Is.EqualTo(expectedTarget));
+            Assert.That(
+                evaluation.HardLimitMicroseconds,
+                Is.EqualTo(expectedHardLimit));
+            Assert.That(evaluation.GateApplies, Is.EqualTo(gateApplies));
+        });
+    }
+
     [Test]
     public void CacheWarmEligibilityRequiresExactWritableProvenance()
     {
@@ -118,6 +158,29 @@ public sealed class RendererStartupLatencyPolicyTests
                     WritableBinaryHitCount = 2
                 }).WarmEligible,
                 Is.False);
+            Assert.That(
+                (exact with
+                {
+                    RuntimeCacheLoaded = false,
+                    SeedCacheLoaded = true
+                }).QualifiedSeedEligible,
+                Is.True);
+            Assert.That(
+                (exact with
+                {
+                    RuntimeCacheLoaded = false,
+                    SeedCacheLoaded = true,
+                    ShaderBundleChanged = true
+                }).QualifiedSeedEligible,
+                Is.False);
+            Assert.That(
+                (exact with
+                {
+                    RuntimeCacheLoaded = false,
+                    PipelineCreationCount = 3,
+                    SeedBinaryHitCount = 3
+                }).QualifiedSeedEligible,
+                Is.True);
         });
     }
 }

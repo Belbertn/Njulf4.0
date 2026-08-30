@@ -14,6 +14,12 @@ internal enum SceneMaterialPipelineKinds : byte
     ThickTransmission = 1 << 4
 }
 
+internal enum ScenePipelinePreparationScope : byte
+{
+    FirstPresentCritical,
+    Complete
+}
+
 /// <summary>
 /// Scene-derived material families whose pipelines must be available before
 /// command recording begins. The mask is intentionally monotonic and cheap to

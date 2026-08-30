@@ -1319,6 +1319,22 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void MeshletLodTransitions_PreserveSourceCoverageAcrossDifferentTopology()
+        {
+            string shader = ReadShaderFile("common.glsl");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(shader, Does.Contain(
+                    "if (!target)\n        return true;"));
+                Assert.That(shader, Does.Contain(
+                    "return hashSample <= threshold;"));
+                Assert.That(shader, Does.Not.Contain(
+                    "hashSample > threshold"));
+            });
+        }
+
+        [Test]
         public void RenderingConstants_ValidationWorks()
         {
             Assert.DoesNotThrow(() => RenderingConstants.ValidateFrameIndex(0));

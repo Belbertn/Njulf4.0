@@ -455,9 +455,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public bool MaterialTransportProvenanceAttachmentEnabled { get; private set; }
 
         /// <summary>
-        /// Materializes the active scene's transparent and exact-feedback
-        /// families before render-critical command recording starts. Optional
-        /// specialized variants retain their established universal fallback.
+        /// Materializes the active scene's transparent families. Every
+        /// semantic color and exact-feedback pipeline belongs to the
+        /// first-present scope. The complete scope adds only performance
+        /// variants whose canonical fallback produces equivalent pixels.
         /// </summary>
         internal void PrepareScenePipelineManifest(
             in ScenePipelineManifest manifest,
@@ -465,13 +466,25 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool partitioningEnabled,
             bool receiverFeedbackRequired,
             bool rayVariantsRequired,
-            bool decalReceiverCacheRequired)
+            bool decalReceiverCacheRequired,
+            ScenePipelinePreparationScope preparationScope)
         {
             if (!Enum.IsDefined(compositionMode))
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(compositionMode));
             }
+            if (!Enum.IsDefined(preparationScope))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(preparationScope));
+            }
+
+            bool prepareSpecializations = preparationScope ==
+                ScenePipelinePreparationScope.Complete;
+
+            if (prepareSpecializations)
+                PreparePostFirstPresentForwardOpaquePipelines();
 
             if (manifest.Requires(SceneMaterialPipelineKinds.Masked) &&
                 receiverFeedbackRequired)
@@ -486,6 +499,21 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 EnsureWeightedOitTransparentPipeline();
             else
                 EnsureTransparentForwardPipeline();
+
+            // The canonical ray program owns directional visibility,
+            // reflections, and full thick-transmission transport. It is the
+            // only ray pipeline allowed to gate the first production present.
+            bool rayPipelinesReady = false;
+            if (rayVariantsRequired)
+            {
+                rayPipelinesReady = TryEnsureRayTransparentPipelines();
+                if (rayPipelinesReady &&
+                    compositionMode == TransparencyMode.WeightedBlendedOit)
+                {
+                    rayPipelinesReady =
+                        TryEnsureRayWeightedOitTransparentPipeline();
+                }
+            }
 
             if (manifest.Requires(SceneMaterialPipelineKinds.ThinGlass) &&
                 compositionMode == TransparencyMode.SortedAlphaBlend)
@@ -517,31 +545,25 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 }
             }
 
-            bool rayPipelinesReady = false;
-            if (rayVariantsRequired)
+            if (rayPipelinesReady && receiverFeedbackRequired &&
+                !manifest.Requires(
+                    SceneMaterialPipelineKinds.ThickTransmission))
             {
-                rayPipelinesReady = TryEnsureRayTransparentPipelines();
-                if (rayPipelinesReady &&
-                    compositionMode == TransparencyMode.WeightedBlendedOit)
+                // The compact B1 ray programs intentionally omit full volume
+                // transport. Never publish one as the color pipeline for a
+                // scene containing thick transmission.
+                if (compositionMode ==
+                    TransparencyMode.WeightedBlendedOit)
                 {
-                    rayPipelinesReady =
-                        TryEnsureRayWeightedOitTransparentPipeline();
+                    TryEnsureRayWeightedOitReceiverFeedbackPipeline();
                 }
-                if (rayPipelinesReady && receiverFeedbackRequired)
+                else
                 {
-                    if (compositionMode ==
-                        TransparencyMode.WeightedBlendedOit)
-                    {
-                        TryEnsureRayWeightedOitReceiverFeedbackPipeline();
-                    }
-                    else
-                    {
-                        TryEnsureRayTransparentReceiverFeedbackPipeline();
-                    }
+                    TryEnsureRayTransparentReceiverFeedbackPipeline();
                 }
             }
 
-            if (!partitioningEnabled)
+            if (!prepareSpecializations || !partitioningEnabled)
                 return;
 
             Span<TransparentMaterialClass> materialClasses =
@@ -608,6 +630,212 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         out _,
                         out _);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Materializes the one advanced opaque MRT program that the production
+        /// graph can select before its first present. Render-time resolution is
+        /// deliberately lookup-only; a missing required program is therefore a
+        /// startup failure instead of an unbounded driver compile in Draw.
+        /// </summary>
+        internal void PrepareFirstPresentForwardOpaquePipeline()
+        {
+            if (!RendererBuildConfiguration.FastPipelineStartup)
+                return;
+
+            ForwardOpaquePipelineFamily family =
+                ResolveEffectiveForwardOpaquePipelineFamily(
+                    ForwardOpaquePipelineFamily.Full);
+            VkPipeline exactPipeline = ResolveBasePipeline(family);
+            if (exactPipeline.Handle == 0)
+            {
+                throw new InvalidOperationException(
+                    "The universal opaque forward pipeline is unavailable during first-present preparation.");
+            }
+
+            bool nearField = NearFieldDirectSourceAttachmentEnabled;
+            bool caustic = GiCausticReceiverAttachmentEnabled;
+            bool traceResolutionNearField = nearField &&
+                _nearFieldDirectSourceConfiguration.SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster;
+
+            bool prepared;
+            if (traceResolutionNearField)
+            {
+                prepared = TryEnsureNearFieldDirectSourcePipeline(
+                    exactPipeline,
+                    receiverCacheRequired: false);
+                if (prepared && caustic)
+                {
+                    prepared = TryEnsureGiCausticReceiverPipeline(
+                        exactPipeline,
+                        receiverCacheRequired: false);
+                }
+            }
+            else if (nearField && caustic &&
+                     CombinedAdvancedGiAttachmentEnabled)
+            {
+                prepared = TryEnsureCombinedAdvancedGiPipeline(
+                    exactPipeline,
+                    receiverCacheRequired: false);
+            }
+            else if (nearField)
+            {
+                prepared = TryEnsureNearFieldDirectSourcePipeline(
+                    exactPipeline,
+                    receiverCacheRequired: false);
+            }
+            else if (caustic)
+            {
+                prepared = TryEnsureGiCausticReceiverPipeline(
+                    exactPipeline,
+                    receiverCacheRequired: false);
+            }
+            else
+            {
+                prepared = true;
+            }
+
+            if (!prepared)
+            {
+                throw new InvalidOperationException(
+                    "The active advanced opaque forward pipeline could not be prepared before the first production present.");
+            }
+        }
+
+        /// <summary>
+        /// Builds performance-only receiver-cache variants on the bounded
+        /// post-present scheduler. Their absence always retains the exact DDGI
+        /// gather path and never starts pipeline creation from command recording.
+        /// </summary>
+        private void PreparePostFirstPresentForwardOpaquePipelines()
+        {
+            if (!RendererBuildConfiguration.FastPipelineStartup ||
+                MaterialTransportProvenanceAttachmentEnabled)
+            {
+                return;
+            }
+
+            SimpleDdgiReceiverCacheMode requestedMode =
+                SimpleDdgiReceiverCachePolicy.ResolveRequestedMode(
+                    Settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+                    Settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark,
+                    Settings.Diagnostics.ForceExactForwardGiGatherForBenchmark);
+            if (!requestedMode.UsesCache())
+                return;
+
+            ForwardOpaquePipelineFamily family =
+                ResolveEffectiveForwardOpaquePipelineFamily(
+                    ForwardOpaquePipelineFamily.Full);
+            VkPipeline exactPipeline = ResolveBasePipeline(family);
+            bool ordinaryPipelineReady;
+            if (Settings.GlobalIllumination.DebugView ==
+                GlobalIlluminationDebugView.DdgiReceiverCacheRejection)
+            {
+                ordinaryPipelineReady = TryEnsureReceiverCacheSpecializedPipeline(
+                    family,
+                    "forward_opaque_ddgi_cache_debug.frag.spv",
+                    "forward_opaque_simple_ddgi_cache_debug.frag.spv",
+                    "forward_opaque_simple_full_input_ddgi_cache_debug.frag.spv",
+                    "Surface-Aware Receiver-Cache Debug",
+                    ref _forwardReceiverCacheDebugPipeline,
+                    ref _forwardCompactedReceiverCacheDebugPipeline,
+                    ref _forwardSimpleReceiverCacheDebugPipeline,
+                    ref _forwardSimpleFullInputReceiverCacheDebugPipeline,
+                    ref _forwardCompactedSimpleReceiverCacheDebugPipeline,
+                    ref _forwardCompactedSimpleFullInputReceiverCacheDebugPipeline);
+            }
+            else if (requestedMode ==
+                     SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark)
+            {
+                ordinaryPipelineReady = TryEnsureReceiverCacheSpecializedPipeline(
+                    family,
+                    "forward_opaque_ddgi_cache_legacy.frag.spv",
+                    "forward_opaque_simple_ddgi_cache_legacy.frag.spv",
+                    "forward_opaque_simple_full_input_ddgi_cache_legacy.frag.spv",
+                    "Legacy Depth-Only Receiver-Cache Benchmark",
+                    ref _forwardReceiverCacheLegacyPipeline,
+                    ref _forwardCompactedReceiverCacheLegacyPipeline,
+                    ref _forwardSimpleReceiverCacheLegacyPipeline,
+                    ref _forwardSimpleFullInputReceiverCacheLegacyPipeline,
+                    ref _forwardCompactedSimpleReceiverCacheLegacyPipeline,
+                    ref _forwardCompactedSimpleFullInputReceiverCacheLegacyPipeline);
+            }
+            else if (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled)
+            {
+                ordinaryPipelineReady = TryEnsureReceiverCacheSpecializedPipeline(
+                    family,
+                    "forward_opaque_ddgi_cache_required_diagnostics.frag.spv",
+                    "forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv",
+                    "forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv",
+                    "Surface-Aware Receiver-Cache Diagnostics",
+                    ref _forwardReceiverCacheDiagnosticsPipeline,
+                    ref _forwardCompactedReceiverCacheDiagnosticsPipeline,
+                    ref _forwardSimpleReceiverCacheDiagnosticsPipeline,
+                    ref _forwardSimpleFullInputReceiverCacheDiagnosticsPipeline,
+                    ref _forwardCompactedSimpleReceiverCacheDiagnosticsPipeline,
+                    ref _forwardCompactedSimpleFullInputReceiverCacheDiagnosticsPipeline);
+            }
+            else
+            {
+                ordinaryPipelineReady = TryEnsureReceiverCacheSpecializedPipeline(
+                    family,
+                    "forward_opaque_ddgi_cache_required.frag.spv",
+                    "forward_opaque_simple_ddgi_cache_required.frag.spv",
+                    "forward_opaque_simple_full_input_ddgi_cache_required.frag.spv",
+                    "Receiver-Cache",
+                    ref _forwardReceiverCachePipeline,
+                    ref _forwardCompactedReceiverCachePipeline,
+                    ref _forwardSimpleReceiverCachePipeline,
+                    ref _forwardSimpleFullInputReceiverCachePipeline,
+                    ref _forwardCompactedSimpleReceiverCachePipeline,
+                    ref _forwardCompactedSimpleFullInputReceiverCachePipeline);
+            }
+
+            if (!ordinaryPipelineReady ||
+                Settings.GlobalIllumination.DebugView !=
+                    GlobalIlluminationDebugView.None ||
+                requestedMode ==
+                    SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark ||
+                Settings.Diagnostics.DdgiForwardEstimateCountersEnabled)
+            {
+                return;
+            }
+
+            bool nearField = NearFieldDirectSourceAttachmentEnabled;
+            bool caustic = GiCausticReceiverAttachmentEnabled;
+            bool traceResolutionNearField = nearField &&
+                _nearFieldDirectSourceConfiguration.SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster;
+            if (traceResolutionNearField)
+            {
+                if (caustic)
+                {
+                    _ = TryEnsureGiCausticReceiverPipeline(
+                        exactPipeline,
+                        receiverCacheRequired: true);
+                }
+                return;
+            }
+
+            if (nearField && caustic && CombinedAdvancedGiAttachmentEnabled)
+            {
+                _ = TryEnsureCombinedAdvancedGiPipeline(
+                    exactPipeline,
+                    receiverCacheRequired: true);
+            }
+            else if (nearField)
+            {
+                _ = TryEnsureNearFieldDirectSourcePipeline(
+                    exactPipeline,
+                    receiverCacheRequired: true);
+            }
+            else if (caustic)
+            {
+                _ = TryEnsureGiCausticReceiverPipeline(
+                    exactPipeline,
+                    receiverCacheRequired: true);
             }
         }
 
@@ -864,19 +1092,40 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             int combination = (giCausticReceiverEnabled ? 1 : 0) |
                 (nearFieldDirectSourceEnabled ? 2 : 0);
             int receiver = receiverCacheRequired ? 1 : 0;
-            if (_hybridReflectionPipelines[receiver, combination, family]
-                    .Handle == 0 &&
-                !TryCreateHybridReflectionPipeline(
-                    combination,
-                    family,
-                    receiverCacheRequired))
-            {
-                return false;
-            }
-
             hybridPipeline =
                 _hybridReflectionPipelines[receiver, combination, family];
             return hybridPipeline.Handle != 0;
+        }
+
+        public bool AreHybridReflectionPipelinesReady(
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled)
+        {
+            if (!HybridReflectionAttachmentEnabled)
+                return false;
+
+            int combination = (giCausticReceiverEnabled ? 1 : 0) |
+                (nearFieldDirectSourceEnabled ? 2 : 0);
+            int firstFamily = RendererBuildConfiguration.FastPipelineStartup
+                ? TasklessSubmissionEnabled ? 1 : 0
+                : 0;
+            int familyCount = RendererBuildConfiguration.FastPipelineStartup
+                ? 1
+                : 6;
+            for (int receiver = 0; receiver < 2; receiver++)
+            {
+                for (int family = firstFamily;
+                     family < firstFamily + familyCount;
+                     family++)
+                {
+                    if (_hybridReflectionPipelines[receiver, combination, family]
+                            .Handle == 0)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
 
         public bool TryPrepareHybridReflectionPipelines(
@@ -888,9 +1137,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             int combination = (giCausticReceiverEnabled ? 1 : 0) |
                 (nearFieldDirectSourceEnabled ? 2 : 0);
+            int firstFamily = RendererBuildConfiguration.FastPipelineStartup
+                ? TasklessSubmissionEnabled ? 1 : 0
+                : 0;
+            int familyCount = RendererBuildConfiguration.FastPipelineStartup
+                ? 1
+                : 6;
             for (int receiver = 0; receiver < 2; receiver++)
             {
-                for (int family = 0; family < 6; family++)
+                for (int family = firstFamily;
+                     family < firstFamily + familyCount;
+                     family++)
                 {
                     if (_hybridReflectionPipelines[
                                 receiver,
@@ -991,25 +1248,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             }
             else
             {
-                if (receiverCache &&
-                    RendererBuildConfiguration.FastPipelineStartup &&
-                    !TryEnsureReceiverCacheSpecializedPipeline(
-                        key.Family,
-                        "forward_opaque_ddgi_cache_required.frag.spv",
-                        "forward_opaque_simple_ddgi_cache_required.frag.spv",
-                        "forward_opaque_simple_full_input_ddgi_cache_required.frag.spv",
-                        "Receiver-Cache",
-                        ref _forwardReceiverCachePipeline,
-                        ref _forwardCompactedReceiverCachePipeline,
-                        ref _forwardSimpleReceiverCachePipeline,
-                        ref _forwardSimpleFullInputReceiverCachePipeline,
-                        ref _forwardCompactedSimpleReceiverCachePipeline,
-                        ref _forwardCompactedSimpleFullInputReceiverCachePipeline))
-                {
-                    pipeline = default;
-                    return false;
-                }
-
                 pipeline = ResolveOpaqueSpecializedPipeline(
                     exactPipeline,
                     receiverCache,
@@ -1140,24 +1378,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ForwardOpaquePipelineFamily family,
             out VkPipeline pipeline)
         {
-            if (RendererBuildConfiguration.FastPipelineStartup &&
-                !TryEnsureReceiverCacheSpecializedPipeline(
-                    family,
-                    "forward_opaque_ddgi_cache_required_diagnostics.frag.spv",
-                    "forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv",
-                    "forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv",
-                    "Surface-Aware Receiver-Cache Diagnostics",
-                    ref _forwardReceiverCacheDiagnosticsPipeline,
-                    ref _forwardCompactedReceiverCacheDiagnosticsPipeline,
-                    ref _forwardSimpleReceiverCacheDiagnosticsPipeline,
-                    ref _forwardSimpleFullInputReceiverCacheDiagnosticsPipeline,
-                    ref _forwardCompactedSimpleReceiverCacheDiagnosticsPipeline,
-                    ref _forwardCompactedSimpleFullInputReceiverCacheDiagnosticsPipeline))
-            {
-                pipeline = default;
-                return false;
-            }
-
+            family = ResolveEffectiveForwardOpaquePipelineFamily(family);
             pipeline = family switch
             {
                 ForwardOpaquePipelineFamily.Full =>
@@ -1181,24 +1402,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ForwardOpaquePipelineFamily family,
             out VkPipeline pipeline)
         {
-            if (RendererBuildConfiguration.FastPipelineStartup &&
-                !TryEnsureReceiverCacheSpecializedPipeline(
-                    family,
-                    "forward_opaque_ddgi_cache_legacy.frag.spv",
-                    "forward_opaque_simple_ddgi_cache_legacy.frag.spv",
-                    "forward_opaque_simple_full_input_ddgi_cache_legacy.frag.spv",
-                    "Legacy Depth-Only Receiver-Cache Benchmark",
-                    ref _forwardReceiverCacheLegacyPipeline,
-                    ref _forwardCompactedReceiverCacheLegacyPipeline,
-                    ref _forwardSimpleReceiverCacheLegacyPipeline,
-                    ref _forwardSimpleFullInputReceiverCacheLegacyPipeline,
-                    ref _forwardCompactedSimpleReceiverCacheLegacyPipeline,
-                    ref _forwardCompactedSimpleFullInputReceiverCacheLegacyPipeline))
-            {
-                pipeline = default;
-                return false;
-            }
-
+            family = ResolveEffectiveForwardOpaquePipelineFamily(family);
             pipeline = family switch
             {
                 ForwardOpaquePipelineFamily.Full =>
@@ -1222,24 +1426,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ForwardOpaquePipelineFamily family,
             out VkPipeline pipeline)
         {
-            if (RendererBuildConfiguration.FastPipelineStartup &&
-                !TryEnsureReceiverCacheSpecializedPipeline(
-                    family,
-                    "forward_opaque_ddgi_cache_debug.frag.spv",
-                    "forward_opaque_simple_ddgi_cache_debug.frag.spv",
-                    "forward_opaque_simple_full_input_ddgi_cache_debug.frag.spv",
-                    "Surface-Aware Receiver-Cache Debug",
-                    ref _forwardReceiverCacheDebugPipeline,
-                    ref _forwardCompactedReceiverCacheDebugPipeline,
-                    ref _forwardSimpleReceiverCacheDebugPipeline,
-                    ref _forwardSimpleFullInputReceiverCacheDebugPipeline,
-                    ref _forwardCompactedSimpleReceiverCacheDebugPipeline,
-                    ref _forwardCompactedSimpleFullInputReceiverCacheDebugPipeline))
-            {
-                pipeline = default;
-                return false;
-            }
-
+            family = ResolveEffectiveForwardOpaquePipelineFamily(family);
             pipeline = family switch
             {
                 ForwardOpaquePipelineFamily.Full =>
@@ -1260,8 +1447,30 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         }
 
         private VkPipeline ResolveBasePipeline(
-            ForwardOpaquePipelineFamily family) =>
-            family switch
+            ForwardOpaquePipelineFamily family)
+        {
+            if (RendererBuildConfiguration.FastPipelineStartup)
+            {
+                VkPipeline universalPipeline = TasklessSubmissionEnabled
+                    ? _forwardCompactedPipeline
+                    : _forwardPipeline;
+                return family switch
+                {
+                    ForwardOpaquePipelineFamily.Full or
+                    ForwardOpaquePipelineFamily.CompactedFull or
+                    ForwardOpaquePipelineFamily.Simple or
+                    ForwardOpaquePipelineFamily.SimpleFullInput or
+                    ForwardOpaquePipelineFamily.CompactedSimple or
+                    ForwardOpaquePipelineFamily.CompactedSimpleFullInput =>
+                        universalPipeline,
+                    _ => throw new ArgumentOutOfRangeException(
+                        nameof(family),
+                        family,
+                        "Unknown forward opaque pipeline family.")
+                };
+            }
+
+            return family switch
             {
                 ForwardOpaquePipelineFamily.Full => _forwardPipeline,
                 ForwardOpaquePipelineFamily.CompactedFull =>
@@ -1278,6 +1487,20 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     family,
                     "Unknown forward opaque pipeline family.")
             };
+        }
+
+        private ForwardOpaquePipelineFamily
+            ResolveEffectiveForwardOpaquePipelineFamily(
+                ForwardOpaquePipelineFamily requestedFamily)
+        {
+            _ = ResolveBasePipeline(requestedFamily);
+            if (!RendererBuildConfiguration.FastPipelineStartup)
+                return requestedFamily;
+
+            return TasklessSubmissionEnabled
+                ? ForwardOpaquePipelineFamily.CompactedFull
+                : ForwardOpaquePipelineFamily.Full;
+        }
 
         private void InvalidateForwardOpaquePipelineCache()
         {
@@ -1383,14 +1606,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (!NearFieldDirectSourceAttachmentEnabled)
                 return false;
 
-            if (RendererBuildConfiguration.FastPipelineStartup &&
-                !TryEnsureNearFieldDirectSourcePipeline(
-                    exactPipeline,
-                    receiverCacheRequired))
-            {
-                return false;
-            }
-
             if (exactPipeline.Handle == _forwardPipeline.Handle)
             {
                 nearFieldPipeline = receiverCacheRequired
@@ -1445,14 +1660,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (!GiCausticReceiverAttachmentEnabled)
                 return false;
 
-            if (RendererBuildConfiguration.FastPipelineStartup &&
-                !TryEnsureGiCausticReceiverPipeline(
-                    exactPipeline,
-                    receiverCacheRequired))
-            {
-                return false;
-            }
-
             if (exactPipeline.Handle == _forwardPipeline.Handle)
                 causticPipeline = receiverCacheRequired
                     ? _forwardReceiverCacheGiCausticReceiverPipeline
@@ -1503,14 +1710,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 !GiCausticReceiverAttachmentEnabled ||
                 _nearFieldDirectSourceConfiguration.SourceProducerMode !=
                     SimpleDdgiNearFieldSourceProducerMode.ForwardMrt)
-            {
-                return false;
-            }
-
-            if (RendererBuildConfiguration.FastPipelineStartup &&
-                !TryEnsureCombinedAdvancedGiPipeline(
-                    exactPipeline,
-                    receiverCacheRequired))
             {
                 return false;
             }
@@ -2440,20 +2639,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         "Compacted Mesh-Only Alpha-Test Shadow Pipeline");
                 }));
 
-            RunPipelineCreationBatch(
-                ("mesh.forward.full", () =>
-                {
-                    _forwardPipeline = CreateGraphicsPipeline(
-                        forwardTaskShaderName, "forward.mesh.spv",
-                        forwardOpaqueFragmentShaderName, colorFormat,
-                        depthFormat, true, false, false, CullModeFlags.None,
-                        false, materialTransportProvenanceFormat:
-                        materialTransportProvenanceFormat);
-                    _context.SetDebugName(_forwardPipeline.Handle,
-                        ObjectType.Pipeline,
-                        "Opaque Forward Plus Mesh Pipeline");
-                }),
-                ("mesh.forward.compacted-full", () =>
+            if (RendererBuildConfiguration.FastPipelineStartup)
+            {
+                if (TasklessSubmissionEnabled)
                 {
                     _forwardCompactedPipeline = CreateGraphicsPipeline(
                         null, _compactedForwardMeshShaderName,
@@ -2463,9 +2651,49 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         materialTransportProvenanceFormat);
                     _context.SetDebugName(_forwardCompactedPipeline.Handle,
                         ObjectType.Pipeline,
-                        "Compacted Opaque Forward Plus Mesh Pipeline");
-                }),
-                ("mesh.forward.simple", () =>
+                        "First-Frame Universal Compacted Opaque Forward Pipeline");
+                }
+                else
+                {
+                    _forwardPipeline = CreateGraphicsPipeline(
+                        forwardTaskShaderName, "forward.mesh.spv",
+                        forwardOpaqueFragmentShaderName, colorFormat,
+                        depthFormat, true, false, false, CullModeFlags.None,
+                        false, materialTransportProvenanceFormat:
+                        materialTransportProvenanceFormat);
+                    _context.SetDebugName(_forwardPipeline.Handle,
+                        ObjectType.Pipeline,
+                        "First-Frame Universal Opaque Forward Pipeline");
+                }
+            }
+            else
+            {
+                RunPipelineCreationBatch(
+                    ("mesh.forward.full", () =>
+                    {
+                        _forwardPipeline = CreateGraphicsPipeline(
+                            forwardTaskShaderName, "forward.mesh.spv",
+                            forwardOpaqueFragmentShaderName, colorFormat,
+                            depthFormat, true, false, false, CullModeFlags.None,
+                            false, materialTransportProvenanceFormat:
+                            materialTransportProvenanceFormat);
+                        _context.SetDebugName(_forwardPipeline.Handle,
+                            ObjectType.Pipeline,
+                            "Opaque Forward Plus Mesh Pipeline");
+                    }),
+                    ("mesh.forward.compacted-full", () =>
+                    {
+                        _forwardCompactedPipeline = CreateGraphicsPipeline(
+                            null, _compactedForwardMeshShaderName,
+                            forwardOpaqueFragmentShaderName, colorFormat,
+                            depthFormat, true, false, false, CullModeFlags.None,
+                            false, materialTransportProvenanceFormat:
+                            materialTransportProvenanceFormat);
+                        _context.SetDebugName(_forwardCompactedPipeline.Handle,
+                            ObjectType.Pipeline,
+                            "Compacted Opaque Forward Plus Mesh Pipeline");
+                    }),
+                    ("mesh.forward.simple", () =>
                 {
                     _forwardSimplePipeline = CreateGraphicsPipeline(
                         forwardTaskShaderName, "forward_simple.mesh.spv",
@@ -2518,7 +2746,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         _forwardCompactedSimpleFullInputPipeline.Handle,
                         ObjectType.Pipeline,
                         "Compacted Simple Full-Input Opaque Forward Plus Mesh Pipeline");
-                }));
+                    }));
+            }
 
             // C4 and C5 can independently have zero work on any frame. Admit
             // each semantic MRT set even when both features are configured so

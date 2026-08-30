@@ -2314,6 +2314,20 @@ internal sealed class RendererDiagnosticsAssembler
             ForwardVisibilityCompactionEnabled = sceneData.ForwardVisibilityCompactionEnabled ? 1 : 0,
             ForwardVisibilityCompactionActive = sceneData.ForwardVisibilityCompactionActive ? 1 : 0,
             ForwardVisibilityCompactionSkipReason = sceneData.ForwardVisibilityCompactionSkipReason,
+            ForwardVisibilitySimpleCapacity =
+                sceneData.ForwardVisibilitySimpleCapacity,
+            ForwardVisibilitySimpleNormalCapacity =
+                sceneData.ForwardVisibilitySimpleNormalCapacity,
+            ForwardVisibilityFullCapacity =
+                sceneData.ForwardVisibilityFullCapacity,
+            ForwardVisibilityCounterReadbackValid =
+                sceneData.ForwardVisibilityCounterReadbackValid,
+            ForwardVisibilityCandidateCount =
+                sceneData.ForwardVisibilityCandidateCount,
+            ForwardVisibilityEmittedCount =
+                sceneData.ForwardVisibilityEmittedCount,
+            ForwardVisibilityOverflowCount =
+                sceneData.ForwardVisibilityOverflowCount,
             CurrentFrameHiZTested = sceneData.CurrentFrameHiZTested,
             CurrentFrameHiZCulled = sceneData.CurrentFrameHiZCulled,
             HiZPolicyStatus = sceneData.HiZPolicyStatus,

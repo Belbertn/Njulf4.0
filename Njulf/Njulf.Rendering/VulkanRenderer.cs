@@ -41,10 +41,38 @@ namespace Njulf.Rendering
     /// - Passes ONLY RECORD COMMANDS: VulkanRenderer calls methods on passes which record into command buffers
     /// </summary>
     public unsafe class VulkanRenderer : IRenderer, IRendererFrameState,
-        IScenePipelinePreparer,
-        IStartupLatencyReporter, IRendererDebugTools, IDisposable
+        IProgressiveScenePipelinePreparer,
+        IStartupLatencyReporter, IStartupMilestoneLatencyReporter,
+        IRendererDebugTools, IDisposable
     {
         public bool IsFrameInProgress => _lifetime.FrameInProgress;
+
+        public bool IsProgressiveStartupEnabled =>
+            RendererBuildConfiguration.ProgressivePipelineStartup;
+
+        public RendererStartupSnapshot StartupSnapshot
+        {
+            get
+            {
+                lock (_startupGate)
+                {
+                    long now = Stopwatch.GetTimestamp();
+                    ulong pipelines = _giPipelineCacheService?.Telemetry
+                        .PipelineCreationCount ?? 0UL;
+                    return new RendererStartupSnapshot(
+                        _startupPhase,
+                        ElapsedMicroseconds(_startupStartedTimestamp, now),
+                        ElapsedMicroseconds(
+                            _startupPhaseStartedTimestamp,
+                            now),
+                        _bootstrapPresented,
+                        _startupScenePresented,
+                        _fullQualityPresented,
+                        pipelines,
+                        _startupDetail);
+                }
+            }
+        }
 
         internal static IReadOnlyList<string> ProductionRenderPassOrder =>
             ProductionRenderPipelineDeclaration.Instance.PassOrder;
@@ -240,6 +268,31 @@ namespace Njulf.Rendering
         private readonly HashSet<ParticleBlendMode> _particleBlendModeScratch = new();
         private bool _initialScenePipelinesPrepared;
         private bool _pipelineCachePersistenceScheduled;
+        private bool _fullQualityCachePersistenceScheduled;
+        private Action? _postFirstPresentPipelinePreparation;
+        private bool _postFirstPresentPipelinePreparationScheduled;
+        private int _postFirstPresentPipelinePreparationGeneration;
+        private int _postFirstPresentPipelineSpecializationsReady = 1;
+        private readonly object _startupGate = new();
+        private RendererStartupPhase _startupPhase =
+            RendererStartupPhase.Bootstrap;
+        private string _startupDetail =
+            "Bootstrap device path is initializing.";
+        private long _startupStartedTimestamp;
+        private long _startupPhaseStartedTimestamp;
+        private Task? _productionInitializationTask;
+        private Task? _scenePreparationTask;
+        private int _renderThreadManagedId;
+        private bool _productionPreparationStarted;
+        private bool _productionResourcesReady;
+        private Exception? _startupFailure;
+        private int _productionGraphReady;
+        private bool _progressiveFrame;
+        private RendererStartupPhase _progressiveFramePhase;
+        private bool _bootstrapPresented;
+        private bool _startupScenePresented;
+        private bool _fullQualityPresented;
+        private bool _productionFrameWasFullQuality;
         private DirectionalShadowPass? _directionalShadowPass;
         private DirectionalRayShadowPass? _directionalRayShadowPass;
         private AreaRayShadowPass? _areaRayShadowPass;
@@ -347,7 +400,7 @@ namespace Njulf.Rendering
         private string _lastRenderTargetRecreateReason = string.Empty;
 
         // Scene state
-        private Color _clearColor = Color.CornflowerBlue;
+        private Color _clearColor = Color.Black;
         public RendererDiagnostics LastDiagnostics => _lastDiagnostics;
         public RenderBudgetSnapshot LastBudgetSnapshot => _lastBudgetSnapshot;
         public DeviceRequirementReport? SelectedDeviceRequirementReport => _context.SelectedDeviceRequirementReport;
@@ -883,6 +936,9 @@ namespace Njulf.Rendering
 
         public int DebugObjectSnapshotCount => _lastSceneData?.ObjectDebugSnapshots.Count ?? 0;
 
+        public ScreenshotCaptureAnalysis LastScreenshotCaptureAnalysis =>
+            _screenshotCaptureService.LastCaptureAnalysis;
+
         public void QueueOverlayDrawData(OverlayDrawData? drawData)
         {
             _lifetime.ThrowIfDisposalStarted();
@@ -1207,6 +1263,29 @@ namespace Njulf.Rendering
 
         private void InitializeCore()
         {
+            long started = Stopwatch.GetTimestamp();
+            lock (_startupGate)
+            {
+                _startupStartedTimestamp = started;
+                _startupPhaseStartedTimestamp = started;
+            }
+            InitializeBootstrapCore();
+            if (!RendererBuildConfiguration.ProgressivePipelineStartup)
+                InitializeProductionResourcesCore();
+        }
+
+        private void InitializeBootstrapCore()
+        {
+            // A pipeline-free clear needs only the device/swapchain services
+            // constructed by DI plus one render-finished semaphore per image.
+            // Everything else is deliberately deferred until after that clear
+            // has been presented.
+            _sync.EnsureRenderFinishedSemaphoreCapacity(
+                _swapchain.ImageCount);
+        }
+
+        private void InitializeProductionResourcesCore()
+        {
             System.Diagnostics.Debug.WriteLine("Initializing VulkanRenderer...");
 
             // Auto-qualified admission is shader-bundle keyed. Resolve the effective embedded
@@ -1451,16 +1530,130 @@ namespace Njulf.Rendering
                 InitializeNearFieldResidualGenerationTransaction();
             }
 
+            if (RendererBuildConfiguration.ProgressivePipelineStartup)
+            {
+                // These registrations contain no graphics-pipeline work and
+                // make already uploaded scene geometry available to the tiny
+                // startup path before production compilation begins.
+                RegisterSceneBuffers();
+            }
+            else
+            {
+                InitializeProductionPipelinesAndGraph();
+                RegisterSceneBuffers();
+            }
+        }
+
+        private void InitializeProductionPipelinesAndGraph()
+        {
             _lifetime.RunStartupStep(
                 "VulkanRenderer.CreatePipelines",
                 CreatePipelines);
             _lifetime.RunStartupStep(
                 "VulkanRenderer.InitializeRenderGraph",
                 InitializeRenderGraph);
+            Volatile.Write(ref _productionGraphReady, 1);
+        }
 
-            // Register static buffers in bindless heap
-            RegisterSceneBuffers();
-            _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
+        public void BeginProductionPreparation()
+        {
+            _lifetime.ThrowIfDisposalStarted();
+            if (!RendererBuildConfiguration.ProgressivePipelineStartup)
+                return;
+
+            ThrowIfProgressiveStartupFaulted();
+            lock (_startupGate)
+            {
+                if (_productionResourcesReady)
+                    return;
+                if (_productionPreparationStarted)
+                {
+                    throw new InvalidOperationException(
+                        "Production preparation is already in progress.");
+                }
+
+                _productionPreparationStarted = true;
+                _startupDetail =
+                    "Production resources are being created before native pipeline compilation starts.";
+            }
+
+            try
+            {
+                // Vulkan queues and command pools require external
+                // synchronization. Resource creation stays on the host's
+                // device-owning thread; native pipeline creation begins on the
+                // bounded worker as soon as those resources are ready.
+                _lifetime.RunStartupStep(
+                    "VulkanRenderer.InitializeProductionResources",
+                    InitializeProductionResourcesCore);
+                lock (_startupGate)
+                {
+                    _productionResourcesReady = true;
+                    SetStartupPhaseLocked(
+                        RendererStartupPhase.ProductionPreparing,
+                        "Production resources are ready; visual-critical pipelines are compiling.");
+                }
+                StartProgressiveProductionInitialization();
+            }
+            catch (Exception exception)
+            {
+                lock (_startupGate)
+                {
+                    _startupFailure = exception;
+                    SetStartupPhaseLocked(
+                        RendererStartupPhase.Faulted,
+                        $"Production preparation failed: {exception.Message}");
+                }
+                throw;
+            }
+        }
+
+        private void StartProgressiveProductionInitialization()
+        {
+            lock (_startupGate)
+            {
+                if (_productionInitializationTask != null)
+                    return;
+                SetStartupPhaseLocked(
+                    RendererStartupPhase.ProductionPreparing,
+                    "The neutral bootstrap remains visible while production variants compile.");
+                _productionInitializationTask = Task.Run(() =>
+                {
+                    try
+                    {
+                        InitializeProductionPipelinesAndGraph();
+                        lock (_startupGate)
+                        {
+                            if (_startupPhase ==
+                                RendererStartupPhase.ProductionPreparing)
+                            {
+                                _startupDetail =
+                                    "Production graph is ready; active-scene variants are being prepared.";
+                            }
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        lock (_startupGate)
+                        {
+                            _startupFailure = exception;
+                            SetStartupPhaseLocked(
+                                RendererStartupPhase.Faulted,
+                                $"Progressive renderer startup failed: {exception.Message}");
+                        }
+                        throw;
+                    }
+                });
+            }
+        }
+
+        private void SetStartupPhaseLocked(
+            RendererStartupPhase phase,
+            string detail)
+        {
+            _startupPhase = phase;
+            _startupPhaseStartedTimestamp = Stopwatch.GetTimestamp();
+            _startupDetail = detail;
         }
 
         private SimpleDdgiNearFieldResidualVulkanRuntime
@@ -2900,11 +3093,24 @@ namespace Njulf.Rendering
         public bool BeginFrame()
         {
             _lifetime.ThrowIfDisposalStarted();
+            int currentThreadId = Environment.CurrentManagedThreadId;
+            _ = Interlocked.CompareExchange(
+                ref _renderThreadManagedId,
+                currentThreadId,
+                comparand: 0);
             if (!_lifetime.InitializationSucceeded)
                 Initialize();
 
             _lifetime.ThrowIfSubmissionFaulted();
             _lifetime.EnsureCanBeginFrame();
+
+            if (RendererBuildConfiguration.ProgressivePipelineStartup &&
+                StartupSnapshot.Phase != RendererStartupPhase.FullQuality)
+            {
+                ThrowIfProgressiveStartupFaulted();
+                return BeginProgressiveFrame();
+            }
+            _productionFrameWasFullQuality = true;
 
             if (_lifetime.SwapchainRecreationRequested)
             {
@@ -3219,6 +3425,12 @@ namespace Njulf.Rendering
             _lifetime.ThrowIfDisposalStarted();
             _lifetime.EnsureCanEndFrame();
 
+            if (_progressiveFrame)
+            {
+                EndProgressiveFrame();
+                return;
+            }
+
             var vk = _context.Api;
 
             _meshletPhysicalResidencyResources?.RecordFeedbackReadback(
@@ -3414,16 +3626,16 @@ namespace Njulf.Rendering
                 throw new VulkanException("Failed to present swapchain image", presentResult);
             }
 
-            if (_initialScenePipelinesPrepared)
-                _giPipelineCacheService?.SchedulePersist();
-
-            if (_initialScenePipelinesPrepared &&
-                !_pipelineCachePersistenceScheduled)
+            if (_productionFrameWasFullQuality)
             {
-                _performanceCaptureMetadataProvider
-                    .SchedulePostStartupIdentityResolution();
-                _pipelineCachePersistenceScheduled = true;
+                lock (_startupGate)
+                {
+                    _bootstrapPresented = true;
+                    _startupScenePresented = true;
+                    _fullQualityPresented = true;
+                }
             }
+            SchedulePostFullQualityPersistence();
 
             // TriggerCapture queues a single present-delimited frame. Retire
             // the renderer-facing request only after that frame presented.
@@ -3449,10 +3661,151 @@ namespace Njulf.Rendering
             _context.ThrowIfValidationFailure();
         }
 
+        private void EndProgressiveFrame()
+        {
+            var vk = _context.Api;
+            if (_swapchainImageTransitionedThisFrame)
+            {
+                TransitionSwapchainImage(
+                    _currentCommandBuffer,
+                    ImageLayout.PresentSrcKhr);
+            }
+
+            Result result = vk.EndCommandBuffer(_currentCommandBuffer);
+            if (result != Result.Success)
+            {
+                MarkFrameSubmissionFault(
+                    "Failed to end progressive-startup command buffer.",
+                    result);
+                throw new VulkanException(
+                    "Failed to end progressive-startup command buffer",
+                    result);
+            }
+
+            try
+            {
+                _sync.ResetFence(_currentFrame);
+            }
+            catch (VulkanException exception)
+            {
+                MarkFrameSubmissionFault(
+                    "Failed to reset the progressive-startup frame fence.",
+                    exception.Result);
+                throw;
+            }
+
+            Semaphore imageAvailable =
+                _sync.GetImageAvailableSemaphore(_currentFrame);
+            Semaphore renderFinished =
+                _sync.GetRenderFinishedSemaphoreForImage(_imageIndex);
+            PipelineStageFlags waitStage =
+                PipelineStageFlags.ColorAttachmentOutputBit;
+            CommandBuffer commandBuffer = _currentCommandBuffer;
+            var submitInfo = new SubmitInfo
+            {
+                SType = StructureType.SubmitInfo,
+                WaitSemaphoreCount = 1,
+                PWaitSemaphores = &imageAvailable,
+                PWaitDstStageMask = &waitStage,
+                CommandBufferCount = 1,
+                PCommandBuffers = &commandBuffer,
+                SignalSemaphoreCount = 1,
+                PSignalSemaphores = &renderFinished
+            };
+            result = vk.QueueSubmit(
+                _context.GraphicsQueue,
+                1,
+                &submitInfo,
+                _sync.GetInFlightFence(_currentFrame));
+            if (result != Result.Success)
+            {
+                Result recovery = TryRecoverFrameFenceAfterTerminalSubmitFailure(
+                    1,
+                    &imageAvailable,
+                    &waitStage,
+                    null,
+                    hasTimelineWaits: false);
+                string reason =
+                    $"Failed to submit progressive-startup frame: {result}; " +
+                    $"fence recovery: {recovery}.";
+                MarkFrameSubmissionFault(reason, result);
+                throw new VulkanException(
+                    "Failed to submit progressive-startup frame",
+                    result);
+            }
+
+            var swapchain = _swapchain.Swapchain;
+            uint imageIndex = _imageIndex;
+            var presentInfo = new PresentInfoKHR
+            {
+                SType = StructureType.PresentInfoKhr,
+                WaitSemaphoreCount = 1,
+                PWaitSemaphores = &renderFinished,
+                SwapchainCount = 1,
+                PSwapchains = &swapchain,
+                PImageIndices = &imageIndex
+            };
+            Result presentResult = _swapchain.Present(&presentInfo);
+            if (presentResult != Result.Success &&
+                presentResult != Result.ErrorOutOfDateKhr &&
+                presentResult != Result.SuboptimalKhr)
+            {
+                MarkFrameSubmissionFault(
+                    $"Failed to present progressive-startup frame: {presentResult}.",
+                    presentResult);
+                throw new VulkanException(
+                    "Failed to present progressive-startup frame",
+                    presentResult);
+            }
+
+            lock (_startupGate)
+            {
+                _bootstrapPresented = true;
+                if (_progressiveFramePhase ==
+                        RendererStartupPhase.FullQuality)
+                {
+                    _startupScenePresented = true;
+                    _fullQualityPresented = true;
+                }
+            }
+            if (!_initialScenePipelinesPrepared)
+            {
+                _giPipelineCacheService?.MarkRenderCriticalFramesStarted(
+                    _renderThreadManagedId);
+            }
+            SchedulePostFullQualityPersistence();
+
+            _submittedGraphicsFrameFenceValues[_currentFrame] =
+                _ddgiFrameSerial == ulong.MaxValue
+                    ? ulong.MaxValue
+                    : _ddgiFrameSerial + 1UL;
+            _currentFrame = (_currentFrame + 1) % FramesInFlight;
+            _temporalSampleIndex++;
+            _ddgiFrameSerial++;
+            _sync.AdvanceFrame();
+            _progressiveFrame = false;
+            _lifetime.CompleteFrame();
+
+            if (presentResult == Result.ErrorOutOfDateKhr ||
+                presentResult == Result.SuboptimalKhr)
+            {
+                _lifetime.RequestSwapchainRecreation();
+            }
+            RefreshValidationDiagnostics();
+            _context.ThrowIfValidationFailure();
+        }
+
         public unsafe void Clear(Color color)
         {
             _lifetime.ThrowIfDisposalStarted();
             _lifetime.EnsureFrameInProgress(nameof(Clear));
+
+            _clearColor = color;
+            if (_progressiveFrame)
+            {
+                RecordProgressiveClear(color);
+                return;
+            }
 
             var vk = _context.Api;
             var khrDynamicRendering = _context.KhrDynamicRendering;
@@ -3495,6 +3848,38 @@ namespace Njulf.Rendering
 
             vk.CmdBeginRendering(_currentCommandBuffer, &renderingInfo);
             vk.CmdEndRendering(_currentCommandBuffer);
+        }
+
+        private void RecordProgressiveClear(Color color)
+        {
+            EnsureSwapchainImageColorAttachment(_currentCommandBuffer);
+            var colorAttachment = new RenderingAttachmentInfo
+            {
+                SType = StructureType.RenderingAttachmentInfo,
+                ImageView = _swapchain.ImageViews[_imageIndex],
+                ImageLayout = ImageLayout.ColorAttachmentOptimal,
+                LoadOp = AttachmentLoadOp.Clear,
+                StoreOp = AttachmentStoreOp.Store,
+                ClearValue = new ClearValue(new ClearColorValue(
+                    color.R,
+                    color.G,
+                    color.B,
+                    color.A))
+            };
+            var renderingInfo = new RenderingInfo
+            {
+                SType = StructureType.RenderingInfo,
+                RenderArea = new Rect2D(
+                    new Offset2D(0, 0),
+                    _swapchain.Extent),
+                LayerCount = 1,
+                ColorAttachmentCount = 1,
+                PColorAttachments = &colorAttachment
+            };
+            _context.Api.CmdBeginRendering(
+                _currentCommandBuffer,
+                &renderingInfo);
+            _context.Api.CmdEndRendering(_currentCommandBuffer);
         }
 
         /// <summary>
@@ -3563,20 +3948,37 @@ namespace Njulf.Rendering
 
         private bool PrepareHybridReflectionReceiverPipelines()
         {
-            // Screen-pipeline publication stays false while these variants are
-            // created, so Forward+ continues selecting its ordinary opaque
-            // family and cannot race a partially populated pipeline bank.
-            for (int nearField = 0; nearField <= 1; nearField++)
+            // Screen-pipeline publication stays false while the base fallback
+            // and configured graph combination are created. Forward+ retains
+            // lookup-or-create semantics for a later dynamic combination, so
+            // it never demotes the requested reflection mode merely because a
+            // previously unused attachment combination became active.
+            if (!TryPrepareHybridReflectionReceiverCombination(
+                    nearFieldDirectSource: false,
+                    giCausticReceiver: false))
             {
-                for (int caustic = 0; caustic <= 1; caustic++)
-                {
-                    if (!_meshPipeline.TryPrepareHybridReflectionPipelines(
-                            nearField != 0,
-                            caustic != 0))
-                    {
-                        return false;
-                    }
-                }
+                return false;
+            }
+
+            bool nearFieldDirectSource =
+                _advancedGiAdmission.GraphModes.UsesNearFieldHiZResidual &&
+                _meshPipeline.NearFieldDirectSourceConfiguration
+                    .SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.ForwardMrt;
+            bool giCausticReceiver =
+                _advancedGiAdmission.GraphModes.UsesCausticWorldCache;
+            if (nearFieldDirectSource && giCausticReceiver &&
+                !_meshPipeline.CombinedAdvancedGiAttachmentEnabled)
+            {
+                giCausticReceiver = false;
+            }
+
+            if ((nearFieldDirectSource || giCausticReceiver) &&
+                !TryPrepareHybridReflectionReceiverCombination(
+                    nearFieldDirectSource,
+                    giCausticReceiver))
+            {
+                return false;
             }
 
             Volatile.Write(
@@ -3585,12 +3987,191 @@ namespace Njulf.Rendering
             return true;
         }
 
+        private bool TryPrepareHybridReflectionReceiverCombination(
+            bool nearFieldDirectSource,
+            bool giCausticReceiver)
+        {
+            if (!_meshPipeline.TryPrepareHybridReflectionPipelines(
+                    nearFieldDirectSource,
+                    giCausticReceiver))
+            {
+                return false;
+            }
+
+            return !_foliagePipeline.IsPrepared ||
+                _foliagePipeline.TryPrepareHybridReflectionPipelines(
+                    nearFieldDirectSource,
+                    giCausticReceiver);
+        }
+
+        private void PrepareHybridReflectionsForFullQuality()
+        {
+            HybridReflectionVulkanRuntime runtime =
+                _hybridReflectionRuntime ?? throw new InvalidOperationException(
+                    "Hybrid reflection runtime is not initialized.");
+
+            // BeginInitializeAsync also releases a claim made by
+            // DeferInitialize. Waiting here is safe because scene preparation
+            // runs behind the responsive bootstrap presentation, and it keeps
+            // full-quality publication behind the complete receiver bank.
+            runtime.BeginInitializeAsync(
+                    PrepareHybridReflectionReceiverPipelines)
+                .GetAwaiter()
+                .GetResult();
+
+            // An already-published runtime does not invoke the callback. Run
+            // the idempotent preparation once more so newly prepared foliage
+            // families on a scene transition are covered as well.
+            if (!PrepareHybridReflectionReceiverPipelines() ||
+                !runtime.ScreenPipelinesAvailable)
+            {
+                throw new InvalidOperationException(
+                    "Hybrid reflections were requested, but their complete " +
+                    "screen and receiver pipeline bank is unavailable. " +
+                    $"Runtime: {runtime.FailureDetail}; mesh: " +
+                    $"{_meshPipeline.HybridReflectionFailureReason}; foliage: " +
+                    _foliagePipeline.HybridReflectionPipelineFailureReason);
+            }
+        }
+
+        private bool BeginProgressiveFrame()
+        {
+            if (_lifetime.SwapchainRecreationRequested)
+            {
+                bool recreated = RecreateProgressiveSwapchain();
+                _lifetime.ObserveSwapchainRecreationAttempt(recreated);
+                if (!recreated)
+                    return false;
+            }
+
+            _stallTracker.BeginFrame();
+            try
+            {
+                _sync.WaitForFence(_currentFrame);
+            }
+            catch (VulkanException exception)
+            {
+                MarkFrameSubmissionFault(
+                    "Failed while waiting for a progressive-startup frame fence.",
+                    exception.Result);
+                throw;
+            }
+            _stallTracker.Record(
+                RuntimeStallReason.FrameFenceWait,
+                _sync.LastFenceWaitMicroseconds,
+                "Progressive startup frame fence");
+            _deleter.ProcessCompletedFrame(
+                _sync.GetInFlightFence(_currentFrame));
+            _context.SetAllocatorCurrentFrameIndex(_allocatorFrameIndex++);
+
+            Result acquireResult = _swapchain.TryAcquireNextImage(
+                _sync.GetImageAvailableSemaphore(_currentFrame),
+                out _imageIndex);
+            if (acquireResult == Result.ErrorOutOfDateKhr)
+            {
+                _lifetime.RequestSwapchainRecreation();
+                _lifetime.ObserveSwapchainRecreationAttempt(
+                    RecreateProgressiveSwapchain());
+                return false;
+            }
+            if (acquireResult != Result.Success &&
+                acquireResult != Result.SuboptimalKhr)
+            {
+                if (acquireResult == Result.ErrorDeviceLost)
+                {
+                    MarkFrameSubmissionFault(
+                        "The Vulkan device was lost while acquiring a progressive-startup frame.",
+                        acquireResult);
+                }
+                throw new VulkanException(
+                    "Failed to acquire progressive-startup swapchain image",
+                    acquireResult);
+            }
+            if (acquireResult == Result.SuboptimalKhr)
+                _lifetime.RequestSwapchainRecreation();
+
+            _cmd.ResetGraphicsCommandBuffer(_currentFrame);
+            _currentCommandBuffer =
+                _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
+            _swapchainImageTransitionedThisFrame = false;
+            lock (_startupGate)
+                _progressiveFramePhase = _startupPhase;
+            _progressiveFrame = true;
+            _lifetime.MarkFrameStarted();
+
+            // Guarantee that even a host which has not issued Draw yet owns a
+            // valid, visibly responsive present.
+            RecordProgressiveClear(_clearColor);
+            return true;
+        }
+
+        private bool RecreateProgressiveSwapchain()
+        {
+            _lifetime.EnsureSwapchainRecreationAllowed();
+            bool recreated = _swapchain.RecreateSwapchain(() =>
+                RecordDeviceWaitIdle(
+                    RuntimeStallReason.ResourceResize,
+                    "Progressive startup swapchain recreate",
+                    _context.WaitIdle));
+            if (recreated)
+            {
+                _sync.EnsureRenderFinishedSemaphoreCapacity(
+                    _swapchain.ImageCount);
+            }
+            return recreated;
+        }
+
         public void PrepareScene(Scene scene, ICamera camera)
         {
             _lifetime.ThrowIfDisposalStarted();
             ArgumentNullException.ThrowIfNull(scene);
             ArgumentNullException.ThrowIfNull(camera);
 
+            if (RendererBuildConfiguration.ProgressivePipelineStartup)
+            {
+                BeginProductionPreparation();
+                StartProgressiveProductionInitialization();
+            }
+
+            Task? initialization = _productionInitializationTask;
+            if (initialization != null)
+                initialization.GetAwaiter().GetResult();
+            ThrowIfProgressiveStartupFaulted();
+            PrepareSceneCore(scene, camera);
+            PublishFullQualityStartup();
+        }
+
+        public Task PrepareSceneAsync(
+            Scene scene,
+            ICamera camera,
+            CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfDisposalStarted();
+            ArgumentNullException.ThrowIfNull(scene);
+            ArgumentNullException.ThrowIfNull(camera);
+
+            if (RendererBuildConfiguration.ProgressivePipelineStartup)
+            {
+                BeginProductionPreparation();
+                StartProgressiveProductionInitialization();
+            }
+
+            Task preparationTask = ProgressiveRendererStartupTask.RunAsync(
+                _productionInitializationTask,
+                () =>
+                {
+                    ThrowIfProgressiveStartupFaulted();
+                    PrepareSceneCore(scene, camera);
+                },
+                PublishFullQualityStartup,
+                cancellationToken);
+            lock (_startupGate)
+                _scenePreparationTask = preparationTask;
+            return preparationTask;
+        }
+
+        private void PrepareSceneCore(Scene scene, ICamera camera)
+        {
             bool exhaustive = RendererBuildConfiguration.PipelineStartupMode ==
                               RendererPipelineStartupMode.Exhaustive;
             ScenePipelineManifest pipelineManifest = exhaustive
@@ -3619,22 +4200,98 @@ namespace Njulf.Rendering
                     SceneMaterialPipelineKinds.GeometryDecal) &&
                 Settings.Transparency.Enabled &&
                 Settings.Decals.ReceiveShadows;
-            if (pipelineManifest.MaterialKinds !=
-                SceneMaterialPipelineKinds.None)
+            TransparencyMode transparencyMode =
+                Settings.Transparency.Mode;
+            bool partitioningEnabled =
+                Settings.Transparency.Enabled &&
+                Settings.Transparency.PipelinePartitioningEnabled;
+            bool rayVariantsRequired =
+                _context.RayQuerySupported &&
+                (transparentRayVariantsRequired ||
+                 decalRayVariantsRequired);
+            bool decalReceiverCacheRequired =
+                receiverFeedbackRequired &&
+                Settings.Decals.ReceiveGlobalIllumination;
+            bool deferPostFirstPresentSpecializations =
+                RendererBuildConfiguration.ProgressivePipelineStartup &&
+                !exhaustive;
+            bool initialScenePreparation =
+                !_initialScenePipelinesPrepared;
+            if (initialScenePreparation)
+            {
+                lock (_startupGate)
+                {
+                    _postFirstPresentPipelinePreparation = null;
+                    _postFirstPresentPipelinePreparationScheduled = false;
+                    _postFirstPresentPipelinePreparationGeneration = unchecked(
+                        _postFirstPresentPipelinePreparationGeneration + 1);
+                }
+                Volatile.Write(
+                    ref _postFirstPresentPipelineSpecializationsReady,
+                    deferPostFirstPresentSpecializations ? 0 : 1);
+            }
+            bool firstPresentCriticalOnly =
+                deferPostFirstPresentSpecializations &&
+                Volatile.Read(
+                    ref _postFirstPresentPipelineSpecializationsReady) == 0;
+
+            if (receiverFeedbackRequired)
             {
                 _lifetime.RunStartupStep(
-                    "Pipeline.Prepare.SceneManifest",
-                    () => _meshPipeline.PrepareScenePipelineManifest(
+                    "Pipeline.Prepare.DdgiReceiverFeedback",
+                    _simpleDdgiReceiverFeedback!.PreparePipelines);
+            }
+
+            bool directionalGuidingRequired =
+                Settings.GlobalIllumination
+                    .SimpleDdgiDirectionalGuidingMode !=
+                    SimpleDdgiDirectionalGuidingMode.Off &&
+                _advancedGiAdmission.GraphModes.UsesDirectionalGuiding;
+            if (directionalGuidingRequired)
+            {
+                SimpleDdgiStoragePackingMode storagePackingMode =
+                    Settings.GlobalIllumination.SimpleDdgiStoragePackingMode
+                        .Sanitize();
+                _lifetime.RunStartupStep(
+                    "Pipeline.Prepare.DdgiDirectionalGuiding",
+                    () => _simpleDdgiGuidingRuntime!.PreparePipelines(
+                        storagePackingMode));
+            }
+
+            _lifetime.RunStartupStep(
+                "Pipeline.Prepare.FirstPresentForwardOpaque",
+                _meshPipeline.PrepareFirstPresentForwardOpaquePipeline);
+
+            ScenePipelinePreparationScope preparationScope =
+                firstPresentCriticalOnly
+                    ? ScenePipelinePreparationScope.FirstPresentCritical
+                    : ScenePipelinePreparationScope.Complete;
+            _lifetime.RunStartupStep(
+                "Pipeline.Prepare.SceneManifest",
+                () => _meshPipeline.PrepareScenePipelineManifest(
+                    pipelineManifest,
+                    transparencyMode,
+                    partitioningEnabled,
+                    receiverFeedbackRequired,
+                    rayVariantsRequired,
+                    decalReceiverCacheRequired,
+                    preparationScope));
+
+            if (initialScenePreparation && firstPresentCriticalOnly)
+            {
+                Action preparation = () =>
+                    _lifetime.RunStartupStep(
+                        "Pipeline.Prepare.PostFirstPresentSpecializations",
+                        () => _meshPipeline.PrepareScenePipelineManifest(
                         pipelineManifest,
-                        Settings.Transparency.Mode,
-                        Settings.Transparency.Enabled &&
-                        Settings.Transparency.PipelinePartitioningEnabled,
+                        transparencyMode,
+                        partitioningEnabled,
                         receiverFeedbackRequired,
-                        _context.RayQuerySupported &&
-                        (transparentRayVariantsRequired ||
-                         decalRayVariantsRequired),
-                        receiverFeedbackRequired &&
-                        Settings.Decals.ReceiveGlobalIllumination));
+                        rayVariantsRequired,
+                        decalReceiverCacheRequired,
+                            ScenePipelinePreparationScope.Complete));
+                lock (_startupGate)
+                    _postFirstPresentPipelinePreparation = preparation;
             }
 
             bool foliageRequired = exhaustive ||
@@ -3681,29 +4338,145 @@ namespace Njulf.Rendering
                     _fogPass.PreparePipelines);
             }
 
-            bool hybridReflectionsRequired = exhaustive ||
+            bool hybridReflectionsRequested =
                 Settings.Reflections.Enabled &&
                 Settings.Reflections.Mode is
                     (ReflectionMode.StaticProbesAndSsr or
                      ReflectionMode.StaticProbesAndPlanar or
                      ReflectionMode.HybridRayQuery);
+            bool hybridReflectionsRequired = exhaustive ||
+                hybridReflectionsRequested;
+            if (hybridReflectionsRequested &&
+                !_meshPipeline.HybridReflectionAttachmentEnabled)
+            {
+                throw new InvalidOperationException(
+                    "Hybrid reflections were requested without a valid " +
+                    "forward receiver attachment: " +
+                    _meshPipeline.HybridReflectionFailureReason);
+            }
             if (hybridReflectionsRequired &&
-                _hybridReflectionRuntime is
-                {
-                    ScreenPipelinesAvailable: false,
-                    InitializationInProgress: false,
-                    InitializationCompleted: false
-                })
+                _meshPipeline.HybridReflectionAttachmentEnabled)
             {
                 _lifetime.RunStartupStep(
-                    "Pipeline.Prepare.HybridReflections",
-                    _hybridReflectionRuntime.Initialize);
+                    "Pipeline.Prepare.HybridReflections.FullQuality",
+                    PrepareHybridReflectionsForFullQuality);
             }
 
             if (!_initialScenePipelinesPrepared)
             {
-                _giPipelineCacheService!.MarkRenderCriticalFramesStarted();
+                _giPipelineCacheService!.MarkRenderCriticalFramesStarted(
+                    _renderThreadManagedId);
                 _initialScenePipelinesPrepared = true;
+            }
+        }
+
+        private void PublishFullQualityStartup()
+        {
+            Volatile.Write(ref _productionGraphReady, 1);
+            lock (_startupGate)
+            {
+                if (_startupPhase != RendererStartupPhase.FullQuality)
+                {
+                    SetStartupPhaseLocked(
+                        RendererStartupPhase.FullQuality,
+                        "The active scene is running on the production render graph.");
+                }
+            }
+        }
+
+        private void SchedulePostFullQualityPersistence()
+        {
+            bool fullQualityPresented;
+            lock (_startupGate)
+                fullQualityPresented = _fullQualityPresented;
+            if (!fullQualityPresented)
+                return;
+
+            GiPipelineCacheService? pipelineCache =
+                _giPipelineCacheService;
+            if (pipelineCache is not null)
+            {
+                SchedulePostFirstPresentPipelinePreparation(
+                    pipelineCache);
+            }
+            if (pipelineCache is not null &&
+                Volatile.Read(
+                    ref _postFirstPresentPipelineSpecializationsReady) != 0 &&
+                !_fullQualityCachePersistenceScheduled)
+            {
+                pipelineCache.SchedulePersist(immediate: true);
+                _fullQualityCachePersistenceScheduled = true;
+            }
+            if (pipelineCache is not null &&
+                !_pipelineCachePersistenceScheduled)
+            {
+                _performanceCaptureMetadataProvider
+                    .SchedulePostStartupIdentityResolution();
+                _pipelineCachePersistenceScheduled = true;
+            }
+        }
+
+        private void SchedulePostFirstPresentPipelinePreparation(
+            GiPipelineCacheService pipelineCache)
+        {
+            ArgumentNullException.ThrowIfNull(pipelineCache);
+            Action? preparation;
+            int generation;
+            lock (_startupGate)
+            {
+                if (_postFirstPresentPipelinePreparationScheduled)
+                    return;
+
+                preparation = _postFirstPresentPipelinePreparation;
+                if (preparation is null)
+                {
+                    Volatile.Write(
+                        ref _postFirstPresentPipelineSpecializationsReady,
+                        1);
+                    return;
+                }
+
+                _postFirstPresentPipelinePreparationScheduled = true;
+                generation =
+                    _postFirstPresentPipelinePreparationGeneration;
+            }
+
+            pipelineCache.CompilationScheduler.Schedule(
+                new PipelineArtifactId(
+                    "MeshPipeline.PostFirstPresent.SceneSpecializations." +
+                    generation),
+                _ =>
+                {
+                    try
+                    {
+                        preparation();
+                        Volatile.Write(
+                            ref _postFirstPresentPipelineSpecializationsReady,
+                            1);
+                        pipelineCache.SchedulePersist();
+                    }
+                    catch (Exception exception) when (
+                        exception is VulkanException or IOException or
+                            InvalidOperationException or ArgumentException)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            "Post-first-present pipeline specialization " +
+                            $"failed: {exception.GetType().Name}: " +
+                            exception.Message);
+                    }
+                });
+        }
+
+        private void ThrowIfProgressiveStartupFaulted()
+        {
+            Exception? failure;
+            lock (_startupGate)
+                failure = _startupFailure;
+            if (failure != null)
+            {
+                throw new InvalidOperationException(
+                    "Progressive production renderer initialization failed.",
+                    failure);
             }
         }
 
@@ -3760,6 +4533,15 @@ namespace Njulf.Rendering
 
         public void ReportFirstPresent(long elapsedMicroseconds)
         {
+            ReportStartupMilestone(
+                RendererStartupMilestone.BootstrapPresent,
+                elapsedMicroseconds);
+        }
+
+        public void ReportStartupMilestone(
+            RendererStartupMilestone milestone,
+            long elapsedMicroseconds)
+        {
             RendererStartupLatencyGateMode gateMode =
                 RendererBuildConfiguration.StartupLatencyGateMode;
             if (gateMode == RendererStartupLatencyGateMode.Disabled)
@@ -3768,31 +4550,49 @@ namespace Njulf.Rendering
             GiPipelineCacheTelemetry cacheTelemetry =
                 _giPipelineCacheService?.Telemetry ??
                 GiPipelineCacheTelemetry.Empty;
-            bool applicationCacheLoaded = cacheTelemetry.WarmEligible;
-            RendererStartupLatencyEvaluation evaluation =
-                RendererStartupLatencyPolicy.Evaluate(
+            bool deploymentSeed =
+                cacheTelemetry.QualifiedSeedEligible;
+            RendererStartupMilestoneLatencyEvaluation evaluation =
+                RendererStartupLatencyPolicy.EvaluateMilestone(
+                    milestone,
                     elapsedMicroseconds,
-                    applicationCacheLoaded);
-            string cacheClass = evaluation.CacheClass ==
-                                RendererStartupCacheClass.Warm
+                    cacheTelemetry.WarmEligible,
+                    deploymentSeed);
+            string milestoneName = milestone switch
+            {
+                RendererStartupMilestone.BootstrapPresent =>
+                    "responsive bootstrap present",
+                RendererStartupMilestone.ScenePresent =>
+                    "simplified real-scene present",
+                RendererStartupMilestone.FullQualityPresent =>
+                    "production-graph scene present",
+                RendererStartupMilestone.VisibleContentPresent =>
+                    "visually qualified final frame",
+                _ => "unknown startup milestone"
+            };
+            string cacheClass = cacheTelemetry.WarmEligible
                 ? "warm application cache"
-                : cacheTelemetry.SeedCacheLoaded
-                    ? "application-cold cache with read-only seed"
+                : deploymentSeed
+                    ? "compatible deployment seed"
                     : DescribeApplicationColdCache(cacheTelemetry);
-            string outcome = evaluation.MeetsAspirationalTarget
+            string outcome = !evaluation.GateApplies
+                ? "control-plane timing recorded; the visible-content gate is authoritative"
+                : evaluation.MeetsAspirationalTarget
                 ? "target met"
                 : evaluation.MeetsHardLimit
                     ? "above target"
                     : gateMode == RendererStartupLatencyGateMode.TimingOnly
                         ? "hard limit exceeded; reporting only"
                         : "hard limit exceeded";
+            string budget = evaluation.GateApplies
+                ? $"target <= {evaluation.AspirationalTargetMicroseconds / 1_000_000.0:F3}s, " +
+                  $"hard <= {evaluation.HardLimitMicroseconds / 1_000_000.0:F3}s"
+                : "no control-plane hard gate";
             string message =
-                $"Startup latency: {evaluation.ElapsedMicroseconds / 1_000_000.0:F3}s " +
-                $"({cacheClass}; target <= " +
-                $"{evaluation.AspirationalTargetMicroseconds / 1_000_000.0:F3}s, " +
-                $"hard <= {evaluation.HardLimitMicroseconds / 1_000_000.0:F3}s; " +
-                $"gate={DescribeStartupLatencyGateMode(gateMode)}; " +
-                $"{outcome}).";
+                $"Startup latency ({milestoneName}): " +
+                $"{evaluation.ElapsedMicroseconds / 1_000_000.0:F3}s " +
+                $"({cacheClass}; {budget}; " +
+                $"gate={DescribeStartupLatencyGateMode(gateMode)}; {outcome}).";
             Console.WriteLine(message);
 
             if (RendererStartupLatencyPolicy.ShouldFail(
@@ -3866,13 +4666,21 @@ namespace Njulf.Rendering
         {
             _lifetime.ThrowIfDisposalStarted();
             _lifetime.EnsureFrameInProgress(nameof(DrawScene));
-            long drawSceneStart = Stopwatch.GetTimestamp();
-            long drawStageStart = drawSceneStart;
 
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
+
+            if (_progressiveFrame)
+            {
+                // BeginProgressiveFrame already recorded the neutral clear.
+                // Do not draw a visibly incorrect approximation of the scene.
+                return;
+            }
+
+            long drawSceneStart = Stopwatch.GetTimestamp();
+            long drawStageStart = drawSceneStart;
 
             PrepareScene(scene, camera);
             long prepareSceneMicroseconds =
@@ -4378,8 +5186,12 @@ namespace Njulf.Rendering
             sceneData.HiZPolicyAdaptiveStatus = hiZDecision.AdaptiveStatus;
             sceneData.TransparentPassEnabled = EnableTransparentPass && Settings.Transparency.Enabled;
             sceneData.TransparencyMode = Settings.Transparency.Mode;
+            sceneData.PostFirstPresentPipelineSpecializationsReady =
+                Volatile.Read(
+                    ref _postFirstPresentPipelineSpecializationsReady) != 0;
             sceneData.TransparentPipelinePartitioningEnabled =
-                Settings.Transparency.PipelinePartitioningEnabled;
+                Settings.Transparency.PipelinePartitioningEnabled &&
+                sceneData.PostFirstPresentPipelineSpecializationsReady;
             sceneData.TransparencyDebugView = Settings.Transparency.DebugView;
             sceneData.TransparentReceiveShadows = Settings.Transparency.ReceiveShadows;
             sceneData.TransparentReceiveGlobalIllumination =
@@ -10994,9 +11806,17 @@ namespace Njulf.Rendering
             SceneRenderingData sceneData,
             SceneSubmissionCounterSnapshot counters)
         {
+            sceneData.ForwardVisibilityCounterReadbackValid =
+                counters.IsValid ? 1 : 0;
             if (!counters.IsValid)
                 return;
 
+            sceneData.ForwardVisibilityCandidateCount =
+                ClampUIntToInt(counters.CandidateCount);
+            sceneData.ForwardVisibilityEmittedCount =
+                ClampUIntToInt(counters.EmittedCount);
+            sceneData.ForwardVisibilityOverflowCount =
+                ClampUIntToInt(counters.OverflowCount);
             sceneData.CurrentFrameHiZTested = ClampUIntToInt(counters.HiZTestedCount);
             sceneData.CurrentFrameHiZCulled = ClampUIntToInt(counters.HiZRejectedCount);
             sceneData.ForwardOcclusionTestedMeshletsGpu = Math.Max(
@@ -11816,6 +12636,17 @@ namespace Njulf.Rendering
             return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }
 
+        private static long ElapsedMicroseconds(
+            long startTimestamp,
+            long endTimestamp)
+        {
+            if (startTimestamp <= 0 || endTimestamp <= startTimestamp)
+                return 0;
+            return checked((long)Math.Round(
+                (endTimestamp - startTimestamp) * 1_000_000.0 /
+                Stopwatch.Frequency));
+        }
+
         private void RecordDeviceWaitIdle(RuntimeStallReason reason, string description, Action wait)
         {
             if (wait == null)
@@ -12264,13 +13095,43 @@ namespace Njulf.Rendering
 
             steps.Add(
                 new StagedDisposalStep(
+                    "progressive-startup-drain",
+                    () =>
+                    {
+                        try
+                        {
+                            _productionInitializationTask?.GetAwaiter()
+                                .GetResult();
+                        }
+                        catch
+                        {
+                            // Startup failure is surfaced through the host;
+                            // disposal still owns every partially created
+                            // Vulkan resource after the task has stopped.
+                        }
+                        try
+                        {
+                            _scenePreparationTask?.GetAwaiter()
+                                .GetResult();
+                        }
+                        catch
+                        {
+                            // Cancellation or preparation failure is observed
+                            // by the host. The important shutdown invariant is
+                            // that no preparation callback is still touching
+                            // resources when the device-idle stage begins.
+                        }
+                    }));
+            steps.Add(
+                new StagedDisposalStep(
                     DeviceIdle,
                     () =>
                     {
                         _lifetime.RecordDisposalDeviceIdleResult(
                             _context.Api.DeviceWaitIdle(
-                                _context.Device));
-                    }));
+                            _context.Device));
+                    },
+                    "progressive-startup-drain"));
             AddResourceStage(
                 "screenshot-capture-resolution",
                 ResolveScreenshotCapturesForDisposal);
@@ -12375,7 +13236,7 @@ namespace Njulf.Rendering
                         ?.Dispose());
             AddResourceStage(
                 "automatic-planar-reflection-manager",
-                _automaticPlanarReflectionManager.Dispose,
+                () => _automaticPlanarReflectionManager?.Dispose(),
                 "render-graph");
             AddResourceStage(
                 "ddgi-mutation-journal",
@@ -12457,7 +13318,8 @@ namespace Njulf.Rendering
 
             AddResourceStage(
                 "mesh-pipeline",
-                () => _meshPipeline?.Dispose());
+                () => _meshPipeline?.Dispose(),
+                "gi-pipeline-cache");
             AddResourceStage(
                 "ray-scene-descriptor-bank",
                 () =>

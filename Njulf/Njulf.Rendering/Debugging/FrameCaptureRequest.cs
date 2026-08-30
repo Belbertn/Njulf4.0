@@ -23,6 +23,7 @@ namespace Njulf.Rendering.Debug
         private int _completedCount;
         private string _lastScreenshotPath = string.Empty;
         private string _lastScreenshotError = string.Empty;
+        private ScreenshotCaptureAnalysis _lastCaptureAnalysis;
 
         public int PendingCount
         {
@@ -60,6 +61,15 @@ namespace Njulf.Rendering.Debug
             }
         }
 
+        public ScreenshotCaptureAnalysis LastCaptureAnalysis
+        {
+            get
+            {
+                lock (_gate)
+                    return _lastCaptureAnalysis;
+            }
+        }
+
         public void Request(string? outputPath = null, ScreenshotColorSpace colorSpace = ScreenshotColorSpace.FinalLdrSrgb)
         {
             string path = string.IsNullOrWhiteSpace(outputPath)
@@ -89,13 +99,18 @@ namespace Njulf.Rendering.Debug
             }
         }
 
-        public void MarkCompleted(string outputPath)
+        public void MarkCompleted(
+            string outputPath,
+            ScreenshotContentAnalysis contentAnalysis = default)
         {
             lock (_gate)
             {
                 _completedCount++;
                 _lastScreenshotPath = outputPath;
                 _lastScreenshotError = string.Empty;
+                _lastCaptureAnalysis = new ScreenshotCaptureAnalysis(
+                    outputPath,
+                    contentAnalysis);
             }
         }
 

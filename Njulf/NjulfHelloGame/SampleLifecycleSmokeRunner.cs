@@ -19,6 +19,7 @@ public sealed class SampleLifecycleSmokeRunner
     private readonly Action _exit;
     private readonly Func<IReadOnlyList<SampleMissingAssetScenario>, string?> _runMissingAssetScenario;
     private readonly Func<TimeSpan> _elapsed;
+    private readonly Func<bool> _startupWaitSatisfied;
     private readonly List<SampleSmokeOperationResult> _results = new();
     private int _resizeStep;
     private int _sceneReloadsCompleted;
@@ -43,13 +44,15 @@ public sealed class SampleLifecycleSmokeRunner
         Action exit,
         Func<IReadOnlyList<SampleMissingAssetScenario>, string?>? runMissingAssetScenario = null,
         Func<TimeSpan>? elapsed = null,
-        Func<(int Width, int Height)>? initialWindowSize = null)
+        Func<(int Width, int Height)>? initialWindowSize = null,
+        Func<bool>? startupWaitSatisfied = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _resize = resize ?? throw new ArgumentNullException(nameof(resize));
         _reloadScene = reloadScene ?? throw new ArgumentNullException(nameof(reloadScene));
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _runMissingAssetScenario = runMissingAssetScenario ?? RunDefaultMissingAssetScenario;
+        _startupWaitSatisfied = startupWaitSatisfied ?? (() => true);
         if (elapsed != null)
         {
             _elapsed = elapsed;
@@ -84,7 +87,9 @@ public sealed class SampleLifecycleSmokeRunner
         switch (_options.Mode)
         {
             case SampleSmokeMode.Startup:
-                ExitWhenFrameBudgetReached(frameIndex);
+                ExitWhenFrameBudgetReached(
+                    frameIndex,
+                    _startupWaitSatisfied());
                 break;
             case SampleSmokeMode.Resize:
                 RunResize(frameIndex);

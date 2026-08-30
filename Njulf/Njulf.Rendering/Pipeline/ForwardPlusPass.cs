@@ -1772,9 +1772,9 @@ namespace Njulf.Rendering.Pipeline
                     }
                     else if (sceneData.SceneSubmissionIndirectMeshletDispatchEnabled)
                     {
-                        int compactedDrawCapacity = Math.Min(
-                            sceneData.SceneSubmissionGpuOpaqueCandidateCount,
-                            sceneData.SceneSubmissionGpuCompactedOpaqueCapacity);
+                        int compactedDrawCapacity =
+                            ResolveCompactedForwardCapacityPlan(sceneData)
+                                .AggregateCapacity;
                         string indirectSkipReason = BuildSceneOpaqueIndirectDispatchSkipReason(sceneData);
                         sceneData.SceneSubmissionIndirectDispatchSkipReason = indirectSkipReason;
                         if (indirectSkipReason.Length == 0)
@@ -1808,9 +1808,9 @@ namespace Njulf.Rendering.Pipeline
                     }
                     else
                     {
-                        int compactedDrawCapacity = Math.Min(
-                            sceneData.SceneSubmissionGpuOpaqueCandidateCount,
-                            sceneData.SceneSubmissionGpuCompactedOpaqueCapacity);
+                        int compactedDrawCapacity =
+                            ResolveCompactedForwardCapacityPlan(sceneData)
+                                .AggregateCapacity;
                         sceneData.SceneSubmissionForwardPath =
                             SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedDirect;
                         sceneData.SceneSubmissionForwardTaskShader =
@@ -2098,6 +2098,34 @@ namespace Njulf.Rendering.Pipeline
             int FullMaterialMeshletCount,
             int LocalProbeMeshletCount);
 
+        internal static CompactedForwardCapacityPlan
+            ResolveCompactedForwardCapacityPlan(
+                Data.SceneRenderingData sceneData)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+            return new CompactedForwardCapacityPlan(
+                Math.Max(
+                    0,
+                    sceneData
+                        .SceneSubmissionGpuCompactedSimpleOpaqueCapacity),
+                Math.Max(
+                    0,
+                    sceneData
+                        .SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity),
+                Math.Max(
+                    0,
+                    sceneData.SceneSubmissionGpuCompactedFullOpaqueCapacity),
+                Math.Max(
+                    0,
+                    sceneData.SceneSubmissionGpuCompactedOpaqueCapacity));
+        }
+
+        internal readonly record struct CompactedForwardCapacityPlan(
+            int SimpleCapacity,
+            int SimpleNormalCapacity,
+            int FullCapacity,
+            int AggregateCapacity);
+
         private string BuildSceneOpaqueIndirectDispatchSkipReason(Data.SceneRenderingData sceneData)
         {
             if (_bufferManager == null)
@@ -2272,15 +2300,15 @@ namespace Njulf.Rendering.Pipeline
             bool giCausticReceiverEnabled = false)
         {
             bool useSimpleGlobalIblPipeline = ResolveOpaqueVariantSelection(sceneData).UseSimpleGlobalIblPipeline;
+            CompactedForwardCapacityPlan capacities =
+                ResolveCompactedForwardCapacityPlan(sceneData);
             DrawForwardBucketIndirect(
                 cmd,
                 sceneData,
                 useSimpleGlobalIblPipeline
                     ? ForwardOpaquePipelineFamily.CompactedSimple
                     : ForwardOpaquePipelineFamily.CompactedFull,
-                sceneData.SceneSubmissionSidedRasterSpecializationActive
-                    ? sceneData.SceneSubmissionGpuCompactedSimpleOpaqueCapacity
-                    : Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
+                capacities.SimpleCapacity,
                 BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
                 SceneOpaqueCompactionPass.GetSimpleOpaqueDoubleSidedIndirectDispatchOffset(),
@@ -2293,9 +2321,7 @@ namespace Njulf.Rendering.Pipeline
                 useSimpleGlobalIblPipeline
                     ? ForwardOpaquePipelineFamily.CompactedSimpleFullInput
                     : ForwardOpaquePipelineFamily.CompactedFull,
-                sceneData.SceneSubmissionSidedRasterSpecializationActive
-                    ? sceneData.SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity
-                    : Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
+                capacities.SimpleNormalCapacity,
                 BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
                 SceneOpaqueCompactionPass.GetSimpleNormalOpaqueDoubleSidedIndirectDispatchOffset(),
@@ -2306,9 +2332,7 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 ForwardOpaquePipelineFamily.CompactedFull,
-                sceneData.SceneSubmissionSidedRasterSpecializationActive
-                    ? sceneData.SceneSubmissionGpuCompactedFullOpaqueCapacity
-                    : Math.Max(0, sceneData.FullOpaqueMeshletCount),
+                capacities.FullCapacity,
                 BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
                 SceneOpaqueCompactionPass.GetFullOpaqueDoubleSidedIndirectDispatchOffset(),
@@ -2370,13 +2394,15 @@ namespace Njulf.Rendering.Pipeline
             bool giCausticReceiverEnabled = false)
         {
             bool useSimpleGlobalIblPipeline = ResolveOpaqueVariantSelection(sceneData).UseSimpleGlobalIblPipeline;
+            CompactedForwardCapacityPlan capacities =
+                ResolveCompactedForwardCapacityPlan(sceneData);
             DrawForwardBucket(
                 cmd,
                 sceneData,
                 useSimpleGlobalIblPipeline
                     ? ForwardOpaquePipelineFamily.Simple
                     : ForwardOpaquePipelineFamily.Full,
-                Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
+                capacities.SimpleCapacity,
                 BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled);
@@ -2386,7 +2412,7 @@ namespace Njulf.Rendering.Pipeline
                 useSimpleGlobalIblPipeline
                     ? ForwardOpaquePipelineFamily.SimpleFullInput
                     : ForwardOpaquePipelineFamily.Full,
-                Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
+                capacities.SimpleNormalCapacity,
                 BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled);
@@ -2394,7 +2420,7 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 ForwardOpaquePipelineFamily.Full,
-                Math.Max(0, sceneData.FullOpaqueMeshletCount),
+                capacities.FullCapacity,
                 BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled);
@@ -2709,8 +2735,7 @@ namespace Njulf.Rendering.Pipeline
             bool legacyBenchmark = _simpleDdgiReceiverCacheRequestedMode ==
                 SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark;
             if (_settings.Diagnostics.DdgiForwardEstimateCountersEnabled &&
-                _simpleDdgiReceiverCacheResolveDiagnosticsPipeline.Handle == 0 &&
-                !TryEnsureSimpleDdgiReceiverCacheDiagnosticsPipeline())
+                _simpleDdgiReceiverCacheResolveDiagnosticsPipeline.Handle == 0)
             {
                 return false;
             }
@@ -3331,7 +3356,9 @@ namespace Njulf.Rendering.Pipeline
 
             if (sceneData.TransparentPassEnabled &&
                 sceneData.TransparentReceiveGlobalIllumination &&
-                sceneData.TransparentObjectCount > 0)
+                sceneData.TransparentObjectCount > 0 &&
+                !TransparentForwardPass.RequiresCanonicalRayColorPipeline(
+                    sceneData))
             {
                 mask |= SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
                     SimpleDdgiReceiverFeedbackProducer.TransparentWeightedOit);

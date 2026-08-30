@@ -71,6 +71,97 @@ namespace Njulf.Rendering.Debug
     }
 
     /// <summary>
+    /// Deterministic content evidence computed directly from final-LDR
+    /// swapchain bytes. It rejects the uniform black/bootstrap images that a
+    /// successful Vulkan present alone cannot distinguish from a rendered
+    /// scene.
+    /// </summary>
+    public readonly record struct ScreenshotContentAnalysis(
+        int Width,
+        int Height,
+        int PixelCount,
+        int VisiblePixelCount,
+        byte MinimumLuminance,
+        byte MaximumLuminance,
+        double VisiblePixelFraction,
+        bool HasVisibleContent,
+        string Detail)
+    {
+        private const int MinimumVisibleChannel = 12;
+        private const int MinimumLuminanceRange = 8;
+
+        public static ScreenshotContentAnalysis Analyze(
+            ReadOnlySpan<byte> sourcePixels,
+            int width,
+            int height,
+            ScreenshotPixelFormat sourceFormat)
+        {
+            if (width <= 0 || height <= 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(width),
+                    "Screenshot dimensions must both be positive.");
+            }
+            if (!Enum.IsDefined(sourceFormat))
+                throw new ArgumentOutOfRangeException(nameof(sourceFormat));
+
+            int pixelCount = checked(width * height);
+            int requiredBytes = checked(pixelCount * 4);
+            if (sourcePixels.Length != requiredBytes)
+            {
+                throw new ArgumentException(
+                    $"Screenshot pixel payload is {sourcePixels.Length} bytes, but {requiredBytes} bytes are required.",
+                    nameof(sourcePixels));
+            }
+
+            int visiblePixelCount = 0;
+            int minimumLuminance = byte.MaxValue;
+            int maximumLuminance = byte.MinValue;
+            for (int offset = 0; offset < sourcePixels.Length; offset += 4)
+            {
+                byte red = sourceFormat == ScreenshotPixelFormat.Rgba8
+                    ? sourcePixels[offset]
+                    : sourcePixels[offset + 2];
+                byte green = sourcePixels[offset + 1];
+                byte blue = sourceFormat == ScreenshotPixelFormat.Rgba8
+                    ? sourcePixels[offset + 2]
+                    : sourcePixels[offset];
+                if (Math.Max(red, Math.Max(green, blue)) >=
+                    MinimumVisibleChannel)
+                {
+                    visiblePixelCount++;
+                }
+
+                int luminance = (54 * red + 183 * green + 19 * blue + 128) >> 8;
+                minimumLuminance = Math.Min(minimumLuminance, luminance);
+                maximumLuminance = Math.Max(maximumLuminance, luminance);
+            }
+
+            double visibleFraction = (double)visiblePixelCount / pixelCount;
+            int minimumVisiblePixels = Math.Max(4, pixelCount / 200);
+            bool hasVisibleContent =
+                visiblePixelCount >= minimumVisiblePixels &&
+                maximumLuminance - minimumLuminance >= MinimumLuminanceRange;
+            string detail = FormattableString.Invariant(
+                $"visible={visiblePixelCount}/{pixelCount} ({visibleFraction:P2}), luminance={minimumLuminance}..{maximumLuminance}, outcome={(hasVisibleContent ? "visible-content" : "uniform-or-black")}");
+            return new ScreenshotContentAnalysis(
+                width,
+                height,
+                pixelCount,
+                visiblePixelCount,
+                checked((byte)minimumLuminance),
+                checked((byte)maximumLuminance),
+                visibleFraction,
+                hasVisibleContent,
+                detail);
+        }
+    }
+
+    public readonly record struct ScreenshotCaptureAnalysis(
+        string OutputPath,
+        ScreenshotContentAnalysis Content);
+
+    /// <summary>
     /// Minimal allocation-conscious PNG writer for final LDR renderer captures.
     /// It writes scanline-filter type 0 RGBA data and includes an sRGB chunk so
     /// the captured final display image has an explicit color interpretation.
@@ -533,13 +624,21 @@ namespace Njulf.Rendering.Debug
                     throw new InvalidOperationException("Renderer screenshot readback allocation is not host mapped.");
 
                 ReadOnlySpan<byte> pixels = new(mappedPixels, checked((int)pending.ByteCount));
+                ScreenshotContentAnalysis contentAnalysis =
+                    ScreenshotContentAnalysis.Analyze(
+                        pixels,
+                        pending.Width,
+                        pending.Height,
+                        pending.PixelFormat);
                 PngScreenshotEncoder.WriteAtomic(
                     pending.Request.OutputPath,
                     pixels,
                     pending.Width,
                     pending.Height,
                     pending.PixelFormat);
-                _captureService.MarkCompleted(pending.Request.OutputPath);
+                _captureService.MarkCompleted(
+                    pending.Request.OutputPath,
+                    contentAnalysis);
             }
             catch (Exception exception)
             {

@@ -1,10 +1,34 @@
 # Startup performance
 
-Njulf starts in `active-scene` pipeline mode in every build tier. The renderer
-creates only pipeline families required by the configured renderer and initial
-scene before first present. `--pipeline-startup exhaustive` (or
-`NJULF_PIPELINE_STARTUP_MODE=exhaustive`) remains available for tooling that
-must validate every optional family up front.
+Njulf defaults to progressive `active-scene` startup in every build tier. It
+publishes three active phases:
+
+1. `Bootstrap` presents a neutral black, pipeline-free clear.
+2. `ProductionPreparing` keeps that neutral clear visible while production
+   graphics and compute pipelines are created through the shared cache service.
+3. `FullQuality` is published after the production graph and every active-scene
+   pipeline that can change the presented pixels is ready. The milestone
+   completes only after that production frame has successfully presented.
+
+`FallbackScene` remains an enum/API compatibility value but is not entered by
+the default path. Production resource preparation starts immediately on the
+Vulkan-owning thread, native pipeline creation starts as soon as those resources
+exist, and initial content loading overlaps that compilation after the bootstrap
+present. Fast startup admits one full-material opaque beauty pipeline in the
+selected task/taskless submission form. Performance-equivalent simple,
+full-input, and alternate-submission variants are deferred.
+
+Exact receiver-feedback producers and output-equivalent transparent partition
+pipelines do not gate the first production present. They are compiled on the
+bounded worker after that present; rendering continues on the canonical
+production color pipelines until the complete specialization bank is published.
+Thick-transmission ray-query draws always retain the full canonical ray color
+program: the compact feedback shader is never substituted for that path.
+
+`--pipeline-startup blocking-active-scene` retains the synchronous active-scene
+path. `--pipeline-startup exhaustive` builds every optional material family for
+tooling and qualification. The equivalent environment setting is
+`NJULF_PIPELINE_STARTUP_MODE`.
 
 ## Pipeline caches and deployment seeds
 
@@ -12,131 +36,151 @@ The writable Vulkan cache defaults to:
 
 `%LOCALAPPDATA%/Njulf/PipelineCaches/gi-<vendor>-<device>.njvkcache`
 
-Override it with `NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY`. Serialization is
-scheduled after successful presents, coalesced off the render thread, and also
-attempted during clean renderer shutdown. The envelope and driver payload are
-bounded to 512 MiB and decoded as a stream. Writers use a per-cache lock and
-atomic replacement, so concurrent application processes cannot publish a
-partially written cache.
+Override it with `NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY`. No cache checkpoint is
+scheduled while the first full-quality frame is being prepared. The first
+successful full-quality present requests an immediate checkpoint; later changes
+are debounced and rate-limited, and clean shutdown performs a final synchronous
+attempt. Serialization runs off the render thread.
+
+The envelope and driver payload are bounded to 512 MiB and decoded as a stream.
+Writers use a per-cache lock and atomic replacement, so concurrent application
+processes cannot publish a partially written cache.
 
 A deployment can include a read-only seed at:
 
 `<application base>/PipelineCacheSeeds/gi-<vendor>-<device>.njvkcache`
 
 Override that directory with
-`NJULF_VULKAN_PIPELINE_CACHE_SEED_DIRECTORY`. To produce a seed, run a
-representative exhaustive qualification from the intended shipping build tier
-on the target GPU/driver, close the application cleanly, and copy the resulting
-writable `.njvkcache` file into the seed directory. Do not rename it.
+`NJULF_VULKAN_PIPELINE_CACHE_SEED_DIRECTORY`. Seeds and writable caches use the
+same checked envelope. Vendor, device, driver, Vulkan API version,
+`pipelineCacheUUID`, renderer ABI, shader bundle, and build configuration are
+validated. A missing, corrupt, or incompatible seed is ignored; seeds are never
+written or deleted by the renderer.
 
-Seeds and writable caches use the same checked envelope. Vendor, device,
-driver, Vulkan API version, `pipelineCacheUUID`, and renderer ABI must match;
-the payload is length-bounded and SHA-256 checked. A missing, corrupt, or
-incompatible seed is ignored and the renderer falls back to an empty Vulkan
-cache. Seeds are never written or deleted by the renderer.
+After an exhaustive qualification on the intended GPU/driver and shipping build
+tier, export a checked seed with:
 
-Writable caches also record shader-bundle and build-configuration provenance.
-Compatible data from an older envelope, another shader bundle, or another
-build tier is still passed to Vulkan as an accelerator, but the launch is
-classified as application-cold until the cache is refreshed after a successful
-present. Only an exact current-tier writable cache is classified as warm. A
-version-1 envelope is migrated automatically; no manual cache deletion is
-required.
+```powershell
+./tools/export-pipeline-seeds.ps1 -PipelineCachePath <path-to-njvkcache>
+```
+
+Pass `-PipelineBinaryGlobalKeyDirectory` as well to export a qualified
+explicit-binary store. The default destination is the sample project; override
+it with `-DestinationRoot`. The script validates the device-qualified cache
+filename, copies into `PipelineCacheSeeds` / `PipelineBinarySeeds/v1`, and emits
+a SHA-256 receipt. Either source may be exported independently; a binary-only
+deployment uses `-PipelineBinaryGlobalKeyDirectory` without
+`-PipelineCachePath`. The sample project copies either directory to build and
+publish output when it exists.
+
+Device, driver, API, `pipelineCacheUUID`, and renderer ABI remain hard cache
+compatibility boundaries. Within those boundaries, a cache from an older shader
+bundle or build is admitted as an opportunistic partial cache: Vulkan keys exact
+pipeline inputs internally, so unchanged pipelines can hit while changed
+pipelines compile normally. Revision-mismatched data is never classified as
+warm or as a qualified seed. After the current build presents a full-quality
+frame, the combined cache is atomically republished with current provenance.
 
 ## Explicit pipeline binaries
 
-When the device exposes `VK_KHR_pipeline_binary` together with its required
-extended-flags dependency, the renderer also maintains an application-owned,
-content-addressed binary store. Pipeline keys map to an ordered list of binary
-keys; immutable blobs are SHA-256 checked and deduplicated. The global Vulkan
-pipeline key, device/driver identity, shader bundle, renderer ABI, and build
-configuration all participate in compatibility. A rejected writable entry is
-removed and pipeline creation falls back to the ordinary Vulkan cache/compile
-path.
+When the complete `VK_KHR_pipeline_binary` feature chain is available, the
+renderer can maintain an application-owned content-addressed binary store.
+Pipeline keys map to ordered binary-key lists; immutable blobs are SHA-256
+checked and deduplicated. Device/driver identity, the global Vulkan key, and
+renderer ABI are hard compatibility boundaries. Shader/build revisions may
+reuse only entries whose driver-generated pipeline-create-info key still matches
+exactly; other entries are ordinary misses.
 
 The writable store defaults to:
 
 `%LOCALAPPDATA%/Njulf/PipelineBinaries/v1/<global-key>`
 
-Override it with `NJULF_PIPELINE_BINARY_CACHE_DIRECTORY`. The store is bounded
-to 512 MiB and collects least-recently-used pipeline mappings. Manifest and
-blob publication is atomic and protected by a cross-process store lock.
+Override it with `NJULF_PIPELINE_BINARY_CACHE_DIRECTORY`. A read-only deployment
+seed can be placed at
+`<application base>/PipelineBinarySeeds/v1/<global-key>` or overridden with
+`NJULF_PIPELINE_BINARY_SEED_DIRECTORY`. Writable entries take precedence.
+Successfully consumed seed entries are promoted into the writable store, so a
+qualification run produces one self-contained export even when it began with a
+partial read-only seed.
 
-A read-only deployment seed can be placed at:
-
-`<application base>/PipelineBinarySeeds/v1/<global-key>`
-
-Override that root with `NJULF_PIPELINE_BINARY_SEED_DIRECTORY`. Writable
-entries take precedence over seed entries. Seeds are validated but never
-modified.
-
-On a binary miss, drivers that prefer their internal cache keep using the
-shared Vulkan cache and expose any available binary data afterward. Other
-drivers use the explicit capture-data path with a null `VkPipelineCache`, save
-the resulting binary set asynchronously, and release captured driver resources
-immediately after extraction.
-
-`NJULF_PIPELINE_BINARY_CACHE` controls the feature:
+Use `--pipeline-binary-cache <mode>` or
+`NJULF_PIPELINE_BINARY_CACHE=<mode>`:
 
 | Value | Behavior |
 | --- | --- |
-| `auto` (default) | Use pipeline binaries when the complete optional feature chain is available; otherwise use the Vulkan pipeline cache. |
-| `off` | Disable the application-owned binary store. |
-| `require` | Require pipeline binaries and enable compile-miss verification; fail startup if support or a required artifact is missing. |
+| `auto` (default) | Consume compatible stored binaries. A miss uses the shared Vulkan pipeline cache; drivers advertising an internal binary cache may expose a binary afterward. |
+| `off` | Disable the application-owned binary store and use only the Vulkan pipeline cache. |
+| `capture` | Explicit population mode. A miss uses the capture-data path with a null `VkPipelineCache`, extracts the resulting binaries, and persists them asynchronously. |
+| `require` | Consume-only verification mode. Fail if binary support or any requested artifact is missing; never silently compile a missing artifact. |
+
+The store is bounded to 512 MiB, collects least-recently-used mappings, and uses
+cross-process locking plus atomic manifest/blob publication.
 
 ## Startup compilation and verification
 
-All pipeline owners connected to the renderer cache service create graphics
-and compute pipelines through one compiler gateway. It records wall time,
-driver feedback duration, application-cache hits, compile-required results,
-artifact source (writable binary, seed binary, Vulkan cache, or compilation),
-stage count, peak concurrency, and whether creation escaped into a
-render-critical frame. Aggregate hit/miss, binary-capture, concurrency, store
-path, and graphics-pipeline-library eligibility fields are included in renderer
-diagnostics and performance snapshots.
+Pipeline owners use one compiler gateway. Telemetry records wall and driver
+feedback time, application-cache hits, compile-required results, artifact source
+(writable binary, seed binary, Vulkan cache, or compilation), stage count, peak
+concurrency, and any creation that escaped into a render-critical frame.
 
-Independent mesh startup families are scheduled through a bounded worker pool.
-`NJULF_PIPELINE_COMPILE_WORKERS` accepts `1` through `8`. The default is
-`min(4, max(1, processor-count / 4))`. Logical startup manifests are awaited
-before publication, so a scene cannot observe a partially built pipeline bank.
-
-Active-scene mode scans visible material metadata and prepares the masked,
-transparent, thin-glass, thick-transmission, decal, receiver-feedback, and ray
-variants required by that scene before command recording. Optional specialized
-families retain their universal fallback. Exhaustive mode requests every
-material family.
+Independent startup families use a bounded worker pool.
+`NJULF_PIPELINE_COMPILE_WORKERS` accepts `1` through `8`; the default is
+`min(4, max(1, processor-count / 4))`. Active-scene preparation scans visible
+material metadata and requests only the masked, transparent, glass,
+transmission, decal, receiver-feedback, and ray variants used by that scene.
+First-present publication waits for the complete pixel-affecting manifest.
+Feedback and partition specializations publish only after their post-present
+manifest has completed, so command recording never sees a partially built bank.
 
 Set `NJULF_PIPELINE_CACHE_VERIFY=1` or pass `--pipeline-cache-verify` to add
-`VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT` when the device
-supports pipeline creation cache control. A returned compile-required result
-counts as a cache miss and makes qualification fail at the owning pipeline.
-Warm classification requires an exact current-build writable cache and zero
-feedback-backed compile misses.
+`VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT` where supported. A
+compile-required result counts as a cache miss and fails qualification at the
+owning pipeline. Warm classification requires exact current-build writable data
+and zero feedback-backed compile misses.
 
-`VK_EXT_graphics_pipeline_library` support and fast-link properties are probed
-and reported as eligibility telemetry. Pipeline-library splitting remains
-disabled until a representative fast-link qualification demonstrates a win;
-unsupported or partial extension chains always fall back to monolithic
-pipelines.
+## Independent latency gates
 
-## Latency gates
+Each milestone is measured from `Game.Run`:
 
-The first successful present is measured from `Game.Run`:
+| Milestone | Cache class | Target | Hard limit |
+| --- | --- | ---: | ---: |
+| Responsive bootstrap present | Any | 3 s | 5 s |
+| Visually qualified final frame | Exact warm writable cache | 5 s | 10 s |
+| Visually qualified final frame | Empty cache or exact deployment seed | 15 s | 30 s |
 
-| Cache class | Target | Hard limit |
-| --- | ---: | ---: |
-| Warm writable application cache | 5 s | 10 s |
-| Empty writable cache, optionally using a deployment seed | 15 s | 30 s |
+The production-graph present is a control-plane timing only: it does not prove
+that the swapchain contains scene pixels. Startup qualification uses the
+renderer-owned final-LDR readback, rejects black or uniform bootstrap images,
+and reports the timestamp of the captured present as the authoritative final
+frame. It also requires zero pipeline creations on the render thread after
+first-present preparation. Ordinary launches report only. Set
+`NJULF_STARTUP_LATENCY_GATE=enforce` for fatal qualification, `timing` for
+report-only behavior, or `off` to disable output.
 
-Ordinary launches report timing in every build tier and do not terminate when
-a limit is exceeded. Automated qualification must opt into fatal enforcement
-with `NJULF_STARTUP_LATENCY_GATE=enforce`; the graphics smoke workflow and
-material-GI release gate do this explicitly. Use `timing` to select the normal
-report-only behavior or `off` to disable the measurement output.
+The earlier 3.170 s RTX 3060 result measured only the production-graph present
+and is retracted as a final-frame qualification result. On 2026-08-30, the
+Development build was requalified on the NVIDIA GeForce RTX 3060 Laptop GPU
+(`vendor=0x10DE`, `device=0x2560`, driver `610.248.0`) from empty writable Vulkan
+and explicit-binary cache directories using the packaged device seed. The
+production graph presented at 5.444 s and the renderer-owned 1600x900 final-LDR
+capture qualified at 6.597 s. Its raw readback contained visible content in
+1,382,687 of 1,440,000 pixels (96.02%, luminance range 0..230), and no pipeline
+was created on the render thread. The corresponding incomplete-seed baseline
+was 39.109 s, so this measured final-frame path is 32.512 s (83.1%) faster. This
+is pipeline-cache/ownership work only; no content or shader recook was required.
+Machine-readable seed and capture evidence is recorded in
+`NjulfHelloGame/pipeline-seed-qualification.json`.
 
-Startup JSONL can be requested with `--startup-log <path>`. Use a one-frame
-smoke launch for repeatable first-present checks:
+Startup JSONL can be requested with `--startup-log <path>`. Smoke automation can
+choose which milestone keeps the process alive:
 
 ```text
---smoke-mode Startup --smoke-frames 1 --pipeline-startup active-scene
+--smoke-mode Startup --smoke-frames 1 --pipeline-startup active-scene \
+--startup-wait bootstrap|full-quality \
+--pipeline-binary-cache auto|off|capture|require
 ```
+
+`scene` and `fallback-scene` remain compatibility aliases for `full-quality`.
+For startup smoke, that target now waits for a renderer-owned final-LDR capture;
+it never invokes the Windows Print Screen or Snipping Tool path. No model,
+texture, material, or other asset recook is required.

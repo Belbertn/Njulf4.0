@@ -382,6 +382,19 @@ bool MeshletLodTransitionTriangleVisible(
     if ((commandFlags & MESHLET_COMMAND_FLAG_LOD_DITHER_TRANSITION) == 0u)
         return true;
 
+    bool target = (commandFlags &
+        MESHLET_COMMAND_FLAG_LOD_DITHER_TARGET) != 0u;
+
+    // Hierarchical source and target cuts can use unrelated meshlet and
+    // triangle indices. Complementary primitive-ID masks therefore do not
+    // guarantee complementary screen coverage: both cuts can reject the same
+    // surface region and expose holes while the camera moves. Keep the source
+    // cut conservative for the short transition and progressively introduce
+    // the target. The target is fully populated before the source is retired,
+    // so topology-changing transitions cannot remove coverage.
+    if (!target)
+        return true;
+
     uint value = instanceId * 0x9e3779b9u;
     value ^= meshletIndex * 0x85ebca6bu;
     value ^= triangleIndex * 0xc2b2ae35u;
@@ -394,9 +407,7 @@ bool MeshletLodTransitionTriangleVisible(
     uint threshold = (commandFlags &
         MESHLET_COMMAND_FLAG_LOD_DITHER_THRESHOLD_MASK) >>
         MESHLET_COMMAND_FLAG_LOD_DITHER_THRESHOLD_SHIFT;
-    bool target = (commandFlags &
-        MESHLET_COMMAND_FLAG_LOD_DITHER_TARGET) != 0u;
-    return target ? hashSample <= threshold : hashSample > threshold;
+    return hashSample <= threshold;
 }
 
 const uint FOLIAGE_PROTOTYPE_FLAG_CAST_SHADOWS = 1u << 0;

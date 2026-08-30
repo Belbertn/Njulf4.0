@@ -44,6 +44,89 @@ public sealed class ForwardPlusPassTests
     }
 
     [Test]
+    public void ForwardPipelineResolution_IsLookupOnlyDuringRendering()
+    {
+        string meshPipeline = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "PipelineObjects",
+            "MeshPipeline.cs").ReplaceLineEndings("\n");
+        int resolverStart = meshPipeline.IndexOf(
+            "public bool TryResolveForwardOpaquePipeline(",
+            StringComparison.Ordinal);
+        int resolverEnd = meshPipeline.IndexOf(
+            "internal int ForwardOpaquePipelineCacheEntryCount",
+            resolverStart,
+            StringComparison.Ordinal);
+        Assert.That(resolverStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(resolverEnd, Is.GreaterThan(resolverStart));
+        string resolver = meshPipeline[resolverStart..resolverEnd];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolver, Does.Not.Contain("TryEnsure"));
+            Assert.That(
+                meshPipeline,
+                Does.Contain("PrepareFirstPresentForwardOpaquePipeline"));
+            Assert.That(
+                meshPipeline,
+                Does.Contain("PreparePostFirstPresentForwardOpaquePipelines"));
+        });
+    }
+
+    [Test]
+    public void ProgressiveStartup_DefersOnlyOutputEquivalentPipelineVariants()
+    {
+        string meshPipeline = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "PipelineObjects",
+            "MeshPipeline.cs").ReplaceLineEndings("\n");
+        string forwardPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "ForwardPlusPass.cs");
+        string transparentPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "TransparentForwardPass.cs");
+        string weightedPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "WeightedTransparentPass.cs");
+
+        int manifestStart = meshPipeline.IndexOf(
+            "internal void PrepareScenePipelineManifest(",
+            StringComparison.Ordinal);
+        int partitionGate = meshPipeline.IndexOf(
+            "if (!prepareSpecializations || !partitioningEnabled)",
+            manifestStart,
+            StringComparison.Ordinal);
+        Assert.That(manifestStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(partitionGate, Is.GreaterThan(manifestStart));
+        string firstPresentPreparation =
+            meshPipeline[manifestStart..partitionGate];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstPresentPreparation,
+                Does.Contain("TryEnsureAlphaMaskReceiverFeedbackPipelines"));
+            Assert.That(firstPresentPreparation,
+                Does.Contain("EnsureThinGlassForwardPipeline"));
+            Assert.That(firstPresentPreparation,
+                Does.Contain("EnsureGeometryDecalOverlayPipeline"));
+            Assert.That(firstPresentPreparation,
+                Does.Contain("TryEnsureTransparentReceiverFeedbackPipeline"));
+            Assert.That(forwardPass,
+                Does.Not.Contain("PostFirstPresentPipelineSpecializationsReady"));
+            Assert.That(transparentPass,
+                Does.Not.Contain("PostFirstPresentPipelineSpecializationsReady"));
+            Assert.That(weightedPass,
+                Does.Not.Contain("PostFirstPresentPipelineSpecializationsReady"));
+        });
+    }
+
+    [Test]
     public void ForwardPlus_UsesProductionGiDisabledPipelineSelection()
     {
         string source = ReadRepoText(

@@ -93,25 +93,23 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            int simpleCapacity = Math.Max(0, sceneData.SimpleOpaqueMeshletCount);
-            int simpleNormalCapacity = Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount);
-            int fullCapacity = Math.Max(0, sceneData.FullOpaqueMeshletCount);
-            int dispatchCandidateCount = Math.Max(simpleCapacity, Math.Max(simpleNormalCapacity, fullCapacity));
-            if (dispatchCandidateCount <= 0)
+            bool sidedStreams =
+                sceneData.SceneSubmissionSidedRasterSpecializationActive;
+            ForwardVisibilityCapacityPlan capacityPlan = ResolveCapacityPlan(
+                sceneData.SceneSubmissionGpuCompactedSimpleOpaqueCapacity,
+                sceneData.SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity,
+                sceneData.SceneSubmissionGpuCompactedFullOpaqueCapacity,
+                sidedStreams);
+            if (capacityPlan.DispatchCandidateCount <= 0)
             {
                 sceneData.ForwardVisibilityCompactionActive = false;
                 sceneData.ForwardVisibilityCompactionSkipReason = "no forward visibility candidates";
                 return;
             }
 
-            bool sidedStreams =
-                sceneData.SceneSubmissionSidedRasterSpecializationActive;
             EnsureRuntimeBuffers(
                 frameIndex,
-                simpleCapacity,
-                simpleNormalCapacity,
-                fullCapacity,
-                sidedStreams);
+                capacityPlan);
             RuntimeBuffer simpleVisible = _simpleVisibleDrawBuffers[frameIndex];
             RuntimeBuffer simpleNormalVisible = _simpleNormalVisibleDrawBuffers[frameIndex];
             RuntimeBuffer fullVisible = _fullVisibleDrawBuffers[frameIndex];
@@ -128,21 +126,27 @@ namespace Njulf.Rendering.Pipeline
                 return;
             }
 
+            if (!CapacityBackingsCoverPlan(
+                    capacityPlan,
+                    simpleVisible.ElementCapacity,
+                    simpleNormalVisible.ElementCapacity,
+                    fullVisible.ElementCapacity))
+            {
+                sceneData.ForwardVisibilityCompactionActive = false;
+                sceneData.ForwardVisibilityCompactionSkipReason =
+                    "forward visibility buffers do not cover compacted transition capacity";
+                return;
+            }
+
             sceneData.ForwardVisibilityCompactionActive = true;
             sceneData.ForwardVisibilitySidedStreamsActive = sidedStreams;
             sceneData.ForwardVisibilityCompactionSkipReason = string.Empty;
-            uint simpleOutputCapacity = ResolveStreamCapacity(
-                simpleVisible,
-                simpleCapacity,
-                sidedStreams);
-            uint simpleNormalOutputCapacity = ResolveStreamCapacity(
-                simpleNormalVisible,
-                simpleNormalCapacity,
-                sidedStreams);
-            uint fullOutputCapacity = ResolveStreamCapacity(
-                fullVisible,
-                fullCapacity,
-                sidedStreams);
+            uint simpleOutputCapacity = checked(
+                (uint)capacityPlan.SimpleInputCapacity);
+            uint simpleNormalOutputCapacity = checked(
+                (uint)capacityPlan.SimpleNormalInputCapacity);
+            uint fullOutputCapacity = checked(
+                (uint)capacityPlan.FullInputCapacity);
             sceneData.ForwardVisibilitySimpleCapacity =
                 checked((int)simpleOutputCapacity);
             sceneData.ForwardVisibilitySimpleNormalCapacity =
@@ -177,15 +181,9 @@ namespace Njulf.Rendering.Pipeline
             var pushConstants = new GPUForwardVisibilityCompactionPushConstants
             {
                 CurrentFrameIndex = (uint)frameIndex,
-                SimpleInputCapacity = sidedStreams
-                    ? checked((uint)sceneData.SceneSubmissionGpuCompactedSimpleOpaqueCapacity)
-                    : checked((uint)Math.Max(0, simpleCapacity)),
-                SimpleNormalInputCapacity = sidedStreams
-                    ? checked((uint)sceneData.SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity)
-                    : checked((uint)Math.Max(0, simpleNormalCapacity)),
-                FullInputCapacity = sidedStreams
-                    ? checked((uint)sceneData.SceneSubmissionGpuCompactedFullOpaqueCapacity)
-                    : checked((uint)Math.Max(0, fullCapacity)),
+                SimpleInputCapacity = simpleOutputCapacity,
+                SimpleNormalInputCapacity = simpleNormalOutputCapacity,
+                FullInputCapacity = fullOutputCapacity,
                 SimpleOutputCapacity = simpleOutputCapacity,
                 SimpleNormalOutputCapacity = simpleNormalOutputCapacity,
                 FullOutputCapacity = fullOutputCapacity,
@@ -213,7 +211,10 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUForwardVisibilityCompactionPushConstants>(),
                 &pushConstants);
 
-            uint groupCountX = Math.Max(1u, (checked((uint)dispatchCandidateCount) + WorkgroupSize - 1u) / WorkgroupSize);
+            uint groupCountX = Math.Max(
+                1u,
+                (checked((uint)capacityPlan.DispatchCandidateCount) +
+                    WorkgroupSize - 1u) / WorkgroupSize);
             _context.Api.CmdDispatch(cmd, groupCountX, 1, 1);
             RecordOutputBarrier(cmd, simpleVisible, simpleNormalVisible, fullVisible, counterBuffer, indirectDispatchBuffer);
             RecordCounterReadback(cmd, frameIndex, counterBuffer);
@@ -253,25 +254,22 @@ namespace Njulf.Rendering.Pipeline
 
         private void EnsureRuntimeBuffers(
             int frameIndex,
-            int simpleCapacity,
-            int simpleNormalCapacity,
-            int fullCapacity,
-            bool sidedStreams)
+            in ForwardVisibilityCapacityPlan capacityPlan)
         {
             ValidateFrameIndex(frameIndex);
             EnsureCapacity(
                 ref _simpleVisibleDrawBuffers[frameIndex],
-                RequiredStreamElements(simpleCapacity, sidedStreams),
+                capacityPlan.SimpleBackingElementCount,
                 DrawCommandStride,
                 $"ForwardVisibility.SimpleOpaqueVisibleMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _simpleNormalVisibleDrawBuffers[frameIndex],
-                RequiredStreamElements(simpleNormalCapacity, sidedStreams),
+                capacityPlan.SimpleNormalBackingElementCount,
                 DrawCommandStride,
                 $"ForwardVisibility.SimpleNormalOpaqueVisibleMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _fullVisibleDrawBuffers[frameIndex],
-                RequiredStreamElements(fullCapacity, sidedStreams),
+                capacityPlan.FullBackingElementCount,
                 DrawCommandStride,
                 $"ForwardVisibility.FullOpaqueVisibleMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
@@ -288,6 +286,41 @@ namespace Njulf.Rendering.Pipeline
             UpdateRegisteredBindlessBuffers(frameIndex);
         }
 
+        internal static ForwardVisibilityCapacityPlan ResolveCapacityPlan(
+            int simpleCompactedCapacity,
+            int simpleNormalCompactedCapacity,
+            int fullCompactedCapacity,
+            bool sidedStreams)
+        {
+            int simpleInputCapacity = Math.Max(0, simpleCompactedCapacity);
+            int simpleNormalInputCapacity = Math.Max(
+                0,
+                simpleNormalCompactedCapacity);
+            int fullInputCapacity = Math.Max(0, fullCompactedCapacity);
+            return new ForwardVisibilityCapacityPlan(
+                simpleInputCapacity,
+                simpleNormalInputCapacity,
+                fullInputCapacity,
+                Math.Max(
+                    simpleInputCapacity,
+                    Math.Max(simpleNormalInputCapacity, fullInputCapacity)),
+                RequiredStreamElements(simpleInputCapacity, sidedStreams),
+                RequiredStreamElements(
+                    simpleNormalInputCapacity,
+                    sidedStreams),
+                RequiredStreamElements(fullInputCapacity, sidedStreams));
+        }
+
+        internal static bool CapacityBackingsCoverPlan(
+            in ForwardVisibilityCapacityPlan plan,
+            uint simpleBackingElementCount,
+            uint simpleNormalBackingElementCount,
+            uint fullBackingElementCount) =>
+            simpleBackingElementCount >= plan.SimpleBackingElementCount &&
+            simpleNormalBackingElementCount >=
+                plan.SimpleNormalBackingElementCount &&
+            fullBackingElementCount >= plan.FullBackingElementCount;
+
         private static uint RequiredStreamElements(
             int candidateCount,
             bool sidedStreams)
@@ -297,14 +330,6 @@ namespace Njulf.Rendering.Pipeline
                 ? checked(logicalCapacity * 2u)
                 : logicalCapacity;
         }
-
-        private static uint ResolveStreamCapacity(
-            RuntimeBuffer buffer,
-            int candidateCount,
-            bool sidedStreams) =>
-            sidedStreams
-                ? checked((uint)Math.Max(1, candidateCount))
-                : buffer.ElementCapacity;
 
         private void EnsureCapacity(
             ref RuntimeBuffer buffer,
@@ -557,4 +582,13 @@ namespace Njulf.Rendering.Pipeline
             public ulong ByteSize { get; }
         }
     }
+
+    internal readonly record struct ForwardVisibilityCapacityPlan(
+        int SimpleInputCapacity,
+        int SimpleNormalInputCapacity,
+        int FullInputCapacity,
+        int DispatchCandidateCount,
+        uint SimpleBackingElementCount,
+        uint SimpleNormalBackingElementCount,
+        uint FullBackingElementCount);
 }

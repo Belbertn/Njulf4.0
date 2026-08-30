@@ -1,0 +1,1845 @@
+{
+  "FormatVersion": 1,
+  "Identity": {
+    "VendorId": 4318,
+    "DeviceId": 9568,
+    "DriverVersion": 2559541248,
+    "ApiVersion": 4211029,
+    "GlobalKey": "2087D1DA89BBCA42",
+    "ShaderBundleHash": "C079DC09B1539A58948B2C986FC6B8CE1E63ADE0906963F37BE3A3CEEA4DD1D6",
+    "EngineAbiHash": "384B9D26818B4F949846A8D02CA688EDC88AB1FC82408CFCD5D2DDEA5B65FBD3",
+    "BuildConfigurationHash": "21B6A798321A49F75B9C3827FA3CFDB7EFE2C4E05C3D13AEFE1C825B9774A158"
+  },
+  "Pipelines": {
+    "73EBD77E3BD0A066": {
+      "ArtifactId": "SimpleDdgi.NearFieldResidual.ddgi_near_field_residual_reset.comp.spv",
+      "Binaries": [
+        {
+          "Key": "5864F35381877F877B5602C3038AFBD605000000",
+          "Length": 4150,
+          "Sha256": "79B18D533CA1A27BC0024C230076A3BF168D010467E836C5E515FC12C6D777FD"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580132273025
+    },
+    "753E0BD32DC1D6E5": {
+      "ArtifactId": "SimpleDdgi.NearFieldResidual.ddgi_near_field_residual_prepare.comp.spv",
+      "Binaries": [
+        {
+          "Key": "CCC9E4DB068A56BE2D1F97ED041DB81E05000000",
+          "Length": 34706,
+          "Sha256": "DBFDC9CA291FE11E16D69A6282F2D9653320222A6605412FCE7A4E4718A30C52"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580132339922
+    },
+    "B77861ECB1F85A8E": {
+      "ArtifactId": "SimpleDdgi.NearFieldResidual.ddgi_near_field_residual_classify.comp.spv",
+      "Binaries": [
+        {
+          "Key": "840CE6F3AB046CA21F6D29FD6715D63205000000",
+          "Length": 26943,
+          "Sha256": "749FDF06249F7EF45CF6BE699220E69126754D488B55EA8F295E6AEFDBF23DF7"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580132411650
+    },
+    "6C6EBBB5F1D33117": {
+      "ArtifactId": "SimpleDdgi.NearFieldResidual.ddgi_near_field_residual_trace.comp.spv",
+      "Binaries": [
+        {
+          "Key": "E870E1806ED970098C61C123BC3604F005000000",
+          "Length": 122683,
+          "Sha256": "321D57993870DC5DFE454F5C2683684F8C55402AE82642984C9A2E840ECE9D9A"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580132473075
+    },
+    "5871A9BE66A0F564": {
+      "ArtifactId": "SimpleDdgi.NearFieldResidual.ddgi_near_field_residual_temporal.comp.spv",
+      "Binaries": [
+        {
+          "Key": "F25BADE47ABFDF8A98A3F5E60DC4FE2005000000",
+          "Length": 88217,
+          "Sha256": "DFF6B1F84698C9FF88B2470E4AC20276DC6B3665911C8B8F4FE33DABA3E613D6"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580132597989
+    },
+    "5CE6ECFDF80113D5": {
+      "ArtifactId": "SimpleDdgi.NearFieldResidual.ddgi_near_field_residual_finalize.comp.spv",
+      "Binaries": [
+        {
+          "Key": "442DC4522526F72CFCAB749071CAE28205000000",
+          "Length": 8451,
+          "Sha256": "43F76F10BF6B5948EBC3BF857F9851009752F03BBE64576C146569665AD696A8"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580132700375
+    },
+    "C7DDDA1AF0E396E4": {
+      "ArtifactId": "SimpleDdgi.NearFieldResidual.ddgi_near_field_residual_filter.comp.spv",
+      "Binaries": [
+        {
+          "Key": "F616E533AED66C18AF77698857A3219F05000000",
+          "Length": 29074,
+          "Sha256": "2E32AB878CB60483CEA22EF5DAB84CD2BD95CA2C55E90123B24E72F8957A5D69"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580132748959
+    },
+    "89BBC6EAED8EBAF0": {
+      "ArtifactId": "SimpleDdgi.NearFieldResidual.ddgi_near_field_residual_frequency.comp.spv",
+      "Binaries": [
+        {
+          "Key": "C784DA4BE81BD270215D105BC091395305000000",
+          "Length": 31343,
+          "Sha256": "2B3DFB7A93A0324F2647030840A9DF6DCE4DA93FF109559AB4DD9C0601B97973"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580132821264
+    },
+    "8BEDAA69EAA53CE5": {
+      "ArtifactId": "SimpleDdgi.NearFieldResidual.ddgi_near_field_residual_composite.comp.spv",
+      "Binaries": [
+        {
+          "Key": "4880A16D3DC8645FD32C1C6C05D3BD6305000000",
+          "Length": 37250,
+          "Sha256": "92A04133DEC9BA1D5143889FF2306995D14B004AB16C43673705FA93A088E9CC"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580132901707
+    },
+    "4E482E0A6563A9A8": {
+      "ArtifactId": "MeshPipeline.Graphics.depth_sided.frag.spv.depth.mesh.spv.depth.task.spv",
+      "Binaries": [
+        {
+          "Key": "B26C549DB257C0AEB266207A9BCB27D706000000",
+          "Length": 16417,
+          "Sha256": "222C2D4CF76887C47ECEB496E9B9BA6F2A042203254094E1A7A7DE280F375962"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        },
+        {
+          "Key": "AC38D3FA03AA3AF015EED16ACBCAE95701000000",
+          "Length": 1256,
+          "Sha256": "5E3B0298323B2FBB3715BBA457A56175150DCB20259208CE2E183281CAFA2BF2"
+        },
+        {
+          "Key": "849A8A31BD4AEEF140870D21A00C72D807000000",
+          "Length": 16461,
+          "Sha256": "A88005573E7E622F0E4F48CC51D4AD904A7390B24A80663B4E696B23A322D50D"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580133879879
+    },
+    "D9036BFFB0175D30": {
+      "ArtifactId": "MeshPipeline.Graphics.depth_alpha.frag.spv.depth_alpha.mesh.spv.depth.task.spv",
+      "Binaries": [
+        {
+          "Key": "9815CCC4A81C983D2AFDCA272895FCBA07000000",
+          "Length": 17501,
+          "Sha256": "A0B00CE8B2658F52626285552D61F439AC4A75B36647EEDCF23A403D013D84BE"
+        },
+        {
+          "Key": "0917A17AFE4D56724A6CB848DEECA5B401000000",
+          "Length": 3795,
+          "Sha256": "14E331E0AD95B10C18FB323A2EE2B29C3CF5E09B8286FE8E9DCE9B9814CF09FC"
+        },
+        {
+          "Key": "B26C549DB257C0AEB266207A9BCB27D706000000",
+          "Length": 16417,
+          "Sha256": "222C2D4CF76887C47ECEB496E9B9BA6F2A042203254094E1A7A7DE280F375962"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580133790149
+    },
+    "3BA2E1BFFB45A664": {
+      "ArtifactId": "MeshPipeline.Graphics.depth-only.depth_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "695AEEE930C2BD433BA2E1BFFB45A66407000000",
+          "Length": 16659,
+          "Sha256": "3CA87D316BFE3ED94A984CE9B1E3073A4454BF4184E4D6048D7B6E9E2A632A08"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580133825014
+    },
+    "F1D5D10401F04B88": {
+      "ArtifactId": "MeshPipeline.Graphics.depth_alpha.frag.spv.depth_alpha_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "0917A17AFE4D56724A6CB848DEECA5B401000000",
+          "Length": 3795,
+          "Sha256": "14E331E0AD95B10C18FB323A2EE2B29C3CF5E09B8286FE8E9DCE9B9814CF09FC"
+        },
+        {
+          "Key": "77583CFD9E3C03917546C249AAEB6C3E07000000",
+          "Length": 17759,
+          "Sha256": "12C148D6D9CAC956192C19DD1E615AA7EC50D4D1C5FE398B3A78A0B4AD691FB9"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580133942321
+    },
+    "05CADE837B727996": {
+      "ArtifactId": "MeshPipeline.Graphics.depth-only.shadow_depth.mesh.spv.shadow_depth.task.spv",
+      "Binaries": [
+        {
+          "Key": "92A82D9D432EEA1D57C8FC042E6EE1D107000000",
+          "Length": 15247,
+          "Sha256": "57DF077792B934DA59E16BFBDA0126E72B910F254679EC881F07F0F4766EC641"
+        },
+        {
+          "Key": "D82AD1F22BEDB5945A711A2C5199E42A06000000",
+          "Length": 13773,
+          "Sha256": "C2EB87D93F1E5E8DF6D5DDA138BEF3358B112485DE56670C695225E2C32741CD"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580133981844
+    },
+    "2D18B1A13F3E8E85": {
+      "ArtifactId": "MeshPipeline.Graphics.depth_alpha.frag.spv.shadow_depth_alpha.mesh.spv.shadow_depth.task.spv",
+      "Binaries": [
+        {
+          "Key": "0917A17AFE4D56724A6CB848DEECA5B401000000",
+          "Length": 3795,
+          "Sha256": "14E331E0AD95B10C18FB323A2EE2B29C3CF5E09B8286FE8E9DCE9B9814CF09FC"
+        },
+        {
+          "Key": "6E60EF05BDF285730C87917F71FB4DEF07000000",
+          "Length": 17507,
+          "Sha256": "0EA7CC9800C80526AFF8C8940D9E4C42C99BD4FC142849D835DE7F8848B85A23"
+        },
+        {
+          "Key": "D82AD1F22BEDB5945A711A2C5199E42A06000000",
+          "Length": 13773,
+          "Sha256": "C2EB87D93F1E5E8DF6D5DDA138BEF3358B112485DE56670C695225E2C32741CD"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580134011890
+    },
+    "96427CB94A8F75D3": {
+      "ArtifactId": "MeshPipeline.Graphics.depth_alpha.frag.spv.shadow_depth_alpha_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "AC51AD13A8FD6A5E1E64F033D301ABA007000000",
+          "Length": 17721,
+          "Sha256": "3BB8B4DFE1C62CCA89AD2C51B21BE97F048415FC3E5605EA07B87212A4B87F4F"
+        },
+        {
+          "Key": "0917A17AFE4D56724A6CB848DEECA5B401000000",
+          "Length": 3795,
+          "Sha256": "14E331E0AD95B10C18FB323A2EE2B29C3CF5E09B8286FE8E9DCE9B9814CF09FC"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580134057058
+    },
+    "07DB99F9089A1F40": {
+      "ArtifactId": "MeshPipeline.Graphics.forward_opaque_ddgi.frag.spv.forward_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "5C675D5CE2ED8F196315AAB08C1FC82E01000000",
+          "Length": 1597744,
+          "Sha256": "CCF40C482FD6C24918FA738E9CFE9D7B4404BFE90B0FCE9C8FE17F786584D0D7"
+        },
+        {
+          "Key": "140A4744B04202918C14E8AA947077DA07000000",
+          "Length": 20896,
+          "Sha256": "567B4D68E348FAD9BA3447AD20A5808D828419818DEB5E7392AA10AFCDC3BB97"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580134155930
+    },
+    "9EBE88ECA07D57A2": {
+      "ArtifactId": "MeshPipeline.Graphics.motion_vector_alpha.frag.spv.motion_vector_alpha.mesh.spv.motion_vector.task.spv",
+      "Binaries": [
+        {
+          "Key": "8A259CB27C9334E5764C5BF9B2D4108107000000",
+          "Length": 20744,
+          "Sha256": "75D48EB94FAAEF4ECF4D477FA2F7039D80BA0DBEE036427B629DF225FC1F7C25"
+        },
+        {
+          "Key": "D931E686CD7C48ED1E49C8738EB7083D06000000",
+          "Length": 12624,
+          "Sha256": "C9FF27AD2223F7F575B16BF987B44ADCAE02527D2D89EC88F22F1C7B8CD11DE3"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        },
+        {
+          "Key": "671B92E5B1B2D0F154BA476E2D23D44B01000000",
+          "Length": 5153,
+          "Sha256": "5ABCD5A9BEB609FC682EB4EF042E6884FB8BC6C5636C5AEFEC7DF401FA117FBE"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580135187863
+    },
+    "72534BEDC9436221": {
+      "ArtifactId": "MeshPipeline.Graphics.motion_vector.frag.spv.motion_vector_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "10ADB513BD31F59FE9281EEAE2D7DD3407000000",
+          "Length": 20033,
+          "Sha256": "B52ED830BE4A91489B6202D8DBAB31B0D9BD0A01B5B6F7676B48C93F3AA6144F"
+        },
+        {
+          "Key": "CAF92B602A6AADA9061A5D7C2EC038AF01000000",
+          "Length": 3339,
+          "Sha256": "65028A0394930599CDFECC9B80F4A8952A7C3095583A3978CAEBC2570D1949A0"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580135218720
+    },
+    "654715BC0438BA2D": {
+      "ArtifactId": "MeshPipeline.Graphics.motion_vector.frag.spv.motion_vector.mesh.spv.motion_vector.task.spv",
+      "Binaries": [
+        {
+          "Key": "5A860219AA5A49532A8A696FF830A37F07000000",
+          "Length": 19359,
+          "Sha256": "E1B752D978E01823A147661A1874E4B5811D00C49C578A7F2730C9D16E5ADCD5"
+        },
+        {
+          "Key": "CAF92B602A6AADA9061A5D7C2EC038AF01000000",
+          "Length": 3339,
+          "Sha256": "65028A0394930599CDFECC9B80F4A8952A7C3095583A3978CAEBC2570D1949A0"
+        },
+        {
+          "Key": "D931E686CD7C48ED1E49C8738EB7083D06000000",
+          "Length": 12624,
+          "Sha256": "C9FF27AD2223F7F575B16BF987B44ADCAE02527D2D89EC88F22F1C7B8CD11DE3"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580135126280
+    },
+    "CC30354DB51CEBE4": {
+      "ArtifactId": "MeshPipeline.Graphics.motion_vector_alpha.frag.spv.motion_vector_alpha_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        },
+        {
+          "Key": "671B92E5B1B2D0F154BA476E2D23D44B01000000",
+          "Length": 5153,
+          "Sha256": "5ABCD5A9BEB609FC682EB4EF042E6884FB8BC6C5636C5AEFEC7DF401FA117FBE"
+        },
+        {
+          "Key": "79F37D98EEFD36FBBB1A08AFBB32360307000000",
+          "Length": 20886,
+          "Sha256": "2D8972BA777EA978BB82FBF3876F30A62A27BB3C42ACDE6C1EC00FC62E0BC18B"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580135249117
+    },
+    "050DB69B888FF8AE": {
+      "ArtifactId": "MeshPipeline.Compute.scene_opaque_compact.comp.spv",
+      "Binaries": [
+        {
+          "Key": "CD951B55E8E5802B3D97BA191E09939205000000",
+          "Length": 527090,
+          "Sha256": "CE5A2E1C7EBF0884269F63AA64DA64E85242F782E17EDF550900CC3A8B3C1AC4"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580135326123
+    },
+    "2D2D8E9AA8D41471": {
+      "ArtifactId": "MeshPipeline.Compute.forward_visibility_compact.comp.spv",
+      "Binaries": [
+        {
+          "Key": "BBBF9F2E2F841F8525490AFF05296EA805000000",
+          "Length": 129816,
+          "Sha256": "9EC7BEB536B4B87F7CB3F2975E87E9011B9487D75F6E9E0378FAE155BC33638F"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580135652302
+    },
+    "E07FDA3649CCA858": {
+      "ArtifactId": "LightCulling.Compute",
+      "Binaries": [
+        {
+          "Key": "82A7ECB47258D17AE0A41F7567E7920305000000",
+          "Length": 30558,
+          "Sha256": "4E80A2C2F95918D07239E4E2909AABEB4B1C57F2976892E473A6DFF2EA9A960E"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580135803942
+    },
+    "0E17B122885CF192": {
+      "ArtifactId": "Composite.ToneMap",
+      "Binaries": [
+        {
+          "Key": "BBDDEE7FD27E61859118252FAD0C314001000000",
+          "Length": 10046,
+          "Sha256": "CE77AB419C6DE8F2D3B014078A8DE47FBAC0593919F5A0DD7393EE0784D475E9"
+        },
+        {
+          "Key": "3812CDE0F55721A8AC0D3783FAB57E6600000000",
+          "Length": 2130,
+          "Sha256": "732A08A0FDAD95A2AA3EE7CB3453D8189CEDCECD518BBCD65E75351672B7AD98"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580135945849
+    },
+    "B5FC132CF8217549": {
+      "ArtifactId": "Skinning.Compute",
+      "Binaries": [
+        {
+          "Key": "480C8C074AB9A3076DE3414F9D4C466C05000000",
+          "Length": 18031,
+          "Sha256": "D2FE6E4D82A95D7DA226D3D8B6F81982B1AF13BAC104A9EA29CCB54FD59C7904"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580136014004
+    },
+    "3F479A4F7CA18F29": {
+      "ArtifactId": "DdgiFoliageProxyGenerationPass:ddgi_foliage_proxy_generate.comp.spv",
+      "Binaries": [
+        {
+          "Key": "DCEE4A80C619554D672E6547ED33DD4A05000000",
+          "Length": 15562,
+          "Sha256": "CA7DAB342D7215C2DD165D6889396603290CC0DC423A0DC3719519E9FFAA0237"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580136080910
+    },
+    "C5A9B97667C278D9": {
+      "ArtifactId": "GpuParticle.Reset",
+      "Binaries": [
+        {
+          "Key": "78CE191008F2626CFDF53A772F5662A005000000",
+          "Length": 6889,
+          "Sha256": "C8F7AA9BEE51D41C026702E96638C1DA797BCF67B554F2DA76958890F2DFCDB5"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580136145108
+    },
+    "DCA6A0A215636A45": {
+      "ArtifactId": "GpuParticle.Simulate",
+      "Binaries": [
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        },
+        {
+          "Key": "51E21AAE434864FA7CD8AD7B9C6B7BCF05000000",
+          "Length": 34532,
+          "Sha256": "4EED45C5C84180FFC534A6D2BF317C2325DCDB809193CEBA28DB78AEFB315C7F"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580136201669
+    },
+    "79AA274FA1B9DE4F": {
+      "ArtifactId": "GpuParticle.Sort",
+      "Binaries": [
+        {
+          "Key": "47EE263E4111786091869922ACA4585905000000",
+          "Length": 10396,
+          "Sha256": "05898398EA5354B11363E8D8830578C3404563A9FDBB12CA6D7245DD19A7839F"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580136281206
+    },
+    "7BFFA4E19816AAAB": {
+      "ArtifactId": "ReflectionProbe.Prefilter",
+      "Binaries": [
+        {
+          "Key": "25613D5BAE73FE5C430156C76DE2794405000000",
+          "Length": 7837,
+          "Sha256": "4638227F83C76BCB88596A472DBB26E6C1BFF25AB5BCE0CC9316ACEF888A75C7"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580136591056
+    },
+    "A6ACC9885200941B": {
+      "ArtifactId": "HiZ.Build",
+      "Binaries": [
+        {
+          "Key": "ECAE5A268EAC0ADDB65CE1BAEE82171E05000000",
+          "Length": 2927,
+          "Sha256": "130BF9236E0FF2DB83DDC97B8091B9CEE22E182B5DA1A74FD4A4ED8FA58533A2"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580136763152
+    },
+    "51FAC042EDFB6830": {
+      "ArtifactId": "DirectionalRayShadowPass:directional_ray_shadow.comp.spv",
+      "Binaries": [
+        {
+          "Key": "E2EDAA44F9E36234A9C411E5FC3B61B305000000",
+          "Length": 55283,
+          "Sha256": "576D330BBA61E7C9BB60CB5D4F730B68425C00A57F07FF4FEB78D6D5E7EA4E92"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580136832971
+    },
+    "1A3069534D9CCEE9": {
+      "ArtifactId": "AreaRayShadowPass:area_ray_shadow.comp.spv",
+      "Binaries": [
+        {
+          "Key": "99F823C1ABB32FEA0A422C3BCEDA020605000000",
+          "Length": 54816,
+          "Sha256": "11E295CC72373D18A7DEBB3A5EEF3DBB85478680AFC33A9F468CA7D56E29F758"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580136942795
+    },
+    "785FA9481A9EB1E1": {
+      "ArtifactId": "DirectionalShadow:directional_csm_resolve.comp.spv",
+      "Binaries": [
+        {
+          "Key": "5A7D0FD4CEB0A6B8B83C31A5EE19839805000000",
+          "Length": 55865,
+          "Sha256": "38B9E4B16EF6B0ECC63EF659312D72D4822F87B64CE7F09CF3BDCEBCFC6D98FF"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137027896
+    },
+    "7B41F948E7E6D25E": {
+      "ArtifactId": "DirectionalShadow:directional_shadow_temporal.comp.spv",
+      "Binaries": [
+        {
+          "Key": "5EA810AC264B1D5F43F3AD54715FF9FB05000000",
+          "Length": 25844,
+          "Sha256": "5B00FA695208937628420E1D0F84F2BA036924310AC09A81CED55A86E675C715"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137104702
+    },
+    "642CDE1DD1B1B951": {
+      "ArtifactId": "DirectionalShadow:directional_shadow_spatial.comp.spv",
+      "Binaries": [
+        {
+          "Key": "C578D13B78CBF90FC4B80234459C5EA805000000",
+          "Length": 10352,
+          "Sha256": "7E4E904595F51D5F366ADEC3392E6FD73B738EBD5117D5B12797BF8F1BF70A6B"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137166870
+    },
+    "DA835165FCD797CB": {
+      "ArtifactId": "AmbientOcclusion.GtaoPass",
+      "Binaries": [
+        {
+          "Key": "A273EC11C278EB9DCABFA5721740CD2105000000",
+          "Length": 21160,
+          "Sha256": "F043C8EF245CA5589BD7568D2C26EE05F7573EC924B977C7CB5DB2C5817E8514"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137263895
+    },
+    "BB6A00C0F2CDE526": {
+      "ArtifactId": "AmbientOcclusion.GtaoTemporalPass",
+      "Binaries": [
+        {
+          "Key": "E1A4639AD1638EB4836A135B0B0280DD05000000",
+          "Length": 22992,
+          "Sha256": "09AE6408E60E62FB78E21E35AEBC2E1D18EB029455377B92978EB025E3D74349"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137354009
+    },
+    "3513ECE1407BDD4F": {
+      "ArtifactId": "AmbientOcclusion.GtaoSpatialPass",
+      "Binaries": [
+        {
+          "Key": "A41C6BA3007E1298EDF56B47074869CF05000000",
+          "Length": 14723,
+          "Sha256": "3B75758CB48BE8DE4467A2BAD610AA9FA9BC941E05088E1E2A4CB18D697406F3"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137438244
+    },
+    "534472C682AE82C5": {
+      "ArtifactId": "SimpleDdgiLightTreePass:ddgi_light_bounds.comp.spv",
+      "Binaries": [
+        {
+          "Key": "38C620263D961FB75BEC0697512D43B805000000",
+          "Length": 19268,
+          "Sha256": "169BFE0B598ADAB4ADB9685701D949773565FB548F51718B3D631F6F2FACD674"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137506140
+    },
+    "73E1362E0B5077AE": {
+      "ArtifactId": "SimpleDdgiLightTreePass:ddgi_light_sort.comp.spv",
+      "Binaries": [
+        {
+          "Key": "8595F1AE1A7034127BDC649D26A97C7E05000000",
+          "Length": 6237,
+          "Sha256": "EF4424D7D0BAAB807B3DBF6296286F4B90061FAFADAA06450E01E51039067720"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137566411
+    },
+    "EC626DC1D118162C": {
+      "ArtifactId": "SimpleDdgiLightTreePass:ddgi_light_tree_build.comp.spv",
+      "Binaries": [
+        {
+          "Key": "61E46AFDC6C54DB10CA26CB52F8E08DF05000000",
+          "Length": 7978,
+          "Sha256": "BD4F157D762ECF5DC1F72B92040855675D1C2509EFDB4FF029139D41D83F5EC9"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137611796
+    },
+    "082056CBFE5FD7F8": {
+      "ArtifactId": "SimpleDdgiLightTreePass:ddgi_light_tree_refit.comp.spv",
+      "Binaries": [
+        {
+          "Key": "23ABE220007CD4BEC8D6066F1908557F05000000",
+          "Length": 20188,
+          "Sha256": "737E92F435878FA5306A75D32066B2619691208474D135E51945514E35DE189B"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137660048
+    },
+    "8BBEF1219B7D2BBF": {
+      "ArtifactId": "SimpleDdgiLightTreePass:ddgi_light_tree_finalize.comp.spv",
+      "Binaries": [
+        {
+          "Key": "C7800CA56EA821A3D355B980D560C66C05000000",
+          "Length": 4884,
+          "Sha256": "9853459548DEB0AE7FBFE044B77DD4280D4B4A0E2A2D46C5135466F8CC344EE9"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137724201
+    },
+    "334263F940790B6F": {
+      "ArtifactId": "AmbientOcclusion.VariableRateShadingPass",
+      "Binaries": [
+        {
+          "Key": "C06F056C97B47FB53B5FCBA89871D5C305000000",
+          "Length": 11346,
+          "Sha256": "F8897F3FD8A00EBCD289F200CAFF0981429B21DCD3225B8AB7BF145426E9D32E"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137803799
+    },
+    "013DFEB6BC593B0E": {
+      "ArtifactId": "ForwardPlusPass:ddgi_simple_receiver_cache.comp.spv",
+      "Binaries": [
+        {
+          "Key": "C229E59A184C6DD5D96BE89FC0973B8B05000000",
+          "Length": 260516,
+          "Sha256": "189328C015F35D3CBBEBBD8AB75B66020F3131A0FDBE8A1D0BD6B62DD81BB9A6"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580137918762
+    },
+    "BC66F048533AA4E6": {
+      "ArtifactId": "ForwardPlusPass:ddgi_simple_receiver_cache_resolve.comp.spv",
+      "Binaries": [
+        {
+          "Key": "9203B3E692FE3E995CBDB0C6DDEC05DD05000000",
+          "Length": 210371,
+          "Sha256": "945E15BA1EB06B59518C560A65D021F9A84B06254BD8BDB8D66F6511905943D5"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138114705
+    },
+    "8B3E927812171B20": {
+      "ArtifactId": "SimpleDdgiPageDemandPass:ddgi_simple_page_demand.comp.spv",
+      "Binaries": [
+        {
+          "Key": "C40EF5FB44B0AA7CD3D5C50918D1F71E05000000",
+          "Length": 36728,
+          "Sha256": "3DBB38BEED8DB18B1DE3577D99DF69054BDF237D3B10FC489CAAC6975253B50D"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138371109
+    },
+    "80FEE1C50925630B": {
+      "ArtifactId": "SimpleDdgiPageResidencyPass:ddgi_simple_page_reset.comp.spv",
+      "Binaries": [
+        {
+          "Key": "5DD6CAEFD34FE00C80BA7FDB3E8516C105000000",
+          "Length": 5059,
+          "Sha256": "1FA482F9C50E27FE4A648626FA7A550E846979DA2DF844AFCE06D872CE7BF363"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138445954
+    },
+    "E3FB12A919F03625": {
+      "ArtifactId": "SimpleDdgiPageResidencyPass:ddgi_simple_page_classify.comp.spv",
+      "Binaries": [
+        {
+          "Key": "4C343B21C51E32326BE542E0D3D6EC7405000000",
+          "Length": 20586,
+          "Sha256": "53708A2357906F4BF6E8D8FD138B7E168FA94E9979AC2198A90033DA49C93041"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138487114
+    },
+    "1BEC10BB3EBF2BB7": {
+      "ArtifactId": "SimpleDdgiPageResidencyPass:ddgi_simple_page_reconcile.comp.spv",
+      "Binaries": [
+        {
+          "Key": "0E2B134EED323096E3540B13C2EBCE1505000000",
+          "Length": 44607,
+          "Sha256": "DB76DFC1F8502C141CFA00AD9EE938F8FDA35853064F0826B6B8D7348249C198"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138542946
+    },
+    "4A039740B89D7280": {
+      "ArtifactId": "SimpleDdgiPageResidencyPass:ddgi_simple_page_initialize.comp.spv",
+      "Binaries": [
+        {
+          "Key": "1EFA8A01C4449BDABA65A884F8374D6A05000000",
+          "Length": 17575,
+          "Sha256": "AE54E15769D0117BB26157C982533CEC318D8DBF6F9643E959CFE41C4473CE98"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138629169
+    },
+    "EA6B9381EE51EEA1": {
+      "ArtifactId": "FarFieldClipmapBakePass:farfield_voxelize.comp.spv",
+      "Binaries": [
+        {
+          "Key": "F177C3C336B7D1B05AD5FE31EDD2D38805000000",
+          "Length": 57730,
+          "Sha256": "CBE394D185C86331EBC3B7820FF70B0F83406E5AB04BD52A77C023DC0249877F"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138694880
+    },
+    "7C32B83D7E0617E1": {
+      "ArtifactId": "FarFieldClipmapBakePass:farfield_jumpflood.comp.spv",
+      "Binaries": [
+        {
+          "Key": "8F33E17F605E22A81CF3E6EC1829F41C05000000",
+          "Length": 10545,
+          "Sha256": "0C236AC3CBCEACFDE5A7D5D63A19EFF3121F926E6356CBD9CB19FE5D3DAD22F8"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138779850
+    },
+    "976422EBC65B07F4": {
+      "ArtifactId": "SimpleDdgiSchedulePass:ddgi_simple_schedule_reset.comp.spv",
+      "Binaries": [
+        {
+          "Key": "F3ABFE266C0346A9FF9D62154161C3C905000000",
+          "Length": 9173,
+          "Sha256": "D0F0406C5AF231B8F6E5B39C819252013520475C1A4C810DE72B1429AAC34F7F"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138841601
+    },
+    "E6825C5449544B62": {
+      "ArtifactId": "SimpleDdgiSchedulePass:ddgi_simple_schedule_classify.comp.spv",
+      "Binaries": [
+        {
+          "Key": "14A1AB0B3D23B447F678AA207B8BF8E205000000",
+          "Length": 58229,
+          "Sha256": "C55E659DF3593DEE6DA230B99ACDE5AC852FEE2C727369AFB83103570C0F9B0C"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138891723
+    },
+    "094E1E7543780814": {
+      "ArtifactId": "SimpleDdgiSchedulePass:ddgi_simple_schedule_prefix.comp.spv",
+      "Binaries": [
+        {
+          "Key": "28E94704CE9AEE8DA18B72F52CBEF67C05000000",
+          "Length": 5295,
+          "Sha256": "63E539159555BB20EFAF43BBCD4FEA72E84773D4389152A5DADB0B9058F96F1E"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580138969830
+    },
+    "CDFE50B18D4C108E": {
+      "ArtifactId": "SimpleDdgiSchedulePass:ddgi_simple_schedule_lane_base.comp.spv",
+      "Binaries": [
+        {
+          "Key": "F95302B08619278FC5B935382F00576105000000",
+          "Length": 6955,
+          "Sha256": "84C4B96A1C9DBB9E634C1C93B84E9EF48F6A86DCFFED566075B9B43C45D087E1"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580139008907
+    },
+    "9367886D59B76A42": {
+      "ArtifactId": "SimpleDdgiSchedulePass:ddgi_simple_schedule_compact.comp.spv",
+      "Binaries": [
+        {
+          "Key": "DE55D7D203D7BCEB9B4DDACFA7DFDB6505000000",
+          "Length": 5222,
+          "Sha256": "FBDD75798CF6FAC326455B1E354A111F2658FE4B81A067ADD9B442DD3474EB76"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580139055730
+    },
+    "5E3E5270F440DEC3": {
+      "ArtifactId": "SimpleDdgiSchedulePass:ddgi_simple_schedule_admit_tail.comp.spv",
+      "Binaries": [
+        {
+          "Key": "0A1B0227491D5A1BAEB1FD0A7C85160B05000000",
+          "Length": 40113,
+          "Sha256": "F423793B2893E8F23033E0F5DD6BC5A3494599BFAED3357445ACDE26E8030F54"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580139096544
+    },
+    "F9CA4197F5E553A3": {
+      "ArtifactId": "SimpleDdgiSchedulePass:ddgi_simple_schedule_admit.comp.spv",
+      "Binaries": [
+        {
+          "Key": "0A8D41627FC9AF771113DA577E6581AA05000000",
+          "Length": 48142,
+          "Sha256": "D29A7D9CA6C032E5BCB1D4311D7707C3D4371AA4042C069A9AD243E7D7092F93"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580139188470
+    },
+    "A2AABC8E7059EB68": {
+      "ArtifactId": "SimpleDdgiSchedulePass:ddgi_simple_schedule_materialize.comp.spv",
+      "Binaries": [
+        {
+          "Key": "3C22958BD014010452CF4B0A3F088AD105000000",
+          "Length": 24500,
+          "Sha256": "F3C6116961C71A8E60DF526C7B9011ED5AB59FCA33BCA99F058FE7F42FE7EB3B"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580139274904
+    },
+    "03943B0F6D62BACA": {
+      "ArtifactId": "SimpleDdgiSchedulePass:ddgi_simple_schedule_emit.comp.spv",
+      "Binaries": [
+        {
+          "Key": "ECB18687E205292B8B98D2756E4F179805000000",
+          "Length": 15918,
+          "Sha256": "F47FB9DCC0355AA1F9A39F658F9320CE89818830A7B6332C95847EE55DE49F3A"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580139332873
+    },
+    "044DB26D6048B34D": {
+      "ArtifactId": "SimpleDdgiTracePass:ddgi_simple_trace_packed_guided_reuse.comp.spv",
+      "Binaries": [
+        {
+          "Key": "EFB177429F347061642004936A2E28EA05000000",
+          "Length": 89903,
+          "Sha256": "CF8FB3554FB41C2CCF021B3B77A3D2F1F9B1EDEA540B96E968D3627340511807"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580139454903
+    },
+    "D5F501A28D3AEC24": {
+      "ArtifactId": "SimpleDdgiTracePass:ddgi_simple_trace_packed_guided_source.comp.spv",
+      "Binaries": [
+        {
+          "Key": "C18E5E78C7D4104A8DCF169E93312E5205000000",
+          "Length": 1464390,
+          "Sha256": "B343ECF5403CEE7A5EA94E783C4E41FFA33722AEEF3183B781943288B141A5CC"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580139595799
+    },
+    "72106EF6B8ECFECB": {
+      "ArtifactId": "SimpleDdgiTracePass:ddgi_simple_trace_packed_guided_final.comp.spv",
+      "Binaries": [
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        },
+        {
+          "Key": "B5FC888D1DF62EF9A2FC8C2C2BA9B5AA05000000",
+          "Length": 1110578,
+          "Sha256": "4722D0DC39739B064FC489A263CCB58194C274B2F0DB9D77FDD04E16C75B1A7A"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580140359547
+    },
+    "36F50764C44F83ED": {
+      "ArtifactId": "SimpleDdgiRelocateClassifyPass:ddgi_simple_relocate_classify_guided.comp.spv",
+      "Binaries": [
+        {
+          "Key": "812A308B47B00678C63EC34EC526F76105000000",
+          "Length": 51320,
+          "Sha256": "DD06A988BFEC62BC292B1CA97CFAE2BABA3990E5340E4DEF0FBF9402B8CAF849"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580140925115
+    },
+    "BF04E1EA2DC578D9": {
+      "ArtifactId": "SimpleDdgiAcceleratedSolvePass:ddgi_simple_blend_guided.comp.spv",
+      "Binaries": [
+        {
+          "Key": "B4CEADF35E835D1EE7CF149DB072D3D605000000",
+          "Length": 147687,
+          "Sha256": "BBFADC1AF3F86FECEC4B4F17DAABBDC5256394C57D95661A7C384C74E00AE872"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580141553213
+    },
+    "E9995314D49C2666": {
+      "ArtifactId": "SimpleDdgiAcceleratedSolvePass:ddgi_simple_transport_intermediate_publish.comp.spv",
+      "Binaries": [
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        },
+        {
+          "Key": "26210FFCFE5677FA811C91CCA62121F205000000",
+          "Length": 29959,
+          "Sha256": "AC74050890CF6DD83A5EC8D1A32A3D51ED69E5344D7B50DE0C62DB8C196CE4DD"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580141143715
+    },
+    "1DF9274C79110A47": {
+      "ArtifactId": "SimpleDdgiAcceleratedSolvePass:ddgi_simple_transport_solve_guided_packed.comp.spv",
+      "Binaries": [
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        },
+        {
+          "Key": "BB5E979451DF2FFF95C7E49084EDCA1905000000",
+          "Length": 454046,
+          "Sha256": "6E054B4DACA652F675E0D4D507C71FFC5112C22993A929CC4395412B953939DD"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580141515579
+    },
+    "A366B37D76A2652D": {
+      "ArtifactId": "SimpleDdgiDirectionalRadiancePass:ddgi_simple_directional_stage_guided_packed.comp.spv",
+      "Binaries": [
+        {
+          "Key": "C55236B250C048192BE221BE43C8A34405000000",
+          "Length": 58375,
+          "Sha256": "C98DD69EA74273DE81FA4450F6C92AE75738B4BDD5FD82C187F3D1E3C6201314"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580141591011
+    },
+    "288732D3E4B24F0E": {
+      "ArtifactId": "SimpleDdgiDirectionalRadiancePass:ddgi_simple_directional_project_guided.comp.spv",
+      "Binaries": [
+        {
+          "Key": "B3D4E315C49B5590E8002B63A89C71DD05000000",
+          "Length": 62818,
+          "Sha256": "EE9025FB3FEC68BE288BE63A801ECAD52174E2E06BDBF010114854F0EFC080E4"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580141667941
+    },
+    "592919A38F387AC9": {
+      "ArtifactId": "SimpleDdgiDirectionalRadiancePass:ddgi_simple_directional_publish.comp.spv",
+      "Binaries": [
+        {
+          "Key": "FA5E511F6FA59378715281919462777B05000000",
+          "Length": 89409,
+          "Sha256": "09F49B2EEB9845B7DCF435F121E6D4D3FB635A3BDD09D927395774C4B5E5B211"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580141746687
+    },
+    "BE3DA5875B56CA77": {
+      "ArtifactId": "SimpleDdgiPublishPass:ddgi_simple_publish.comp.spv",
+      "Binaries": [
+        {
+          "Key": "EDBA2C811F837E050E6AE6EC2276695B05000000",
+          "Length": 31664,
+          "Sha256": "B9D1FE12BFE43C860700DC0D420130082F14158CA8949B2801D19A26B85E1D0C"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580141874902
+    },
+    "84BB2AE3573BAACC": {
+      "ArtifactId": "SimpleDdgiPublishPass:ddgi_simple_publish_sampled.comp.spv",
+      "Binaries": [
+        {
+          "Key": "AE4C58AD9E6B9210E4CAA8B87BFBEA7B05000000",
+          "Length": 40610,
+          "Sha256": "43AEEAF5E52307E63FFEA86E92C230AEBE007AEC82814A1BE6D26A7104D226AD"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580141939812
+    },
+    "CE6245DC399B5E36": {
+      "ArtifactId": "SimpleDdgiSchedulerCommitPass:ddgi_simple_schedule_commit_local.comp.spv",
+      "Binaries": [
+        {
+          "Key": "F671159BE44F606F9E347F5B686FDA0705000000",
+          "Length": 103384,
+          "Sha256": "2EAFA79A2DE70698C13B6BFB124E1825CD6F14BB0FE89BA3F65403A602BA801E"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142033603
+    },
+    "656719C945E64415": {
+      "ArtifactId": "SimpleDdgiSchedulerCommitPass:ddgi_simple_schedule_commit_propagation.comp.spv",
+      "Binaries": [
+        {
+          "Key": "8336EFC2CA7F1D519D723228C912658A05000000",
+          "Length": 11521,
+          "Sha256": "E53885AFBC4F5206D4858B921E2E979D5C85C2B168868823535A9FB010FF14B0"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142143829
+    },
+    "20AD3B931D7A857B": {
+      "ArtifactId": "SimpleDdgiSchedulerCommitPass:ddgi_simple_schedule_feedback_partial.comp.spv",
+      "Binaries": [
+        {
+          "Key": "DF4B35E7C9C4267B2080AA03964585BB05000000",
+          "Length": 26371,
+          "Sha256": "29E4940274D76D53E964877F1F49FAE5B54CB99875C784D685D1541D00D66229"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142192791
+    },
+    "144A4691AF088D11": {
+      "ArtifactId": "SimpleDdgiSchedulerCommitPass:ddgi_simple_schedule_feedback.comp.spv",
+      "Binaries": [
+        {
+          "Key": "C00E6011AD4433C1F402DF89D7B60FE405000000",
+          "Length": 25105,
+          "Sha256": "5A4D1AE7CF313294DD71E3F5149EF0C260074C0C9CA166A0AE1994806CF6706D"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142251958
+    },
+    "8C927811CF403C13": {
+      "ArtifactId": "SimpleDdgiPageFeedbackPass:ddgi_simple_page_feedback.comp.spv",
+      "Binaries": [
+        {
+          "Key": "9FE85E3DBD7C87C6ACC0C3DF47177B1F05000000",
+          "Length": 62696,
+          "Sha256": "1AAB034EF9184D36116BBECF782E05E905396CBE8052CD71A44A4078D138E5C1"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142319673
+    },
+    "D5D2EB4BCD2B8688": {
+      "ArtifactId": "AutomaticPlanar.automatic_planar_reproject.comp.spv",
+      "Binaries": [
+        {
+          "Key": "7982469ED29D8A758D2471D0B4C5908A05000000",
+          "Length": 51541,
+          "Sha256": "4E4D05D5A1EA6FC5FBA1A2280A422B4F81BD38B09093B44FAF3BB853F18D9BDE"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142464939
+    },
+    "8F91B1B5911F64C5": {
+      "ArtifactId": "AutomaticPlanar.automatic_planar_prefilter.comp.spv",
+      "Binaries": [
+        {
+          "Key": "E91B66CCD3F1F0C9370C7822A2DA66E705000000",
+          "Length": 5085,
+          "Sha256": "3F06C83ED1FD45F5B9C78504A6C1AED10418FA97D254C59B266F5C5A92867D82"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142549278
+    },
+    "07F52BAB5B8A2480": {
+      "ArtifactId": "DebugDraw.DepthTested",
+      "Binaries": [
+        {
+          "Key": "633668EFCDF5C54015BE6E7B757EA92301000000",
+          "Length": 1342,
+          "Sha256": "D76C194EBE8D1040F24FF2FE3253A6258DFE0D423081EC79EB1621B79186A143"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        },
+        {
+          "Key": "9300567C5D0329F204F70449E8FBF62C00000000",
+          "Length": 2664,
+          "Sha256": "B4ACD9B163480AABA665F948C73D70E92C071C4293AE23FCE677E9A74BD287C7"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142667856
+    },
+    "023A267BD8716E4E": {
+      "ArtifactId": "Bloom.bloom_extract.comp.spv",
+      "Binaries": [
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        },
+        {
+          "Key": "1CBB6F2D05807EF4B297B416FD819C4905000000",
+          "Length": 3074,
+          "Sha256": "4088952A065EF0A8986A36809DC4794D47490212321E07BB77019C9E70FFF688"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142725492
+    },
+    "F7380784CEE93D79": {
+      "ArtifactId": "Bloom.bloom_downsample.comp.spv",
+      "Binaries": [
+        {
+          "Key": "909CE49FE01BC7CB5FE35621D97619AF05000000",
+          "Length": 4094,
+          "Sha256": "1FEBE9F7396BDD029F25CDF91D52059BD15B214512BB54A5DABE7B467ECB3DF2"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142758481
+    },
+    "4834FA8BFEEA6E51": {
+      "ArtifactId": "Bloom.bloom_upsample.comp.spv",
+      "Binaries": [
+        {
+          "Key": "9D0AD0E329534CAD088181C20B208E1805000000",
+          "Length": 4076,
+          "Sha256": "33F7FECC63BC9545E899B737C90B8BBF7FAA65BA7C709159ABB0EB8FACE5A80C"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142795125
+    },
+    "F0632160A8AFF8C6": {
+      "ArtifactId": "AntiAliasing.FXAA Pipeline",
+      "Binaries": [
+        {
+          "Key": "3812CDE0F55721A8AC0D3783FAB57E6600000000",
+          "Length": 2130,
+          "Sha256": "732A08A0FDAD95A2AA3EE7CB3453D8189CEDCECD518BBCD65E75351672B7AD98"
+        },
+        {
+          "Key": "7553359CE54A1EC1033F16C8F29F5BB001000000",
+          "Length": 8251,
+          "Sha256": "33ADEB4843C6D6B9BBA52833FF5E913A81E408F314C7ACB99942637AE1EFBF71"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142869521
+    },
+    "8C49A06C8B1F6100": {
+      "ArtifactId": "AntiAliasing.SMAA Edge Pipeline",
+      "Binaries": [
+        {
+          "Key": "D70BF93517E198537F24FBF73E3BFDC901000000",
+          "Length": 3897,
+          "Sha256": "700FF7CEC8C035ACC9D6C4EAAB3BE7A465A2838E8CC6335ED5B8407D242914E4"
+        },
+        {
+          "Key": "3812CDE0F55721A8AC0D3783FAB57E6600000000",
+          "Length": 2130,
+          "Sha256": "732A08A0FDAD95A2AA3EE7CB3453D8189CEDCECD518BBCD65E75351672B7AD98"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142915484
+    },
+    "EFCC9E77E997F4DB": {
+      "ArtifactId": "AntiAliasing.SMAA Blend Weight Pipeline",
+      "Binaries": [
+        {
+          "Key": "87BFEE40A684D731BA423EF239AF658E01000000",
+          "Length": 18089,
+          "Sha256": "B47E33C124A27BEFC39095A2A42840B0F4E63616D157478C3CB87EDF768D2364"
+        },
+        {
+          "Key": "3812CDE0F55721A8AC0D3783FAB57E6600000000",
+          "Length": 2130,
+          "Sha256": "732A08A0FDAD95A2AA3EE7CB3453D8189CEDCECD518BBCD65E75351672B7AD98"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580142957510
+    },
+    "F52E105D6BA71FE3": {
+      "ArtifactId": "AntiAliasing.SMAA Neighborhood Pipeline",
+      "Binaries": [
+        {
+          "Key": "A40CC7F94E5E03A170C42CD091CAAE0101000000",
+          "Length": 5086,
+          "Sha256": "488360D1FEC4543A0CD6D987FD472503694F8275DB116D716A7C454E1F665ACC"
+        },
+        {
+          "Key": "3812CDE0F55721A8AC0D3783FAB57E6600000000",
+          "Length": 2130,
+          "Sha256": "732A08A0FDAD95A2AA3EE7CB3453D8189CEDCECD518BBCD65E75351672B7AD98"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580143009354
+    },
+    "9D41F50FC198ACD9": {
+      "ArtifactId": "AntiAliasing.TAA Resolve Pipeline",
+      "Binaries": [
+        {
+          "Key": "3812CDE0F55721A8AC0D3783FAB57E6600000000",
+          "Length": 2130,
+          "Sha256": "732A08A0FDAD95A2AA3EE7CB3453D8189CEDCECD518BBCD65E75351672B7AD98"
+        },
+        {
+          "Key": "34B5C246D91D72B3589E9CE3D5C1EC3A01000000",
+          "Length": 9325,
+          "Sha256": "4F99157721195809EF6C5A25CA919E9E6045EB90534126CBC8E17DCACA2060BF"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580143060116
+    },
+    "4E2214494B214C38": {
+      "ArtifactId": "SimpleDdgi.ReceiverFeedback.ddgi_receiver_feedback_reset.comp.spv",
+      "Binaries": [
+        {
+          "Key": "12C920A084147A391E88E40E5134D5AD05000000",
+          "Length": 7802,
+          "Sha256": "CA70AC56F9442415B2E8CBA4A9F74BE9BA23944422C2A8EA5FDBDADD11A66A52"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580143194622
+    },
+    "B77B10FFAF98E2BB": {
+      "ArtifactId": "SimpleDdgi.ReceiverFeedback.ddgi_receiver_feedback_capture.comp.spv",
+      "Binaries": [
+        {
+          "Key": "0465B5FB9C18EBAD1FF8A457174F736905000000",
+          "Length": 24185,
+          "Sha256": "186E2871E8F7E469ED98A2D16BAC65F45B42DAC794EC740DE61BB63593A8F81A"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580143239386
+    },
+    "538F422CEB6F399C": {
+      "ArtifactId": "SimpleDdgi.ReceiverFeedback.ddgi_receiver_feedback_radix_histogram.comp.spv",
+      "Binaries": [
+        {
+          "Key": "88D3973D26B4EF905B7FE851DD9AF4E105000000",
+          "Length": 18106,
+          "Sha256": "6FCC31CEDD038C32B7B126DBE7BF49FFE2585ECDA16773B41825AE4ED3444532"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580143307154
+    },
+    "03CB4E3643589278": {
+      "ArtifactId": "SimpleDdgi.ReceiverFeedback.ddgi_receiver_feedback_radix_prefix.comp.spv",
+      "Binaries": [
+        {
+          "Key": "F29867624EA318568B3736F66353DC5B05000000",
+          "Length": 14257,
+          "Sha256": "BC2A997251851CEDF83534806BD327BC0C08859020CE1906E37FFF779078879C"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580143365484
+    },
+    "B738F934354BC7AE": {
+      "ArtifactId": "SimpleDdgi.ReceiverFeedback.ddgi_receiver_feedback_radix_scatter.comp.spv",
+      "Binaries": [
+        {
+          "Key": "822A79B60126BB071F2D4B684AB2896405000000",
+          "Length": 26740,
+          "Sha256": "79B9AF882F3C75A282E9486F50A21BD410A4B492D415A6CE81C6E56405D5A17E"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580143414314
+    },
+    "3F2ADBC245C8B2DE": {
+      "ArtifactId": "SimpleDdgi.ReceiverFeedback.ddgi_receiver_feedback_reduce.comp.spv",
+      "Binaries": [
+        {
+          "Key": "0AC0690E25FBBE3F6799C732D835387D05000000",
+          "Length": 52665,
+          "Sha256": "E8165449042E38F4CF4A429DEDBD350B5DF8885E506548392C3CE5280BB2208A"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580143473811
+    },
+    "7EE10BB6B639BA69": {
+      "ArtifactId": "MeshPipeline.Graphics.forward_opaque_ddgi_near_field_trace_source.frag.spv.forward_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "F6B2B72DE05DBB05521863E695FE6ED001000000",
+          "Length": 774592,
+          "Sha256": "AC4C63340B2C8D0E8141D0ED21FB80A1D5F25EFB1A767C712778609315AB3644"
+        },
+        {
+          "Key": "140A4744B0420291ABB6B1FD7310FFEC07000000",
+          "Length": 20891,
+          "Sha256": "37DFF69B9C094706D8351AAA3CFE0B4B43D061A509C07872B3ACBDB159D19150"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580143570378
+    },
+    "CEA3BD558743CC06": {
+      "ArtifactId": "MeshPipeline.Graphics.forward_opaque_ddgi_c4_receiver.frag.spv.forward_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "A3067DCC7420BA612291A7EFA372E92601000000",
+          "Length": 1596162,
+          "Sha256": "0E51E9A28B2C3E922F67F3D89D39CBAA52AE3CBDDD97665DD49BE218E0ABA5BA"
+        },
+        {
+          "Key": "140A4744B04202918C14E8AA947077DA07000000",
+          "Length": 20896,
+          "Sha256": "567B4D68E348FAD9BA3447AD20A5808D828419818DEB5E7392AA10AFCDC3BB97"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580144056048
+    },
+    "1B65BC60DD319FB5": {
+      "ArtifactId": "MeshPipeline.Graphics.forward.frag.spv.forward_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "140A4744B04202918C14E8AA947077DA07000000",
+          "Length": 20896,
+          "Sha256": "567B4D68E348FAD9BA3447AD20A5808D828419818DEB5E7392AA10AFCDC3BB97"
+        },
+        {
+          "Key": "312CF320677EBED917F9836DEB6F96DD01000000",
+          "Length": 1617162,
+          "Sha256": "FB0FC0276FAB9ED33F5DA906087697E695FACEC61AB9EB9CFE66FD2E7B56BAD5"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580144952833
+    },
+    "D9EC482C25D205D7": {
+      "ArtifactId": "MeshPipeline.Graphics.forward_transparent_ray.frag.spv.forward_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "140A4744B0420291B94B1C1946288BA007000000",
+          "Length": 20896,
+          "Sha256": "73A5EDBFADB31C13C0914DEF8BDEA8E8FE2DD9F2EE73D6A06BBCE4774259A592"
+        },
+        {
+          "Key": "54B151751A5CF19C5EFBDE007650C82B01000000",
+          "Length": 1092422,
+          "Sha256": "EBFCC48DA76DD10AAE528A76BFF8B6FE92E44C938A25A2F842B69D4593E36F54"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580145814027
+    },
+    "57BBDDD76B8CF1D2": {
+      "ArtifactId": "MeshPipeline.Graphics.forward_opaque_ddgi_cache_required.frag.spv.forward_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "85F81595A7C8206E331C5F1970D3286B01000000",
+          "Length": 1554718,
+          "Sha256": "C3CC4BCD578046AABC38A2C526775817874CA1DFC06FB46A5FF270850EE9BFE5"
+        },
+        {
+          "Key": "140A4744B04202918C14E8AA947077DA07000000",
+          "Length": 20896,
+          "Sha256": "567B4D68E348FAD9BA3447AD20A5808D828419818DEB5E7392AA10AFCDC3BB97"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580146760752
+    },
+    "183D1F1731F742A7": {
+      "ArtifactId": "MeshPipeline.Graphics.forward_opaque_ddgi_c4_receiver_cache_required.frag.spv.forward_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "140A4744B04202918C14E8AA947077DA07000000",
+          "Length": 20896,
+          "Sha256": "567B4D68E348FAD9BA3447AD20A5808D828419818DEB5E7392AA10AFCDC3BB97"
+        },
+        {
+          "Key": "C6779AE3A1A04F923CC93BFC4617008001000000",
+          "Length": 1563511,
+          "Sha256": "4007B13649818E0669B51BC64485CE6EE8E92FF46CB51A5C8D2516CC0051551B"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580147828148
+    },
+    "3669A3F8E716E810": {
+      "ArtifactId": "MeshPipeline.Graphics.forward_transparent_ddgi_b1.frag.spv.forward_compacted.mesh.spv.no-task",
+      "Binaries": [
+        {
+          "Key": "58C64E63DDFD9186CA23066270E702AE01000000",
+          "Length": 1595090,
+          "Sha256": "3F5CAF63CAC70EDFB62FD3FDF36CF15CA2DB44110D8666DE5B3385E76F2E9F72"
+        },
+        {
+          "Key": "140A4744B04202918C14E8AA947077DA07000000",
+          "Length": 20896,
+          "Sha256": "567B4D68E348FAD9BA3447AD20A5808D828419818DEB5E7392AA10AFCDC3BB97"
+        },
+        {
+          "Key": "D2A4DA9965F472EE5F4E56444943545FFFFFFFFF",
+          "Length": 2097152,
+          "Sha256": "F77A0E41C054ADC5F74DBD361D39BAB0409963599863331C892E2F202D81EA12"
+        }
+      ],
+      "LastAccessUtcTicks": 639236580149847471
+    }
+  }
+}

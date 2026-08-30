@@ -745,6 +745,11 @@ namespace Njulf.Rendering.Diagnostics
                 warnings.Add("Current-frame forward visibility compaction fell back: " +
                     diagnostics.ForwardVisibilityCompactionSkipReason);
             }
+            if (diagnostics.ForwardVisibilityOverflowCount > 0)
+            {
+                warnings.Add(
+                    "Forward visibility compaction overflowed; transition-expanded commands were not all emitted.");
+            }
             if (diagnostics.SceneSubmissionGpuOpaqueOverflowCount > 0)
                 warnings.Add("Scene-submission GPU opaque compaction overflowed.");
             if (diagnostics.SceneSubmissionValidationMismatchCount > 0)

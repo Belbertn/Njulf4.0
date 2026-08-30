@@ -340,6 +340,12 @@ internal sealed class HelloGame : Game
     private SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private IReadOnlyList<ParticleEffectInstance>? _sampleVfxEffects;
     private readonly SampleSmokeOptions _smokeOptions;
+    private readonly string _startupWaitTarget;
+    private string? _startupVisualCapturePath;
+    private int _startupVisualCaptureAttempt;
+    private bool _startupVisualCaptureAwaitingPresent;
+    private bool _startupVisualQualified;
+    private long _startupVisualCandidatePresentMicroseconds;
     private readonly SampleMaterialGiRolloutBootstrap _materialGiRolloutBootstrap;
     private readonly SampleVfxVolumetricDemoOverride
         _vfxVolumetricDemoOverride = new();
@@ -400,6 +406,7 @@ internal sealed class HelloGame : Game
     public HelloGame(SampleSmokeOptions smokeOptions, string[] commandLineArgs)
     {
         _smokeOptions = smokeOptions ?? throw new ArgumentNullException(nameof(smokeOptions));
+        _startupWaitTarget = ResolveStartupWaitTarget(commandLineArgs);
         _materialGiRolloutBootstrap = SampleMaterialGiRolloutBootstrap.Load(
             _smokeOptions.MaterialGiQualificationManifestPath,
             qualificationCandidate:
@@ -443,6 +450,148 @@ internal sealed class HelloGame : Game
                   volumetricTemporalCapture ||
                   !string.IsNullOrWhiteSpace(
                       _smokeOptions.BistroQualityCaptureDirectory));
+    }
+
+    private bool IsStartupWaitSatisfied(VulkanRenderer renderer)
+    {
+        RendererStartupSnapshot snapshot = renderer.StartupSnapshot;
+        bool fullQualityRequested = _startupWaitTarget is
+            "scene" or "fallback-scene" or "full-quality";
+        if (!fullQualityRequested)
+        {
+            return !renderer.IsProgressiveStartupEnabled ||
+                   snapshot.BootstrapPresented || snapshot.IsFullQuality;
+        }
+        if (renderer.IsProgressiveStartupEnabled &&
+            !snapshot.FullQualityPresented)
+        {
+            return false;
+        }
+        if (_startupVisualQualified)
+            return true;
+
+        RendererDiagnostics diagnostics = renderer.LastDiagnostics;
+        ScreenshotCaptureAnalysis capture =
+            renderer.LastScreenshotCaptureAnalysis;
+        if (_startupVisualCapturePath != null &&
+            !string.IsNullOrWhiteSpace(capture.OutputPath) &&
+            string.Equals(
+                Path.GetFullPath(capture.OutputPath),
+                Path.GetFullPath(_startupVisualCapturePath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (capture.Content.HasVisibleContent)
+            {
+                if (diagnostics.GiRenderCriticalPipelineCreationCount != 0UL)
+                {
+                    return FailStartupVisualQualification(
+                        $"renderer capture contains visible pixels, but " +
+                        $"render-thread pipeline creation escaped startup " +
+                        $"preparation (count=" +
+                        $"{diagnostics.GiRenderCriticalPipelineCreationCount}, " +
+                        $"last={diagnostics.GiLastCreatedPipeline}, " +
+                        $"capture={capture.OutputPath})");
+                }
+
+                _startupVisualQualified = true;
+                long elapsedMicroseconds = Math.Max(
+                    0L,
+                    _startupVisualCandidatePresentMicroseconds);
+                renderer.ReportStartupMilestone(
+                    RendererStartupMilestone.VisibleContentPresent,
+                    elapsedMicroseconds);
+                Console.WriteLine(
+                    $"Startup visible final frame qualified: " +
+                    $"elapsed={elapsedMicroseconds / 1_000_000.0:F3}s, " +
+                    $"capture={capture.OutputPath}, {capture.Content.Detail}.");
+                return true;
+            }
+
+            Console.WriteLine(
+                $"Startup frame rejected as non-visible: " +
+                $"capture={capture.OutputPath}, {capture.Content.Detail}.");
+            _startupVisualCapturePath = null;
+        }
+        else if (_startupVisualCapturePath != null &&
+                 string.Equals(
+                     diagnostics.LastScreenshotPath,
+                     _startupVisualCapturePath,
+                     StringComparison.OrdinalIgnoreCase) &&
+                 !string.IsNullOrWhiteSpace(
+                     diagnostics.LastScreenshotError))
+        {
+            return FailStartupVisualQualification(
+                "renderer final-LDR capture failed: " +
+                diagnostics.LastScreenshotError);
+        }
+
+        if (_startupVisualCapturePath != null)
+            return false;
+        if (_startupVisualCaptureAttempt >= 8)
+        {
+            return FailStartupVisualQualification(
+                "eight production swapchain captures remained black or uniform");
+        }
+
+        renderer.Settings.Debug.Enabled = true;
+        renderer.Settings.Debug.AllowScreenshots = true;
+        int attempt = ++_startupVisualCaptureAttempt;
+        _startupVisualCapturePath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Screenshots",
+            $"startup-final-{Environment.ProcessId}-{attempt}.png");
+        _startupVisualCaptureAwaitingPresent = true;
+        renderer.RequestScreenshot(_startupVisualCapturePath);
+        return false;
+    }
+
+    private bool FailStartupVisualQualification(string detail)
+    {
+        _runtimeSmokeFailure ??=
+            "Startup visible-final-frame qualification failed: " + detail;
+        Console.Error.WriteLine(_runtimeSmokeFailure);
+        Environment.ExitCode = 1;
+        Exit();
+        return false;
+    }
+
+    protected override void OnBootstrapFramePresented()
+    {
+        if (_smokeOptions.Mode == SampleSmokeMode.Startup &&
+            _startupWaitTarget == "bootstrap")
+        {
+            // The pipeline-free clear is a real submitted/presented smoke
+            // frame even though the content Draw override intentionally did
+            // not run. Count it in the generic health contract.
+            _drawnFrames = Math.Max(_drawnFrames, 1);
+            if (_smokeOptions.FrameCount <= 1)
+                Exit();
+        }
+    }
+
+    private static string ResolveStartupWaitTarget(
+        IReadOnlyList<string> arguments)
+    {
+        const string option = "--startup-wait";
+        const string prefix = "--startup-wait=";
+        for (int index = 0; index < arguments.Count; index++)
+        {
+            string argument = arguments[index];
+            if (argument.StartsWith(
+                    prefix,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return argument[prefix.Length..].ToLowerInvariant();
+            }
+            if (argument.Equals(option, StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < arguments.Count)
+            {
+                return arguments[index + 1].ToLowerInvariant();
+            }
+        }
+        return Environment.GetEnvironmentVariable("NJULF_STARTUP_WAIT")
+                   ?.Trim().ToLowerInvariant() ??
+               "bootstrap";
     }
 
     internal static bool RequiresControlledProductionWindow(
@@ -886,7 +1035,9 @@ internal sealed class HelloGame : Game
                     Window?.Size ??
                     new Silk.NET.Maths.Vector2D<int>(WindowWidth, WindowHeight);
                 return (size.X, size.Y);
-            });
+            },
+            startupWaitSatisfied: () =>
+                IsStartupWaitSatisfied(renderer));
         if (_smokeOptions.Mode == SampleSmokeMode.SceneTransition)
         {
             _bistroTransitionSmoke = new BistroTransitionSmokeState
@@ -1827,6 +1978,12 @@ internal sealed class HelloGame : Game
 
     protected override void OnFramePresented()
     {
+        if (_startupVisualCaptureAwaitingPresent)
+        {
+            _startupVisualCandidatePresentMicroseconds =
+                RunElapsedMicroseconds;
+            _startupVisualCaptureAwaitingPresent = false;
+        }
         _presentedFrameSerial = _presentedFrameSerial == long.MaxValue
             ? 1
             : _presentedFrameSerial + 1;

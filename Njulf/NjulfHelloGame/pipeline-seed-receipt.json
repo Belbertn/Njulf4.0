@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "capturedUtc": "2026-08-30T03:44:31.9342338+00:00",
+  "sourcePipelineCache": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\artifacts\\startup-visible-gate-20260830-2\\vulkan-cache\\gi-000010de-00002560.njvkcache",
+  "pipelineCacheFile": "PipelineCacheSeeds/gi-000010de-00002560.njvkcache",
+  "pipelineCacheSha256": "2966AE164459BEA57790B2A7444B0BB58C75507F019AAB266F83DB3791D1F33A",
+  "pipelineCacheBytes": 5278181,
+  "pipelineBinarySeed": "PipelineBinarySeeds/v1/2087D1DA89BBCA42",
+  "qualificationRequired": true
+}

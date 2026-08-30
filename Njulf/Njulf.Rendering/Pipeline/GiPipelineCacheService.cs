@@ -65,6 +65,15 @@ public readonly record struct GiPipelineCacheTelemetry(
         !LegacyEnvelopeLoaded &&
         PipelineCompileMissCount == 0;
 
+    public bool QualifiedSeedEligible =>
+        !ShaderBundleChanged &&
+        !BuildConfigurationChanged &&
+        !LegacyEnvelopeLoaded &&
+        PipelineCompileMissCount == 0 &&
+        (SeedCacheLoaded ||
+         PipelineCreationCount > 0 &&
+         SeedBinaryHitCount == PipelineCreationCount);
+
     public static GiPipelineCacheTelemetry Empty { get; } =
         new(false, false, false, false, false, 0, 0, 0, 0, 0,
             string.Empty, "Not initialized", string.Empty);
@@ -517,14 +526,21 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
 {
     private const string EngineAbi =
         "Njulf.GI.PipelineCache/1;SimpleDdgiPush=136;BindlessABI=20260809";
+    private static readonly TimeSpan PersistDebounce =
+        TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan MinimumPersistInterval =
+        TimeSpan.FromSeconds(30);
     private readonly object _gate = new();
     private readonly ReaderWriterLockSlim _cacheAccess =
         new(LockRecursionPolicy.NoRecursion);
     private readonly PipelineCompilationScheduler _compilationScheduler = new();
     private readonly List<PipelineCreationObservation> _observations = new();
     private readonly List<Task> _binaryPersistTasks = new();
+    private readonly CancellationTokenSource _persistCancellation = new();
+    private readonly SemaphoreSlim _persistWakeSignal = new(0, 1);
     private readonly VulkanContext _context;
     private readonly GiPipelineCacheIdentity _identity;
+    private readonly RendererPipelineBinaryCacheMode _pipelineBinaryCacheMode;
     private readonly string _cachePath;
     private readonly string _seedCachePath;
     private readonly PipelineBinaryStore? _pipelineBinaryStore;
@@ -555,9 +571,12 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
     private ulong _cacheMutationGeneration;
     private int _activePipelineCreationCount;
     private int _peakConcurrentPipelineCreationCount;
+    private int _renderCriticalThreadId;
     private string _loadStatus = "Empty cache created.";
     private string _lastCreatedPipeline = string.Empty;
     private Task<bool>? _scheduledPersistTask;
+    private long _nextPersistNotBeforeTimestamp;
+    private bool _immediatePersistRequested;
 
     public GiPipelineCacheService(
         VulkanContext context,
@@ -582,6 +601,8 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             context,
             shaderBundleHash,
             compileConfiguration);
+        _pipelineBinaryCacheMode =
+            RendererBuildConfiguration.PipelineBinaryCacheMode;
         _pipelineBinaryStore = TryCreatePipelineBinaryStore();
         string? configuredCacheDirectory =
             string.IsNullOrWhiteSpace(cacheDirectory)
@@ -768,7 +789,11 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 _pipelineCreationMicroseconds = SaturatingAdd(
                     _pipelineCreationMicroseconds,
                     microseconds);
-                if (_renderCriticalFramesStarted)
+                bool renderCriticalCreation =
+                    _renderCriticalFramesStarted &&
+                    Environment.CurrentManagedThreadId ==
+                        _renderCriticalThreadId;
+                if (renderCriticalCreation)
                 {
                     _renderCriticalPipelineCreationCount = SaturatingIncrement(
                         _renderCriticalPipelineCreationCount);
@@ -818,7 +843,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                     feedbackValid,
                     applicationCacheHit,
                     compileRequired,
-                    _renderCriticalFramesStarted,
+                    renderCriticalCreation,
                     _activePipelineCreationCount + 1,
                     stageCount));
             }
@@ -878,6 +903,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         try
         {
             if (TryCreateGraphicsPipelineFromStoredBinary(
+                    artifactId,
                     createInfo,
                     pipelineKey,
                     out pipeline,
@@ -887,6 +913,14 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 result = binaryResult;
                 source = binarySource;
                 RecordBinaryHit(binarySource);
+                return result;
+            }
+
+            if (_pipelineBinaryCacheMode ==
+                    RendererPipelineBinaryCacheMode.Require &&
+                cacheUsage == PipelineCacheUsage.Shared)
+            {
+                result = Result.PipelineCompileRequired;
                 return result;
             }
 
@@ -917,7 +951,12 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 : feedbackValidNow && result == Result.Success
                     ? PipelineArtifactSource.Compiled
                     : PipelineArtifactSource.Unknown;
-            if (result == Result.Success && pipelineKey.Length != 0)
+            if (result == Result.Success && pipelineKey.Length != 0 &&
+                (capturePipelineData ||
+                 _pipelineBinaryCacheMode ==
+                     RendererPipelineBinaryCacheMode.Auto &&
+                 _context.PipelineOptimizationSupport
+                     .PipelineBinaryInternalCache))
             {
                 createInfo->PNext = originalNext;
                 createInfo->Flags = originalFlags;
@@ -996,6 +1035,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         try
         {
             if (TryCreateComputePipelineFromStoredBinary(
+                    artifactId,
                     createInfo,
                     pipelineKey,
                     out pipeline,
@@ -1005,6 +1045,14 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 result = binaryResult;
                 source = binarySource;
                 RecordBinaryHit(binarySource);
+                return result;
+            }
+
+            if (_pipelineBinaryCacheMode ==
+                    RendererPipelineBinaryCacheMode.Require &&
+                cacheUsage == PipelineCacheUsage.Shared)
+            {
+                result = Result.PipelineCompileRequired;
                 return result;
             }
 
@@ -1035,7 +1083,12 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 : feedbackValidNow && result == Result.Success
                     ? PipelineArtifactSource.Compiled
                     : PipelineArtifactSource.Unknown;
-            if (result == Result.Success && pipelineKey.Length != 0)
+            if (result == Result.Success && pipelineKey.Length != 0 &&
+                (capturePipelineData ||
+                 _pipelineBinaryCacheMode ==
+                     RendererPipelineBinaryCacheMode.Auto &&
+                 _context.PipelineOptimizationSupport
+                     .PipelineBinaryInternalCache))
             {
                 createInfo->PNext = originalNext;
                 createInfo->Flags = originalFlags;
@@ -1071,13 +1124,11 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
 
     private bool ShouldCapturePipelineData(byte[] pipelineKey)
     {
-        PipelineOptimizationDeviceSupport support =
-            _context.PipelineOptimizationSupport;
         return pipelineKey.Length != 0 &&
                _pipelineBinaryStore != null &&
                _context.KhrPipelineBinary != null &&
-               (!support.PipelineBinaryInternalCache ||
-                !support.PipelineBinaryPrefersInternalCache);
+               _pipelineBinaryCacheMode ==
+                   RendererPipelineBinaryCacheMode.Capture;
     }
 
     private PipelineCreateFlags2 BuildExtendedPipelineCreationFlags(
@@ -1137,6 +1188,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
     }
 
     private bool TryCreateGraphicsPipelineFromStoredBinary(
+        PipelineArtifactId artifactId,
         GraphicsPipelineCreateInfo* createInfo,
         byte[] pipelineKey,
         out VkPipeline pipeline,
@@ -1185,6 +1237,13 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         if (result == Result.Success)
         {
             source = lookup.Source;
+            if (source == PipelineArtifactSource.SeedBinary)
+            {
+                QueuePipelineBinarySave(
+                    artifactId,
+                    pipelineKey,
+                    lookup.Binaries);
+            }
             return true;
         }
 
@@ -1195,6 +1254,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
     }
 
     private bool TryCreateComputePipelineFromStoredBinary(
+        PipelineArtifactId artifactId,
         ComputePipelineCreateInfo* createInfo,
         byte[] pipelineKey,
         out VkPipeline pipeline,
@@ -1243,6 +1303,13 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         if (result == Result.Success)
         {
             source = lookup.Source;
+            if (source == PipelineArtifactSource.SeedBinary)
+            {
+                QueuePipelineBinarySave(
+                    artifactId,
+                    pipelineKey,
+                    lookup.Binaries);
+            }
             return true;
         }
 
@@ -1592,11 +1659,15 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         }
     }
 
-    public void MarkRenderCriticalFramesStarted()
+    public void MarkRenderCriticalFramesStarted(int renderThreadId)
     {
+        if (renderThreadId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(renderThreadId));
+
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            _renderCriticalThreadId = renderThreadId;
             _renderCriticalFramesStarted = true;
         }
     }
@@ -1687,27 +1758,76 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
     /// coalesce, while a mutation observed during a snapshot triggers another
     /// debounced save.
     /// </summary>
-    public void SchedulePersist()
+    public void SchedulePersist(bool immediate = false)
     {
         lock (_gate)
         {
             if (_disposed || _disposeStarted || !_dirty)
                 return;
+            _immediatePersistRequested |= immediate;
             if (_scheduledPersistTask is { IsCompleted: false })
+            {
+                if (immediate && _persistWakeSignal.CurrentCount == 0)
+                    _persistWakeSignal.Release();
                 return;
+            }
             _scheduledPersistTask = Task.Run(() =>
             {
                 bool saved = true;
-                do
+                while (true)
                 {
-                    Thread.Sleep(250);
+                    TimeSpan delay;
+                    lock (_gate)
+                    {
+                        long now = Stopwatch.GetTimestamp();
+                        if (_immediatePersistRequested)
+                        {
+                            delay = TimeSpan.Zero;
+                        }
+                        else
+                        {
+                            long due = _nextPersistNotBeforeTimestamp;
+                            delay = due <= now
+                                ? PersistDebounce
+                                : Stopwatch.GetElapsedTime(now, due);
+                        }
+                    }
+
+                    try
+                    {
+                        _persistWakeSignal.Wait(
+                            delay,
+                            _persistCancellation.Token);
+                        _persistCancellation.Token
+                            .ThrowIfCancellationRequested();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return saved;
+                    }
+
+                    lock (_gate)
+                    {
+                        long now = Stopwatch.GetTimestamp();
+                        if (!_immediatePersistRequested &&
+                            now < _nextPersistNotBeforeTimestamp)
+                        {
+                            continue;
+                        }
+                        _immediatePersistRequested = false;
+                    }
+
                     saved &= Persist();
                     lock (_gate)
                     {
+                        _nextPersistNotBeforeTimestamp = checked(
+                            Stopwatch.GetTimestamp() +
+                            (long)(MinimumPersistInterval.TotalSeconds *
+                                Stopwatch.Frequency));
                         if (_disposeStarted || !_dirty || !saved)
                             return saved;
                     }
-                } while (true);
+                }
             });
         }
     }
@@ -1868,15 +1988,15 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
 
     private PipelineBinaryStore? TryCreatePipelineBinaryStore()
     {
-        RendererPipelineBinaryCacheMode mode =
-            RendererBuildConfiguration.PipelineBinaryCacheMode;
+        RendererPipelineBinaryCacheMode mode = _pipelineBinaryCacheMode;
         if (mode == RendererPipelineBinaryCacheMode.Off)
             return null;
 
         if (!_context.PipelineOptimizationSupport.PipelineBinary ||
             _context.KhrPipelineBinary == null)
         {
-            if (mode == RendererPipelineBinaryCacheMode.Require)
+            if (mode is RendererPipelineBinaryCacheMode.Require or
+                RendererPipelineBinaryCacheMode.Capture)
             {
                 throw new InvalidOperationException(
                     "Pipeline-binary verification was requested, but " +
@@ -1896,7 +2016,8 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         byte[] globalKeyBytes = CopyPipelineBinaryKey(globalKey);
         if (result != Result.Success || globalKeyBytes.Length == 0)
         {
-            if (mode == RendererPipelineBinaryCacheMode.Require)
+            if (mode is RendererPipelineBinaryCacheMode.Require or
+                RendererPipelineBinaryCacheMode.Capture)
             {
                 throw new VulkanException(
                     "Failed to query the required pipeline-binary global key",
@@ -2093,6 +2214,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             _disposeStarted = true;
             scheduledPersistTask = _scheduledPersistTask;
         }
+        _persistCancellation.Cancel();
         if (scheduledPersistTask != null)
         {
             try
@@ -2150,6 +2272,8 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         {
             _cacheAccess.ExitWriteLock();
             _cacheAccess.Dispose();
+            _persistWakeSignal.Dispose();
+            _persistCancellation.Dispose();
         }
     }
 }

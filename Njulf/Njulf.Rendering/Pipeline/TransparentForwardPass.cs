@@ -286,11 +286,18 @@ namespace Njulf.Rendering.Pipeline
                 return false;
             }
 
-            bool exactFeedbackRequired =
+            bool exactFeedbackRequested =
                 _receiverFeedbackRuntime?.IsPendingOwnedProducerRequired(
                     frameIndex,
                     SimpleDdgiReceiverFeedbackProducer
                         .TransparentWeightedOit) == true;
+            bool exactFeedbackRequired = exactFeedbackRequested &&
+                !RequiresCanonicalRayColorPipeline(sceneData);
+            if (exactFeedbackRequested && !exactFeedbackRequired)
+            {
+                _receiverFeedbackRuntime!.AbortCapture(
+                    "receiver-feedback-transparent-deferred-to-preserve-full-thick-transmission");
+            }
             if (exactFeedbackRequired &&
                 sceneData.CurrentFrameIndex != checked((uint)frameIndex))
             {
@@ -686,6 +693,29 @@ namespace Njulf.Rendering.Pipeline
                    sceneData.TransparentSceneReflectionRayTaskBudget > 0;
         }
 
+        internal static bool RequiresCanonicalRayColorPipeline(
+            SceneRenderingData sceneData)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+            if (sceneData.EffectiveThickTransmissionMode !=
+                ThickTransmissionMode.RayQuery)
+            {
+                return false;
+            }
+
+            foreach (TransparentMaterialRun run in
+                     sceneData.TransparentMaterialRuns)
+            {
+                if (run.Classification.MaterialClass ==
+                    TransparentMaterialClass.ThickTransmission)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private bool TrySelectExactFeedbackPipeline(
             int frameIndex,
             SceneRenderingData sceneData,
@@ -704,6 +734,12 @@ namespace Njulf.Rendering.Pipeline
                     frameIndex,
                     SimpleDdgiReceiverFeedbackProducer.TransparentWeightedOit))
             {
+                return false;
+            }
+            if (rayVariant && RequiresCanonicalRayColorPipeline(sceneData))
+            {
+                _receiverFeedbackRuntime.AbortCapture(
+                    "receiver-feedback-transparent-deferred-to-preserve-full-thick-transmission");
                 return false;
             }
 

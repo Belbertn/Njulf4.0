@@ -993,6 +993,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
     private SimpleDdgiGuidingGpuPass? _pass;
     private SimpleDdgiGuidingSourceCacheHandshake? _configuredHandshake;
     private SimpleDdgiStoragePackingMode? _configuredStoragePackingMode;
+    private SimpleDdgiStoragePackingMode? _pipelineStoragePackingMode;
     private SimpleDdgiGuidingBuildToken? _reservedBuild;
     private GiPipelineCacheService? _pipelineCacheService;
     private bool _disposed;
@@ -1031,6 +1032,46 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                     "Guiding pipelines were already created.");
             }
             _pipelineCacheService = pipelineCacheService;
+        }
+    }
+
+    internal void PreparePipelines(
+        SimpleDdgiStoragePackingMode storagePackingMode)
+    {
+        storagePackingMode = storagePackingMode.Sanitize();
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (!_allocator.HasDescriptorContext)
+            {
+                throw new InvalidOperationException(
+                    "C3 bindless descriptor context is unavailable during pipeline preparation.");
+            }
+
+            EnsurePipelinesNoLock(storagePackingMode);
+        }
+    }
+
+    private void EnsurePipelinesNoLock(
+        SimpleDdgiStoragePackingMode storagePackingMode)
+    {
+        if (_pass is not null &&
+            _pipelineStoragePackingMode != storagePackingMode)
+        {
+            _pass.Dispose();
+            _pass = null;
+            _pipelineStoragePackingMode = null;
+        }
+
+        if (_pass is null)
+        {
+            _pass = new SimpleDdgiGuidingGpuPass(
+                _context,
+                _bufferManager,
+                _allocator.DescriptorHeap,
+                storagePackingMode,
+                _pipelineCacheService);
+            _pipelineStoragePackingMode = storagePackingMode;
         }
     }
 
@@ -1312,19 +1353,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
 
             try
             {
-                if (_pass is not null &&
-                    _configuredStoragePackingMode !=
-                        request.SourceStoragePackingMode)
-                {
-                    _pass.Dispose();
-                    _pass = null;
-                }
-                _pass ??= new SimpleDdgiGuidingGpuPass(
-                    _context,
-                    _bufferManager,
-                    _allocator.DescriptorHeap,
-                    request.SourceStoragePackingMode,
-                    _pipelineCacheService);
+                EnsurePipelinesNoLock(request.SourceStoragePackingMode);
             }
             catch (Exception exception)
             {
@@ -2898,8 +2927,11 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
             _allocator);
         _configuredHandshake = null;
         _configuredStoragePackingMode = null;
-        _pass?.Dispose();
-        _pass = null;
+        // A disabled C3 allocation does not invalidate immutable pipelines or
+        // their descriptor layouts. First-frame admission intentionally uses
+        // this safe fallback state before the source-cache handshake exists;
+        // retaining the prewarmed pass prevents all six guiding pipelines
+        // from being recreated on the render thread when admission publishes.
         UpdateDiagnosticsNoLock(
             capabilityReason,
             detail,
@@ -3063,6 +3095,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
             _allocator.Dispose();
             _configuredHandshake = null;
             _configuredStoragePackingMode = null;
+            _pipelineStoragePackingMode = null;
             _reservedBuild = null;
             ClearPendingReadbacksNoLock();
             Diagnostics = new SimpleDdgiGuidingGpuRuntimeDiagnostics(

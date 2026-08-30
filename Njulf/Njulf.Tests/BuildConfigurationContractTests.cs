@@ -48,8 +48,10 @@ public sealed class BuildConfigurationContractTests
     [TestCase("auto", 0)]
     [TestCase("off", 1)]
     [TestCase("disabled", 1)]
-    [TestCase("require", 2)]
-    [TestCase("verify", 2)]
+    [TestCase("capture", 2)]
+    [TestCase("populate", 2)]
+    [TestCase("require", 3)]
+    [TestCase("verify", 3)]
     public void PipelineBinaryCacheModeSupportsDeploymentAndVerification(
         string? requested,
         int expected)
@@ -66,6 +68,29 @@ public sealed class BuildConfigurationContractTests
         Assert.That(
             () => RendererBuildConfiguration.ResolvePipelineBinaryCacheMode(
                 "sometimes"),
+            Throws.InvalidOperationException);
+    }
+
+    [TestCase(null, 0)]
+    [TestCase("bootstrap", 0)]
+    [TestCase("scene", 2)]
+    [TestCase("fallback-scene", 2)]
+    [TestCase("full-quality", 2)]
+    [TestCase("full", 2)]
+    public void StartupWaitTargetSupportsIndependentLatencyGates(
+        string? requested,
+        int expected)
+    {
+        Assert.That(
+            RendererBuildConfiguration.ResolveStartupWaitTarget(requested),
+            Is.EqualTo((RendererStartupWaitTarget)expected));
+    }
+
+    [Test]
+    public void InvalidStartupWaitTarget_IsRejected()
+    {
+        Assert.That(
+            () => RendererBuildConfiguration.ResolveStartupWaitTarget("eventually"),
             Throws.InvalidOperationException);
     }
 

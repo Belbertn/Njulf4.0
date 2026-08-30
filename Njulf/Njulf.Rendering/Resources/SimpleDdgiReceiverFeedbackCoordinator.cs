@@ -70,6 +70,12 @@ internal sealed class SimpleDdgiReceiverFeedbackCoordinator :
         GiPipelineCacheService pipelineCacheService) =>
         _runtime.SetPipelineCacheService(pipelineCacheService);
 
+    internal void PreparePipelines()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _runtime.PreparePipelines();
+    }
+
     public SimpleDdgiReceiverFeedbackCoordinator(
         VulkanContext context,
         BufferManager bufferManager,

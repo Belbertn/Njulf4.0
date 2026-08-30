@@ -108,6 +108,14 @@ namespace Njulf.Rendering.Data
         public int TransparentSortCandidateCount { get; set; }
         public long TransparentSortMicroseconds { get; set; }
         public int TransparentOverflowCount { get; set; }
+        /// <summary>
+        /// True only after output-equivalent transparent partition pipelines
+        /// have completed their post-first-present publication. Semantic
+        /// color pipelines and exact receiver-feedback producers are prepared
+        /// before full-quality command recording begins.
+        /// </summary>
+        public bool PostFirstPresentPipelineSpecializationsReady { get; set; } =
+            true;
         public bool TransparentPipelinePartitioningEnabled { get; set; }
         public bool TransparentPipelinePartitioningEffective { get; set; }
         public int TransparentPipelineRunCount { get; set; }
@@ -181,6 +189,10 @@ namespace Njulf.Rendering.Data
         public int ForwardVisibilitySimpleCapacity { get; set; }
         public int ForwardVisibilitySimpleNormalCapacity { get; set; }
         public int ForwardVisibilityFullCapacity { get; set; }
+        public int ForwardVisibilityCounterReadbackValid { get; set; }
+        public int ForwardVisibilityCandidateCount { get; set; }
+        public int ForwardVisibilityEmittedCount { get; set; }
+        public int ForwardVisibilityOverflowCount { get; set; }
         public BufferHandle ForwardVisibilityCounterBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle ForwardVisibilityIndirectDispatchBuffer { get; set; } = BufferHandle.Invalid;
         public ulong ForwardVisibilityBufferBytes { get; set; }
@@ -2226,6 +2238,10 @@ namespace Njulf.Rendering.Data
             ForwardVisibilitySimpleCapacity = 0;
             ForwardVisibilitySimpleNormalCapacity = 0;
             ForwardVisibilityFullCapacity = 0;
+            ForwardVisibilityCounterReadbackValid = 0;
+            ForwardVisibilityCandidateCount = 0;
+            ForwardVisibilityEmittedCount = 0;
+            ForwardVisibilityOverflowCount = 0;
             ForwardVisibilityCounterBuffer = BufferHandle.Invalid;
             ForwardVisibilityIndirectDispatchBuffer = BufferHandle.Invalid;
             ForwardVisibilityBufferBytes = 0;

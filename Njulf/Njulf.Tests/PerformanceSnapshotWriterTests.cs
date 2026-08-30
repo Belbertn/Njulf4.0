@@ -19,6 +19,62 @@ public sealed class PerformanceSnapshotWriterTests
     }
 
     [Test]
+    public void SnapshotWriter_ReportsForwardVisibilityCapacityOverflow()
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            ForwardVisibilityCompactionEnabled = 1,
+            ForwardVisibilityCompactionActive = 1,
+            ForwardVisibilitySimpleCapacity = 14,
+            ForwardVisibilitySimpleNormalCapacity = 1,
+            ForwardVisibilityFullCapacity = 1,
+            ForwardVisibilityCounterReadbackValid = 1,
+            ForwardVisibilityCandidateCount = 10,
+            ForwardVisibilityEmittedCount = 7,
+            ForwardVisibilityOverflowCount = 3
+        };
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "NjulfPerformanceSnapshotTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            string path = new PerformanceSnapshotWriter().Write(
+                directory,
+                diagnostics,
+                RenderBudgetSnapshot.Empty);
+            PerformanceSnapshot snapshot =
+                new PerformanceSnapshotReader().Read(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    snapshot.Diagnostics.ForwardVisibilitySimpleCapacity,
+                    Is.EqualTo(14));
+                Assert.That(
+                    snapshot.Diagnostics.ForwardVisibilityCandidateCount,
+                    Is.EqualTo(10));
+                Assert.That(
+                    snapshot.Diagnostics.ForwardVisibilityEmittedCount,
+                    Is.EqualTo(7));
+                Assert.That(
+                    snapshot.Diagnostics.ForwardVisibilityOverflowCount,
+                    Is.EqualTo(3));
+                Assert.That(
+                    snapshot.Warnings,
+                    Has.Some.Contains("transition-expanded commands"));
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
     public void GlobalIlluminationSnapshot_PreservesCompactReceiverPublicationEvidence()
     {
         RendererDiagnostics diagnostics = RendererDiagnostics.Empty with

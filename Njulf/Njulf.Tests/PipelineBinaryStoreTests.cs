@@ -151,6 +151,33 @@ public sealed class PipelineBinaryStoreTests
     }
 
     [Test]
+    public void ShaderAndBuildRevision_ReusesMatchingPipelineKey()
+    {
+        byte[] pipelineKey = [0x52];
+        CreateStore().Save(
+            new PipelineArtifactId("revision-compatible"),
+            pipelineKey,
+            [new PipelineBinaryBlob([0x53], [5, 3, 1])]);
+        PipelineBinaryStoreIdentity changed = CreateIdentity() with
+        {
+            ShaderBundleHash = new string('D', 64),
+            BuildConfigurationHash = new string('E', 64)
+        };
+        var reader = new PipelineBinaryStore(
+            changed,
+            Path.Combine(_root, "writable"),
+            Path.Combine(_root, "seed"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.TryLoad(pipelineKey, out var lookup), Is.True);
+            Assert.That(lookup.Binaries[0].Data,
+                Is.EqualTo(new byte[] { 5, 3, 1 }));
+            Assert.That(reader.TryLoad([0x54], out _), Is.False);
+        });
+    }
+
+    [Test]
     public void Save_RejectsBinaryKeysBeyondVulkanLimit()
     {
         PipelineBinaryStore store = CreateStore();

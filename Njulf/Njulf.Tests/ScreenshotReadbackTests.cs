@@ -122,6 +122,74 @@ public sealed class ScreenshotReadbackTests
         }
     }
 
+    [Test]
+    public void ContentAnalysis_RejectsBlackAndUniformBootstrapFrames()
+    {
+        byte[] black = new byte[8 * 8 * 4];
+        byte[] uniform = new byte[8 * 8 * 4];
+        for (int offset = 0; offset < uniform.Length; offset += 4)
+        {
+            uniform[offset] = 64;
+            uniform[offset + 1] = 64;
+            uniform[offset + 2] = 64;
+            uniform[offset + 3] = 255;
+        }
+
+        ScreenshotContentAnalysis blackAnalysis =
+            ScreenshotContentAnalysis.Analyze(
+                black,
+                8,
+                8,
+                ScreenshotPixelFormat.Rgba8);
+        ScreenshotContentAnalysis uniformAnalysis =
+            ScreenshotContentAnalysis.Analyze(
+                uniform,
+                8,
+                8,
+                ScreenshotPixelFormat.Rgba8);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blackAnalysis.HasVisibleContent, Is.False);
+            Assert.That(blackAnalysis.VisiblePixelCount, Is.Zero);
+            Assert.That(uniformAnalysis.HasVisibleContent, Is.False);
+            Assert.That(
+                uniformAnalysis.MaximumLuminance -
+                uniformAnalysis.MinimumLuminance,
+                Is.Zero);
+        });
+    }
+
+    [Test]
+    public void ContentAnalysis_AcceptsSpatiallyVariedRenderedPixelsInBgraOrder()
+    {
+        byte[] pixels = new byte[8 * 8 * 4];
+        for (int pixel = 0; pixel < 64; pixel++)
+        {
+            int offset = pixel * 4;
+            pixels[offset] = pixel < 32 ? (byte)20 : (byte)220;
+            pixels[offset + 1] = pixel < 32 ? (byte)40 : (byte)180;
+            pixels[offset + 2] = pixel < 32 ? (byte)80 : (byte)140;
+            pixels[offset + 3] = 255;
+        }
+
+        ScreenshotContentAnalysis analysis =
+            ScreenshotContentAnalysis.Analyze(
+                pixels,
+                8,
+                8,
+                ScreenshotPixelFormat.Bgra8);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(analysis.HasVisibleContent, Is.True);
+            Assert.That(analysis.VisiblePixelCount, Is.EqualTo(64));
+            Assert.That(
+                analysis.MaximumLuminance - analysis.MinimumLuminance,
+                Is.GreaterThanOrEqualTo(8));
+        });
+    }
+
     private static IReadOnlyDictionary<string, byte[]> ReadChunks(ReadOnlySpan<byte> png)
     {
         var chunks = new Dictionary<string, byte[]>(StringComparer.Ordinal);

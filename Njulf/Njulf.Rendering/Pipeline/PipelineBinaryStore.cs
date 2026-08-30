@@ -300,9 +300,17 @@ internal sealed class PipelineBinaryStore
                 return CreateEmptyManifest();
             BinaryManifest? manifest = JsonSerializer.Deserialize<BinaryManifest>(
                 File.ReadAllBytes(path));
-            return manifest != null && IsCompatible(manifest)
+            if (manifest == null || !IsCompatible(manifest))
+                return CreateEmptyManifest();
+
+            // The driver pipeline key is derived from the complete create info.
+            // Matching keys under the same device/driver global key therefore
+            // remain safe across shader-bundle and build revisions. Upgrade the
+            // in-memory identity so a later writable publication records the
+            // current provenance while retaining still-usable entries.
+            return manifest.Identity == _identity
                 ? manifest
-                : CreateEmptyManifest();
+                : manifest with { Identity = _identity };
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or
@@ -320,8 +328,19 @@ internal sealed class PipelineBinaryStore
 
     private bool IsCompatible(BinaryManifest manifest) =>
         manifest.FormatVersion == FormatVersion &&
-        manifest.Identity == _identity &&
-        manifest.Pipelines != null;
+        manifest.Pipelines != null &&
+        manifest.Identity.VendorId == _identity.VendorId &&
+        manifest.Identity.DeviceId == _identity.DeviceId &&
+        manifest.Identity.DriverVersion == _identity.DriverVersion &&
+        manifest.Identity.ApiVersion == _identity.ApiVersion &&
+        string.Equals(
+            manifest.Identity.GlobalKey,
+            _identity.GlobalKey,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            manifest.Identity.EngineAbiHash,
+            _identity.EngineAbiHash,
+            StringComparison.Ordinal);
 
     private void CollectToBudget(BinaryManifest manifest)
     {

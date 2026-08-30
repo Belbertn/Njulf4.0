@@ -374,6 +374,31 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
         }
     }
 
+    internal void PreparePipelines()
+    {
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (!_allocator.HasDescriptorContext ||
+                _allocator.BindlessHeap is null)
+            {
+                throw new InvalidOperationException(
+                    "B1 bindless descriptor context is unavailable during pipeline preparation.");
+            }
+
+            EnsurePipelinesNoLock();
+        }
+    }
+
+    private void EnsurePipelinesNoLock()
+    {
+        _pass ??= new SimpleDdgiReceiverFeedbackGpuPass(
+            _context,
+            _allocator.BindlessHeap!,
+            _bufferManager,
+            _pipelineCacheService);
+    }
+
     /// <summary>
     /// True only after the owned candidate source, exact sort pipelines, and
     /// transactional GPU allocation have all been published.  Consumers use
@@ -620,11 +645,7 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
 
             try
             {
-                _pass ??= new SimpleDdgiReceiverFeedbackGpuPass(
-                    _context,
-                    _allocator.BindlessHeap!,
-                    _bufferManager,
-                    _pipelineCacheService);
+                EnsurePipelinesNoLock();
             }
             catch (Exception exception)
             {
@@ -1939,8 +1960,12 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
             _allocator);
         _activeGpuLayout = default;
         _ownedCandidateSource = false;
-        _pass?.Dispose();
-        _pass = null;
+        // Pipeline/layout objects are immutable and remain valid while the
+        // runtime is bound to its fallback descriptors. Retaining them is
+        // required for startup prewarming: first-frame admission commonly
+        // passes through a disabled state before publishing the exact B1
+        // allocation, and destroying them here would force six render-thread
+        // pipeline creations during that later publication.
         UpdateDiagnosticsNoLock(
             capabilityReason,
             detail,

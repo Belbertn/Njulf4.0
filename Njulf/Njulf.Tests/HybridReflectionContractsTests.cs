@@ -1206,8 +1206,18 @@ public sealed class HybridReflectionContractsTests
                 "for (int receiver = 0; receiver < 2; receiver++)"));
             Assert.That(preparation, Does.Contain(
                 "receiverCacheRequired: receiver != 0"));
+            Assert.That(preparation, Does.Contain(
+                "RendererBuildConfiguration.FastPipelineStartup"));
+            Assert.That(preparation, Does.Contain(
+                "familyCount = RendererBuildConfiguration.FastPipelineStartup"));
             Assert.That(renderer, Does.Contain(
                 "ref _hybridReflectionReceiverPipelinesPrepared"));
+            Assert.That(renderer, Does.Contain(
+                "PrepareHybridReflectionsForFullQuality"));
+            Assert.That(renderer, Does.Contain(
+                "_foliagePipeline.TryPrepareHybridReflectionPipelines"));
+            Assert.That(renderer, Does.Contain(
+                "!runtime.ScreenPipelinesAvailable"));
         });
     }
 

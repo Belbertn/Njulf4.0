@@ -5,7 +5,15 @@ namespace Njulf.Rendering.Pipeline;
 internal enum RendererPipelineStartupMode
 {
     ActiveScene,
+    BlockingActiveScene,
     Exhaustive
+}
+
+internal enum RendererStartupWaitTarget
+{
+    Bootstrap,
+    Scene,
+    FullQuality
 }
 
 internal enum RendererStartupLatencyGateMode
@@ -19,6 +27,7 @@ internal enum RendererPipelineBinaryCacheMode
 {
     Auto,
     Off,
+    Capture,
     Require
 }
 
@@ -30,15 +39,23 @@ internal static class RendererBuildConfiguration
         "NJULF_STARTUP_LATENCY_GATE";
     internal const string PipelineBinaryCacheEnvironmentVariable =
         "NJULF_PIPELINE_BINARY_CACHE";
+    internal const string StartupWaitEnvironmentVariable =
+        "NJULF_STARTUP_WAIT";
     internal const string PipelineCacheVerifyEnvironmentVariable =
         "NJULF_PIPELINE_CACHE_VERIFY";
 
     internal static RendererPipelineStartupMode PipelineStartupMode { get; } =
         ResolvePipelineStartupMode();
 
+    internal static RendererStartupWaitTarget StartupWaitTarget { get; } =
+        ResolveStartupWaitTarget();
+
     // Retained as the compatibility name used by the mesh pipeline. Active
     // scene preparation is now the default in every build tier.
     internal static bool FastPipelineStartup =>
+        PipelineStartupMode != RendererPipelineStartupMode.Exhaustive;
+
+    internal static bool ProgressivePipelineStartup =>
         PipelineStartupMode == RendererPipelineStartupMode.ActiveScene;
 
     internal static RendererStartupLatencyGateMode StartupLatencyGateMode { get; } =
@@ -49,6 +66,7 @@ internal static class RendererBuildConfiguration
 
     internal static RendererPipelineBinaryCacheMode PipelineBinaryCacheMode
         { get; } = ResolvePipelineBinaryCacheMode(
+            ResolveCommandLineValue("--pipeline-binary-cache") ??
             Environment.GetEnvironmentVariable(
                 PipelineBinaryCacheEnvironmentVariable));
 
@@ -95,9 +113,44 @@ internal static class RendererBuildConfiguration
             return RendererPipelineStartupMode.Exhaustive;
         }
 
+        if (requested.Equals(
+                "blocking-active-scene",
+                StringComparison.OrdinalIgnoreCase) ||
+            requested.Equals("blocking", StringComparison.OrdinalIgnoreCase))
+        {
+            return RendererPipelineStartupMode.BlockingActiveScene;
+        }
+
         throw new InvalidOperationException(
             $"Unsupported pipeline startup mode '{requested}'. Use " +
-            "'active-scene' or 'exhaustive'.");
+            "'active-scene', 'blocking-active-scene', or 'exhaustive'.");
+    }
+
+    internal static RendererStartupWaitTarget ResolveStartupWaitTarget(
+        string? requested = null)
+    {
+        requested ??= ResolveCommandLineValue("--startup-wait");
+        requested ??= Environment.GetEnvironmentVariable(
+            StartupWaitEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(requested) ||
+            requested.Equals("bootstrap", StringComparison.OrdinalIgnoreCase))
+        {
+            return RendererStartupWaitTarget.Bootstrap;
+        }
+        if (requested.Equals("scene", StringComparison.OrdinalIgnoreCase) ||
+            requested.Equals("fallback-scene", StringComparison.OrdinalIgnoreCase))
+        {
+            return RendererStartupWaitTarget.FullQuality;
+        }
+        if (requested.Equals("full-quality", StringComparison.OrdinalIgnoreCase) ||
+            requested.Equals("full", StringComparison.OrdinalIgnoreCase))
+        {
+            return RendererStartupWaitTarget.FullQuality;
+        }
+
+        throw new InvalidOperationException(
+            $"Unsupported startup wait target '{requested}'. Use " +
+            "'bootstrap' or 'full-quality' ('scene' is a compatibility alias).");
     }
 
     internal static RendererStartupLatencyGateMode ResolveStartupLatencyGateMode(
@@ -148,6 +201,11 @@ internal static class RendererBuildConfiguration
         {
             return RendererPipelineBinaryCacheMode.Off;
         }
+        if (requested.Equals("capture", StringComparison.OrdinalIgnoreCase) ||
+            requested.Equals("populate", StringComparison.OrdinalIgnoreCase))
+        {
+            return RendererPipelineBinaryCacheMode.Capture;
+        }
         if (requested.Equals("require", StringComparison.OrdinalIgnoreCase) ||
             requested.Equals("verify", StringComparison.OrdinalIgnoreCase))
         {
@@ -156,7 +214,7 @@ internal static class RendererBuildConfiguration
 
         throw new InvalidOperationException(
             $"Unsupported pipeline binary cache mode '{requested}'. Use " +
-            "'auto', 'off', or 'require'.");
+            "'auto', 'off', 'capture', or 'require'.");
     }
 
     private static bool ResolveBooleanSwitch(
@@ -178,5 +236,23 @@ internal static class RendererBuildConfiguration
                 configured.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                 configured.Equals("on", StringComparison.OrdinalIgnoreCase) ||
                 configured.Equals("yes", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? ResolveCommandLineValue(string option)
+    {
+        string[] arguments = Environment.GetCommandLineArgs();
+        string prefix = option + "=";
+        for (int index = 0; index < arguments.Length; index++)
+        {
+            string argument = arguments[index];
+            if (argument.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return argument[prefix.Length..];
+            if (argument.Equals(option, StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < arguments.Length)
+            {
+                return arguments[index + 1];
+            }
+        }
+        return null;
     }
 }

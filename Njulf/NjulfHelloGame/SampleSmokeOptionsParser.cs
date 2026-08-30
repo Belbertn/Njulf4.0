@@ -104,6 +104,8 @@ public static class SampleSmokeOptionsParser
         "--benchmark-quality-sequence-hdr-max-flip-p95",
         "--startup-log",
         "--pipeline-startup",
+        "--startup-wait",
+        "--pipeline-binary-cache",
         "--validation",
         "--force-missing-assets",
         "--fail-on-validation-message",
@@ -976,11 +978,42 @@ public static class SampleSmokeOptionsParser
                             "active-scene",
                             StringComparison.OrdinalIgnoreCase) &&
                         !value.Equals(
+                            "blocking-active-scene",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        !value.Equals(
                             "exhaustive",
                             StringComparison.OrdinalIgnoreCase))
                     {
                         throw new ArgumentException(
-                            "--pipeline-startup must be active-scene or exhaustive.");
+                            "--pipeline-startup must be active-scene, blocking-active-scene, or exhaustive.");
+                    }
+                    break;
+                case "--startup-wait":
+                    if (!value.Equals(
+                            "bootstrap",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        !value.Equals(
+                            "scene",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        !value.Equals(
+                            "fallback-scene",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        !value.Equals(
+                            "full-quality",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new ArgumentException(
+                            "--startup-wait must be bootstrap or full-quality (scene and fallback-scene are compatibility aliases).");
+                    }
+                    break;
+                case "--pipeline-binary-cache":
+                    if (!value.Equals("auto", StringComparison.OrdinalIgnoreCase) &&
+                        !value.Equals("off", StringComparison.OrdinalIgnoreCase) &&
+                        !value.Equals("capture", StringComparison.OrdinalIgnoreCase) &&
+                        !value.Equals("require", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new ArgumentException(
+                            "--pipeline-binary-cache must be auto, off, capture, or require.");
                     }
                     break;
                 case "--validation":

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "qualifiedUtc": "2026-08-30T03:45:01.5148030Z",
+  "seedReceiptSha256": "CE5E62675E0C67FC610662E59CE6AD7AF1996CFFE8FA17649753851D44D649C0",
+  "buildConfiguration": "Development",
+  "device": {
+    "name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "vendorId": 4318,
+    "deviceId": 9568,
+    "driver": "610.248.0",
+    "vulkanApi": "1.4.341",
+    "pipelineBinaryGlobalKey": "2087D1DA89BBCA42"
+  },
+  "run": {
+    "writableVulkanCacheInitiallyEmpty": true,
+    "writablePipelineBinaryCacheInitiallyEmpty": true,
+    "artifactRoot": "artifacts/startup-visible-gate-20260830-3",
+    "responsiveBootstrapPresentMicroseconds": 3242000,
+    "productionGraphPresentMicroseconds": 5444000,
+    "visibleContentPresentMicroseconds": 6597000,
+    "renderThreadPipelineCreationCount": 0
+  },
+  "finalLdrCapture": {
+    "width": 1600,
+    "height": 900,
+    "visiblePixelCount": 1382687,
+    "totalPixelCount": 1440000,
+    "visiblePixelFraction": 0.9602,
+    "minimumLuminance": 0,
+    "maximumLuminance": 230,
+    "pngBytes": 874477,
+    "pngSha256": "15C461CB84557FB44D21B258E6FF6106E0CD413BD86A0A451F2C7A5D5312AFAB"
+  },
+  "qualified": true
+}

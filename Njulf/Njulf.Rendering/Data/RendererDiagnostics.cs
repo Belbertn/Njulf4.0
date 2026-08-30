@@ -1147,6 +1147,13 @@ namespace Njulf.Rendering.Data
         public int ForwardVisibilityCompactionEnabled { get; init; }
         public int ForwardVisibilityCompactionActive { get; init; }
         public string ForwardVisibilityCompactionSkipReason { get; init; } = string.Empty;
+        public int ForwardVisibilitySimpleCapacity { get; init; }
+        public int ForwardVisibilitySimpleNormalCapacity { get; init; }
+        public int ForwardVisibilityFullCapacity { get; init; }
+        public int ForwardVisibilityCounterReadbackValid { get; init; }
+        public int ForwardVisibilityCandidateCount { get; init; }
+        public int ForwardVisibilityEmittedCount { get; init; }
+        public int ForwardVisibilityOverflowCount { get; init; }
         public int CurrentFrameHiZTested { get; init; }
         public int CurrentFrameHiZCulled { get; init; }
         public HiZVisibilityPolicyStatus HiZPolicyStatus { get; init; } = HiZVisibilityPolicyStatus.Disabled;
