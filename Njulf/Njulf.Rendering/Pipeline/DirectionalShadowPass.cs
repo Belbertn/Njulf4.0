@@ -445,18 +445,20 @@ namespace Njulf.Rendering.Pipeline
         private static int GetStaticShadowMeshletCount(SceneRenderingData sceneData, int cascade)
         {
             return CanUseSceneCompactedDirectionalShadows(sceneData, staticShadow: true, cascade)
-                ? Math.Min(
+                ? SceneOpaqueCompactionPass.ResolveCompactedDrawStreamCapacity(
                     sceneData.SceneSubmissionGpuDirectionalStaticShadowCandidateCounts[cascade],
-                    sceneData.SceneSubmissionGpuDirectionalStaticShadowCapacities[cascade])
+                    sceneData.SceneSubmissionGpuDirectionalStaticShadowCapacities[cascade],
+                    sceneData.SceneSubmissionSidedRasterSpecializationActive)
                 : sceneData.DirectionalStaticShadowMeshletCount;
         }
 
         private static int GetDynamicShadowMeshletCount(SceneRenderingData sceneData, int cascade)
         {
             return CanUseSceneCompactedDirectionalShadows(sceneData, staticShadow: false, cascade)
-                ? Math.Min(
+                ? SceneOpaqueCompactionPass.ResolveCompactedDrawStreamCapacity(
                     sceneData.SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts[cascade],
-                    sceneData.SceneSubmissionGpuDirectionalDynamicShadowCapacities[cascade])
+                    sceneData.SceneSubmissionGpuDirectionalDynamicShadowCapacities[cascade],
+                    sceneData.SceneSubmissionSidedRasterSpecializationActive)
                 : sceneData.DirectionalDynamicShadowMeshletCount;
         }
 

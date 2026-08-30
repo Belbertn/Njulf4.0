@@ -675,6 +675,26 @@ namespace Njulf.Rendering.Pipeline
                 ? checked((uint)Math.Max(1, candidateCount))
                 : buffer.ElementCapacity;
 
+        internal static int ResolveCompactedDrawStreamCapacity(
+            int candidateCount,
+            int publishedCapacity,
+            bool sidedStreams)
+        {
+            int clampedCandidateCount = Math.Max(0, candidateCount);
+            int clampedPublishedCapacity = Math.Max(0, publishedCapacity);
+            if (clampedCandidateCount == 0 || clampedPublishedCapacity == 0)
+                return 0;
+
+            // Sided compaction stores the double-sided partition at the
+            // published logical capacity. LOD dither transitions can make that
+            // capacity larger than the source candidate count, so consumers
+            // must preserve it as both their draw bound and second-range
+            // offset. Unspecialized streams remain dense from element zero.
+            return sidedStreams
+                ? clampedPublishedCapacity
+                : Math.Min(clampedCandidateCount, clampedPublishedCapacity);
+        }
+
         private void EnsureCapacity(
             ref RuntimeBuffer buffer,
             uint requiredElements,

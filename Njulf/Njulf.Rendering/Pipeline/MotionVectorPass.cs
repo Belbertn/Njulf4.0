@@ -196,9 +196,10 @@ namespace Njulf.Rendering.Pipeline
                     previousTime,
                     previousFrameValid,
                     _meshPipeline.CompactedMotionVectorPipeline,
-                    Math.Min(
+                    SceneOpaqueCompactionPass.ResolveCompactedDrawStreamCapacity(
                         sceneData.SceneSubmissionGpuDepthSolidCandidateCount,
-                        sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity),
+                        sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity,
+                        sceneData.SceneSubmissionSidedRasterSpecializationActive),
                     BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase,
                     SceneOpaqueCompactionPass.GetSolidDepthIndirectDispatchOffset(),
                     SceneOpaqueCompactionPass.GetSolidDepthDoubleSidedIndirectDispatchOffset());
@@ -209,9 +210,10 @@ namespace Njulf.Rendering.Pipeline
                     previousTime,
                     previousFrameValid,
                     _meshPipeline.CompactedMaskedMotionVectorPipeline,
-                    Math.Min(
+                    SceneOpaqueCompactionPass.ResolveCompactedDrawStreamCapacity(
                         sceneData.SceneSubmissionGpuDepthMaskedCandidateCount,
-                        sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity),
+                        sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity,
+                        sceneData.SceneSubmissionSidedRasterSpecializationActive),
                     BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase,
                     SceneOpaqueCompactionPass.GetMaskedDepthIndirectDispatchOffset(),
                     SceneOpaqueCompactionPass.GetMaskedDepthDoubleSidedIndirectDispatchOffset());
