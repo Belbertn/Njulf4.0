@@ -20,13 +20,8 @@ $outputRoot = if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
     [System.IO.Path]::GetFullPath(
         (Join-Path $solutionRoot $OutputDirectory))
 }
-$assetToolProject = Join-Path $solutionRoot "Njulf.AssetTool/Njulf.AssetTool.csproj"
 $gameProject = Join-Path $solutionRoot "NjulfHelloGame/NjulfHelloGame.csproj"
-$testProject = Join-Path $solutionRoot "Njulf.Tests/Njulf.Tests.csproj"
-$solution = Join-Path $solutionRoot "Njulf.sln"
-$bistroSource = Join-Path $solutionRoot (
-    "NjulfHelloGame/Assets/Bistro_v5_2/BistroExterior.fbx")
-$cookedRoot = Join-Path $solutionRoot "NjulfHelloGame/Cooked"
+$bistroCookWorkflow = Join-Path $PSScriptRoot "cook-bistro.ps1"
 $sourceReport = Join-Path $outputRoot "bistro-quality-run.json"
 
 function Invoke-DotnetChecked {
@@ -50,9 +45,6 @@ try {
             throw "The existing Bistro report is missing: $sourceReport"
         }
     } else {
-        if (-not (Test-Path -LiteralPath $bistroSource -PathType Leaf)) {
-            throw "The Amazon Bistro source asset is missing: $bistroSource"
-        }
         if (Test-Path -LiteralPath $outputRoot) {
             $existing = @(Get-ChildItem -LiteralPath $outputRoot -Force)
             if ($existing.Count -ne 0) {
@@ -62,42 +54,10 @@ try {
             [void](New-Item -ItemType Directory -Path $outputRoot)
         }
 
-        if (-not $SkipBuild) {
-            Invoke-DotnetChecked `
-                -Arguments @(
-                    "build", $solution,
-                    "-c", $Configuration,
-                    "--no-restore") `
-                -Role "Solution build"
-        }
-
-        if (-not $SkipCook) {
-            Invoke-DotnetChecked `
-                -Arguments @(
-                    "run",
-                    "--project", $assetToolProject,
-                    "-c", $Configuration,
-                    "--no-build",
-                    "--",
-                    "cook", "model", $bistroSource,
-                    "--out", $cookedRoot,
-                    "--platform", "win-x64",
-                    "--backend", "Assimp",
-                    "--assimp-material-texture-convention", "AmazonBistro",
-                    "--force",
-                    "--progress", "plain",
-                    "--progress-detail", "stages") `
-                -Role "Amazon Bistro model cook"
-        }
-
-        Invoke-DotnetChecked `
-            -Arguments @(
-                "test", $testProject,
-                "-c", $Configuration,
-                "--no-build",
-                "--filter",
-                "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.ExteriorCook_PreservesThinGlassAndImportSemantics") `
-            -Role "Cooked Bistro material-contract test"
+        & $bistroCookWorkflow `
+            -Configuration $Configuration `
+            -SkipBuild:$SkipBuild `
+            -SkipCook:$SkipCook
 
         # The broader Bistro harness also evaluates DDGI scrolling/tail health.
         # Preserve its exit code and report, then let the scoped analyzer decide

@@ -1,7 +1,8 @@
 # Reflection qualification
 
-The deterministic reflection gate recooks Amazon Bistro with its explicit
-material convention, verifies the cooked package, runs the 720-frame
+The deterministic reflection gate runs the shared `tools/cook-bistro.ps1`
+workflow, which recooks and verifies both Amazon Bistro packages with their
+explicit material convention, then runs the 720-frame
 `HybridRayQueryAb` hardware sequence at DDGI High, authenticates every captured
 beauty frame, and evaluates the reflection path independently of Bistro's
 broader DDGI scrolling and transport-tail checks.
@@ -28,7 +29,10 @@ result is `reflection-qualification.json` with contract
 `bistro-reflection-qualification/v3`. A passing run proves all of the
 following:
 
-- the model package is format 1.4 and matches the Amazon Bistro import contract;
+- both model packages use the current format and match their computed Amazon
+  Bistro import contracts;
+- cooked base-color and normal bindings resolve to full-chain BC7 and BC5 KTX2
+  textures respectively;
 - all four Bistro window materials remain non-metallic thin glass, including a
   sharp clear-glass profile;
 - the stable reflection windows cover both sorted transparency and weighted

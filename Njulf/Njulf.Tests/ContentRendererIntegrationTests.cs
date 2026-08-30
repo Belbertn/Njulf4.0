@@ -58,6 +58,101 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ContentLoadOptions_DefaultRetainsSourceFallbackCompatibility()
+        {
+            Assert.That(ContentLoadOptions.Default.RequireCooked, Is.False);
+        }
+
+        [Test]
+        public void LoadModel_RequireCookedRejectsMissingPackageBeforeSourceImport()
+        {
+            string path = WriteTriangleObj();
+            var uploader = new FakeModelRenderUploadService();
+            using var content = new ContentManager(
+                Path.GetDirectoryName(path),
+                uploader);
+
+            FileNotFoundException failure =
+                Assert.Throws<FileNotFoundException>(() =>
+                    content.Load<Model>(
+                        Path.GetFileName(path),
+                        AmazonBistroCookedOnlyOptions()))!;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(failure.Message,
+                    Does.Contain("cooked package was not found at"));
+                Assert.That(failure.Message,
+                    Does.Contain("--backend Assimp"));
+                Assert.That(failure.Message,
+                    Does.Contain(
+                        "--assimp-material-texture-convention AmazonBistro"));
+                Assert.That(uploader.UploadCount, Is.Zero);
+                Assert.That(content.CookedDiagnostics.SourceFallbackCount,
+                    Is.Zero);
+            });
+        }
+
+        [Test]
+        public void LoadModel_RequireCookedReportsInvalidContractAsInvalidData()
+        {
+            string path = WriteTriangleObj();
+            string root = Path.GetDirectoryName(path)!;
+            ContentLoadOptions options = AmazonBistroCookedOnlyOptions();
+            ulong expectedContract = CookedModelImportContract.Compute(
+                path,
+                options.ImporterOptions);
+            ulong mismatchedContract = expectedContract == ulong.MaxValue
+                ? expectedContract - 1
+                : expectedContract + 1;
+            string cookedPath = Path.Combine(
+                root,
+                "Cooked",
+                CookedPlatform.Current,
+                "models",
+                Path.GetFileNameWithoutExtension(path) + ".njmodel");
+            using (var writer = new CookedAssetWriter(
+                       cookedPath,
+                       CookedAssetKind.Model,
+                       sourceHash: CookedHash.File(path),
+                       importSettingsHash: mismatchedContract))
+            {
+                writer.Complete();
+            }
+
+            CookedResolution resolution = new CookedContentResolver(root)
+                .ResolveModel(
+                    Path.GetFileName(path),
+                    path,
+                    strictSourceHash: true,
+                    expectedContract,
+                    captureModelSnapshot: true);
+            var uploader = new FakeModelRenderUploadService();
+            using var content = new ContentManager(root, uploader);
+
+            InvalidDataException failure =
+                Assert.Throws<InvalidDataException>(() =>
+                    content.Load<Model>(
+                        Path.GetFileName(path),
+                        options))!;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(resolution.Status,
+                    Is.EqualTo(CookedResolutionStatus.Invalid));
+                Assert.That(failure.Message, Does.Contain(resolution.Reason));
+                Assert.That(failure.Message,
+                    Does.Contain("--backend Assimp"));
+                Assert.That(failure.Message,
+                    Does.Contain(
+                        "--assimp-material-texture-convention AmazonBistro"));
+                Assert.That(uploader.UploadCount, Is.Zero);
+                Assert.That(content.CookedDiagnostics.SourceFallbackCount,
+                    Is.Zero);
+            });
+        }
+
+        [Test]
         public async Task LoadAsyncModel_SourceFallbackUsesCooperativeUploadAndRecordsTiming()
         {
             string path = WriteTriangleObj();
@@ -103,6 +198,110 @@ namespace Njulf.Tests
                     Is.GreaterThanOrEqualTo(0));
                 Assert.That(diagnostics.Entries.Single().UploadMilliseconds,
                     Is.GreaterThanOrEqualTo(0));
+            });
+        }
+
+        [Test]
+        public async Task LoadAsyncModel_RequireCookedRejectsBeforeSourceImport()
+        {
+            string path = WriteTriangleObj();
+            using var dispatcher = new RenderThreadContentUploadDispatcher();
+            var uploader = new FakeCooperativeModelRenderUploadService();
+            using var content = new ContentManager(
+                Path.GetDirectoryName(path),
+                uploader,
+                dispatcher);
+
+            FileNotFoundException failure =
+                Assert.ThrowsAsync<FileNotFoundException>(async () =>
+                    await content.LoadAsync<Model>(
+                        Path.GetFileName(path),
+                        AmazonBistroCookedOnlyOptions()))!;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(failure.Message,
+                    Does.Contain("cooked package was not found at"));
+                Assert.That(uploader.PrepareCount, Is.Zero);
+                Assert.That(uploader.LegacyUploadCount, Is.Zero);
+                Assert.That(content.CookedDiagnostics.SourceFallbackCount,
+                    Is.Zero);
+            });
+        }
+
+        [Test]
+        public async Task PreloadModel_RequireCookedReportsFailureBeforeSourceImport()
+        {
+            string path = WriteTriangleObj();
+            using var dispatcher = new RenderThreadContentUploadDispatcher();
+            var uploader = new FakeCooperativeModelRenderUploadService();
+            using var content = new ContentManager(
+                Path.GetDirectoryName(path),
+                uploader,
+                dispatcher);
+
+            ContentPreloadResult<Model> result =
+                await content.PreloadAsync<Model>(
+                    [new ContentPreloadRequest(Path.GetFileName(path))],
+                    new ContentPreloadOptions
+                    {
+                        LoadOptions = AmazonBistroCookedOnlyOptions()
+                    });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.ReadyCount, Is.Zero);
+                Assert.That(result.FailedCount, Is.EqualTo(1));
+                Assert.That(result.Items.Single().Failure,
+                    Is.TypeOf<FileNotFoundException>());
+                Assert.That(result.Items.Single().Failure!.Message,
+                    Does.Contain("cooked package was not found at"));
+                Assert.That(uploader.PrepareCount, Is.Zero);
+                Assert.That(uploader.LegacyUploadCount, Is.Zero);
+                Assert.That(content.CookedDiagnostics.SourceFallbackCount,
+                    Is.Zero);
+            });
+        }
+
+        [Test]
+        public async Task PreloadModel_DefaultOptionsRetainSourceFallback()
+        {
+            string path = WriteTriangleObj();
+            using var dispatcher = new RenderThreadContentUploadDispatcher();
+            var uploader = new FakeCooperativeModelRenderUploadService();
+            using var content = new ContentManager(
+                Path.GetDirectoryName(path),
+                uploader,
+                dispatcher);
+
+            Task<ContentPreloadResult<Model>> preloading =
+                content.PreloadAsync<Model>(
+                    [new ContentPreloadRequest(Path.GetFileName(path))]);
+            var timeout = System.Diagnostics.Stopwatch.StartNew();
+            while (!preloading.IsCompleted)
+            {
+                if (dispatcher.PendingCount > 0)
+                {
+                    dispatcher.ProcessFrame(
+                        TimeSpan.FromMilliseconds(10),
+                        maximumCallbacks: 8,
+                        maximumSubmissionBytes: 4L * 1024L * 1024L);
+                }
+                if (timeout.Elapsed > TimeSpan.FromSeconds(10))
+                    Assert.Fail("Timed out pumping the preload source upload.");
+                await Task.Delay(1);
+            }
+
+            ContentPreloadResult<Model> result = await preloading;
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.ReadyCount, Is.EqualTo(1));
+                Assert.That(result.FailedCount, Is.Zero);
+                Assert.That(result.Items.Single().Asset, Is.Not.Null);
+                Assert.That(uploader.PrepareCount, Is.EqualTo(1));
+                Assert.That(uploader.LegacyUploadCount, Is.Zero);
+                Assert.That(content.CookedDiagnostics.SourceFallbackCount,
+                    Is.EqualTo(1));
             });
         }
 
@@ -672,6 +871,20 @@ namespace Njulf.Tests
                     GenerateTangents = false,
                     JoinIdenticalVertices = false,
                     SortByPrimitiveType = false
+                }
+            };
+        }
+
+        private static ContentLoadOptions AmazonBistroCookedOnlyOptions()
+        {
+            return new ContentLoadOptions
+            {
+                RequireCooked = true,
+                ImporterOptions = new ImporterOptions
+                {
+                    Backend = ModelImportBackend.Assimp,
+                    AssimpMaterialTextureConvention =
+                        AssimpMaterialTextureConvention.AmazonBistro
                 }
             };
         }

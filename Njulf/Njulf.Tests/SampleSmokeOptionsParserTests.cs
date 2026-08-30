@@ -811,6 +811,7 @@ public sealed class SampleSmokeOptionsParserTests
         int sponzaIndex = Array.IndexOf(scenes, SampleSceneKind.SponzaPlaza);
         SampleAssetManifest manifest = SampleAssetManifest.Bistro;
         SampleAssetReference interior = manifest.AddendumModelAssets.Single();
+        SampleAssetReference[] assets = manifest.EnumerateAssets().ToArray();
 
         Assert.Multiple(() =>
         {
@@ -828,6 +829,18 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(
                 interior.AssimpMaterialTextureConvention,
                 Is.EqualTo(AssimpMaterialTextureConvention.AmazonBistro));
+            Assert.That(manifest.ModelAsset.LoadTier,
+                Is.EqualTo(SampleAssetLoadTier.Critical));
+            Assert.That(interior.LoadTier,
+                Is.EqualTo(SampleAssetLoadTier.Deferred));
+            Assert.That(assets, Has.Length.EqualTo(2));
+            Assert.That(assets,
+                Has.All.Matches<SampleAssetReference>(asset =>
+                    asset.RequireCooked &&
+                    asset.ExpectedBackend == ModelImportBackend.Assimp &&
+                    asset.AssimpMaterialTextureConvention ==
+                        AssimpMaterialTextureConvention.AmazonBistro &&
+                    asset.CreateLoadOptions().RequireCooked));
             Assert.That(
                 manifest.CreateModelWorld(rotation: 0f),
                 Is.EqualTo(Njulf.Core.Math.Matrix4x4.Identity));

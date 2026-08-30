@@ -596,7 +596,8 @@ namespace Njulf.Assets
                 requestedPath,
                 sourcePath,
                 strict,
-                expectedImportContractHash);
+                expectedImportContractHash,
+                options.RequireCooked);
             ModelLoadGate gate = AcquireModelLoadGate(gateKey);
             gate.Semaphore.Wait();
             try
@@ -624,13 +625,16 @@ namespace Njulf.Assets
                         cacheGeneration);
                 }
 
-                bool allowFallback = CookedRuntimePolicy.AllowSourceFallback;
+                bool allowFallback =
+                    !options.RequireCooked &&
+                    CookedRuntimePolicy.AllowSourceFallback;
                 if (!allowFallback)
                 {
-                    throw new FileNotFoundException(
-                        $"Cooked model package is required for '{requestedPath}', but {resolution.Reason}. " +
-                        "Cook the asset with Njulf.AssetTool or set NJULF_ALLOW_SOURCE_ASSET_RUNTIME_LOAD=true for development fallback.",
-                        resolution.PackagePath);
+                    throw CreateRequiredCookedModelException(
+                        requestedPath,
+                        sourcePath,
+                        options,
+                        resolution);
                 }
 
                 RecordCookedDiagnostic(
@@ -688,7 +692,8 @@ namespace Njulf.Assets
                 requestedPath,
                 sourcePath,
                 strict,
-                expectedImportContractHash);
+                expectedImportContractHash,
+                options.RequireCooked);
             ModelLoadGate gate = AcquireModelLoadGate(gateKey);
             bool entered = false;
             try
@@ -714,6 +719,7 @@ namespace Njulf.Assets
                     () => PrepareCookedModelForAsyncLoad<T>(
                         requestedPath,
                         sourcePath,
+                        options,
                         strict,
                         expectedImportContractHash,
                         cacheGeneration),
@@ -847,6 +853,7 @@ namespace Njulf.Assets
         private CookedModelAsyncPreparation PrepareCookedModelForAsyncLoad<T>(
             string requestedPath,
             string sourcePath,
+            ContentLoadOptions options,
             bool strict,
             ulong? expectedImportContractHash,
             long cacheGeneration)
@@ -859,12 +866,14 @@ namespace Njulf.Assets
                 _useResolverSnapshots);
             if (resolution.Status != CookedResolutionStatus.Found)
             {
-                if (!CookedRuntimePolicy.AllowSourceFallback)
+                if (options.RequireCooked ||
+                    !CookedRuntimePolicy.AllowSourceFallback)
                 {
-                    throw new FileNotFoundException(
-                        $"Cooked model package is required for '{requestedPath}', but {resolution.Reason}. " +
-                        "Cook the asset with Njulf.AssetTool or set NJULF_ALLOW_SOURCE_ASSET_RUNTIME_LOAD=true for development fallback.",
-                        resolution.PackagePath);
+                    throw CreateRequiredCookedModelException(
+                        requestedPath,
+                        sourcePath,
+                        options,
+                        resolution);
                 }
 
                 return new CookedModelAsyncPreparation(
@@ -1582,7 +1591,8 @@ namespace Njulf.Assets
             string requestedPath,
             string sourcePath,
             bool strict,
-            ulong? expectedImportContractHash)
+            ulong? expectedImportContractHash,
+            bool requireCooked)
         {
             bool requestedCooked = Path.GetExtension(requestedPath).Equals(
                 ".njmodel",
@@ -1592,10 +1602,64 @@ namespace Njulf.Assets
                 typeof(T).FullName,
                 Path.GetFullPath(sourcePath),
                 $"requestedCooked={requestedCooked}",
+                $"requireCooked={requireCooked}",
                 $"expectedImportContractHash={(expectedImportContractHash.HasValue ? expectedImportContractHash.Value.ToString("x16", System.Globalization.CultureInfo.InvariantCulture) : "authoritative-package")}",
                 $"strict={strict}",
                 $"readerFlags={(uint)CookedRuntimePolicy.ReaderFlags}");
         }
+
+        private Exception CreateRequiredCookedModelException(
+            string requestedPath,
+            string sourcePath,
+            ContentLoadOptions options,
+            CookedResolution resolution)
+        {
+            string policyDetail = options.RequireCooked
+                ? "This request is cooked-only and cannot use source import fallback."
+                : $"Source import fallback is disabled; " +
+                  $"set {CookedRuntimePolicy.AllowSourceFallbackVariable}=true " +
+                  "only for development fallback.";
+            string message =
+                $"Cooked model package is required for '{requestedPath}', but " +
+                $"{resolution.Reason}. {policyDetail} Recook with: " +
+                CreateAssetToolCookCommand(sourcePath, options);
+
+            return resolution.Status switch
+            {
+                CookedResolutionStatus.Missing => new FileNotFoundException(
+                    message,
+                    resolution.PackagePath),
+                CookedResolutionStatus.Invalid => new InvalidDataException(
+                    message),
+                _ => new InvalidOperationException(
+                    "A found cooked package cannot produce a required-cook failure.")
+            };
+        }
+
+        private string CreateAssetToolCookCommand(
+            string sourcePath,
+            ContentLoadOptions options)
+        {
+            ImporterOptions importer =
+                options.ImporterOptions ?? ImporterOptions.Default;
+            string maximumSamplerAnisotropy =
+                importer.MaximumSamplerAnisotropy.ToString(
+                    "R",
+                    System.Globalization.CultureInfo.InvariantCulture);
+            return
+                "dotnet run --project Njulf.AssetTool -- cook model " +
+                $"{QuotePowerShellArgument(Path.GetFullPath(sourcePath))} " +
+                $"--out {QuotePowerShellArgument(Path.Combine(_rootDirectory, "Cooked"))} " +
+                $"--platform {CookedPlatform.Current} " +
+                $"--backend {importer.Backend} " +
+                "--assimp-material-texture-convention " +
+                $"{importer.AssimpMaterialTextureConvention} " +
+                $"--max-sampler-anisotropy {maximumSamplerAnisotropy} " +
+                "--texture-format AutoBc --force";
+        }
+
+        private static string QuotePowerShellArgument(string value) =>
+            $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
 
         private ModelLoadGate AcquireModelLoadGate(string gateKey)
         {

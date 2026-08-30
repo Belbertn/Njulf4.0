@@ -17,12 +17,14 @@ internal sealed record SampleAssetReference(
     AssimpMaterialTextureConvention AssimpMaterialTextureConvention =
         AssimpMaterialTextureConvention.Standard,
     SampleAssetLoadTier LoadTier = SampleAssetLoadTier.Critical,
-    float MaximumSamplerAnisotropy = 16f)
+    float MaximumSamplerAnisotropy = 16f,
+    bool RequireCooked = false)
 {
     public string CreateContentIdentity() =>
         $"{ExpectedBackend}\u001f" +
         $"{AssimpMaterialTextureConvention}\u001f" +
-        $"{MaximumSamplerAnisotropy:R}\u001f{Path}";
+        $"{MaximumSamplerAnisotropy:R}\u001f" +
+        $"{RequireCooked}\u001f{Path}";
 
     public ContentLoadOptions CreateLoadOptions()
     {
@@ -35,7 +37,8 @@ internal sealed record SampleAssetReference(
                     AssimpMaterialTextureConvention,
                 MaximumSamplerAnisotropy = MaximumSamplerAnisotropy,
                 ImportLights = true
-            }
+            },
+            RequireCooked = RequireCooked
         };
     }
 }
@@ -85,7 +88,8 @@ internal sealed record SampleAssetManifest(
         new SampleAssetReference(
             "Assets/Bistro_v5_2/BistroExterior.fbx",
             ModelImportBackend.Assimp,
-            AssimpMaterialTextureConvention.AmazonBistro),
+            AssimpMaterialTextureConvention.AmazonBistro,
+            RequireCooked: true),
         // The exterior and interior FBXs share the same authored coordinate
         // system, so the loader's common model world places the interior in
         // the cafe without an additional offset, rotation, or scale.
@@ -95,7 +99,8 @@ internal sealed record SampleAssetManifest(
                 "Assets/Bistro_v5_2/BistroInterior.fbx",
                 ModelImportBackend.Assimp,
                 AssimpMaterialTextureConvention.AmazonBistro,
-                SampleAssetLoadTier.Deferred)
+                SampleAssetLoadTier.Deferred,
+                RequireCooked: true)
         },
         Array.Empty<SampleAssetReference>(),
         1.0f,
