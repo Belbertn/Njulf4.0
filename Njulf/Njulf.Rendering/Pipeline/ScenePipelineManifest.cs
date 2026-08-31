@@ -26,7 +26,10 @@ internal enum ScenePipelinePreparationScope : byte
 /// merge while scanning large scenes.
 /// </summary>
 internal readonly record struct ScenePipelineManifest(
-    SceneMaterialPipelineKinds MaterialKinds)
+    SceneMaterialPipelineKinds MaterialKinds,
+    bool HasRealTransparentShadowReceiver = false,
+    bool HasGeometryDecalShadowReceiver = false,
+    bool HasTransparentReflectionReceiver = false)
 {
     internal static ScenePipelineManifest Empty => new(
         SceneMaterialPipelineKinds.None);
@@ -52,7 +55,19 @@ internal readonly record struct ScenePipelineManifest(
     {
         ArgumentNullException.ThrowIfNull(metadata);
         SceneMaterialPipelineKinds kind = Classify(metadata);
-        return new ScenePipelineManifest(MaterialKinds | kind);
+        bool realTransparent = kind is
+            SceneMaterialPipelineKinds.OrdinaryTransparent or
+            SceneMaterialPipelineKinds.ThinGlass or
+            SceneMaterialPipelineKinds.ThickTransmission;
+        return new ScenePipelineManifest(
+            MaterialKinds | kind,
+            HasRealTransparentShadowReceiver ||
+            realTransparent && metadata.ReceivesShadows,
+            HasGeometryDecalShadowReceiver ||
+            kind == SceneMaterialPipelineKinds.GeometryDecal &&
+            metadata.ReceivesShadows,
+            HasTransparentReflectionReceiver ||
+            SceneDataBuilder.ReceivesSceneReflections(metadata));
     }
 
     internal static SceneMaterialPipelineKinds Classify(

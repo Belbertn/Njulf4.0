@@ -194,6 +194,7 @@ namespace Njulf.Rendering.Data
         private int _transparentObjectCount;
         private int _transparentReflectionReceiverObjectCount;
         private int _transparentReflectionReceiverMeshletCount;
+        private int _transparentShadowReceiverMeshletCount;
         private int _thinGlassObjectCount;
         private int _thinGlassMeshletCount;
         private int _geometryDecalObjectCount;
@@ -681,6 +682,7 @@ namespace Njulf.Rendering.Data
                     _transparentObjectCount = 0;
                     _transparentReflectionReceiverObjectCount = 0;
                     _transparentReflectionReceiverMeshletCount = 0;
+                    _transparentShadowReceiverMeshletCount = 0;
                     _thinGlassObjectCount = 0;
                     _thinGlassMeshletCount = 0;
                     _geometryDecalObjectCount = 0;
@@ -986,6 +988,7 @@ namespace Njulf.Rendering.Data
                 sceneData.MaskedMeshletCount = maskedDepthMeshletCount;
                 sceneData.TransparentMeshletCount = _transparentMeshletDrawCommands.Count;
                 sceneData.TransparentReflectionReceiverMeshletCount = _transparentReflectionReceiverMeshletCount;
+                sceneData.TransparentShadowReceiverMeshletCount = _transparentShadowReceiverMeshletCount;
                 sceneData.ThinGlassMeshletCount = _thinGlassMeshletCount;
                 sceneData.GeometryDecalMeshletCount = _geometryDecalMeshletCount;
                 sceneData.BlendMaterialCount = _blendMaterialCount;
@@ -1584,6 +1587,7 @@ namespace Njulf.Rendering.Data
                                     metadata.IsGeometryDecal,
                                     metadata.TransmissionPolicy,
                                     ReceivesSceneReflections(metadata),
+                                    metadata.ReceivesShadows,
                                     maxTransparentMeshlets);
                         }
                         else
@@ -1935,6 +1939,7 @@ namespace Njulf.Rendering.Data
                                         metadata.IsGeometryDecal,
                                         metadata.TransmissionPolicy,
                                         ReceivesSceneReflections(metadata),
+                                        metadata.ReceivesShadows,
                                         maxTransparentMeshlets);
                             }
                             else
@@ -2043,6 +2048,7 @@ namespace Njulf.Rendering.Data
             _transparentObjectCount = 0;
             _transparentReflectionReceiverObjectCount = 0;
             _transparentReflectionReceiverMeshletCount = 0;
+            _transparentShadowReceiverMeshletCount = 0;
             _thinGlassObjectCount = 0;
             _thinGlassMeshletCount = 0;
             _geometryDecalObjectCount = 0;
@@ -2321,6 +2327,7 @@ namespace Njulf.Rendering.Data
                     isGeometryDecal,
                     metadata.TransmissionPolicy,
                     ReceivesSceneReflections(metadata),
+                    metadata.ReceivesShadows,
                     maxTransparentMeshlets);
             }
 
@@ -2335,6 +2342,7 @@ namespace Njulf.Rendering.Data
             bool isGeometryDecal,
             GiTransmissionPolicy transmissionPolicy,
             bool receivesSceneReflections,
+            bool receivesShadows,
             int maxTransparentMeshlets)
         {
             if (_transparentSortScratch.Count >= maxTransparentMeshlets)
@@ -2347,6 +2355,8 @@ namespace Njulf.Rendering.Data
                 _thinGlassMeshletCount++;
             if (receivesSceneReflections)
                 _transparentReflectionReceiverMeshletCount++;
+            if (!isGeometryDecal && receivesShadows)
+                _transparentShadowReceiverMeshletCount++;
             _transparentSortScratch.Add(new TransparentMeshletDraw(
                 command,
                 distanceSquared,
@@ -2356,7 +2366,8 @@ namespace Njulf.Rendering.Data
                         forwardClass,
                         isGeometryDecal,
                         transmissionPolicy),
-                    receivesSceneReflections)));
+                    receivesSceneReflections,
+                    receivesShadows)));
         }
 
         private void AppendTransparentDrawOrder(

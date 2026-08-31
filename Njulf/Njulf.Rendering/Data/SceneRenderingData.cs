@@ -89,6 +89,12 @@ namespace Njulf.Rendering.Data
         public int TransparentMeshletCount { get; set; }
         public int TransparentReflectionReceiverMeshletCount { get; set; }
         /// <summary>
+        /// Admitted non-decal transparent draws whose material explicitly
+        /// receives shadows. This excludes additive markers and other
+        /// non-receivers from ray-fragment pipeline admission.
+        /// </summary>
+        public int TransparentShadowReceiverMeshletCount { get; set; }
+        /// <summary>
         /// Admitted transparent draw commands using the ThinGlass class. This
         /// is compared with <see cref="TransparentMeshletCount"/> before the
         /// renderer binds the directional-only DDGI glass program.
@@ -2007,6 +2013,7 @@ namespace Njulf.Rendering.Data
             MaskedMeshletCount = 0;
             TransparentMeshletCount = 0;
             TransparentReflectionReceiverMeshletCount = 0;
+            TransparentShadowReceiverMeshletCount = 0;
             ThinGlassMeshletCount = 0;
             GeometryDecalMeshletCount = 0;
             BlendMaterialCount = 0;

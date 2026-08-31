@@ -4376,24 +4376,28 @@ namespace Njulf.Rendering
                     SceneMaterialPipelineKinds.OrdinaryTransparent |
                     SceneMaterialPipelineKinds.ThinGlass |
                     SceneMaterialPipelineKinds.GeometryDecal |
-                    SceneMaterialPipelineKinds.ThickTransmission)
+                    SceneMaterialPipelineKinds.ThickTransmission,
+                    HasRealTransparentShadowReceiver: true,
+                    HasGeometryDecalShadowReceiver: true,
+                    HasTransparentReflectionReceiver: true)
                 : BuildScenePipelineManifest(scene);
             bool receiverFeedbackRequired =
                 _simpleDdgiReceiverFeedback?.GraphicsPipelinesRequested == true;
             bool transparentRayVariantsRequired =
                 pipelineManifest.HasRealTransparentSurface &&
                 Settings.Transparency.Enabled &&
-                (Settings.Transparency.ReceiveShadows ||
+                (Settings.Transparency.ReceiveShadows &&
+                 pipelineManifest.HasRealTransparentShadowReceiver ||
                  pipelineManifest.Requires(
                      SceneMaterialPipelineKinds.ThickTransmission) &&
                  Settings.Transparency.ThickTransmissionMode ==
                      ThickTransmissionMode.RayQuery ||
                  Settings.Transparency.SampleReflections &&
+                 pipelineManifest.HasTransparentReflectionReceiver &&
                  Settings.Reflections.Enabled &&
                  Settings.Reflections.Mode == ReflectionMode.HybridRayQuery);
             bool decalRayVariantsRequired =
-                pipelineManifest.Requires(
-                    SceneMaterialPipelineKinds.GeometryDecal) &&
+                pipelineManifest.HasGeometryDecalShadowReceiver &&
                 Settings.Transparency.Enabled &&
                 Settings.Decals.ReceiveShadows;
             TransparencyMode transparencyMode =
@@ -4888,7 +4892,10 @@ namespace Njulf.Rendering
                     manifest,
                     renderObject.Material,
                     renderObject.Name);
-                if (manifest.MaterialKinds == complete)
+                if (manifest.MaterialKinds == complete &&
+                    manifest.HasRealTransparentShadowReceiver &&
+                    manifest.HasGeometryDecalShadowReceiver &&
+                    manifest.HasTransparentReflectionReceiver)
                     return manifest;
             }
 
@@ -4900,7 +4907,10 @@ namespace Njulf.Rendering
                     manifest,
                     batch.Material,
                     batch.Name);
-                if (manifest.MaterialKinds == complete)
+                if (manifest.MaterialKinds == complete &&
+                    manifest.HasRealTransparentShadowReceiver &&
+                    manifest.HasGeometryDecalShadowReceiver &&
+                    manifest.HasTransparentReflectionReceiver)
                     break;
             }
 
@@ -6935,7 +6945,7 @@ namespace Njulf.Rendering
             bool transparentRayReceiverRequired =
                 sceneData.TransparentPassEnabled &&
                 sceneData.TransparentReceiveShadows &&
-                sceneData.TransparentMeshletCount > 0;
+                sceneData.TransparentShadowReceiverMeshletCount > 0;
             bool transparentRayVariantsAdmitted =
                 _raySceneDescriptorBank?.IsAvailable == true &&
                 _meshPipeline.RayTransparentPipelinesAdmitted;

@@ -175,10 +175,10 @@ public sealed class TransparentPipelinePartitioningTests
     {
         var ordinary = new TransparentDrawClassification(
             TransparentMaterialClass.OrdinaryBlend,
-            ReceivesSceneReflections: false);
+            ReceivesSceneReflections: false, ReceivesShadows: true);
         var decal = new TransparentDrawClassification(
             TransparentMaterialClass.GeometryDecal,
-            ReceivesSceneReflections: false);
+            ReceivesSceneReflections: false, ReceivesShadows: true);
         var transparentPolicy = DefaultOptions(
             transparentLayeredRay: true);
         var decalPolicy = DefaultOptions(decalLayeredRay: true);
@@ -204,6 +204,47 @@ public sealed class TransparentPipelinePartitioningTests
                 TransparentDrawRunPlanner.CreatePipelineKey(
                     decal,
                     decalPolicy).RaySceneRequired,
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void Planner_LayeredPoliciesSkipMaterialsThatDoNotReceiveShadows()
+    {
+        var nonReceiver = new TransparentDrawClassification(
+            TransparentMaterialClass.OrdinaryBlend,
+            ReceivesSceneReflections: false,
+            ReceivesShadows: false);
+        var reflectionReceiver = nonReceiver with
+        {
+            ReceivesSceneReflections = true
+        };
+        var thickTransmission = nonReceiver with
+        {
+            MaterialClass = TransparentMaterialClass.ThickTransmission
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                TransparentDrawRunPlanner.CreatePipelineKey(
+                    nonReceiver,
+                    DefaultOptions(transparentLayeredRay: true))
+                    .RaySceneRequired,
+                Is.False);
+            Assert.That(
+                TransparentDrawRunPlanner.CreatePipelineKey(
+                    reflectionReceiver,
+                    DefaultOptions(
+                        transparentLayeredRay: true,
+                        reflectionRay: true)).RaySceneRequired,
+                Is.True);
+            Assert.That(
+                TransparentDrawRunPlanner.CreatePipelineKey(
+                    thickTransmission,
+                    DefaultOptions(
+                        transparentLayeredRay: true,
+                        thickRay: true)).RaySceneRequired,
                 Is.True);
         });
     }
@@ -329,7 +370,7 @@ public sealed class TransparentPipelinePartitioningTests
             drawCount,
             new TransparentDrawClassification(
                 materialClass,
-                ReceivesSceneReflections: false));
+                ReceivesSceneReflections: false, ReceivesShadows: true));
 
     private static TransparentRunPlanningOptions DefaultOptions(
         TransparencyMode mode = TransparencyMode.SortedAlphaBlend,

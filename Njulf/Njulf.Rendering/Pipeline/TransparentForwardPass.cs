@@ -63,13 +63,14 @@ namespace Njulf.Rendering.Pipeline
 
             bool allTransparentSurfacesAreThinGlass =
                 AllTransparentSurfacesAreThinGlass(sceneData);
-            bool existingRayVariantRequired =
+            bool layeredShadowRayVariantRequired =
                 !allTransparentSurfacesAreThinGlass &&
-                sceneData.TransparentObjectCount > 0 &&
-                (sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
-                 DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
-                 sceneData.EffectiveThickTransmissionMode ==
-                 ThickTransmissionMode.RayQuery);
+                sceneData.TransparentShadowReceiverMeshletCount > 0 &&
+                sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
+                DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery;
+            bool existingRayVariantRequired =
+                layeredShadowRayVariantRequired ||
+                RequiresCanonicalRayColorPipeline(sceneData);
             bool reflectionRayVariantRequired =
                 RequiresSceneReflectionRayVariant(sceneData);
             bool rayVariant =

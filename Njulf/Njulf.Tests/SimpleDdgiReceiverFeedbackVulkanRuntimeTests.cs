@@ -274,7 +274,7 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
             1,
             new TransparentDrawClassification(
                 TransparentMaterialClass.ThickTransmission,
-                ReceivesSceneReflections: false)));
+                ReceivesSceneReflections: false, ReceivesShadows: true)));
 
         uint mask = ForwardPlusPass.ResolveRequiredReceiverFeedbackProducerMask(
             sceneData,

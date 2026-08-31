@@ -13,7 +13,8 @@ namespace Njulf.Rendering.Data
 
     public readonly record struct TransparentDrawClassification(
         TransparentMaterialClass MaterialClass,
-        bool ReceivesSceneReflections);
+        bool ReceivesSceneReflections,
+        bool ReceivesShadows);
 
     public readonly record struct TransparentPipelineKey(
         TransparentMaterialClass MaterialClass,
@@ -103,10 +104,11 @@ namespace Njulf.Rendering.Data
             in TransparentRunPlanningOptions options)
         {
             bool raySceneRequired =
+                classification.ReceivesShadows &&
                 (classification.MaterialClass ==
-                     TransparentMaterialClass.GeometryDecal
-                    ? options.DecalLayeredRaySceneRequired
-                    : options.TransparentLayeredRaySceneRequired) ||
+                    TransparentMaterialClass.GeometryDecal
+                        ? options.DecalLayeredRaySceneRequired
+                        : options.TransparentLayeredRaySceneRequired) ||
                 (classification.MaterialClass ==
                     TransparentMaterialClass.ThickTransmission &&
                  options.ThickTransmissionRayQueryEnabled) ||

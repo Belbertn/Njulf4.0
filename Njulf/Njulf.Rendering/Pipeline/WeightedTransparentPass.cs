@@ -62,10 +62,11 @@ namespace Njulf.Rendering.Pipeline
             }
 
             bool rayVariantRequired =
+                sceneData.TransparentShadowReceiverMeshletCount > 0 &&
                 sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
-                 DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
-                 sceneData.EffectiveThickTransmissionMode ==
-                 ThickTransmissionMode.RayQuery ||
+                DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
+                TransparentForwardPass.RequiresCanonicalRayColorPipeline(
+                    sceneData) ||
                 TransparentForwardPass.RequiresSceneReflectionRayVariant(
                     sceneData);
             bool rayVariant = rayVariantRequired &&
