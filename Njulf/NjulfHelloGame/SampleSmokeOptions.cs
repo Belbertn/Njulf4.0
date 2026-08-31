@@ -87,7 +87,9 @@ public sealed record SampleSmokeOptions(
     int? SimpleDdgiTransportAcceleratedSweepCountOverride = null,
     string? GiAllOnQualificationReportPath = null,
     double? MaximumFramesPerSecondOverride = null,
-    bool? VSyncOverride = null)
+    bool? VSyncOverride = null,
+    bool? PerformanceOptimizationsEnabledOverride = null,
+    PerformanceOptimizationFeature? PerformanceOptimizationMaskOverride = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
     public SampleBenchmarkQualitySequenceOptions BenchmarkQualitySequence { get; init; } =
@@ -109,6 +111,8 @@ public sealed record SampleSmokeOptions(
         EnableDdgiContentConformance ||
         EnableAsyncCompute ||
         AsyncComputeModeOverride.HasValue ||
+        PerformanceOptimizationsEnabledOverride.HasValue ||
+        PerformanceOptimizationMaskOverride.HasValue ||
         SimpleDdgiSchedulerModeOverride.HasValue ||
         SimpleDdgiProbeResidencyModeOverride.HasValue ||
         SimpleDdgiSparsePhysicalPageBudgetOverride.HasValue ||

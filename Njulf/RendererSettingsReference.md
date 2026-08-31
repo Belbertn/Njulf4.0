@@ -32,6 +32,38 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `UseSecondaryCommandBuffers` | Enables secondary command buffers for eligible passes. |
 | `UseCameraDependentCpuScenePayload` | Enables camera-dependent CPU scene payload generation. |
 | `UseCpuMeshletFrustumCulling` | Enables CPU meshlet frustum culling. |
+| `PerformanceOptimizations` | Versioned master switch and per-candidate feature mask for the quality-locked performance campaign. |
+
+## Performance optimization controls
+
+The default is `Enabled = true` with every feature bit requested. Each retained
+candidate selects a baseline or statically compiled optimized path from the
+effective mask; shader hot loops do not branch dynamically. The independent
+async-compute mode remains authoritative and removes `async-gi` from the
+effective mask when it is disabled. Startup JSONL, health reports, and capture
+settings fingerprints record the requested and effective state.
+
+```powershell
+# Preserved pre-campaign algorithms and pipeline variants
+dotnet run --project NjulfHelloGame -c Release -- --performance-optimizations disabled
+
+# Keep the retained stack but force campaign async work to graphics
+dotnet run --project NjulfHelloGame -c Release -- --async-compute-mode disabled
+
+# Isolate one or more candidates without spelling the rest of the mask
+dotnet run --project NjulfHelloGame -c Release -- --performance-optimization-mask all,-async-gi,-generation-reuse
+```
+
+The equivalent environment variables are
+`NJULF_RENDERER_PERFORMANCE_OPTIMIZATIONS` and
+`NJULF_RENDERER_PERFORMANCE_OPTIMIZATION_MASK`. Mask names are:
+`meshlet-working-set`, `resolved-meshlet-addressing`,
+`stable-ddgi-refinement`, `hybrid-projection-elision`,
+`screen-local-receiver`, `split-hybrid-forward`, `row-major-gather`,
+`shared-resolve-staging`, `static-shader-specialization`,
+`directional-lattice-sharing`, `generation-reuse`,
+`asymmetric-sided-streams`, `compact-masked-feedback`,
+`sparse-hybrid-lobe`, and `async-gi`.
 
 `RenderSettings` defaults to `DdgiHigh`, the Simple-DDGI production profile. `Ultra` remains selectable as the highest Simple-DDGI quality tier.
 

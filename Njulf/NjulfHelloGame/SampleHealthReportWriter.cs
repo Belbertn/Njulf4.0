@@ -48,6 +48,17 @@ internal sealed class SampleHealthReportWriter
             startupLogPath,
             options,
             operations,
+            performanceOptimizations = settings == null
+                ? null
+                : new
+                {
+                    enabled = settings.PerformanceOptimizations.Enabled,
+                    requestedMask = PerformanceOptimizationFeatureMask.Format(
+                        settings.PerformanceOptimizations.EnabledFeatures),
+                    effectiveMask = PerformanceOptimizationFeatureMask.Format(
+                        settings.EffectivePerformanceOptimizationFeatures),
+                    asyncMode = settings.AsyncCompute.Mode
+                },
             diagnostics
         });
     }

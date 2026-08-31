@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using Njulf.Core.Interfaces;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Data;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -106,6 +107,42 @@ public sealed class RendererStartupLogTests
             Assert.That(
                 snapshots[2].GetProperty("phase").GetString(),
                 Is.EqualTo(nameof(RendererStartupPhase.FullQuality)));
+        });
+    }
+
+    [Test]
+    public void WritesEffectivePerformanceOptimizationConfiguration()
+    {
+        string path = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"startup-performance-{Guid.NewGuid():N}.jsonl");
+        var settings = new RenderSettings();
+        settings.PerformanceOptimizations.EnabledFeatures =
+            PerformanceOptimizationFeature.All &
+            ~PerformanceOptimizationFeature.DdgiPublicationGenerationReuse;
+        settings.AsyncCompute.Mode = AsyncComputeMode.Disabled;
+
+        using (var log = new RendererStartupLog(path))
+            log.PerformanceConfiguration(settings);
+
+        using JsonDocument document = JsonDocument.Parse(
+            File.ReadLines(path).Last(line =>
+                line.Contains(
+                    "performance-optimizations",
+                    StringComparison.Ordinal)));
+        JsonElement root = document.RootElement;
+        Assert.Multiple(() =>
+        {
+            Assert.That(root.GetProperty("enabled").GetBoolean(), Is.True);
+            Assert.That(
+                root.GetProperty("requestedMask").GetString(),
+                Does.Not.Contain("generation-reuse"));
+            Assert.That(
+                root.GetProperty("effectiveMask").GetString(),
+                Does.Not.Contain("async-gi"));
+            Assert.That(
+                root.GetProperty("asyncFallback").GetString(),
+                Is.EqualTo("async-mode-disabled"));
         });
     }
 }

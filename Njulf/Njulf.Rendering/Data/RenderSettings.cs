@@ -5657,7 +5657,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 26;
+        public const int SerializationVersion = 27;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5708,6 +5708,28 @@ namespace Njulf.Rendering.Data
         public HiZVisibilityPolicySettings HiZVisibilityPolicy { get; } = new();
         public HiZOcclusionSettings HiZOcclusion { get; } = new();
         public AsyncComputeSettings AsyncCompute { get; } = new();
+        public PerformanceOptimizationSettings PerformanceOptimizations { get; } =
+            new();
+        public PerformanceOptimizationFeature
+            EffectivePerformanceOptimizationFeatures
+        {
+            get
+            {
+                PerformanceOptimizationFeature features =
+                    PerformanceOptimizations.EffectiveFeatures;
+                if (AsyncCompute.Mode == AsyncComputeMode.Disabled)
+                {
+                    features &= ~PerformanceOptimizationFeature
+                        .AsyncGiFarFieldExecution;
+                }
+                return features;
+            }
+        }
+
+        public bool IsPerformanceOptimizationEnabled(
+            PerformanceOptimizationFeature feature) =>
+            feature != PerformanceOptimizationFeature.None &&
+            (EffectivePerformanceOptimizationFeatures & feature) == feature;
         public DebugOverlaySettings Debug { get; } = new();
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
         public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.DdgiHigh;
@@ -6430,6 +6452,8 @@ namespace Njulf.Rendering.Data
             // Version 26 persists adaptive-reflection implementation selection
             // and its compact receiver/history contracts after the combined
             // renderer plans consumed the in-progress version-25 schema.
+            // Version 27 persists the quality-locked performance campaign's
+            // master switch and independently reversible feature mask.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -6463,6 +6487,11 @@ namespace Njulf.Rendering.Data
             public SceneSubmissionFile SceneSubmission { get; init; } = new();
             public HiZOcclusionFile HiZOcclusion { get; init; } = new();
             public AsyncComputeFile AsyncCompute { get; init; } = new();
+            public PerformanceOptimizationsFile? PerformanceOptimizations
+            {
+                get;
+                init;
+            }
             public bool GpuMeshletCountersEnabled { get; init; }
             public bool DdgiForwardEstimateCountersEnabled { get; init; }
 
@@ -6509,6 +6538,9 @@ namespace Njulf.Rendering.Data
                     SceneSubmission = SceneSubmissionFile.FromSettings(settings.SceneSubmission),
                     HiZOcclusion = HiZOcclusionFile.FromSettings(settings.HiZOcclusion),
                     AsyncCompute = AsyncComputeFile.FromSettings(settings.AsyncCompute),
+                    PerformanceOptimizations =
+                        PerformanceOptimizationsFile.FromSettings(
+                            settings.PerformanceOptimizations),
                     GpuMeshletCountersEnabled = settings.Diagnostics.GpuMeshletCountersEnabled,
                     DdgiForwardEstimateCountersEnabled = settings.Diagnostics.DdgiForwardEstimateCountersEnabled
                 };
@@ -6632,8 +6664,32 @@ namespace Njulf.Rendering.Data
                 // have a trustworthy policy field, so retain their graphics-only behavior when
                 // Mode is absent instead of silently changing an existing installation.
                 AsyncCompute.ApplyTo(settings.AsyncCompute, missingModeMeansDisabled: !Version.HasValue || Version.Value < 3);
+                PerformanceOptimizations?.ApplyTo(
+                    settings.PerformanceOptimizations);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
                 settings.Diagnostics.DdgiForwardEstimateCountersEnabled = DdgiForwardEstimateCountersEnabled;
+            }
+        }
+
+        private sealed record PerformanceOptimizationsFile
+        {
+            public bool Enabled { get; init; } = true;
+            public PerformanceOptimizationFeature EnabledFeatures { get; init; } =
+                PerformanceOptimizationFeature.All;
+
+            public static PerformanceOptimizationsFile FromSettings(
+                PerformanceOptimizationSettings settings) => new()
+            {
+                Enabled = settings.Enabled,
+                EnabledFeatures = settings.EnabledFeatures &
+                    PerformanceOptimizationFeature.All
+            };
+
+            public void ApplyTo(PerformanceOptimizationSettings settings)
+            {
+                settings.Enabled = Enabled;
+                settings.EnabledFeatures = EnabledFeatures &
+                    PerformanceOptimizationFeature.All;
             }
         }
 

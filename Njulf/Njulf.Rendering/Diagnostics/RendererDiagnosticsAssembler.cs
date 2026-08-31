@@ -2731,6 +2731,27 @@ internal sealed class RendererDiagnosticsAssembler
 
         RendererDiagnostics finalDiagnostics = diagnostics with
         {
+            PerformanceOptimizationsEnabled =
+                Settings.PerformanceOptimizations.Enabled,
+            RequestedPerformanceOptimizationMask = Settings
+                .PerformanceOptimizations.EnabledFeatures &
+                PerformanceOptimizationFeature.All,
+            EffectivePerformanceOptimizationMask =
+                Settings.EffectivePerformanceOptimizationFeatures,
+            PerformanceOptimizationAsyncMode = Settings.AsyncCompute.Mode,
+            PerformanceOptimizationHardwareFallbacks =
+                Settings.IsPerformanceOptimizationEnabled(
+                    PerformanceOptimizationFeature
+                        .AsyncGiFarFieldExecution) &&
+                !asyncComputePlan.Enabled
+                    ? new[] { "async-gi:" + asyncComputePlan.Status }
+                    : Array.Empty<string>(),
+            PerformanceOptimizationQuarantineState =
+                asyncComputePlan.Status.Contains(
+                    "quarantin",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? asyncComputePlan.Status
+                    : "none",
             ActiveBudgetProfile = profile.Kind,
             ActiveBudgetProfileName = profile.Name,
             ActiveQualityPreset = Settings.QualityPreset,

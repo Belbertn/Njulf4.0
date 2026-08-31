@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using Njulf.Core.Interfaces;
+using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Diagnostics;
 
@@ -122,6 +123,39 @@ public sealed class RendererStartupLog : IDisposable
                 kind = "device",
                 timestampUtc = DateTimeOffset.UtcNow,
                 report
+            });
+        }
+    }
+
+    public void PerformanceConfiguration(RenderSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        PerformanceOptimizationFeature requested =
+            settings.PerformanceOptimizations.EnabledFeatures &
+            PerformanceOptimizationFeature.All;
+        PerformanceOptimizationFeature effective =
+            settings.EffectivePerformanceOptimizationFeatures;
+        string asyncFallback =
+            settings.AsyncCompute.Mode == AsyncComputeMode.Disabled &&
+            (requested & PerformanceOptimizationFeature
+                .AsyncGiFarFieldExecution) != 0
+                ? "async-mode-disabled"
+                : "none";
+        lock (_sync)
+        {
+            WriteObject(new
+            {
+                kind = "performance-optimizations",
+                timestampUtc = DateTimeOffset.UtcNow,
+                enabled = settings.PerformanceOptimizations.Enabled,
+                requestedMask =
+                    PerformanceOptimizationFeatureMask.Format(requested),
+                effectiveMask =
+                    PerformanceOptimizationFeatureMask.Format(effective),
+                asyncMode = settings.AsyncCompute.Mode,
+                asyncFallback,
+                hardwareFallbacks = Array.Empty<string>(),
+                quarantineState = "none-at-startup"
             });
         }
     }

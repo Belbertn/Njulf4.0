@@ -122,6 +122,8 @@ public static class SampleSmokeOptionsParser
         "--async-compute",
         "--async-compute-mode",
         "--async-compute-path",
+        "--performance-optimizations",
+        "--performance-optimization-mask",
         "--simple-ddgi-scheduler-mode",
         "--simple-ddgi-residency-mode",
         "--simple-ddgi-sparse-page-budget",
@@ -386,6 +388,24 @@ public static class SampleSmokeOptionsParser
             Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_MODE"));
         AsyncComputePath? asyncComputeValidationPath = ParseAsyncComputePath(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_PATH"));
+        string? performanceOptimizationsEnvironment =
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_PERFORMANCE_OPTIMIZATIONS");
+        bool? performanceOptimizationsEnabledOverride =
+            string.IsNullOrWhiteSpace(performanceOptimizationsEnvironment)
+                ? null
+                : ParseEnabledDisabled(
+                    performanceOptimizationsEnvironment,
+                    "NJULF_RENDERER_PERFORMANCE_OPTIMIZATIONS");
+        string? performanceOptimizationMaskEnvironment =
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_PERFORMANCE_OPTIMIZATION_MASK");
+        PerformanceOptimizationFeature? performanceOptimizationMaskOverride =
+            string.IsNullOrWhiteSpace(performanceOptimizationMaskEnvironment)
+                ? null
+                : PerformanceOptimizationFeatureMask.Parse(
+                    performanceOptimizationMaskEnvironment,
+                    "NJULF_RENDERER_PERFORMANCE_OPTIMIZATION_MASK");
         SimpleDdgiSchedulerMode? simpleDdgiSchedulerModeOverride = ParseSimpleDdgiSchedulerMode(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SCHEDULER_MODE"));
         SimpleDdgiProbeResidencyMode? simpleDdgiProbeResidencyModeOverride =
@@ -1090,6 +1110,16 @@ public static class SampleSmokeOptionsParser
                 case "--async-compute-path":
                     asyncComputeValidationPath = ParseAsyncComputePath(value) ??
                         throw new ArgumentException("--async-compute-path requires a known atomic async path.");
+                    break;
+                case "--performance-optimizations":
+                    performanceOptimizationsEnabledOverride =
+                        ParseEnabledDisabled(value, optionName);
+                    break;
+                case "--performance-optimization-mask":
+                    performanceOptimizationMaskOverride =
+                        PerformanceOptimizationFeatureMask.Parse(
+                            value,
+                            optionName);
                     break;
                 case "--simple-ddgi-scheduler-mode":
                     simpleDdgiSchedulerModeOverride = ParseSimpleDdgiSchedulerMode(value) ??
@@ -2038,6 +2068,13 @@ public static class SampleSmokeOptionsParser
                     mode = SampleSmokeMode.Startup;
                 if (mode == SampleSmokeMode.None && asyncComputeModeOverride.HasValue && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
+                if (mode == SampleSmokeMode.None &&
+                    (performanceOptimizationsEnabledOverride.HasValue ||
+                     performanceOptimizationMaskOverride.HasValue) &&
+                    !smokeModeSpecified)
+                {
+                    mode = SampleSmokeMode.Startup;
+                }
                 if (mode == SampleSmokeMode.None && simpleDdgiSchedulerModeOverride.HasValue && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
                 if (mode == SampleSmokeMode.None &&
@@ -2419,7 +2456,9 @@ public static class SampleSmokeOptionsParser
             transportAcceleratedSweepCountOverride,
             giAllOnQualificationReportPath,
             maximumFramesPerSecondOverride,
-            vSyncOverride);
+            vSyncOverride,
+            performanceOptimizationsEnabledOverride,
+            performanceOptimizationMaskOverride);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -2469,6 +2508,19 @@ public static class SampleSmokeOptionsParser
                 SampleSponzaGiCaptureMode.PresentationReview,
             _ => throw new ArgumentException(
                 $"Invalid Sponza GI capture mode '{value}'. Valid values: detailed, production, presentation.")
+        };
+    }
+
+    private static bool ParseEnabledDisabled(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} requires enabled or disabled.");
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "enabled" or "enable" or "on" or "true" or "1" => true,
+            "disabled" or "disable" or "off" or "false" or "0" => false,
+            _ => throw new ArgumentException(
+                $"{name} requires enabled or disabled.")
         };
     }
 

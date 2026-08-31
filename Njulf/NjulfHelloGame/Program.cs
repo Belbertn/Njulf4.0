@@ -1239,6 +1239,7 @@ internal sealed class HelloGame : Game
 
     private void ApplySmokeRenderSettings(VulkanRenderer renderer)
     {
+        ApplyPerformanceOptimizationOverrides(renderer.Settings);
         if (_smokeOptions.QualityPresetOverride.HasValue)
         {
             renderer.Settings.ApplyQualityPreset(
@@ -1409,6 +1410,12 @@ internal sealed class HelloGame : Game
     private void ApplyPreInitializationRenderSettings(RenderSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        ApplyPerformanceOptimizationOverrides(settings);
+        if (_smokeOptions.AsyncComputeModeOverride.HasValue)
+        {
+            settings.AsyncCompute.Mode =
+                _smokeOptions.AsyncComputeModeOverride.Value;
+        }
         if (_smokeOptions.QualityPresetOverride.HasValue)
         {
             settings.ApplyQualityPreset(
@@ -1462,6 +1469,21 @@ internal sealed class HelloGame : Game
         }
         ApplyAdvancedGiSettings(settings.GlobalIllumination);
         ApplyScenePostOverrides(settings);
+    }
+
+    private void ApplyPerformanceOptimizationOverrides(RenderSettings settings)
+    {
+        if (_smokeOptions.PerformanceOptimizationsEnabledOverride.HasValue)
+        {
+            settings.PerformanceOptimizations.Enabled = _smokeOptions
+                .PerformanceOptimizationsEnabledOverride.Value;
+        }
+        if (_smokeOptions.PerformanceOptimizationMaskOverride.HasValue)
+        {
+            settings.PerformanceOptimizations.EnabledFeatures = _smokeOptions
+                .PerformanceOptimizationMaskOverride.Value &
+                PerformanceOptimizationFeature.All;
+        }
     }
 
     private void ApplyAdvancedGiSettings(GlobalIlluminationSettings gi)

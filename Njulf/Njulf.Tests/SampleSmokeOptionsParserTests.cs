@@ -147,6 +147,12 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE_MODE", null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_PERFORMANCE_OPTIMIZATIONS",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_PERFORMANCE_OPTIMIZATION_MASK",
+            null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_CLIPMAP", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_FAR_FIELD_FORCE_ALL", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SIMPLE_DDGI_SCHEDULER_MODE", null);
@@ -1167,6 +1173,49 @@ public sealed class SampleSmokeOptionsParserTests
         });
 
         Assert.That(options.FrameCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void PerformanceOptimizationCommandLineOverridesEnvironment()
+    {
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_PERFORMANCE_OPTIMIZATIONS",
+            "disabled");
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_PERFORMANCE_OPTIMIZATION_MASK",
+            "none");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--performance-optimizations", "enabled",
+            "--performance-optimization-mask",
+            "all,-async-gi,-generation-reuse"
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.PerformanceOptimizationsEnabledOverride,
+                Is.True);
+            Assert.That(
+                options.PerformanceOptimizationMaskOverride,
+                Is.EqualTo(
+                    PerformanceOptimizationFeature.All &
+                    ~PerformanceOptimizationFeature.AsyncGiFarFieldExecution &
+                    ~PerformanceOptimizationFeature
+                        .DdgiPublicationGenerationReuse));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+        });
+    }
+
+    [TestCase("maybe")]
+    [TestCase("")]
+    public void PerformanceOptimizationMasterRejectsUnknownValues(
+        string value)
+    {
+        Assert.Throws<ArgumentException>(() =>
+            SampleSmokeOptionsParser.Parse(
+                ["--performance-optimizations", value]));
     }
 
     [Test]

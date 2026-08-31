@@ -1269,6 +1269,13 @@ namespace Njulf.Rendering
                 _bindlessHeap);
             _lightManager.PhotometricProfiles = _iesPhotometricProfileManager;
             Settings = initialSettings ?? new RenderSettings();
+            _startupLog?.PerformanceConfiguration(Settings);
+            Console.WriteLine(
+                "Performance optimizations: " +
+                $"enabled={Settings.PerformanceOptimizations.Enabled}, " +
+                $"requested={PerformanceOptimizationFeatureMask.Format(Settings.PerformanceOptimizations.EnabledFeatures)}, " +
+                $"effective={PerformanceOptimizationFeatureMask.Format(Settings.EffectivePerformanceOptimizationFeatures)}, " +
+                $"async={Settings.AsyncCompute.Mode}.");
             _ddgiInvalidation = new DdgiSceneInvalidationCoordinator(
                 _meshManager,
                 _materialManager,

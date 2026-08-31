@@ -608,6 +608,26 @@ namespace Njulf.Rendering.Data
         long GpuReflectionProbePrefilterMicroseconds,
         long GpuReflectionProbePublishMicroseconds)
     {
+        public bool PerformanceOptimizationsEnabled { get; init; } = true;
+        public PerformanceOptimizationFeature RequestedPerformanceOptimizationMask
+        {
+            get;
+            init;
+        } = PerformanceOptimizationFeature.All;
+        public PerformanceOptimizationFeature EffectivePerformanceOptimizationMask
+        {
+            get;
+            init;
+        } = PerformanceOptimizationFeature.All;
+        public AsyncComputeMode PerformanceOptimizationAsyncMode { get; init; } =
+            AsyncComputeMode.Auto;
+        public IReadOnlyList<string> PerformanceOptimizationHardwareFallbacks
+        {
+            get;
+            init;
+        } = Array.Empty<string>();
+        public string PerformanceOptimizationQuarantineState { get; init; } =
+            "none";
         public int DirectionalLightCount { get; init; }
         public int LocalLightCount { get; init; }
         public int PointLightCount { get; init; }

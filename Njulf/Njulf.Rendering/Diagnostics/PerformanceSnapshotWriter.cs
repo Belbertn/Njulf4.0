@@ -78,6 +78,33 @@ namespace Njulf.Rendering.Diagnostics
         public string PairedCaptureIdentity { get; init; } = string.Empty;
         public IReadOnlyList<PerformanceMetricSemanticEntry> CounterSemantics { get; init; } =
             Array.Empty<PerformanceMetricSemanticEntry>();
+        public PerformanceOptimizationCaptureMetadata PerformanceOptimizations
+        {
+            get;
+            init;
+        } = PerformanceOptimizationCaptureMetadata.Unknown;
+    }
+
+    public sealed record PerformanceOptimizationCaptureMetadata(
+        bool Enabled,
+        PerformanceOptimizationFeature RequestedMask,
+        PerformanceOptimizationFeature EffectiveMask,
+        string RequestedMaskExpression,
+        string EffectiveMaskExpression,
+        AsyncComputeMode AsyncMode,
+        IReadOnlyList<string> HardwareFallbacks,
+        string QuarantineState)
+    {
+        public static PerformanceOptimizationCaptureMetadata Unknown { get; } =
+            new(
+                true,
+                PerformanceOptimizationFeature.All,
+                PerformanceOptimizationFeature.All,
+                "all",
+                "all",
+                AsyncComputeMode.Auto,
+                Array.Empty<string>(),
+                "unknown");
     }
 
     public sealed record PerformanceSnapshot(
@@ -105,7 +132,7 @@ namespace Njulf.Rendering.Diagnostics
         /// accelerated-solver dispatch/publication, and C4 receiver-payload
         /// evidence used by strict simultaneous all-on qualification.
         /// </summary>
-        public const int CurrentSchemaVersion = 12;
+        public const int CurrentSchemaVersion = 13;
 
         public int SchemaVersion { get; init; } = CurrentSchemaVersion;
         /// <summary>Persisted source version before migration, useful when opening baselines.</summary>
@@ -918,7 +945,19 @@ namespace Njulf.Rendering.Diagnostics
                     "unavailable:scene-asset-hash-not-reported"),
                 ValidationState = diagnostics.ValidationMode.ToString(),
                 PairedCaptureIdentity = CreatePairedCaptureIdentity(diagnostics),
-                CounterSemantics = CreateCounterSemantics()
+                CounterSemantics = CreateCounterSemantics(),
+                PerformanceOptimizations =
+                    new PerformanceOptimizationCaptureMetadata(
+                        diagnostics.PerformanceOptimizationsEnabled,
+                        diagnostics.RequestedPerformanceOptimizationMask,
+                        diagnostics.EffectivePerformanceOptimizationMask,
+                        PerformanceOptimizationFeatureMask.Format(
+                            diagnostics.RequestedPerformanceOptimizationMask),
+                        PerformanceOptimizationFeatureMask.Format(
+                            diagnostics.EffectivePerformanceOptimizationMask),
+                        diagnostics.PerformanceOptimizationAsyncMode,
+                        diagnostics.PerformanceOptimizationHardwareFallbacks,
+                        diagnostics.PerformanceOptimizationQuarantineState)
             };
         }
 
