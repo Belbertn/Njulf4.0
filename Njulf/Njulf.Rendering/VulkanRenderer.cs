@@ -1919,7 +1919,8 @@ namespace Njulf.Rendering
             // instance from a previous generation alive.
             ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(
                 _renderGraph,
-                _advancedGiAdmission.GraphModes);
+                _advancedGiAdmission.GraphModes,
+                Settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled);
 
             var passInstances = new Dictionary<string, RenderPassBase>(StringComparer.Ordinal);
 
@@ -8293,9 +8294,12 @@ namespace Njulf.Rendering
                     simpleDdgi.RayResultScratchBuffer,
                     simpleDdgi.ProbeStateBuffer,
                     simpleDdgi.ReceiverProbeBuffer,
+                    simpleDdgi.DirectionalRadianceBuffer,
+                    simpleDdgi.DirectionalRadianceParityBuffer,
                     simpleDdgi.ProbeUpdateQueueBuffer,
                     simpleDdgi.RelocationClassificationBuffer,
-                    simpleDdgi.GpuSchedulerArenaBuffer);
+                    simpleDdgi.GpuSchedulerArenaBuffer,
+                    simpleDdgi.SampledAtlasAllocationGeneration);
             NearFieldResidualGraphResourceSnapshot nearFieldResources =
                 _nearFieldResidual.CaptureGraphResources();
             SimpleDdgiNearFieldResidualVulkanBuffers nearFieldBuffers =
@@ -8749,6 +8753,29 @@ namespace Njulf.Rendering
                 AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiScheduler,
                     "Simple DDGI GPU scheduler arena",
                     _simpleDdgiVolumeManager.GpuSchedulerArenaBuffer, queueFamilies, graphicsFamily);
+
+                if (_simpleDdgiVolumeManager
+                    .TryGetSampledAtlasGraphResourceSnapshot(
+                        out SimpleDdgiSampledAtlasGraphResourceSnapshot
+                            sampledAtlas))
+                {
+                    AddSimpleDdgiSampledAtlasBindings(
+                        bindings,
+                        RenderGraphResourceId
+                            .SimpleDdgiSampledIrradianceAtlas,
+                        sampledAtlas.Irradiance!,
+                        sampledAtlas,
+                        queueFamilies,
+                        graphicsFamily);
+                    AddSimpleDdgiSampledAtlasBindings(
+                        bindings,
+                        RenderGraphResourceId
+                            .SimpleDdgiSampledVisibilityAtlas,
+                        sampledAtlas.Visibility!,
+                        sampledAtlas,
+                        queueFamilies,
+                        graphicsFamily);
+                }
             }
 
             if (_simpleDdgiGuidingFrameCoordinator is { } guidingCoordinator &&
@@ -9089,6 +9116,49 @@ namespace Njulf.Rendering
                 initialAccessMask: initialAccessMask));
         }
 
+        private static void AddSimpleDdgiSampledAtlasBindings(
+            ICollection<RenderGraphConcreteResourceBinding> bindings,
+            RenderGraphResourceId resource,
+            IReadOnlyList<SimpleDdgiSampledAtlasImageGraphBinding> images,
+            in SimpleDdgiSampledAtlasGraphResourceSnapshot snapshot,
+            IReadOnlyList<uint> queueFamilies,
+            uint graphicsFamily)
+        {
+            uint? initialOwner = snapshot.SharingMode == SharingMode.Concurrent
+                ? null
+                : graphicsFamily;
+            for (int imageIndex = 0;
+                 imageIndex < images.Count;
+                 imageIndex++)
+            {
+                SimpleDdgiSampledAtlasImageGraphBinding image =
+                    images[imageIndex];
+                if (image.Image.Handle == 0 || image.LayerCount == 0u)
+                    continue;
+
+                bindings.Add(RenderGraphConcreteResourceBinding.ForImage(
+                    resource,
+                    image.Name,
+                    image.Image,
+                    new ImageSubresourceRange
+                    {
+                        AspectMask = ImageAspectFlags.ColorBit,
+                        BaseMipLevel = 0u,
+                        LevelCount = 1u,
+                        BaseArrayLayer = 0u,
+                        LayerCount = image.LayerCount
+                    },
+                    image.LayoutProvider(),
+                    queueFamilies,
+                    initialOwner,
+                    snapshot.SharingMode,
+                    allocationGeneration: snapshot.AllocationGeneration,
+                    lifetime: RenderGraphResourceLifetime.Imported,
+                    layoutTracker: image.LayoutTracker,
+                    layoutProvider: image.LayoutProvider));
+            }
+        }
+
         private int AddTextureBindings(
             ICollection<RenderGraphConcreteResourceBinding> bindings,
             RenderGraphResourceId resource,
@@ -9238,9 +9308,12 @@ namespace Njulf.Rendering
             BufferHandle RayScratch,
             BufferHandle ProbeState,
             BufferHandle ReceiverProbes,
+            BufferHandle DirectionalRadiance,
+            BufferHandle DirectionalRadianceParity,
             BufferHandle UpdateQueue,
             BufferHandle RelocationClassification,
-            BufferHandle Scheduler);
+            BufferHandle Scheduler,
+            ulong SampledAtlasAllocationGeneration);
 
         private readonly record struct NearFieldResidualAsyncBufferIdentity(
             BufferHandle HistoryMetadata0,
@@ -12456,7 +12529,8 @@ namespace Njulf.Rendering
                 });
             ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(
                 _renderGraph,
-                _advancedGiAdmission.GraphModes);
+                _advancedGiAdmission.GraphModes,
+                Settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled);
             _renderGraph.RemovePassesAfterDeviceIdle(
             [
                 GiCausticGpuPassNames.Task,
@@ -12575,7 +12649,8 @@ namespace Njulf.Rendering
             // inventory so ForwardPlus no longer names the released MRTs.
             ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(
                 _renderGraph,
-                _advancedGiAdmission.GraphModes);
+                _advancedGiAdmission.GraphModes,
+                Settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled);
             var c5PassNames = new List<string>(
                 publication.FilterIterationCount + 7)
             {

@@ -36,7 +36,11 @@ public static class AsyncComputePassCatalog
         Candidate("HiZBuildPass", "Depth prepass", "Visibility compaction", "Auto timing gate rejects immediate-consumer workloads."),
         Candidate("FarFieldClipmapBakePass", "Scene geometry/material uploads", "Simple DDGI trace or next-frame sampling", "Grouped with adjacent DDGI work when it is consumed immediately."),
         Candidate("SimpleDdgiSchedulePass", "Simple DDGI frame/policy/delta uploads", "Simple DDGI trace/relocate consumers", "The resident arena is the producer of all fixed indirect commands."),
+        Candidate(SimpleDdgiGuidingGpuPassNames.Sample, "Simple DDGI schedule, guiding distributions, and update queue", "Simple DDGI trace", "Guided direction/PDF sampling is the first phase of the indivisible Simple-DDGI update segment."),
         Candidate("SimpleDdgiTracePass", "TLAS, scene material/light/environment state", "Simple DDGI relocate/blend", "All ray-query inputs and writable DDGI allocations have concrete contracts."),
+        Candidate(SimpleDdgiGuidingGpuPassNames.Train, "Simple DDGI trace scratch and sampled direction sidecar", "Guiding hierarchy build", "Training extraction remains queue-local between trace and hierarchy publication."),
+        Candidate(SimpleDdgiGuidingGpuPassNames.Build, "Guiding training workspace and inactive distribution bank", "Guiding validation", "Hierarchy construction publishes only inside the indivisible update segment."),
+        Candidate(SimpleDdgiGuidingGpuPassNames.Validate, "Built guiding distribution and validation workspace", "Simple DDGI relocate/transport", "Validation closes guiding publication before the remaining Simple-DDGI phases execute."),
         Candidate("SimpleDdgiRelocateClassifyPass", "Simple DDGI trace/state", "Simple DDGI transport/blend", "Part of the indivisible simple-DDGI update segment."),
         Candidate("SimpleDdgiDirectionalRadiancePass", "Simple DDGI completed blend/source cache", "Directional SH sidecar and compact publication", "The optional FP32 reduction and checked publication are split internally but remain inside the indivisible update segment."),
         Candidate("SimpleDdgiAcceleratedSolvePass", "Simple DDGI cached source and relocation state", "Simple DDGI publication", "Transport, blend, and intermediate canonical publication are serialized within each cached sweep."),
@@ -131,7 +135,11 @@ public static class AsyncComputePassCatalog
         switch (passName)
         {
             case "SimpleDdgiSchedulePass":
+            case SimpleDdgiGuidingGpuPassNames.Sample:
             case "SimpleDdgiTracePass":
+            case SimpleDdgiGuidingGpuPassNames.Train:
+            case SimpleDdgiGuidingGpuPassNames.Build:
+            case SimpleDdgiGuidingGpuPassNames.Validate:
             case "SimpleDdgiRelocateClassifyPass":
             case "SimpleDdgiDirectionalRadiancePass":
             case "SimpleDdgiAcceleratedSolvePass":

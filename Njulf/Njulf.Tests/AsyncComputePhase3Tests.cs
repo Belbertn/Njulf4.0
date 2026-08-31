@@ -484,6 +484,72 @@ public sealed class AsyncComputePhase3Tests
     }
 
     [Test]
+    public void Scheduler_KeepsCompleteGuidedSimpleDdgiChainInOneAtomicSegment()
+    {
+        RenderGraphResourceBindings bindings = CreateBindings(
+            CreateBufferBinding(
+                RenderGraphResourceId.SimpleDdgiScheduler,
+                "complete guided DDGI transaction",
+                1160,
+                0,
+                4096));
+        string[] atomicPasses =
+        [
+            "SimpleDdgiSchedulePass",
+            SimpleDdgiGuidingGpuPassNames.Sample,
+            "SimpleDdgiTracePass",
+            SimpleDdgiGuidingGpuPassNames.Train,
+            SimpleDdgiGuidingGpuPassNames.Build,
+            SimpleDdgiGuidingGpuPassNames.Validate,
+            "SimpleDdgiRelocateClassifyPass",
+            "SimpleDdgiAcceleratedSolvePass",
+            "SimpleDdgiTransportPass",
+            "SimpleDdgiBlendPass",
+            "SimpleDdgiDirectionalRadiancePass",
+            "SimpleDdgiPublishPass",
+            "SimpleDdgiTransportAuditPass",
+            "SimpleDdgiSchedulerCommitPass"
+        ];
+        var passes = new List<AsyncComputePassRequest>
+        {
+            GraphicsPass(
+                "forward-producer",
+                RenderGraphResourceId.SimpleDdgiScheduler,
+                RenderGraphResourceAccess.Read)
+        };
+        passes.AddRange(atomicPasses.Select(passName => ComputePass(
+            passName,
+            AsyncComputePath.SimpleDdgiUpdate,
+            RenderGraphResourceId.SimpleDdgiScheduler,
+            RenderGraphResourceAccess.ReadWrite)));
+        passes.Add(GraphicsPass(
+            "next-frame-consumer",
+            RenderGraphResourceId.SimpleDdgiScheduler,
+            RenderGraphResourceAccess.Read));
+
+        AsyncComputeSubmissionPlan plan = Compile(
+            bindings,
+            passes,
+            Enabled(AsyncComputePath.SimpleDdgiUpdate));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Accepted, Is.True, plan.FailureReason);
+            Assert.That(plan.ContainsAsyncCompute, Is.True);
+            Assert.That(
+                plan.Segments.Single(segment =>
+                    segment.Queue == AsyncComputeQueue.Compute).Passes,
+                Is.EqualTo(atomicPasses));
+            Assert.That(atomicPasses.All(passName =>
+                    AsyncComputePassCatalog.TryGetPath(
+                        passName,
+                        out AsyncComputePath path) &&
+                    path == AsyncComputePath.SimpleDdgiUpdate),
+                Is.True);
+        });
+    }
+
+    [Test]
     public void Scheduler_ExcludesFeatureIsolatedPassesBeforeCheckingAtomicGroups()
     {
         RenderGraphResourceBindings bindings = CreateBindings(

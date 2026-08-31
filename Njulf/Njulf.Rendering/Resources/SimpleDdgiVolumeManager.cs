@@ -1963,6 +1963,19 @@ namespace Njulf.Rendering.Resources
             ? string.Empty
             : _sampledAtlasFallbackReason;
 
+        internal bool TryGetSampledAtlasGraphResourceSnapshot(
+            out SimpleDdgiSampledAtlasGraphResourceSnapshot snapshot)
+        {
+            if (SampledAtlasActive && _sampledAtlas is not null)
+            {
+                return _sampledAtlas.TryGetGraphResourceSnapshot(
+                    out snapshot);
+            }
+
+            snapshot = default;
+            return false;
+        }
+
         public SimpleDdgiStorageDiagnostics CreateStorageDiagnostics()
         {
             int fp16DistanceVolumes = 0;

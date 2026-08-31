@@ -152,7 +152,7 @@ public sealed class AdvancedGiRenderGraphModesTests
             Assert.That(declarations["SimpleDdgiTracePass"].Usages.Any(usage =>
                     usage.Resource == RenderGraphResourceId.SimpleDdgiGuidingDirectionPayloadSidecar &&
                     usage.Access == RenderGraphResourceAccess.Read),
-                Is.False);
+                Is.True);
             Assert.That(declarations["SimpleDdgiTracePass"].Usages.Any(usage =>
                     usage.Resource == RenderGraphResourceId.SimpleDdgiRayScratch &&
                     usage.Access == RenderGraphResourceAccess.ReadWrite),
@@ -195,6 +195,92 @@ public sealed class AdvancedGiRenderGraphModesTests
                     usage.Access == RenderGraphResourceAccess.Read &&
                     (usage.AccessMask & AccessFlags2.ShaderStorageReadBit) != 0 &&
                     (usage.AccessMask & AccessFlags2.ShaderSampledReadBit) == 0));
+        });
+    }
+
+    [Test]
+    public void SampledAtlasRequest_DeclaresCompletePublicationAndReceiverFootprint()
+    {
+        var production = ProductionRenderPipelineDeclaration.Instance;
+        Dictionary<string, RenderGraphPassResourceDeclaration> baseline =
+            production.CreatePassResourceDeclarations(
+                    AdvancedGiRenderGraphModes.Disabled)
+                .ToDictionary(static declaration => declaration.PassName);
+        Dictionary<string, RenderGraphPassResourceDeclaration> sampled =
+            production.CreatePassResourceDeclarations(
+                    AdvancedGiRenderGraphModes.Disabled,
+                    sampledAtlasRequested: true)
+                .ToDictionary(static declaration => declaration.PassName);
+        Dictionary<RenderGraphResourceId, RenderGraphResourceDescriptor>
+            descriptors = production.CreateResourceDescriptors(
+                    Format.D32Sfloat,
+                    Format.B8G8R8A8Srgb)
+                .ToDictionary(static descriptor => descriptor.Id);
+
+        RenderGraphResourceId[] images =
+        [
+            RenderGraphResourceId.SimpleDdgiSampledIrradianceAtlas,
+            RenderGraphResourceId.SimpleDdgiSampledVisibilityAtlas
+        ];
+        string[] graphicsReceivers =
+        [
+            "ForwardPlusPass",
+            "AutomaticPlanarReflectionPass",
+            "TransparentForwardPass",
+            "WeightedTransparentPass",
+            "ParticlePass"
+        ];
+        string[] computeReceivers =
+        [
+            "HybridReflectionDdgiBasePass",
+            "FogPass"
+        ];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(images.All(resource =>
+                    descriptors[resource].Kind ==
+                        RenderGraphResourceKind.ImageChain &&
+                    descriptors[resource].Lifetime ==
+                        RenderGraphResourceLifetime.Imported),
+                Is.True);
+            Assert.That(images.All(resource => baseline.Values.All(
+                    declaration => declaration.Usages.All(usage =>
+                        usage.Resource != resource))),
+                Is.True,
+                "The preserved baseline graph must not require optional images.");
+            Assert.That(graphicsReceivers.All(passName => images.All(resource =>
+                    sampled[passName].Usages.Any(usage =>
+                        usage.Resource == resource &&
+                        usage.Access == RenderGraphResourceAccess.Read &&
+                        usage.ImageLayout ==
+                            ImageLayout.ShaderReadOnlyOptimal &&
+                        usage.QueueIntent ==
+                            RenderGraphQueueIntent.Graphics))),
+                Is.True);
+            Assert.That(computeReceivers.All(passName => images.All(resource =>
+                    sampled[passName].Usages.Any(usage =>
+                        usage.Resource == resource &&
+                        usage.Access == RenderGraphResourceAccess.Read &&
+                        usage.StageMask ==
+                            PipelineStageFlags2.ComputeShaderBit &&
+                        usage.QueueIntent ==
+                            RenderGraphQueueIntent.Compute))),
+                Is.True);
+            Assert.That(images.All(resource =>
+                    sampled["SimpleDdgiPublishPass"].Usages.Any(usage =>
+                        usage.Resource == resource &&
+                        usage.Access == RenderGraphResourceAccess.Write &&
+                        usage.ImageLayout == ImageLayout.General &&
+                        usage.FinalImageLayout ==
+                            ImageLayout.ShaderReadOnlyOptimal)),
+                Is.True);
+            Assert.That(sampled["FarFieldClipmapBakePass"].Usages.Any(usage =>
+                    usage.Resource == RenderGraphResourceId.MaterialTextures &&
+                    usage.Access == RenderGraphResourceAccess.Read &&
+                    usage.AccessMask == AccessFlags2.ShaderSampledReadBit &&
+                    usage.QueueIntent == RenderGraphQueueIntent.Compute),
+                Is.True);
         });
     }
 

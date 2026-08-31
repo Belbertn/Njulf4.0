@@ -204,7 +204,12 @@ namespace Njulf.Rendering.Pipeline
         // manager-owned because exact VMA allocation sizes participate in the
         // reflection budget. The graph tracks their ordering as one external
         // resource while the pass records per-image transitions explicitly.
-        AutomaticPlanarReflections
+        AutomaticPlanarReflections,
+        // Optional sampled-image mirrors of the canonical Simple-DDGI SSBO
+        // atlases. They are separate image chains because their formats and
+        // layout state differ, and are append-only for capture compatibility.
+        SimpleDdgiSampledIrradianceAtlas,
+        SimpleDdgiSampledVisibilityAtlas
     }
 
     public enum RenderGraphResourceKind

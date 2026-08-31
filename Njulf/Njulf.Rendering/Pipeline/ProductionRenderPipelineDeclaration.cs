@@ -476,6 +476,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             Pass("FarFieldClipmapBakePass",
                 ReadComputeBuffer(RenderGraphResourceId.MeshGeometryBuffers),
                 ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
+                ReadComputeSampled(RenderGraphResourceId.MaterialTextures),
                 ReadWriteComputeBuffer(RenderGraphResourceId.FarFieldParameters),
                 ReadWriteComputeBuffer(RenderGraphResourceId.FarFieldVoxels),
                 ReadComputeBuffer(RenderGraphResourceId.FarFieldInstances),
@@ -1017,6 +1018,12 @@ internal sealed class ProductionRenderPipelineDeclaration
 
         if (modes.UsesDirectionalGuiding)
         {
+            AppendPassUsages(
+                declarations,
+                "SimpleDdgiTracePass",
+                ReadComputeBuffer(
+                    RenderGraphResourceId
+                        .SimpleDdgiGuidingDirectionPayloadSidecar));
             declarations.AddRange([
                 Pass(SimpleDdgiGuidingGpuPassNames.Sample,
                     ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
@@ -1324,6 +1331,24 @@ internal sealed class ProductionRenderPipelineDeclaration
         return declarations;
     }
 
+    /// <summary>
+    /// Adds the optional sampled-atlas image footprint to the exact renderer
+    /// generation that requested it. Allocation failure is intentionally not
+    /// hidden: absent concrete images make async validation demote the affected
+    /// path to graphics while the canonical SSBO receiver fallback remains live.
+    /// </summary>
+    public IReadOnlyList<RenderGraphPassResourceDeclaration>
+        CreatePassResourceDeclarations(
+            in AdvancedGiRenderGraphModes modes,
+            bool sampledAtlasRequested)
+    {
+        var declarations = new List<RenderGraphPassResourceDeclaration>(
+            CreatePassResourceDeclarations(modes));
+        if (sampledAtlasRequested)
+            AddSimpleDdgiSampledAtlasUsages(declarations);
+        return declarations;
+    }
+
     public IReadOnlyList<RenderGraphResourceDescriptor> CreateResourceDescriptors(
         Format depthFormat,
         Format swapchainColorFormat)
@@ -1405,6 +1430,16 @@ internal sealed class ProductionRenderPipelineDeclaration
             BufferSetResource(RenderGraphResourceId.SimpleDdgiLightTree, "Simple DDGI local-light hierarchy"),
             BufferSetResource(RenderGraphResourceId.SimpleDdgiDirectionalRadiance,
                 "Simple DDGI directional-radiance SH"),
+            ImageChainResource(
+                RenderGraphResourceId.SimpleDdgiSampledIrradianceAtlas,
+                "Simple DDGI sampled irradiance atlas",
+                Format.R16G16B16A16Sfloat,
+                RenderGraphResourceSizePolicy.Dynamic),
+            ImageChainResource(
+                RenderGraphResourceId.SimpleDdgiSampledVisibilityAtlas,
+                "Simple DDGI sampled visibility atlas",
+                Format.R16G16Sfloat,
+                RenderGraphResourceSizePolicy.Dynamic),
             BufferSetResource(RenderGraphResourceId.DdgiFoliageProxyPatches, "DDGI foliage proxy generation patches"),
             BufferSetResource(RenderGraphResourceId.DdgiFoliageProxyGeometry, "DDGI foliage proxy AS geometry"),
             BufferSetResource(RenderGraphResourceId.DynamicBlasStorage, "Dynamic DDGI BLAS storage"),
@@ -1754,6 +1789,25 @@ internal sealed class ProductionRenderPipelineDeclaration
         }
     }
 
+    public void DeclarePassResources(
+        RenderGraph graph,
+        in AdvancedGiRenderGraphModes modes,
+        bool sampledAtlasRequested)
+    {
+        if (graph == null)
+            throw new ArgumentNullException(nameof(graph));
+
+        foreach (RenderGraphPassResourceDeclaration declaration in
+                 CreatePassResourceDeclarations(
+                     modes,
+                     sampledAtlasRequested))
+        {
+            graph.DeclarePassResources(
+                declaration.PassName,
+                declaration.Usages);
+        }
+    }
+
     public IReadOnlyList<string> GetActivePasses(RenderFeatureIsolationMode featureIsolation)
     {
         return GetActivePasses(featureIsolation, TransparencyMode.SortedAlphaBlend);
@@ -1864,6 +1918,83 @@ internal sealed class ProductionRenderPipelineDeclaration
     private static RenderGraphPassResourceDeclaration Pass(string passName, params RenderGraphResourceUsage[] usages)
     {
         return new RenderGraphPassResourceDeclaration(passName, usages);
+    }
+
+    private static void AddSimpleDdgiSampledAtlasUsages(
+        List<RenderGraphPassResourceDeclaration> declarations)
+    {
+        RenderGraphResourceUsage graphicsIrradiance =
+            ReadGraphicsAndComputeSampled(
+                RenderGraphResourceId.SimpleDdgiSampledIrradianceAtlas);
+        RenderGraphResourceUsage graphicsVisibility =
+            ReadGraphicsAndComputeSampled(
+                RenderGraphResourceId.SimpleDdgiSampledVisibilityAtlas);
+        foreach (string passName in new[]
+                 {
+                     "ForwardPlusPass",
+                     "AutomaticPlanarReflectionPass",
+                     "TransparentForwardPass",
+                     "WeightedTransparentPass",
+                     "ParticlePass"
+                 })
+        {
+            AppendPassUsages(
+                declarations,
+                passName,
+                graphicsIrradiance,
+                graphicsVisibility);
+        }
+
+        RenderGraphResourceUsage computeIrradiance = ReadComputeSampled(
+            RenderGraphResourceId.SimpleDdgiSampledIrradianceAtlas);
+        RenderGraphResourceUsage computeVisibility = ReadComputeSampled(
+            RenderGraphResourceId.SimpleDdgiSampledVisibilityAtlas);
+        foreach (string passName in new[]
+                 {
+                     "HybridReflectionDdgiBasePass",
+                     "FogPass"
+                 })
+        {
+            AppendPassUsages(
+                declarations,
+                passName,
+                computeIrradiance,
+                computeVisibility);
+        }
+
+        AppendPassUsages(
+            declarations,
+            "SimpleDdgiPublishPass",
+            WriteComputeStorage(
+                RenderGraphResourceId.SimpleDdgiSampledIrradianceAtlas,
+                ImageLayout.ShaderReadOnlyOptimal),
+            WriteComputeStorage(
+                RenderGraphResourceId.SimpleDdgiSampledVisibilityAtlas,
+                ImageLayout.ShaderReadOnlyOptimal));
+    }
+
+    private static void AppendPassUsages(
+        List<RenderGraphPassResourceDeclaration> declarations,
+        string passName,
+        params RenderGraphResourceUsage[] appended)
+    {
+        int index = declarations.FindIndex(declaration =>
+            string.Equals(
+                declaration.PassName,
+                passName,
+                StringComparison.Ordinal));
+        if (index < 0)
+        {
+            throw new InvalidOperationException(
+                $"Cannot extend resource footprint: pass '{passName}' is absent.");
+        }
+
+        RenderGraphPassResourceDeclaration declaration = declarations[index];
+        var usages = new List<RenderGraphResourceUsage>(
+            declaration.Usages.Length + appended.Length);
+        usages.AddRange(declaration.Usages);
+        usages.AddRange(appended);
+        declarations[index] = declaration with { Usages = usages.ToArray() };
     }
 
     private static void InsertAfter(
@@ -2030,6 +2161,22 @@ internal sealed class ProductionRenderPipelineDeclaration
             ImageLayout.ShaderReadOnlyOptimal,
             RenderGraphQueueIntent.Graphics,
             HistoryBinding: historyBinding);
+    }
+
+    private static RenderGraphResourceUsage ReadGraphicsAndComputeSampled(
+        RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.TaskShaderBitExt |
+            PipelineStageFlags2.MeshShaderBitExt |
+            PipelineStageFlags2.VertexShaderBit |
+            PipelineStageFlags2.FragmentShaderBit |
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderSampledReadBit,
+            ImageLayout.ShaderReadOnlyOptimal,
+            RenderGraphQueueIntent.Graphics);
     }
 
     private static RenderGraphResourceUsage ReadFragmentShadingRate(

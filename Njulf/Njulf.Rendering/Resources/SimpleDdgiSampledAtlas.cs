@@ -10,6 +10,26 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
+    internal readonly record struct SimpleDdgiSampledAtlasImageGraphBinding(
+        string Name,
+        Image Image,
+        uint LayerCount,
+        Func<ImageLayout> LayoutProvider,
+        Action<ImageLayout> LayoutTracker);
+
+    internal readonly record struct SimpleDdgiSampledAtlasGraphResourceSnapshot(
+        ulong AllocationGeneration,
+        SharingMode SharingMode,
+        IReadOnlyList<SimpleDdgiSampledAtlasImageGraphBinding>? Irradiance,
+        IReadOnlyList<SimpleDdgiSampledAtlasImageGraphBinding>? Visibility)
+    {
+        public bool IsComplete =>
+            AllocationGeneration != 0UL &&
+            Irradiance is { Count: > 0 } &&
+            Visibility is { Count: > 0 } &&
+            Irradiance.Count == Visibility.Count;
+    }
+
     /// <summary>
     /// Optional sampled-image view of the canonical Simple DDGI SSBO atlases.
     ///
@@ -56,6 +76,8 @@ namespace Njulf.Rendering.Resources
         private bool _requiresFullSync;
         private bool _releasePending;
         private ulong _pendingReleaseFenceValue;
+        private SimpleDdgiSampledAtlasGraphResourceSnapshot
+            _graphResourceSnapshot;
         private bool _disposed;
 
         public SimpleDdgiSampledAtlas(
@@ -228,7 +250,15 @@ namespace Njulf.Rendering.Resources
             _allocationGeneration++;
             if (_allocationGeneration == 0)
                 _allocationGeneration = 1;
+            RebuildGraphResourceSnapshot();
             return true;
+        }
+
+        internal bool TryGetGraphResourceSnapshot(
+            out SimpleDdgiSampledAtlasGraphResourceSnapshot snapshot)
+        {
+            snapshot = _graphResourceSnapshot;
+            return IsReady && snapshot.IsComplete;
         }
 
         internal static bool RequiresStableCapacityReallocation(
@@ -524,6 +554,7 @@ namespace Njulf.Rendering.Resources
 
             AtlasGroup[] groups = _groups;
             ulong bytes = AllocatedImageBytes;
+            _graphResourceSnapshot = default;
             _groups = Array.Empty<AtlasGroup>();
             _probeCapacity = 0;
             _layersPerTexture = 0;
@@ -1065,6 +1096,7 @@ namespace Njulf.Rendering.Resources
 
         private void DestroyImageResources()
         {
+            _graphResourceSnapshot = default;
             DestroyGroups(_groups);
             _groups = Array.Empty<AtlasGroup>();
             _probeCapacity = 0;
@@ -1072,6 +1104,53 @@ namespace Njulf.Rendering.Resources
             _requiresFullSync = false;
             EstimatedImageBytes = 0;
             AllocatedImageBytes = 0;
+        }
+
+        private void RebuildGraphResourceSnapshot()
+        {
+            if (!IsReady || _allocationGeneration == 0UL)
+            {
+                _graphResourceSnapshot = default;
+                return;
+            }
+
+            var irradiance =
+                new SimpleDdgiSampledAtlasImageGraphBinding[_groups.Length];
+            var visibility =
+                new SimpleDdgiSampledAtlasImageGraphBinding[_groups.Length];
+            for (int groupIndex = 0;
+                 groupIndex < _groups.Length;
+                 groupIndex++)
+            {
+                AtlasGroup group = _groups[groupIndex];
+                int capturedIndex = groupIndex;
+                irradiance[groupIndex] =
+                    new SimpleDdgiSampledAtlasImageGraphBinding(
+                        $"Simple DDGI sampled irradiance group {capturedIndex}",
+                        group.IrradianceImage,
+                        checked((uint)group.LayerCount),
+                        () => group.IrradianceLayout,
+                        layout => group.IrradianceLayout = layout);
+                visibility[groupIndex] =
+                    new SimpleDdgiSampledAtlasImageGraphBinding(
+                        $"Simple DDGI sampled visibility group {capturedIndex}",
+                        group.VisibilityImage,
+                        checked((uint)group.LayerCount),
+                        () => group.VisibilityLayout,
+                        layout => group.VisibilityLayout = layout);
+            }
+
+            SharingMode sharingMode =
+                _context.GraphicsQueueFamilyIndex ==
+                    _context.ComputeQueueFamilyIndex
+                    ? SharingMode.Exclusive
+                    : SharingMode.Concurrent;
+            _graphResourceSnapshot =
+                new SimpleDdgiSampledAtlasGraphResourceSnapshot(
+                    _allocationGeneration,
+                    sharingMode,
+                    irradiance,
+                    visibility);
         }
 
         private void DestroyGroups(AtlasGroup[] groups)

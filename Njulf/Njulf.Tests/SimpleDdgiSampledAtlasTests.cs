@@ -1,6 +1,7 @@
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using Silk.NET.Vulkan;
 
 namespace Njulf.Tests;
 
@@ -260,6 +261,49 @@ public sealed class SimpleDdgiSampledAtlasTests
             Assert.That(
                 atlas,
                 Does.Not.Contain("PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit"));
+        });
+    }
+
+    [Test]
+    public void GraphSnapshot_RequiresBothImageFamiliesAndTracksLiveLayout()
+    {
+        ImageLayout irradianceLayout = ImageLayout.ShaderReadOnlyOptimal;
+        ImageLayout visibilityLayout = ImageLayout.ShaderReadOnlyOptimal;
+        var irradiance = new SimpleDdgiSampledAtlasImageGraphBinding(
+            "irradiance",
+            new Image { Handle = 1001UL },
+            256u,
+            () => irradianceLayout,
+            layout => irradianceLayout = layout);
+        var visibility = new SimpleDdgiSampledAtlasImageGraphBinding(
+            "visibility",
+            new Image { Handle = 1002UL },
+            256u,
+            () => visibilityLayout,
+            layout => visibilityLayout = layout);
+        var snapshot = new SimpleDdgiSampledAtlasGraphResourceSnapshot(
+            7UL,
+            SharingMode.Concurrent,
+            [irradiance],
+            [visibility]);
+
+        irradiance.LayoutTracker(ImageLayout.General);
+        visibility.LayoutTracker(ImageLayout.General);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.IsComplete, Is.True);
+            Assert.That(snapshot.SharingMode, Is.EqualTo(SharingMode.Concurrent));
+            Assert.That(irradiance.LayoutProvider(), Is.EqualTo(ImageLayout.General));
+            Assert.That(visibility.LayoutProvider(), Is.EqualTo(ImageLayout.General));
+            Assert.That(default(SimpleDdgiSampledAtlasGraphResourceSnapshot)
+                .IsComplete, Is.False);
+            Assert.That((new SimpleDdgiSampledAtlasGraphResourceSnapshot(
+                    8UL,
+                    SharingMode.Exclusive,
+                    [irradiance],
+                    Array.Empty<SimpleDdgiSampledAtlasImageGraphBinding>()))
+                .IsComplete, Is.False);
         });
     }
 

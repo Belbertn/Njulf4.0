@@ -229,6 +229,12 @@ internal sealed class AsyncComputeCoordinator
             : requestedMode;
         ulong settingsSignature =
             ComputeSettingsSignature(settings.AsyncCompute);
+        settingsSignature = MixSettingsSignature(
+            settingsSignature,
+            settings.IsPerformanceOptimizationEnabled(
+                PerformanceOptimizationFeature.AsyncGiFarFieldExecution)
+                ? 1UL
+                : 0UL);
         _currentSettingsSignature = settingsSignature;
 
         bool asyncProjectionReady =
@@ -1190,9 +1196,13 @@ internal sealed class AsyncComputeCoordinator
             settings.Fog.Enabled &&
             settings.Fog.Mode != FogMode.Disabled &&
             !animationDebugActive;
+        bool campaignAsyncEnabled =
+            settings.IsPerformanceOptimizationEnabled(
+                PerformanceOptimizationFeature.AsyncGiFarFieldExecution);
         return path switch
         {
             AsyncComputePath.SimpleDdgiUpdate =>
+                campaignAsyncEnabled &&
                 gi.EffectiveUseDdgi &&
                 gi.DdgiAsyncComputeEnabled &&
                 sceneData.SimpleDdgiActive != 0 &&
@@ -1200,6 +1210,7 @@ internal sealed class AsyncComputeCoordinator
                  (sceneData.SimpleDdgiSchedulerMode.IsGpuMode() &&
                   sceneData.SimpleDdgiSchedulerReady != 0)),
             AsyncComputePath.FarFieldClipmapBake =>
+                campaignAsyncEnabled &&
                 gi.EffectiveUseDdgi &&
                 gi.FarFieldClipmapEnabled &&
                 input.FarFieldBakePending,
@@ -1356,6 +1367,13 @@ internal sealed class AsyncComputeCoordinator
     {
         if (!input.Settings.AsyncCompute.IsEnabledBy(path))
             return "Disabled by the per-path async-compute setting.";
+        if ((path is AsyncComputePath.SimpleDdgiUpdate or
+                AsyncComputePath.FarFieldClipmapBake) &&
+            !input.Settings.IsPerformanceOptimizationEnabled(
+                PerformanceOptimizationFeature.AsyncGiFarFieldExecution))
+        {
+            return "Disabled by the async-gi-far-field performance feature switch.";
+        }
         if (!RenderFeatureIsolationPolicy.ShouldExecutePass(
                 input.SceneData.ActiveFeatureIsolation,
                 AsyncComputePassCatalog.GetRepresentativePass(path)))

@@ -227,10 +227,62 @@ public sealed class AsyncComputeCoordinatorTests
         }
     }
 
+    [TestCase(AsyncComputePath.SimpleDdgiUpdate,
+        "SimpleDdgiSchedulePass")]
+    [TestCase(AsyncComputePath.FarFieldClipmapBake,
+        "FarFieldClipmapBakePass")]
+    public void CampaignFeatureOff_ForcesGiPathsToGraphicsWithExactReason(
+        AsyncComputePath path,
+        string passName)
+    {
+        using RenderGraph graph = CreateMappedComputeGraph(
+            passName,
+            bindingHandle: 501UL + (ulong)path);
+        var coordinator = new AsyncComputeCoordinator(
+            graph,
+            framesInFlight: 2);
+        var settings = new RenderSettings();
+        settings.AsyncCompute.Mode = AsyncComputeMode.Auto;
+        settings.GlobalIllumination.Mode = GlobalIlluminationMode.Ddgi;
+        settings.GlobalIllumination.DdgiAsyncComputeEnabled = true;
+        settings.GlobalIllumination.FarFieldClipmapEnabled = true;
+        settings.PerformanceOptimizations.EnabledFeatures &=
+            ~PerformanceOptimizationFeature.AsyncGiFarFieldExecution;
+        var sceneData = new SceneRenderingData
+        {
+            ActiveFeatureIsolation = RenderFeatureIsolationMode.FullFrame,
+            SimpleDdgiActive = 1,
+            SimpleDdgiProbesUpdated = 1
+        };
+
+        coordinator.BeginFrame(new AsyncComputeFrameBoundaryInput(1, 0));
+        AsyncComputeFramePlan plan = coordinator.PlanFrame(
+            CreateInput(
+                settings,
+                sceneData,
+                farFieldBakePending: true));
+        AsyncComputePathRuntimeStatus status =
+            plan.SubmissionPlan.Paths.Single(candidate =>
+                candidate.Path == path);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.Requested, Is.False);
+            Assert.That(
+                status.Status,
+                Is.EqualTo(AsyncComputePathStatus.DisabledByFeature));
+            Assert.That(
+                status.Reason,
+                Does.Contain("async-gi-far-field performance feature switch"));
+            Assert.That(plan.SubmissionPlan.ContainsAsyncCompute, Is.False);
+        });
+    }
+
     private static AsyncComputePlanningInput CreateInput(
         RenderSettings settings,
         SceneRenderingData sceneData,
-        string constraint = "") =>
+        string constraint = "",
+        bool farFieldBakePending = false) =>
         new(
             settings,
             sceneData,
@@ -246,7 +298,7 @@ public sealed class AsyncComputeCoordinatorTests
             QueueFlags.ComputeBit | QueueFlags.TransferBit,
             "test-device",
             "test-driver",
-            FarFieldBakePending: false,
+            FarFieldBakePending: farFieldBakePending,
             BloomMipCount: 0,
             constraint);
 
@@ -310,6 +362,35 @@ public sealed class AsyncComputeCoordinatorTests
                 AccessFlags2.ShaderReadBit,
                 ImageLayout.Undefined,
                 RenderGraphQueueIntent.Graphics));
+        graph.ReplaceConcreteResourceBindings(
+            [CreateBufferBinding(bindingHandle)]);
+        return graph;
+    }
+
+    private static RenderGraph CreateMappedComputeGraph(
+        string passName,
+        ulong bindingHandle)
+    {
+        var graph = new RenderGraph();
+        graph.RegisterResource(new RenderGraphResourceDescriptor(
+            RenderGraphResourceId.LightTiles,
+            "Mapped async test buffer",
+            RenderGraphResourceKind.Buffer,
+            null,
+            RenderGraphResourceSizePolicy.Dynamic,
+            RenderGraphResourceLifetime.Persistent,
+            Persistent: true));
+        AddPass(
+            graph,
+            passName,
+            new RenderGraphResourceUsage(
+                RenderGraphResourceId.LightTiles,
+                RenderGraphResourceAccess.ReadWrite,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.ShaderStorageWriteBit,
+                ImageLayout.Undefined,
+                RenderGraphQueueIntent.Compute));
         graph.ReplaceConcreteResourceBindings(
             [CreateBufferBinding(bindingHandle)]);
         return graph;

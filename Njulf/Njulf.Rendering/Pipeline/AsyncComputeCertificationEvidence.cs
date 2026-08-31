@@ -138,11 +138,12 @@ public static class AsyncComputeCertificationEvidence
 
         new(
             AsyncComputePath.FarFieldClipmapBake,
-            "async-cert-far-field-20260804-pending-r1",
-            "ProductionRenderPipelineDeclaration.v8; FarFieldClipmapBakePass; farfield_voxelize.comp; farfield_jumpflood.comp; farfield_clipmap.glsl",
+            "async-cert-far-field-20260831-pending-r2",
+            "ProductionRenderPipelineDeclaration.v13; FarFieldClipmapBakePass; farfield_voxelize.comp; farfield_jumpflood.comp; farfield_clipmap.glsl",
             ["FarFieldClipmapBakePass"],
             [
                 "MeshGeometryBuffers and MaterialBuffers: complete imported buffer sets; compute storage read",
+                "MaterialTextures: complete referenced sampled-image set used by textured material-v2/v3 voxelization",
                 "FarFieldParameters, FarFieldVoxels, FarFieldJumpFlood, FarFieldPageTable: complete buffer-set slots; compute read/write",
                 "FarFieldInstances and RendererDiagnosticsBuffer: complete buffer-set slots; compute read/write as declared"
             ],
@@ -154,27 +155,29 @@ public static class AsyncComputeCertificationEvidence
             "PENDING: no valid graphics/async linear-HDR or far-field buffer oracle exists until the pipeline-layout failure is fixed and the path completes a clean run.",
             false,
             "NOT EVALUATED: profitability evidence is prohibited until correctness is established.",
-            "External capture evidence remains pending. Production activation is independently authorized for this preferred path and still requires a complete concrete queue/resource plan; any runtime validation failure retains the graphics/CPU fallback."),
+            "The source resource plan now includes textured material sampling and every far-field buffer range. External forced-graphics/forced-compute capture evidence remains pending; any runtime validation failure retains the graphics/CPU fallback."),
 
         new(
             AsyncComputePath.SimpleDdgiUpdate,
-            "async-cert-simple-ddgi-20260810-pending-r4",
-            "ProductionRenderPipelineDeclaration.v12; compact SimpleDdgiReceiverProbes publication; SimpleDdgiSchedulePass; SimpleDdgiPasses; SimpleDdgiDirectionalRadiancePass; SimpleDdgiAcceleratedSolvePass; SimpleDdgiSchedulerCommitPass; ddgi_simple_schedule_*.comp; ddgi_simple_trace.comp; ddgi_simple_relocate_classify.comp; ddgi_simple_transport.comp; ddgi_simple_blend.comp; ddgi_simple_directional_prepare.comp; ddgi_simple_directional_project.comp; ddgi_simple_directional_publish.comp; ddgi_simple_transport_intermediate_publish.comp; ddgi_simple_publish.comp; ddgi_simple_transport_audit.comp",
-            ["SimpleDdgiSchedulePass", "SimpleDdgiTracePass", "SimpleDdgiRelocateClassifyPass", "SimpleDdgiAcceleratedSolvePass", "SimpleDdgiTransportPass", "SimpleDdgiBlendPass", "SimpleDdgiDirectionalRadiancePass", "SimpleDdgiPublishPass", "SimpleDdgiTransportAuditPass", "SimpleDdgiSchedulerCommitPass"],
+            "async-cert-simple-ddgi-20260831-pending-r5",
+            "ProductionRenderPipelineDeclaration.v13; compact SimpleDdgiReceiverProbes publication; sampled irradiance/visibility image publication; SimpleDdgiSchedulePass; SimpleDdgiGuidingGraphPasses; SimpleDdgiPasses; SimpleDdgiDirectionalRadiancePass; SimpleDdgiAcceleratedSolvePass; SimpleDdgiSchedulerCommitPass; ddgi_simple_schedule_*.comp; ddgi_guiding_*.comp; ddgi_simple_trace.comp; ddgi_simple_relocate_classify.comp; ddgi_simple_transport.comp; ddgi_simple_blend.comp; ddgi_simple_directional_prepare.comp; ddgi_simple_directional_project.comp; ddgi_simple_directional_publish.comp; ddgi_simple_transport_intermediate_publish.comp; ddgi_simple_publish.comp; ddgi_simple_publish_sampled.comp; ddgi_simple_transport_audit.comp",
+            ["SimpleDdgiSchedulePass", "SimpleDdgiGuidingSamplePass", "SimpleDdgiTracePass", "SimpleDdgiGuidingTrainPass", "SimpleDdgiGuidingBuildPass", "SimpleDdgiGuidingValidatePass", "SimpleDdgiRelocateClassifyPass", "SimpleDdgiAcceleratedSolvePass", "SimpleDdgiTransportPass", "SimpleDdgiBlendPass", "SimpleDdgiDirectionalRadiancePass", "SimpleDdgiPublishPass", "SimpleDdgiTransportAuditPass", "SimpleDdgiSchedulerCommitPass"],
             [
                 "TLAS/RayQueryInstanceMetadata/MeshGeometryBuffers/MaterialBuffers/MaterialTextures/LightBuffers/EnvironmentData/EnvironmentMaps: complete ray-query input ranges",
                 "FarFieldParameters/FarFieldVoxels/FarFieldInstances/FarFieldJumpFlood/FarFieldPageTable: complete far-field input ranges",
-            "SimpleDdgiParameters/IrradianceAtlas/TransportSourceCache/VisibilityAtlas/RayScratch/ProbeState/ReceiverProbes/UpdateQueue/RelocationData/SchedulerArena: complete update and compact-publication buffer-set ranges"
+                "SimpleDdgiParameters/IrradianceAtlas/TransportAtlas/TransportSourceCache/VisibilityAtlas/RayScratch/ProbeState/ReceiverProbes/UpdateQueue/RelocationData/SchedulerArena/DirectionalRadiance/Parity: complete update and compact-publication buffer-set ranges",
+                "Sampled irradiance and visibility atlas image groups: live layouts, complete array-layer ranges, concurrent sharing where queue families differ, compute publication, and graphics/compute receiver reads",
+                "Guiding distribution banks, transient training workspace, and generation-time direction/PDF sidecar: exact allocation ranges inside the atomic update segment"
             ],
-            "Scene/lighting/AS inputs -> SimpleDdgiSchedulePass -> SimpleDdgiTracePass -> relocate -> cached transport/blend sweeps -> FP32 directional SH projection -> checked SH publication -> SimpleDdgiPublishPass -> frozen cached audit -> SimpleDdgiSchedulerCommitPass -> next-frame GI sampling.",
-            "Buffer-only contract; no image layouts. Compute owns private update state until publication; canonical atlases and the distinct compact ReceiverProbes range transfer to the first graphics or next-frame GI consumer.",
-            "No active certifying topology: the tested Sponza run was rejected because sampled-simple-DDGI atlas ownership remained graphics-visible, so the atomic path did not execute as an eligible isolated workload.",
+            "Scene/lighting/AS inputs -> schedule -> guiding sample -> trace -> guiding train/build/validate -> relocate -> cached transport/blend sweeps -> FP32 directional SH projection -> checked SH publication -> canonical and sampled-image publish -> frozen cached audit -> scheduler commit -> next-frame GI sampling.",
+            "Compute owns private update state until publication. Canonical buffers, directional/parity sidecars, compact ReceiverProbes, guiding allocations, and every sampled-atlas image group have concrete ranges; sampled images publish ShaderReadOnlyOptimal and use concurrent sharing on split queue families.",
+            "The prior source-plan blocker is closed: sampled-atlas images and the complete guiding chain are represented. A new forced-compute Vulkan/quality capture is still required before changing the external correctness certificate.",
             ["async-cert-simple-ddgi-debug.json"],
-            "BLOCKED: no active forced path with a complete non-sampled-atlas resource contract; no Vulkan-clean lifecycle certificate is claimed.",
+            "PENDING: the complete source resource plan is implemented, but no new Vulkan-clean forced-compute lifecycle capture is claimed by this source change alone.",
             "PENDING: no valid linear-HDR/buffer equivalence pair for an active Simple-DDGI async segment.",
             false,
             "NOT EVALUATED: profitability evidence is prohibited until correctness is established.",
-            "External capture evidence remains pending. Production activation is independently authorized for this preferred path and still requires complete sampled-atlas/resource ownership validation; any failure retains the graphics fallback.")
+            "External equivalence/overlap capture evidence remains pending. Production activation is independently authorized only when concrete resource validation succeeds; missing images, topology mismatch, validation failure, or quarantine retains the graphics fallback.")
     ];
 
     public static IReadOnlyList<AsyncComputePathCertificationEvidence> All => Entries;

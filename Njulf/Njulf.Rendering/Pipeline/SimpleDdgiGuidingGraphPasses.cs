@@ -28,10 +28,16 @@ internal abstract class SimpleDdgiGuidingGraphPass : RenderPassBase
     public override RenderGraphQueueIntent QueueIntent =>
         RenderGraphQueueIntent.Compute;
 
-    // The first production integration stays on the graphics queue: Sample
-    // precedes DDGI trace and Train consumes that trace's exact scratch. Async
-    // promotion requires a measured timeline/ownership-transfer contract.
-    public override bool SupportsAsyncCompute => false;
+    // Sample, trace, training, hierarchy publication, and validation are one
+    // indivisible Simple-DDGI transaction. The render graph declares every
+    // persistent distribution and transient workspace range, so the scheduler
+    // may migrate the complete group but can never split an individual phase.
+    public override bool SupportsAsyncCompute =>
+        AsyncComputePassCatalog.IsProductionActivationAuthorized(
+            AsyncComputePath.SimpleDdgiUpdate);
+
+    public override string AsyncComputeReason =>
+        "Directional guiding is part of the atomic Simple-DDGI update segment with concrete distribution, workspace, and direction-sidecar ranges.";
 
     public override void Initialize()
     {
