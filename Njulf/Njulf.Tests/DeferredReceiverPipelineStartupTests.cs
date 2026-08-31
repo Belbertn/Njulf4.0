@@ -106,6 +106,9 @@ public sealed class DeferredReceiverPipelineStartupTests
             "Njulf.Rendering", "Pipeline", "TransparentForwardPass.cs");
         string weighted = ReadRepoText(
             "Njulf.Rendering", "Pipeline", "WeightedTransparentPass.cs");
+        string feedbackRuntime = ReadRepoText(
+            "Njulf.Rendering", "Resources",
+            "SimpleDdgiReceiverFeedbackVulkanRuntime.cs");
 
         string beginCapture = ExtractMethod(
             forward,
@@ -131,6 +134,9 @@ public sealed class DeferredReceiverPipelineStartupTests
         string weightedExecute = ExtractMethod(
             weighted,
             "public override void Execute(");
+        string configureFeedbackRuntime = ExtractMethod(
+            feedbackRuntime,
+            "private bool TryConfigureCore(");
 
         Assert.Multiple(() =>
         {
@@ -158,6 +164,10 @@ public sealed class DeferredReceiverPipelineStartupTests
                 Does.Contain("IsSimpleDdgiReceiverCacheAdaptiveReady(pipelineBank)"));
             Assert.That(sortedExecute, Does.Not.Contain("TryEnsure"));
             Assert.That(weightedExecute, Does.Not.Contain("TryEnsure"));
+            Assert.That(configureFeedbackRuntime,
+                Does.Not.Contain("EnsurePipelinesNoLock"));
+            Assert.That(configureFeedbackRuntime,
+                Does.Not.Contain("new SimpleDdgiReceiverFeedbackGpuPass"));
         });
     }
 

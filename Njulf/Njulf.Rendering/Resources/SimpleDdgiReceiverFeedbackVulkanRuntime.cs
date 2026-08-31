@@ -643,20 +643,13 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
                 return false;
             }
 
-            try
-            {
-                EnsurePipelinesNoLock();
-            }
-            catch (Exception exception)
-            {
-                reason = "receiver-feedback-gpu-sort-pipeline-unavailable:" +
-                    exception.GetType().Name;
-                DisableAtSafeTransitionNoLock(
-                    SimpleDdgiReceiverFeedbackGpuCapabilityReason.GpuSortPipelineUnavailable,
-                    reason,
-                    exactCaptureProducerAvailable: true);
-                return false;
-            }
+            // Configuration runs from frame preparation as render settings and
+            // resource generations change.  It may allocate the inexpensive
+            // transactional buffers, but it must never enter native pipeline
+            // creation.  Progressive startup prepares _pass on the bounded
+            // compilation worker and publishes the complete receiver bank only
+            // afterwards.  IsOwnedCaptureReady keeps recording on the exact
+            // canonical fallback until both steps have completed.
 
             // A reconfiguration first points the four descriptors at the
             // safe fallback. This prevents a failed replacement transaction
