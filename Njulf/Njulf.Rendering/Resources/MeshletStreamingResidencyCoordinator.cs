@@ -356,7 +356,8 @@ public sealed class MeshletStreamingResidencyCoordinator : IDisposable
         string packageKey,
         IMeshletStreamingPageSource source,
         out MeshletStreamingPackageHandle? handle,
-        out string fallbackReason)
+        out string fallbackReason,
+        bool requireCompleteWorkingSet = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packageKey);
         ArgumentNullException.ThrowIfNull(source);
@@ -421,12 +422,26 @@ public sealed class MeshletStreamingResidencyCoordinator : IDisposable
             int globalPinned = _packagesById.Values
                 .Where(static package => !package.Unloading)
                 .Sum(static package => package.Manifest.PinnedPageCount);
-            if (globalPinned + pinned + largestRange >
-                _options.PhysicalPageCapacity)
+            bool completeWorkingSetRequired =
+                requireCompleteWorkingSet ||
+                _packagesById.Values.Any(static package =>
+                    !package.Unloading &&
+                    package.RequiresCompleteWorkingSet);
+            long registeredPageCount = _packagesById.Values
+                .Where(static package => !package.Unloading)
+                .Sum(static package =>
+                    (long)package.Manifest.Pages.Count);
+            bool exceedsCapacity = completeWorkingSetRequired
+                ? registeredPageCount + source.Manifest.Pages.Count >
+                  _options.PhysicalPageCapacity
+                : globalPinned + pinned + largestRange >
+                  _options.PhysicalPageCapacity;
+            if (exceedsCapacity)
             {
                 handle = null;
-                fallbackReason =
-                    "pinned-plus-largest-range-exceeds-global-cache";
+                fallbackReason = completeWorkingSetRequired
+                    ? "complete-working-set-exceeds-global-cache"
+                    : "pinned-plus-largest-range-exceeds-global-cache";
                 RecordFallbackNoLock(fallbackReason);
                 return false;
             }
@@ -489,7 +504,8 @@ public sealed class MeshletStreamingResidencyCoordinator : IDisposable
                 packageKey,
                 source,
                 _nextGlobalPageId,
-                gpuContracts);
+                gpuContracts,
+                requireCompleteWorkingSet);
             _nextGlobalPageId = checked(
                 _nextGlobalPageId + source.Manifest.Pages.Count);
             foreach (MeshletStreamingPageRecord record in
@@ -2227,7 +2243,8 @@ public sealed class MeshletStreamingResidencyCoordinator : IDisposable
             string key,
             IMeshletStreamingPageSource source,
             int globalPageBase,
-            PackageGpuContracts gpuContracts)
+            PackageGpuContracts gpuContracts,
+            bool requiresCompleteWorkingSet)
         {
             Id = id;
             Key = key;
@@ -2235,6 +2252,7 @@ public sealed class MeshletStreamingResidencyCoordinator : IDisposable
             Manifest = source.Manifest;
             GlobalPageBase = globalPageBase;
             GpuContracts = gpuContracts;
+            RequiresCompleteWorkingSet = requiresCompleteWorkingSet;
             Pages = new PageRuntime[Manifest.Pages.Count];
         }
 
@@ -2244,6 +2262,7 @@ public sealed class MeshletStreamingResidencyCoordinator : IDisposable
         public MeshletStreamingManifest Manifest { get; }
         public int GlobalPageBase { get; }
         public PackageGpuContracts GpuContracts { get; }
+        public bool RequiresCompleteWorkingSet { get; }
         public PageRuntime[] Pages { get; }
         public CancellationTokenSource Cancellation { get; } = new();
         public int ReferenceCount { get; set; } = 1;

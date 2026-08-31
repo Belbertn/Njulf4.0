@@ -30,15 +30,18 @@ internal sealed class MeshletFrameResidencyResolver
 {
     private readonly MeshletStreamingResidencyCoordinator _coordinator;
     private readonly MeshletPhysicalPageCacheUploader _uploader;
+    private readonly bool _resolvedAddressingEnabled;
 
     internal MeshletFrameResidencyResolver(
         MeshletStreamingResidencyCoordinator coordinator,
-        MeshletPhysicalPageCacheUploader uploader)
+        MeshletPhysicalPageCacheUploader uploader,
+        bool resolvedAddressingEnabled = true)
     {
         _coordinator = coordinator ??
             throw new ArgumentNullException(nameof(coordinator));
         _uploader = uploader ??
             throw new ArgumentNullException(nameof(uploader));
+        _resolvedAddressingEnabled = resolvedAddressingEnabled;
     }
 
     internal ulong GetRecordedRangeStateRevision(int frameSlot) =>
@@ -123,7 +126,7 @@ internal sealed class MeshletFrameResidencyResolver
             rangeIndices,
             MeshletStreamingResidencyCoordinator.VisiblePriority);
 
-    private static MeshletFrameRangeResolution Create(
+    private MeshletFrameRangeResolution Create(
         uint requestedRangeIndex,
         uint resolvedRangeIndex,
         in GPUMeshletStreamingRange range,
@@ -132,7 +135,11 @@ internal sealed class MeshletFrameResidencyResolver
         new(
             requestedRangeIndex,
             resolvedRangeIndex,
-            MeshletVirtualAddress.Encode(range.FirstVirtualMeshlet),
+            _resolvedAddressingEnabled
+                ? MeshletVirtualAddress.EncodeResolved(
+                    range.FirstVirtualMeshlet)
+                : MeshletVirtualAddress.Encode(
+                    range.FirstVirtualMeshlet),
             range.MeshletCount,
             effectiveLod,
             usesFallback);

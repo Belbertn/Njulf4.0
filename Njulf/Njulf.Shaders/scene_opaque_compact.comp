@@ -386,8 +386,11 @@ bool ReadCompactionMeshlet(
         pc.Push.CurrentFrameIndex,
         meshlet,
         resolvedAddress);
+#if !defined(NJULF_RESOLVED_MESHLET_ADDRESSING) || \
+    NJULF_RESOLVED_MESHLET_ADDRESSING
     if (valid)
         command.MeshletIndex = resolvedAddress;
+#endif
     return valid;
 }
 

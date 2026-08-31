@@ -526,8 +526,9 @@ public static class MeshletStreamingActivationPlanner
         CookedMeshPayload mesh,
         bool streamingEnabled,
         int configuredPhysicalPageCount,
-        int alreadyPinnedPageCount = 0,
-        int alreadyCommittedBankCount = 0)
+        int alreadyRegisteredPageCount = 0,
+        int alreadyCommittedBankCount = 0,
+        bool requireCompleteWorkingSet = true)
     {
         ArgumentNullException.ThrowIfNull(mesh);
         if (configuredPhysicalPageCount is <= 0 or >
@@ -536,11 +537,11 @@ public static class MeshletStreamingActivationPlanner
             throw new ArgumentOutOfRangeException(
                 nameof(configuredPhysicalPageCount));
         }
-        if (alreadyPinnedPageCount < 0 ||
-            alreadyPinnedPageCount > configuredPhysicalPageCount)
+        if (alreadyRegisteredPageCount < 0 ||
+            alreadyRegisteredPageCount > configuredPhysicalPageCount)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(alreadyPinnedPageCount));
+                nameof(alreadyRegisteredPageCount));
         }
         if (alreadyCommittedBankCount is < 0 or >
             MeshletPhysicalBankAllocator.MaximumBankCount)
@@ -576,6 +577,7 @@ public static class MeshletStreamingActivationPlanner
         }
 
         var candidates = new List<MeshletStreamingSubMeshActivation>();
+        var candidatePageCounts = new Dictionary<int, int>();
         for (int subMeshIndex = 0;
              subMeshIndex < mesh.SubMeshes.Count;
              subMeshIndex++)
@@ -584,6 +586,7 @@ public static class MeshletStreamingActivationPlanner
             MeshletStreamingPageRecord[] pages = manifest.Pages
                 .Where(page => page.SubMeshIndex == subMeshIndex)
                 .ToArray();
+            candidatePageCounts.Add(subMeshIndex, pages.Length);
             bool skinned = subMesh.SkinIndex >= 0 ||
                 subMesh.SkinningCount != 0;
             int pinned = pages.Count(page =>
@@ -657,18 +660,27 @@ public static class MeshletStreamingActivationPlanner
                 candidate.LargestSelectableRangePageCount)
             .DefaultIfEmpty(0)
             .Max();
-        if (alreadyPinnedPageCount + pinnedPages + largestSelectable >
-            configuredPhysicalPageCount)
+        int selectedPageCount = positive.Sum(candidate =>
+            candidatePageCounts[candidate.SubMeshIndex]);
+        bool capacityExceeded = requireCompleteWorkingSet
+            ? selectedPageCount >
+              configuredPhysicalPageCount - alreadyRegisteredPageCount
+            : alreadyRegisteredPageCount + pinnedPages + largestSelectable >
+              configuredPhysicalPageCount;
+        if (capacityExceeded)
         {
             positive.Clear();
+            selectedPageCount = 0;
+            largestSelectable = 0;
             candidates = candidates.Select(candidate =>
                 candidate.Active
                     ? candidate with
                     {
                         Active = false,
                         EstimatedBytesAvoided = 0,
-                        FallbackReason =
-                            "pinned-plus-largest-range-exceeds-cache"
+                        FallbackReason = requireCompleteWorkingSet
+                            ? "complete-working-set-exceeds-cache"
+                            : "pinned-plus-largest-range-exceeds-cache"
                     }
                     : candidate).ToList();
         }
@@ -679,7 +691,11 @@ public static class MeshletStreamingActivationPlanner
             candidate.FullResidentMeshletBytes);
         long metadata = positive.Sum(static candidate =>
             candidate.IncrementalMetadataBytes);
-        int requiredPages = checked(alreadyPinnedPageCount + pinnedPages);
+        int requiredPages = checked(
+            alreadyRegisteredPageCount +
+            (requireCompleteWorkingSet
+                ? selectedPageCount
+                : pinnedPages));
         int requiredBanks = requiredPages == 0
             ? alreadyCommittedBankCount
             : Math.Max(

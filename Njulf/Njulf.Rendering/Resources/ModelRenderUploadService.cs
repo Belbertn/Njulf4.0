@@ -32,6 +32,7 @@ namespace Njulf.Rendering.Resources
         private readonly MeshletStreamingResidencyCoordinator?
             _meshletResidencyCoordinator;
         private readonly SceneSubmissionSettings? _sceneSubmissionSettings;
+        private readonly bool _completeMeshletWorkingSetAdmissionEnabled;
         private readonly Action<MeshHandle> _releaseMeshHandle;
         private readonly Action<object> _retainMeshResource;
         private readonly Action<object> _releaseMeshResource;
@@ -85,7 +86,8 @@ namespace Njulf.Rendering.Resources
                 opacityMicromapRegistrations,
             MeshletStreamingResidencyCoordinator
                 meshletResidencyCoordinator,
-            SceneSubmissionSettings sceneSubmissionSettings)
+            SceneSubmissionSettings sceneSubmissionSettings,
+            bool completeMeshletWorkingSetAdmissionEnabled = true)
             : this(
                 new ModelRenderUploadBackend(
                     meshManager,
@@ -93,7 +95,8 @@ namespace Njulf.Rendering.Resources
                     materialManager),
                 opacityMicromapRegistrations,
                 meshletResidencyCoordinator,
-                sceneSubmissionSettings)
+                sceneSubmissionSettings,
+                completeMeshletWorkingSetAdmissionEnabled)
         {
         }
 
@@ -110,7 +113,8 @@ namespace Njulf.Rendering.Resources
                 backend,
                 opacityMicromapRegistrations,
                 meshletResidencyCoordinator: null,
-                sceneSubmissionSettings: null)
+                sceneSubmissionSettings: null,
+                completeMeshletWorkingSetAdmissionEnabled: true)
         {
         }
 
@@ -120,7 +124,8 @@ namespace Njulf.Rendering.Resources
                 opacityMicromapRegistrations,
             MeshletStreamingResidencyCoordinator?
                 meshletResidencyCoordinator,
-            SceneSubmissionSettings? sceneSubmissionSettings)
+            SceneSubmissionSettings? sceneSubmissionSettings,
+            bool completeMeshletWorkingSetAdmissionEnabled = true)
         {
             _backend = backend ?? throw new ArgumentNullException(nameof(backend));
             _opacityMicromapRegistrations =
@@ -130,6 +135,8 @@ namespace Njulf.Rendering.Resources
             _meshletResidencyCoordinator =
                 meshletResidencyCoordinator;
             _sceneSubmissionSettings = sceneSubmissionSettings;
+            _completeMeshletWorkingSetAdmissionEnabled =
+                completeMeshletWorkingSetAdmissionEnabled;
             _runtimePrimitiveProfiles = new RuntimePrimitiveTransportProfileBuilder();
             _releaseMeshHandle = ReleaseMeshHandle;
             _retainMeshResource = resource =>
@@ -574,7 +581,8 @@ namespace Njulf.Rendering.Resources
                                 cooked,
                                 coordinator,
                                 submissionSettings
-                                    .GpuMeshletStreamingEnabled)
+                                    .GpuMeshletStreamingEnabled,
+                                _completeMeshletWorkingSetAdmissionEnabled)
                             .AsTask()
                             .GetAwaiter()
                             .GetResult();
@@ -4042,6 +4050,7 @@ namespace Njulf.Rendering.Resources
                                 coordinator,
                                 submissionSettings
                                     .GpuMeshletStreamingEnabled,
+                                owner._completeMeshletWorkingSetAdmissionEnabled,
                                 _preparationCancellation.Token)
                             .AsTask();
                 }

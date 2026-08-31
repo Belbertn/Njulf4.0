@@ -255,6 +255,73 @@ public sealed class MeshletPhysicalResidencyTests
     }
 
     [Test]
+    public void ActivationPlanner_RejectsOversubscribedCompleteWorkingSet()
+    {
+        CookedMeshPayload payload = CreateActivationPayload(
+            streamablePageCount: 2,
+            fullResidentBytes: 128 * 1024 * 1024);
+
+        MeshletStreamingActivationPlan optimized =
+            MeshletStreamingActivationPlanner.Evaluate(
+                payload,
+                streamingEnabled: true,
+                configuredPhysicalPageCount: 4,
+                alreadyRegisteredPageCount: 2,
+                requireCompleteWorkingSet: true);
+        MeshletStreamingActivationPlan baseline =
+            MeshletStreamingActivationPlanner.Evaluate(
+                payload,
+                streamingEnabled: true,
+                configuredPhysicalPageCount: 4,
+                alreadyRegisteredPageCount: 0,
+                requireCompleteWorkingSet: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(optimized.Active, Is.False);
+            Assert.That(
+                optimized.FallbackReason,
+                Is.EqualTo("complete-working-set-exceeds-cache"));
+            Assert.That(baseline.Active, Is.True);
+        });
+    }
+
+    [Test]
+    public void Coordinator_CompleteWorkingSetAdmissionIsRaceSafe()
+    {
+        using var uploader = new MeshletPhysicalPageCacheUploader(4);
+        using var coordinator = new MeshletStreamingResidencyCoordinator(
+            uploader,
+            CreateOptions(4));
+        Assert.That(coordinator.TryRegisterPackage(
+            "complete-package-a",
+            CreateSource(),
+            out MeshletStreamingPackageHandle? first,
+            out _,
+            requireCompleteWorkingSet: true), Is.True);
+        using (first)
+        {
+            Assert.That(coordinator.TryRegisterPackage(
+                "complete-package-b",
+                CreateSource(),
+                out MeshletStreamingPackageHandle? second,
+                out string reason,
+                requireCompleteWorkingSet: true), Is.False);
+            Assert.Multiple(() =>
+            {
+                Assert.That(second, Is.Null);
+                Assert.That(
+                    reason,
+                    Is.EqualTo(
+                        "complete-working-set-exceeds-global-cache"));
+                Assert.That(
+                    coordinator.CreateSnapshot().PackageCount,
+                    Is.EqualTo(1));
+            });
+        }
+    }
+
+    [Test]
     public void ResolvedMappingTable_UpdatesChangedPagesAndRejectsFalseReadiness()
     {
         MeshletGpuPagePackResult packed = MeshletGpuPagePacker.Pack(
@@ -438,6 +505,10 @@ public sealed class MeshletPhysicalResidencyTests
             var resolver = new MeshletFrameResidencyResolver(
                 coordinator,
                 uploader);
+            var baselineResolver = new MeshletFrameResidencyResolver(
+                coordinator,
+                uploader,
+                resolvedAddressingEnabled: false);
             _ = uploader.CaptureFrameStateForRecording(0);
             MeshletFrameRangeResolution unavailable = resolver.Resolve(
                 meshInfo,
@@ -467,6 +538,14 @@ public sealed class MeshletPhysicalResidencyTests
                 Assert.That(fallback.EffectiveLod, Is.EqualTo(2));
                 Assert.That(
                     fallback.FirstMeshletAddress,
+                    Is.EqualTo(MeshletVirtualAddress.EncodeResolved(
+                        MeshletVirtualAddress.Decode(
+                            meshInfo.MeshletLod2Offset))));
+                Assert.That(
+                    baselineResolver.Resolve(
+                        meshInfo,
+                        requestedLod: 0,
+                        frameSlot: 0).FirstMeshletAddress,
                     Is.EqualTo(meshInfo.MeshletLod2Offset));
                 Assert.That(accepted, Is.EqualTo(1));
                 Assert.That(
@@ -488,7 +567,9 @@ public sealed class MeshletPhysicalResidencyTests
                 Assert.That(fine.EffectiveLod, Is.Zero);
                 Assert.That(
                     fine.FirstMeshletAddress,
-                    Is.EqualTo(meshInfo.MeshletOffset));
+                    Is.EqualTo(MeshletVirtualAddress.EncodeResolved(
+                        MeshletVirtualAddress.Decode(
+                            meshInfo.MeshletOffset))));
             });
         }
     }
@@ -657,6 +738,96 @@ public sealed class MeshletPhysicalResidencyTests
             PinnedPageCount: 1);
         manifest.Validate("memory");
         return new InMemorySource(manifest, data);
+    }
+
+    private static CookedMeshPayload CreateActivationPayload(
+        int streamablePageCount,
+        int fullResidentBytes)
+    {
+        if (streamablePageCount <= 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(streamablePageCount));
+        int meshletCount = checked(streamablePageCount + 1);
+        int packedMeshletBytes = checked(
+            meshletCount * Marshal.SizeOf<GPUPackedMeshlet>());
+        int meshletVertexCount = checked(
+            (fullResidentBytes - packedMeshletBytes) / sizeof(uint));
+        var bounds = new BoundingBox(Vector3.Zero, Vector3.One);
+        var subMesh = new CookedSubMeshRecord(
+            "Activation",
+            MaterialSlot: 0,
+            NodeIndex: -1,
+            SkinIndex: -1,
+            Matrix4x4.Identity,
+            VertexOffset: 0,
+            VertexCount: 3,
+            IndexOffset: 0,
+            IndexCount: 3,
+            SkinningOffset: 0,
+            SkinningCount: 0,
+            MeshletOffset: 0,
+            MeshletCount: streamablePageCount,
+            MeshletVertexOffset: 0,
+            MeshletVertexCount: meshletVertexCount,
+            MeshletTriangleOffset: 0,
+            MeshletTriangleCount: 0,
+            LodRanges: Array.Empty<ProcessedMeshLodRange>(),
+            DrawRanges: Array.Empty<ProcessedMeshDrawRange>(),
+            bounds,
+            BoundingSphere.FromBox(bounds),
+            (uint)ProcessedVertexAttribute.Position)
+        {
+            MeshletLod2Offset = 0,
+            MeshletLod2Count = 1
+        };
+
+        byte[] decoded = CreateDecodedPage(0);
+        var pages = new MeshletStreamingPageRecord[meshletCount];
+        for (int pageId = 0; pageId < pages.Length; pageId++)
+        {
+            bool pinned = pageId == streamablePageCount;
+            pages[pageId] = new MeshletStreamingPageRecord(
+                pageId,
+                SubMeshIndex: 0,
+                LogicalFirstMeshlet: pageId,
+                MeshletCount: 1,
+                pinned
+                    ? MeshletStreamingPageFlags.Pinned |
+                      MeshletStreamingPageFlags.Lod2
+                    : MeshletStreamingPageFlags.Streamable |
+                      MeshletStreamingPageFlags.Lod0,
+                FallbackPageId: streamablePageCount,
+                DataOffset: 4096L * (pageId + 256),
+                StoredBytes: decoded.Length,
+                UncompressedBytes: decoded.Length,
+                CookedCompression.None,
+                Crc32.HashToUInt32(decoded),
+                XxHash64.HashToUInt64(decoded));
+        }
+        var manifest = new MeshletStreamingManifest(
+            MeshletStreamingManifest.CurrentSchemaVersion,
+            MeshletStreamingManifest.ProductionPageSizeBytes,
+            "activation.pages",
+            pages,
+            pages.Sum(static page => (long)page.StoredBytes),
+            pages.Sum(static page => (long)page.UncompressedBytes),
+            PinnedPageCount: 1);
+        manifest.Validate("activation");
+        return new CookedMeshPayload(
+            [subMesh],
+            Array.Empty<CookedVertexPositionStream>(),
+            Array.Empty<CookedVertexNormalTangentStream>(),
+            Array.Empty<CookedVertexUvColorStream>(),
+            Array.Empty<CookedVertexSkinningData>(),
+            Array.Empty<uint>(),
+            Array.Empty<Meshlet>(),
+            Array.Empty<Meshlet>(),
+            Array.Empty<Meshlet>(),
+            Array.Empty<uint>(),
+            Array.Empty<uint>())
+        {
+            StreamingManifest = manifest
+        };
     }
 
     private static byte[] CreateDecodedPage(uint vertexOffset)

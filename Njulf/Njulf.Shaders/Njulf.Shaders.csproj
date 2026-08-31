@@ -364,6 +364,15 @@
       <GpuDiagnosticComputeShader Include="scene_opaque_compact_diagnostics.comp">
         <Source>scene_opaque_compact.comp</Source>
       </GpuDiagnosticComputeShader>
+      <!-- The virtual-address baseline remains a separate native program so
+           the resolved-addressing switch never becomes a hot shader branch. -->
+      <ResolvedMeshletAddressingShaderVariant Include="scene_opaque_compact_virtual.comp">
+        <Source>scene_opaque_compact.comp</Source>
+      </ResolvedMeshletAddressingShaderVariant>
+      <ResolvedMeshletAddressingShaderVariant Include="scene_opaque_compact_virtual_diagnostics.comp">
+        <Source>scene_opaque_compact.comp</Source>
+        <Defines>-DNJULF_GPU_DIAGNOSTIC_COUNTERS=1</Defines>
+      </ResolvedMeshletAddressingShaderVariant>
       <ForwardSimpleFragmentShader Include="forward.frag" />
       <ForwardWeightedOitFragmentShader Include="forward.frag" />
       <FoliageForwardFragmentShader Include="foliage_forward.frag" />
@@ -944,6 +953,10 @@
         <NjulfShaderArtifact Include="@(GpuDiagnosticComputeShader)">
           <Source>$(MSBuildProjectDirectory)\%(GpuDiagnosticComputeShader.Source)</Source>
           <Defines>-DNJULF_GPU_DIAGNOSTIC_COUNTERS=1</Defines>
+        </NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="@(ResolvedMeshletAddressingShaderVariant)">
+          <Source>$(MSBuildProjectDirectory)\%(ResolvedMeshletAddressingShaderVariant.Source)</Source>
+          <Defines>%(ResolvedMeshletAddressingShaderVariant.Defines) -DNJULF_RESOLVED_MESHLET_ADDRESSING=0</Defines>
         </NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_compacted.mesh"><Source>$(MSBuildProjectDirectory)\forward.mesh</Source><Defines>-DFORWARD_COMPACTED_MESH=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_simple_compacted.mesh"><Source>$(MSBuildProjectDirectory)\forward_simple.mesh</Source><Defines>-DFORWARD_COMPACTED_MESH=1</Defines></NjulfShaderArtifact>

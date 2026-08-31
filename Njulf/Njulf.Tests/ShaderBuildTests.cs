@@ -85,6 +85,8 @@ public sealed class ShaderBuildTests
         "depth_compacted.mesh",
         "depth_alpha_compacted.mesh",
         "shadow_depth_alpha_compacted.mesh",
+        "scene_opaque_compact_virtual.comp",
+        "scene_opaque_compact_virtual_diagnostics.comp",
         "forward_compacted.mesh",
         "forward_compacted_48v64p_128t.mesh",
         "forward_compacted_64v126p_64t.mesh",
@@ -106,7 +108,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(404));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(406));
 
         foreach (string shaderName in RequiredShaders)
         {

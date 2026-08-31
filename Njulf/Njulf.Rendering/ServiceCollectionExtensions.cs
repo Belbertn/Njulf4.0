@@ -401,7 +401,11 @@ namespace Microsoft.Extensions.DependencyInjection
                     provider.GetRequiredService<
                         MeshletStreamingResidencyCoordinator>(),
                     provider.GetRequiredService<
-                        MeshletPhysicalPageCacheUploader>()));
+                        MeshletPhysicalPageCacheUploader>(),
+                    provider.GetRequiredService<RenderingOptions>()
+                        .InitialSettings.IsPerformanceOptimizationEnabled(
+                            PerformanceOptimizationFeature
+                                .ResolvedMeshletAddressing)));
             services.TryAddSingleton(provider =>
                 new VulkanMeshletPhysicalResidencyResources(
                     provider.GetRequiredService<VulkanContext>(),
@@ -427,7 +431,11 @@ namespace Microsoft.Extensions.DependencyInjection
                         OpacityMicromapRuntimeRegistrationStore>(),
                     provider.GetRequiredService<
                         MeshletStreamingResidencyCoordinator>(),
-                    provider.GetRequiredService<SceneSubmissionSettings>()));
+                    provider.GetRequiredService<SceneSubmissionSettings>(),
+                    provider.GetRequiredService<RenderingOptions>()
+                        .InitialSettings.IsPerformanceOptimizationEnabled(
+                            PerformanceOptimizationFeature
+                                .MeshletWorkingSetAdmission)));
             services.TryAddSingleton<LightManager>();
             services.TryAddSingleton(provider =>
                 new SceneDataBuilder(

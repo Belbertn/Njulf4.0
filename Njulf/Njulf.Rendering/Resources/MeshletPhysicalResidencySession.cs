@@ -47,6 +47,7 @@ public sealed class MeshletPhysicalResidencySession : IDisposable
         CookedModelAsset model,
         MeshletStreamingResidencyCoordinator coordinator,
         bool streamingEnabled,
+        bool completeWorkingSetAdmissionEnabled = true,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(model);
@@ -60,8 +61,11 @@ public sealed class MeshletPhysicalResidencySession : IDisposable
                 model.Mesh,
                 streamingEnabled,
                 coordinator.Options.PhysicalPageCapacity,
-                snapshot.PinnedPageCount,
-                snapshot.Banks.CommittedBankCount);
+                completeWorkingSetAdmissionEnabled
+                    ? snapshot.PageCount
+                    : snapshot.PinnedPageCount,
+                snapshot.Banks.CommittedBankCount,
+                completeWorkingSetAdmissionEnabled);
         if (!plan.Active)
         {
             return new MeshletPhysicalResidencySessionOpenResult(
@@ -125,7 +129,9 @@ public sealed class MeshletPhysicalResidencySession : IDisposable
                     packageKey,
                     source,
                     out MeshletStreamingPackageHandle? handle,
-                    out string fallbackReason))
+                    out string fallbackReason,
+                    requireCompleteWorkingSet:
+                        completeWorkingSetAdmissionEnabled))
             {
                 (source as IDisposable)?.Dispose();
                 source = null;

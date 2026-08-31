@@ -4227,12 +4227,23 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreateComputePipelines()
         {
-            _sceneOpaqueCompactionPipeline = CreateComputePipeline("scene_opaque_compact.comp.spv", _sceneSubmissionComputeLayout);
+            bool resolvedMeshletAddressing =
+                Settings.IsPerformanceOptimizationEnabled(
+                    PerformanceOptimizationFeature
+                        .ResolvedMeshletAddressing);
+            string sceneOpaqueCompactionShader = resolvedMeshletAddressing
+                ? "scene_opaque_compact.comp.spv"
+                : "scene_opaque_compact_virtual.comp.spv";
+            _sceneOpaqueCompactionPipeline = CreateComputePipeline(
+                sceneOpaqueCompactionShader,
+                _sceneSubmissionComputeLayout);
             _context.SetDebugName(_sceneOpaqueCompactionPipeline.Handle, ObjectType.Pipeline, "Scene Opaque Compaction Compute Pipeline");
             if (GpuMeshletCountersEnabled)
             {
                 _sceneOpaqueCompactionDiagnosticsPipeline = CreateComputePipeline(
-                    "scene_opaque_compact_diagnostics.comp.spv",
+                    resolvedMeshletAddressing
+                        ? "scene_opaque_compact_diagnostics.comp.spv"
+                        : "scene_opaque_compact_virtual_diagnostics.comp.spv",
                     _sceneSubmissionComputeLayout);
                 _context.SetDebugName(
                     _sceneOpaqueCompactionDiagnosticsPipeline.Handle,
