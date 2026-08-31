@@ -39,6 +39,9 @@
       <ShaderSource Update="ambient_occlusion.comp;ambient_occlusion_blur.comp">
         <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
       </ShaderSource>
+      <ShaderSource Update="ddgi_masked_feedback_compact.comp">
+        <AdditionalCompileOptions>$(NjulfReceiverAttributionOptimizationOptions)</AdditionalCompileOptions>
+      </ShaderSource>
       <ShaderInclude Include="*.glsl" />
       <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_source.comp">
         <Source>ddgi_simple_trace.comp</Source>

@@ -106,7 +106,14 @@ public readonly record struct SimpleDdgiReceiverCacheDiagnostics(
     ulong LifetimeForwardAcceptedCount = 0UL,
     ulong LifetimeExactFallbackFragmentCount = 0UL,
     ulong LifetimeDirectionalCacheEvaluationCount = 0UL,
-    ulong LifetimeLegacyFragmentCount = 0UL)
+    ulong LifetimeLegacyFragmentCount = 0UL,
+    int MaskedFeedbackCompactionReadbackValid = 0,
+    uint MaskedFeedbackCompactedCount = 0u,
+    uint MaskedFeedbackOverflowFallbackCount = 0u,
+    uint MaskedFeedbackCandidateHighWater = 0u,
+    uint MaskedFeedbackLogicalCapacity = 0u,
+    uint MaskedFeedbackObservedHighWater = 0u,
+    ulong MaskedFeedbackCompactBufferBytes = 0UL)
 {
     public static SimpleDdgiReceiverCacheDiagnostics Exact(
         SimpleDdgiReceiverCacheMode requestedMode,

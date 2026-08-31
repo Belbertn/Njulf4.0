@@ -2613,6 +2613,20 @@ namespace Njulf.Rendering.Data
         public uint SurfaceBufferIndex;
     }
 
+    // 36-byte post-forward alpha-mask feedback ABI. Raster has already stored
+    // the exact world-space surface and stable geometry identity; compute needs
+    // only the frame/camera context required by the unchanged DDGI gather.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiMaskedFeedbackCompactPushConstants
+    {
+        public Vector4 CameraPositionAndPadding;
+        public uint CurrentFrameIndex;
+        public uint ScreenWidth;
+        public uint ScreenHeight;
+        public uint ParamsBufferIndex;
+        public uint CompactBufferIndex;
+    }
+
     // 124-byte ABI for publishing the reduced gather lattice to parallel
     // frame-local radiance and surface buffers. The resolve reconstructs a
     // deterministic 2x2 representative and admits only compatible gather

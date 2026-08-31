@@ -740,7 +740,10 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
             Assert.That(forwardPass,
                 Does.Contain("receiver-feedback-alpha-foliage-completion-failed"));
             Assert.That(forwardPass,
-                Does.Contain("receiverGatherRequired = receiverCacheEligible ||"));
+                Does.Contain(
+                    "receiverGatherRequired = receiverPipelineBank is not null &&"));
+            Assert.That(forwardPass,
+                Does.Contain("(receiverCacheEligible ||"));
             Assert.That(
                 typeof(ForwardPlusPass).GetField(
                     "_simpleDdgiReceiverFeedbackRuntime",

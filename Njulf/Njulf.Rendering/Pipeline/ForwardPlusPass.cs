@@ -55,10 +55,12 @@ namespace Njulf.Rendering.Pipeline
             internal VkPipeline AdaptiveFeedbackGather;
             internal VkPipeline AdaptiveMissingFeedbackGather;
             internal VkPipeline AdaptiveResolve;
+            internal VkPipeline CompactMaskedFeedback;
 
             internal bool IsComplete(
                 bool requiresLegacy,
-                bool requiresDiagnostics) =>
+                bool requiresDiagnostics,
+                bool requiresCompactMaskedFeedback) =>
                 CanonicalGather.Handle != 0 &&
                 CanonicalResolve.Handle != 0 &&
                 ExactFeedbackGather.Handle != 0 &&
@@ -67,6 +69,8 @@ namespace Njulf.Rendering.Pipeline
                 AdaptiveFeedbackGather.Handle != 0 &&
                 AdaptiveMissingFeedbackGather.Handle != 0 &&
                 AdaptiveResolve.Handle != 0 &&
+                (!requiresCompactMaskedFeedback ||
+                 CompactMaskedFeedback.Handle != 0) &&
                 (!requiresLegacy ||
                  LegacyGather.Handle != 0 && LegacyResolve.Handle != 0) &&
                 (!requiresDiagnostics || DiagnosticsResolve.Handle != 0);
@@ -134,6 +138,7 @@ namespace Njulf.Rendering.Pipeline
         private PipelineCache _simpleDdgiReceiverCachePipelineCache;
         private VkPipeline _simpleDdgiReceiverCachePipeline;
         private VkPipeline _simpleDdgiReceiverFeedbackPipeline;
+        private VkPipeline _simpleDdgiMaskedFeedbackCompactPipeline;
         private VkPipeline _simpleDdgiReceiverCacheResolvePipeline;
         private VkPipeline _simpleDdgiReceiverCacheResolveDiagnosticsPipeline;
         private bool
@@ -281,6 +286,8 @@ namespace Njulf.Rendering.Pipeline
                     _receiverCacheLifetime.Snapshot;
                 SimpleDdgiReceiverCacheAdaptiveCounters adaptive =
                     _adaptiveReceiverCounters;
+                SimpleDdgiMaskedFeedbackCompactionCounters maskedFeedback =
+                    _maskedFeedbackCompactCounters;
                 diagnostics = diagnostics with
                 {
                     AdaptiveAbiVersion =
@@ -334,7 +341,21 @@ namespace Njulf.Rendering.Pipeline
                     LifetimeDirectionalCacheEvaluationCount =
                         lifetime.DirectionalCacheEvaluationCount,
                     LifetimeLegacyFragmentCount =
-                        lifetime.LegacyFragmentCount
+                        lifetime.LegacyFragmentCount,
+                    MaskedFeedbackCompactionReadbackValid =
+                        maskedFeedback.ReadbackValid,
+                    MaskedFeedbackCompactedCount =
+                        maskedFeedback.PublishedCount,
+                    MaskedFeedbackOverflowFallbackCount =
+                        maskedFeedback.OverflowFallbackCount,
+                    MaskedFeedbackCandidateHighWater =
+                        maskedFeedback.CandidateHighWater,
+                    MaskedFeedbackLogicalCapacity =
+                        maskedFeedback.LogicalCapacity,
+                    MaskedFeedbackObservedHighWater =
+                        maskedFeedback.ObservedHighWater,
+                    MaskedFeedbackCompactBufferBytes =
+                        SimpleDdgiMaskedFeedbackCompactTotalBytes
                 };
                 if (diagnostics.EffectiveMode ==
                         SimpleDdgiReceiverCacheMode.Exact ||
@@ -775,6 +796,15 @@ namespace Njulf.Rendering.Pipeline
                         CreateSimpleDdgiReceiverCacheAdaptivePipeline(
                             "ddgi_simple_receiver_cache_resolve_adaptive.comp.spv",
                             "Simple DDGI Receiver Cache Adaptive Resolve Pipeline");
+                    if (_settings.IsPerformanceOptimizationEnabled(
+                            PerformanceOptimizationFeature
+                                .CompactMaskedFeedback))
+                    {
+                        bank.CompactMaskedFeedback =
+                            CreateSimpleDdgiReceiverCachePipeline(
+                                "ddgi_masked_feedback_compact.comp.spv",
+                                "Simple DDGI Masked Feedback Compact Pipeline");
+                    }
 
                     if (!bank.IsComplete(
                             requiresLegacy:
@@ -788,7 +818,11 @@ namespace Njulf.Rendering.Pipeline
                                 SimpleDdgiReceiverCacheMode
                                     .LegacyDepthOnlyBenchmark,
                             requiresDiagnostics: _settings.Diagnostics
-                                .DdgiForwardEstimateCountersEnabled))
+                                .DdgiForwardEstimateCountersEnabled,
+                            requiresCompactMaskedFeedback:
+                                _settings.IsPerformanceOptimizationEnabled(
+                                    PerformanceOptimizationFeature
+                                        .CompactMaskedFeedback)))
                     {
                         throw new InvalidOperationException(
                             "The receiver pipeline bank is incomplete.");
@@ -814,6 +848,8 @@ namespace Njulf.Rendering.Pipeline
                     _adaptiveReceiverMissingFeedbackGatherPipeline =
                         bank.AdaptiveMissingFeedbackGather;
                     _adaptiveReceiverResolvePipeline = bank.AdaptiveResolve;
+                    _simpleDdgiMaskedFeedbackCompactPipeline =
+                        bank.CompactMaskedFeedback;
                     _simpleDdgiReceiverPipelineBankFailure =
                         "receiver-pipeline-bank-ready";
                     Volatile.Write(
@@ -1762,6 +1798,16 @@ namespace Njulf.Rendering.Pipeline
                     }
                 }
 
+                if (_simpleDdgiReceiverCacheAvailableForCurrentView)
+                {
+                    PrepareSimpleDdgiMaskedFeedbackCompaction(
+                        cmd,
+                        frameIndex,
+                        receiverFeedbackCaptureOpen &&
+                        _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
+                        receiverFeedbackProducer.IsAvailable);
+                }
+
                 SetFullViewportAndScissor(cmd, renderExtent);
                 BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
                 if (_simpleDdgiReceiverCacheAvailableForCurrentView)
@@ -2121,6 +2167,13 @@ namespace Njulf.Rendering.Pipeline
                     _context.KhrDynamicRendering.CmdEndRendering(cmd);
                 }
 
+                RecordSimpleDdgiMaskedFeedbackCompaction(
+                    cmd,
+                    frameIndex,
+                    sceneData,
+                    renderExtent,
+                    timestamps);
+
                 if (nearFieldTraceResolutionEnabled)
                 {
                     RecordTraceResolutionNearFieldSource(
@@ -2165,6 +2218,7 @@ namespace Njulf.Rendering.Pipeline
                 _simpleDdgiReceiverCacheAvailableForCurrentView = false;
                 _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView = false;
                 _simpleDdgiFoliageFeedbackRequiredForCurrentView = false;
+                _maskedFeedbackCompactionActiveForCurrentView = false;
                 if (receiverFeedbackCaptureOpen)
                 {
                     if (!exactOpaqueProducerCompleted)
@@ -5110,6 +5164,7 @@ namespace Njulf.Rendering.Pipeline
             uint gatherHeight = DivideRoundUp(
                 extent.Height,
                 SimpleDdgiReceiverGatherScale);
+            RecreateSimpleDdgiMaskedFeedbackCompactResources(extent);
             ulong gatherByteSize = checked(
                 (ulong)gatherWidth * gatherHeight *
                 SimpleDdgiReceiverGatherEntryBytes);
@@ -5431,7 +5486,8 @@ namespace Njulf.Rendering.Pipeline
                 bank.AdaptiveGather,
                 bank.AdaptiveFeedbackGather,
                 bank.AdaptiveMissingFeedbackGather,
-                bank.AdaptiveResolve
+                bank.AdaptiveResolve,
+                bank.CompactMaskedFeedback
             ];
             foreach (VkPipeline pipeline in pipelines)
             {
@@ -5456,6 +5512,7 @@ namespace Njulf.Rendering.Pipeline
             }
             CleanupSimpleDdgiReceiverCacheAdaptive(
                 destroyInfrastructure: true);
+            CleanupSimpleDdgiMaskedFeedbackCompactResources();
             _simpleDdgiReceiverCacheAvailableForCurrentView = false;
             for (int i = 0; i < FramesInFlight; i++)
             {
@@ -5558,6 +5615,15 @@ namespace Njulf.Rendering.Pipeline
                     _simpleDdgiReceiverFeedbackPipeline,
                     null);
                 _simpleDdgiReceiverFeedbackPipeline = default;
+            }
+
+            if (_simpleDdgiMaskedFeedbackCompactPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _simpleDdgiMaskedFeedbackCompactPipeline,
+                    null);
+                _simpleDdgiMaskedFeedbackCompactPipeline = default;
             }
 
             if (_simpleDdgiReceiverCachePipeline.Handle != 0)

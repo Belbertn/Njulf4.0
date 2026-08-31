@@ -80,31 +80,20 @@ bool SimpleDdgiTryComputeCubemapTileNamespace(
     return true;
 }
 
-void EmitSimpleDdgiSurfaceReceiverFeedbackCore(
-    SimpleDdgiGatherResult gather,
-    bool gatherContributed,
-    float radiometricOwnership,
-    float leakAttenuation,
-    float physicalSurfaceWeight,
-    bool eligible,
-    uint producer,
-    uint currentFrameIndex,
+bool SimpleDdgiSurfaceFeedbackTryResolveTile(
+    vec2 fragmentCoordinate,
     vec2 screenDimensions,
     bool exactTileNamespaceInputValid,
     uint exactTileNamespaceBase,
-    uvec3 stableGeometryIdentity)
+    out uvec2 pixel,
+    out uint exactTileId,
+    out uvec2 tileBase,
+    out uvec2 coveredTileExtent,
+    out uint coveredTilePixelCount)
 {
-    uint controlOffsetWords;
-    if (!SimpleDdgiReceiverFeedbackTryResolveFrameControlOffset(
-            currentFrameIndex,
-            controlOffsetWords))
-    {
-        return;
-    }
-
     uvec2 extent = uvec2(max(floor(screenDimensions), vec2(1.0)));
-    uvec2 pixel = min(
-        uvec2(max(floor(gl_FragCoord.xy), vec2(0.0))),
+    pixel = min(
+        uvec2(max(floor(fragmentCoordinate), vec2(0.0))),
         extent - uvec2(1u));
     uvec2 tileGrid = (extent +
         uvec2(SIMPLE_DDGI_RECEIVER_FEEDBACK_SURFACE_TILE_SCALE - 1u)) /
@@ -122,16 +111,145 @@ void EmitSimpleDdgiSurfaceReceiverFeedbackCore(
     bool tileNamespaceValid = exactTileNamespaceInputValid &&
         tileOrdinalValid &&
         exactTileNamespaceBase <= 0xffffffffu - localTileId;
-    uint exactTileId = tileNamespaceValid
+    exactTileId = tileNamespaceValid
         ? exactTileNamespaceBase + localTileId
         : 0u;
-    uvec2 tileBase = tile *
+    tileBase = tile *
         SIMPLE_DDGI_RECEIVER_FEEDBACK_SURFACE_TILE_SCALE;
-    uvec2 coveredTileExtent = min(
+    coveredTileExtent = min(
         uvec2(SIMPLE_DDGI_RECEIVER_FEEDBACK_SURFACE_TILE_SCALE),
         extent - tileBase);
-    uint coveredTilePixelCount =
+    coveredTilePixelCount =
         coveredTileExtent.x * coveredTileExtent.y;
+    return tileNamespaceValid;
+}
+
+bool SimpleDdgiSurfaceFeedbackRepresentativePixel(
+    uvec2 pixel,
+    uvec2 tileBase,
+    uvec2 coveredTileExtent,
+    uint coveredTilePixelCount,
+    uint exactTileId,
+    uint frameSerialLow,
+    uint frameSerialHigh,
+    uint producer)
+{
+    uint representativeHash = SimpleDdgiSurfaceFeedbackHash(
+        exactTileId ^ frameSerialLow ^
+        SimpleDdgiSurfaceFeedbackHash(frameSerialHigh + 0x9e3779b9u) ^
+        SimpleDdgiSurfaceFeedbackHash(producer + 0x85ebca6bu));
+    uint representativeLinear = coveredTilePixelCount != 0u
+        ? representativeHash % coveredTilePixelCount
+        : 0u;
+    uvec2 representativePixel = tileBase + uvec2(
+        representativeLinear % max(coveredTileExtent.x, 1u),
+        representativeLinear / max(coveredTileExtent.x, 1u));
+    return all(equal(pixel, representativePixel));
+}
+
+// Used before an exact gather to decide whether a producer could emit from
+// this pixel. A producer absent from the immutable required mask is a valid
+// no-op. A required but malformed policy is not safe to skip: the caller must
+// retain the dense path so its normal failure accounting remains authoritative.
+bool SimpleDdgiSurfaceFeedbackCouldSelectProducer(
+    uint controlOffsetWords,
+    uint producer,
+    uvec2 pixel,
+    uvec2 tileBase,
+    uvec2 coveredTileExtent,
+    uint coveredTilePixelCount,
+    uint exactTileId,
+    out bool policyUsable)
+{
+    uint requiredMask = SimpleDdgiReceiverFeedbackProducerControlWord(
+        controlOffsetWords,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_REQUIRED_MASK);
+    if ((requiredMask & (1u << producer)) == 0u)
+    {
+        policyUsable = true;
+        return false;
+    }
+    if (!SimpleDdgiReceiverFeedbackProducerControlIsValid(
+            controlOffsetWords,
+            producer))
+    {
+        policyUsable = false;
+        return false;
+    }
+
+    uint samplingPeriod = SimpleDdgiReceiverFeedbackProducerControlWord(
+        controlOffsetWords,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_SAMPLE_PERIOD);
+    uint samplingPhase = SimpleDdgiReceiverFeedbackProducerControlWord(
+        controlOffsetWords,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_SAMPLE_PHASE);
+    uint maximumOwners = SimpleDdgiReceiverFeedbackProducerControlWord(
+        controlOffsetWords,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_MAXIMUM_OWNERS);
+    policyUsable = samplingPeriod != 0u &&
+        samplingPhase < samplingPeriod && maximumOwners != 0u &&
+        maximumOwners <= SIMPLE_DDGI_EXACT_FEEDBACK_MAX_OWNERS;
+    if (!policyUsable)
+        return false;
+
+    uint frameSerialLow =
+        SimpleDdgiReceiverFeedbackProducerControlWord(
+            controlOffsetWords,
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_FRAME_LOW);
+    uint frameSerialHigh =
+        SimpleDdgiReceiverFeedbackProducerControlWord(
+            controlOffsetWords,
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_FRAME_HIGH);
+    return exactTileId % samplingPeriod == samplingPhase &&
+        SimpleDdgiSurfaceFeedbackRepresentativePixel(
+            pixel,
+            tileBase,
+            coveredTileExtent,
+            coveredTilePixelCount,
+            exactTileId,
+            frameSerialLow,
+            frameSerialHigh,
+            producer);
+}
+
+void EmitSimpleDdgiSurfaceReceiverFeedbackCore(
+    SimpleDdgiGatherResult gather,
+    bool gatherContributed,
+    float radiometricOwnership,
+    float leakAttenuation,
+    float physicalSurfaceWeight,
+    bool eligible,
+    uint producer,
+    uint currentFrameIndex,
+    vec2 screenDimensions,
+    vec2 fragmentCoordinate,
+    bool exactTileNamespaceInputValid,
+    uint exactTileNamespaceBase,
+    uvec3 stableGeometryIdentity)
+{
+    uint controlOffsetWords;
+    if (!SimpleDdgiReceiverFeedbackTryResolveFrameControlOffset(
+            currentFrameIndex,
+            controlOffsetWords))
+    {
+        return;
+    }
+
+    uvec2 pixel;
+    uint exactTileId;
+    uvec2 tileBase;
+    uvec2 coveredTileExtent;
+    uint coveredTilePixelCount;
+    bool tileNamespaceValid = SimpleDdgiSurfaceFeedbackTryResolveTile(
+        fragmentCoordinate,
+        screenDimensions,
+        exactTileNamespaceInputValid,
+        exactTileNamespaceBase,
+        pixel,
+        exactTileId,
+        tileBase,
+        coveredTileExtent,
+        coveredTilePixelCount);
     // One rotating pixel represents the whole 12x12 (or clipped edge) tile.
     // Multiplying its physical measure by exact tile area makes that spatial
     // stratum unbiased; the independent tile-period correction is stored in
@@ -201,18 +319,16 @@ void EmitSimpleDdgiSurfaceReceiverFeedbackCore(
             SimpleDdgiReceiverFeedbackProducerControlWord(
                 controlOffsetWords,
                 SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_FRAME_HIGH);
-        uint representativeHash = SimpleDdgiSurfaceFeedbackHash(
-            exactTileId ^ frameSerialLow ^
-            SimpleDdgiSurfaceFeedbackHash(frameSerialHigh + 0x9e3779b9u) ^
-            SimpleDdgiSurfaceFeedbackHash(
-                effectiveProducer + 0x85ebca6bu));
-        uint representativeLinear = coveredTilePixelCount != 0u
-            ? representativeHash % coveredTilePixelCount
-            : 0u;
-        uvec2 representativePixel = tileBase + uvec2(
-            representativeLinear % max(coveredTileExtent.x, 1u),
-            representativeLinear / max(coveredTileExtent.x, 1u));
-        bool representative = all(equal(pixel, representativePixel));
+        bool representative =
+            SimpleDdgiSurfaceFeedbackRepresentativePixel(
+                pixel,
+                tileBase,
+                coveredTileExtent,
+                coveredTilePixelCount,
+                exactTileId,
+                frameSerialLow,
+                frameSerialHigh,
+                effectiveProducer);
 
         uint receiverHash = SimpleDdgiSurfaceFeedbackHash(
             exactTileId ^

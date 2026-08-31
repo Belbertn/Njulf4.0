@@ -523,6 +523,7 @@ void main()
         reflectionFeedback ? 5u : 1u,
         pc.Push.CurrentFrameIndex,
         pc.Push.ScreenDimensions.xy,
+        gl_FragCoord.xy,
         tileNamespaceValid,
         tileNamespaceBase,
         uvec3(

@@ -1,0 +1,138 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+
+#define NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION 1
+#include "common.glsl"
+#include "ddgi_receiver_feedback_source_abi.glsl"
+#include "ddgi_receiver_feedback_producer.glsl"
+
+#define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT 0u
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE false
+#define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE false
+#define SIMPLE_DDGI_RECEIVER_COVERAGE_HASH 0u
+#define SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS SIMPLE_DDGI_RECEIVER_CONSUMER_OPAQUE
+#define SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK 0
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 0
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 0u
+#define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
+#include "ddgi_simple_shared.glsl"
+#include "ddgi_receiver_feedback_surface_producer.glsl"
+#include "ddgi_masked_feedback_compaction_abi.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SimpleDdgiMaskedFeedbackCompactPushBlock
+{
+    vec4 CameraPositionAndPadding;
+    uint CurrentFrameIndex;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint ParamsBufferIndex;
+    uint CompactBufferIndex;
+} pc;
+
+bool SimpleDdgiMaskedFeedbackFinite(vec3 value)
+{
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+void main()
+{
+    uint logicalCapacity;
+    if (!SimpleDdgiMaskedFeedbackCompactionActive(
+            pc.CompactBufferIndex,
+            logicalCapacity))
+    {
+        return;
+    }
+
+    uint recordIndex = gl_GlobalInvocationID.x;
+    uint publishedCount = min(
+        SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex,
+            SIMPLE_DDGI_MASKED_FEEDBACK_PUBLISHED_COUNT_WORD),
+        logicalCapacity);
+    if (recordIndex >= publishedCount)
+        return;
+
+    uint recordBase = SIMPLE_DDGI_MASKED_FEEDBACK_HEADER_WORDS +
+        recordIndex * SIMPLE_DDGI_MASKED_FEEDBACK_RECORD_WORDS;
+    vec3 worldPosition = vec3(
+        uintBitsToFloat(SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 0u)),
+        uintBitsToFloat(SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 1u)),
+        uintBitsToFloat(SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 2u)));
+    float survivingCoverage = uintBitsToFloat(
+        SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 3u));
+    vec3 geometricNormal = vec3(
+        uintBitsToFloat(SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 4u)),
+        uintBitsToFloat(SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 5u)),
+        uintBitsToFloat(SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 6u)));
+    uvec2 pixel = uvec2(
+        SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 7u),
+        SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 8u));
+    uvec3 stableGeometryIdentity = uvec3(
+        SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 9u),
+        SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 10u),
+        SimpleDdgiMaskedFeedbackWord(
+            pc.CompactBufferIndex, recordBase + 11u));
+
+    if (!SimpleDdgiMaskedFeedbackFinite(worldPosition) ||
+        !SimpleDdgiMaskedFeedbackFinite(geometricNormal) ||
+        !(survivingCoverage >= 0.0) || isnan(survivingCoverage) ||
+        isinf(survivingCoverage) || pixel.x >= pc.ScreenWidth ||
+        pixel.y >= pc.ScreenHeight)
+    {
+        return;
+    }
+
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    bool diffuseGatherRequired =
+        (params.flags &
+            (SIMPLE_DDGI_FLAG_ENABLED |
+             SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) ==
+            (SIMPLE_DDGI_FLAG_ENABLED |
+             SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) &&
+        params.probeCount > 0u;
+    if (!diffuseGatherRequired)
+        return;
+
+    vec3 normal = normalize(geometricNormal);
+    vec3 viewDirection = normalize(
+        pc.CameraPositionAndPadding.xyz - worldPosition);
+    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(
+        params,
+        worldPosition,
+        normal,
+        viewDirection);
+    float ownership = SimpleDdgiRadiometricOwnership(gather);
+    float leakAttenuation = SimpleDdgiLeakAttenuation(gather, params);
+    EmitSimpleDdgiSurfaceReceiverFeedbackCore(
+        gather,
+        true,
+        ownership,
+        leakAttenuation,
+        clamp(survivingCoverage, 0.0, 1.0),
+        true,
+        1u,
+        pc.CurrentFrameIndex,
+        vec2(pc.ScreenWidth, pc.ScreenHeight),
+        vec2(pixel) + vec2(0.5),
+        true,
+        0u,
+        stableGeometryIdentity);
+}

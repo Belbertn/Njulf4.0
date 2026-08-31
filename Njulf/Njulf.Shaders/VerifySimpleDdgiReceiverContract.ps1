@@ -381,10 +381,11 @@ foreach ($moduleName in @(
     $expectedExactReceiverConstants = if ($isCacheModule) { 4 } else { 0 }
     $expectedExactReceiverAccesses = if ($isCacheModule) { 3 } else { 0 }
     # Cache-capable opaque programs retain both independent fail-closed lanes:
-    # the canonical rejection gather and the exact B1 ownership producer used
-    # by accepted alpha-masked fragments. The latter contributes fourteen
-    # bounded atomic instructions to these six explicitly pinned artifacts.
-    $expectedAtomicInstructions = if ($isCacheModule) { 43 } else { 0 }
+    # the canonical rejection gather and exact B1 ownership. The optimized
+    # masked path adds three bounded list operations: candidate high-water,
+    # overflow fallback, and dense publication maximum. Overflow still executes
+    # the original exact gather in the same fragment.
+    $expectedAtomicInstructions = if ($isCacheModule) { 46 } else { 0 }
 
     if ($atomicInstructions -ne $expectedAtomicInstructions) {
         $violations.Add(

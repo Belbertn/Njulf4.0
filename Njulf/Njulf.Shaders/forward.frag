@@ -67,6 +67,7 @@ const uint NJULF_PERFORMANCE_SPLIT_HYBRID_FORWARD = 1u << 5u;
 const uint NJULF_PERFORMANCE_STATIC_SHADER_SPECIALIZATION = 1u << 8u;
 const uint NJULF_PERFORMANCE_DIRECTIONAL_LATTICE_SHARING = 1u << 9u;
 const uint NJULF_PERFORMANCE_DDGI_PUBLICATION_REUSE = 1u << 10u;
+const uint NJULF_PERFORMANCE_COMPACT_MASKED_FEEDBACK = 1u << 12u;
 const uint NJULF_RECEIVER_CACHE_LANE_COMBINED = 0u;
 const uint NJULF_RECEIVER_CACHE_LANE_ACCEPTED = 1u;
 const uint NJULF_RECEIVER_CACHE_LANE_EXACT_FALLBACK = 2u;
@@ -312,6 +313,7 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #include "ddgi_receiver_feedback_source_abi.glsl"
 #include "ddgi_receiver_feedback_producer.glsl"
 #include "ddgi_receiver_feedback_surface_producer.glsl"
+#include "ddgi_masked_feedback_compaction_abi.glsl"
 #endif
 #include "farfield_clipmap.glsl"
 
@@ -5186,6 +5188,7 @@ void EmitSimpleDdgiSurfaceReceiverFeedback(
         producer,
         pc.Push.CurrentFrameIndex,
         pc.Push.ScreenDimensions,
+        gl_FragCoord.xy,
         tileNamespaceValid,
         tileNamespaceBase,
         uvec3(fragObjectIndex, fragMaterialIndex, fragMeshletIndex));
@@ -5208,6 +5211,102 @@ void EmitSimpleDdgiTransparentReceiverFeedback(
         2u,
         true,
         0u);
+}
+
+// Returns true when this cache-accepted masked fragment needs no inline exact
+// gather. That can mean there is no open alpha producer, neither rotating B1
+// stratum selects the pixel, or its exact surface payload was appended. A
+// malformed producer policy or compact-list overflow returns false so the
+// unchanged fragment gather and failure accounting execute immediately.
+bool TryHandleSimpleDdgiMaskedFeedbackWithoutInlineGather(
+    vec3 worldPosition,
+    vec3 geometricNormal,
+    float survivingCoverage)
+{
+    uint compactBufferIndex = SimpleDdgiMaskedFeedbackBufferIndex(
+        pc.Push.CurrentFrameIndex);
+    uint wordCount = uint(BindlessStorageBuffers[
+        nonuniformEXT(compactBufferIndex)].Words.length());
+    if (wordCount < SIMPLE_DDGI_MASKED_FEEDBACK_HEADER_WORDS)
+        return false;
+
+    uint state = SimpleDdgiMaskedFeedbackWord(
+        compactBufferIndex,
+        SIMPLE_DDGI_MASKED_FEEDBACK_STATE_WORD);
+    if ((state & SIMPLE_DDGI_MASKED_FEEDBACK_INITIALIZED_BIT) == 0u)
+        return false;
+    if ((state & SIMPLE_DDGI_MASKED_FEEDBACK_ACTIVE_BIT) == 0u)
+        return true;
+
+    uint logicalCapacity;
+    if (!SimpleDdgiMaskedFeedbackCompactionActive(
+            compactBufferIndex,
+            logicalCapacity))
+    {
+        return false;
+    }
+
+    uint controlOffsetWords;
+    if (!SimpleDdgiReceiverFeedbackTryResolveFrameControlOffset(
+            pc.Push.CurrentFrameIndex,
+            controlOffsetWords))
+    {
+        return false;
+    }
+
+    uvec2 pixel;
+    uint exactTileId;
+    uvec2 tileBase;
+    uvec2 coveredTileExtent;
+    uint coveredTilePixelCount;
+    if (!SimpleDdgiSurfaceFeedbackTryResolveTile(
+            gl_FragCoord.xy,
+            pc.Push.ScreenDimensions,
+            true,
+            0u,
+            pixel,
+            exactTileId,
+            tileBase,
+            coveredTileExtent,
+            coveredTilePixelCount))
+    {
+        return false;
+    }
+
+    bool alphaPolicyUsable;
+    bool refinementPolicyUsable;
+    bool alphaSelected = SimpleDdgiSurfaceFeedbackCouldSelectProducer(
+        controlOffsetWords,
+        1u,
+        pixel,
+        tileBase,
+        coveredTileExtent,
+        coveredTilePixelCount,
+        exactTileId,
+        alphaPolicyUsable);
+    bool refinementSelected =
+        SimpleDdgiSurfaceFeedbackCouldSelectProducer(
+            controlOffsetWords,
+            6u,
+            pixel,
+            tileBase,
+            coveredTileExtent,
+            coveredTilePixelCount,
+            exactTileId,
+            refinementPolicyUsable);
+    if (!alphaPolicyUsable || !refinementPolicyUsable)
+        return false;
+    if (!alphaSelected && !refinementSelected)
+        return true;
+
+    return SimpleDdgiMaskedFeedbackTryAppend(
+        compactBufferIndex,
+        logicalCapacity,
+        worldPosition,
+        geometricNormal,
+        survivingCoverage,
+        pixel,
+        uvec3(fragObjectIndex, fragMaterialIndex, fragMeshletIndex));
 }
 
 void EmitSimpleDdgiAlphaMaskReceiverFeedback(
@@ -6387,6 +6486,7 @@ void main()
     float exactFeedbackRadiometricOwnership = 0.0;
     float exactFeedbackLeakAttenuation = 0.0;
     float exactFeedbackRoughDdgiOwnership = 0.0;
+    bool exactFeedbackMaskedHandledByCompaction = false;
 #endif
     vec3 ddgiDirectionalRadiance = vec3(0.0);
     float ddgiDirectionalConfidence = 0.0;
@@ -6484,10 +6584,25 @@ void main()
              bentNormalValid);
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
         // Cache-required opaque artifacts also own B1 attribution. Only a
-        // surviving alpha-mask fragment pays for the exact structured gather;
-        // opaque receivers retain the cache fast path.
+        // surviving alpha-mask fragment that cannot enter the lossless compact
+        // transaction pays for the exact structured gather here. Rejected
+        // cache admissions and any overflow retain this authoritative path.
+        bool alphaMaskFeedbackRequired =
+            alphaMode > 0.5 && alphaMode < 1.5;
+        if (alphaMaskFeedbackRequired && receiverCacheAccepted &&
+            !exactGatherRequired && diffuseGatherRequired &&
+            NjulfPerformanceOptimizationEnabled(
+                NJULF_PERFORMANCE_COMPACT_MASKED_FEEDBACK))
+        {
+            exactFeedbackMaskedHandledByCompaction =
+                TryHandleSimpleDdgiMaskedFeedbackWithoutInlineGather(
+                    fragWorldPosition,
+                    ddgiNormal,
+                    materialCoverage.Alpha);
+        }
         exactGatherRequired = exactGatherRequired ||
-            (alphaMode > 0.5 && alphaMode < 1.5);
+            (alphaMaskFeedbackRequired &&
+             !exactFeedbackMaskedHandledByCompaction);
 #endif
         if (exactGatherRequired && diffuseGatherRequired)
 #else
@@ -8239,7 +8354,8 @@ void main()
         exactFeedbackRadiometricOwnership,
         exactFeedbackLeakAttenuation,
         materialCoverage.Alpha,
-        alphaMode > 0.5 && alphaMode < 1.5,
+        alphaMode > 0.5 && alphaMode < 1.5 &&
+            !exactFeedbackMaskedHandledByCompaction,
         exactFeedbackRoughDdgiOwnership);
 #else
     EmitSimpleDdgiTransparentReceiverFeedback(

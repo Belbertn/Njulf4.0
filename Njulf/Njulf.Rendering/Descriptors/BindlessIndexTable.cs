@@ -1042,8 +1042,16 @@ namespace Njulf.Rendering.Descriptors
         public const int MeshletResolvedMappingBufferFrame1 =
             MeshletResolvedMappingBufferBase + 1;
 
-        public const int StaticBufferCount =
+        /// <summary>Cache-accepted masked receiver surface list for frame 0.</summary>
+        public const int SimpleDdgiMaskedFeedbackCompactBufferBase =
             MeshletResolvedMappingBufferFrame1 + 1;
+
+        /// <summary>Cache-accepted masked receiver surface list for frame 1.</summary>
+        public const int SimpleDdgiMaskedFeedbackCompactBufferFrame1 =
+            SimpleDdgiMaskedFeedbackCompactBufferBase + 1;
+
+        public const int StaticBufferCount =
+            SimpleDdgiMaskedFeedbackCompactBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1234,6 +1242,8 @@ namespace Njulf.Rendering.Descriptors
                     FoliageImpostorViewBuffer => nameof(FoliageImpostorViewBuffer),
                     MeshletResolvedMappingBufferBase => nameof(MeshletResolvedMappingBufferBase),
                     MeshletResolvedMappingBufferFrame1 => nameof(MeshletResolvedMappingBufferFrame1),
+                    SimpleDdgiMaskedFeedbackCompactBufferBase => nameof(SimpleDdgiMaskedFeedbackCompactBufferBase),
+                    SimpleDdgiMaskedFeedbackCompactBufferFrame1 => nameof(SimpleDdgiMaskedFeedbackCompactBufferFrame1),
                     SceneOpaqueCompactedMeshletDrawBufferBase => nameof(SceneOpaqueCompactedMeshletDrawBufferBase),
                     SceneOpaqueCompactedMeshletDrawBufferFrame1 => nameof(SceneOpaqueCompactedMeshletDrawBufferFrame1),
                     SceneSimpleOpaqueCompactedMeshletDrawBufferBase => nameof(SceneSimpleOpaqueCompactedMeshletDrawBufferBase),

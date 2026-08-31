@@ -10,6 +10,7 @@ $allShaderFiles = @(
     Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'foliage_forward_ddgi_b1.frag.spv'
     Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'foliage_forward_ddgi_b1_provenance.frag.spv'
     Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'ddgi_simple_*.comp.spv'
+    Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'ddgi_masked_feedback_compact.comp.spv'
     Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'fog.comp.spv'
     Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'fog_b1.comp.spv'
     Get-ChildItem -LiteralPath $resolvedDirectory -File -Filter 'particle.vert.spv'
@@ -112,34 +113,34 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_full_input_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_weighted_oit.frag.spv' = 27
     # Surface-aware cache programs retain the canonical exact gather behind a
-    # fail-closed rejection branch. They also retain the seven bounded B1
-    # ownership operations needed by alpha-masked fragments. The former only
-    # execute for rejected cache samples; the latter only execute for accepted
-    # B1 producers, allowing cache consumption and exact ownership in one draw.
-    'forward_opaque_ddgi_cache_required.frag.spv' = 21
-    'forward_opaque_simple_ddgi_cache_required.frag.spv' = 21
-    'forward_opaque_simple_full_input_ddgi_cache_required.frag.spv' = 21
-    'forward_opaque_ddgi_near_field_direct_source_cache_required.frag.spv' = 21
-    'forward_opaque_simple_ddgi_near_field_direct_source_cache_required.frag.spv' = 21
-    'forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag.spv' = 21
-    'forward_opaque_ddgi_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_simple_ddgi_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_simple_full_input_ddgi_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_ddgi_c4_receiver_cache_required.frag.spv' = 21
-    'forward_opaque_simple_ddgi_c4_receiver_cache_required.frag.spv' = 21
-    'forward_opaque_simple_full_input_ddgi_c4_receiver_cache_required.frag.spv' = 21
-    'forward_opaque_ddgi_c4_c5_cache_required.frag.spv' = 21
-    'forward_opaque_simple_ddgi_c4_c5_cache_required.frag.spv' = 21
-    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required.frag.spv' = 21
-    'forward_opaque_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_simple_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_simple_full_input_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_simple_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_simple_full_input_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 21
-    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 21
+    # fail-closed rejection branch. Seven bounded B1 ownership operations own
+    # dense/rejected samples; the compact path adds exactly two list atomics
+    # (measured high-water and overflow fallback). Record publication uses a
+    # bounded maximum operation and is audited separately by SPIR-V validation.
+    'forward_opaque_ddgi_cache_required.frag.spv' = 23
+    'forward_opaque_simple_ddgi_cache_required.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_cache_required.frag.spv' = 23
+    'forward_opaque_ddgi_near_field_direct_source_cache_required.frag.spv' = 23
+    'forward_opaque_simple_ddgi_near_field_direct_source_cache_required.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag.spv' = 23
+    'forward_opaque_ddgi_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_ddgi_c4_receiver_cache_required.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c4_receiver_cache_required.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c4_receiver_cache_required.frag.spv' = 23
+    'forward_opaque_ddgi_c4_c5_cache_required.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c4_c5_cache_required.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required.frag.spv' = 23
+    'forward_opaque_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 23
     # Legacy cache variants do not compile the canonical rejection gather, but
     # still carry the same seven exact B1 ownership operations.
     'forward_opaque_ddgi_cache_legacy.frag.spv' = 7
@@ -227,14 +228,17 @@ $algorithmicAtomicCounts = @{
     # atomics must remain equivalent to the pre-surface-cache implementation.
     'ddgi_simple_receiver_cache_legacy.comp.spv' = 3
     'ddgi_simple_receiver_cache_b1.comp.spv' = 5
+    # The post-forward masked list performs the same outlined B1 reservation
+    # and publication operations after its exact surface gather.
+    'ddgi_masked_feedback_compact.comp.spv' = 5
 
     # Qualification counters exist only in explicitly selected diagnostic
     # artifacts. Pin their complete static add count here so no diagnostic
     # operation can leak into the zero-add production/cache-debug siblings.
     'ddgi_simple_receiver_cache_resolve_diagnostics.comp.spv' = 6
-    'forward_opaque_ddgi_cache_required_diagnostics.frag.spv' = 26
-    'forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv' = 26
-    'forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv' = 26
+    'forward_opaque_ddgi_cache_required_diagnostics.frag.spv' = 28
+    'forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv' = 28
+    'forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv' = 28
 
     # Sparse page classification, reconciliation, fixed feedback reduction,
     # and generation-safe update lifecycle attribution.
