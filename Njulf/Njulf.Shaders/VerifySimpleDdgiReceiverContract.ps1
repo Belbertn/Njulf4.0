@@ -6,6 +6,7 @@ param(
 
 $resolvedDirectory = (Resolve-Path -LiteralPath $ShaderDirectory).Path
 $spirvDis = (Get-Command spirv-dis -ErrorAction Stop).Source
+$spirvOpt = (Get-Command spirv-opt -ErrorAction Stop).Source
 $spirvVal = (Get-Command spirv-val -ErrorAction Stop).Source
 
 function Read-SpirvDisassembly {
@@ -31,6 +32,52 @@ function Read-SpirvDisassembly {
         }
 
         return [IO.File]::ReadAllText($temporaryPath)
+    }
+    finally {
+        if ([IO.File]::Exists($temporaryPath)) {
+            [IO.File]::Delete($temporaryPath)
+        }
+    }
+}
+
+function Read-ProductionSpecializedSpirvDisassembly {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $ModulePath
+    )
+
+    # Forward performance controls are specialization constants. Embedded
+    # modules retain the exact rollback graph; production pipelines freeze the
+    # default all-enabled mask before native compilation. Verify that same IR.
+    $temporaryPath = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        'njulf-spirv-opt-' + [Guid]::NewGuid().ToString('N') + '.spv')
+    try {
+        $optimizationArguments = @(
+            '--target-env=vulkan1.3'
+            '--freeze-spec-const'
+            '--eliminate-dead-branches'
+            '--eliminate-dead-code-aggressive'
+            '-O'
+            $ModulePath
+            '-o'
+            $temporaryPath)
+        $diagnostics =
+            (& $spirvOpt @optimizationArguments 2>&1) -join
+                [Environment]::NewLine
+        if ($LASTEXITCODE -ne 0) {
+            throw "spirv-opt failed for '$ModulePath': $diagnostics"
+        }
+
+        $validation =
+            (& $spirvVal --target-env vulkan1.3 $temporaryPath 2>&1) -join
+                [Environment]::NewLine
+        if ($LASTEXITCODE -ne 0) {
+            throw "spirv-val failed for specialized '$ModulePath': $validation"
+        }
+
+        return Read-SpirvDisassembly -ModulePath $temporaryPath
     }
     finally {
         if ([IO.File]::Exists($temporaryPath)) {
@@ -248,12 +295,6 @@ foreach ($moduleName in @(
     $sourceCacheConstants = [regex]::Matches(
         $disassembly,
         '%(?:u?int)_' + $sourceCacheIndex + '\b').Count
-    $compactDirectionalBaseReferences = [regex]::Matches(
-        $disassembly,
-        '%(?:u?int)_178\b').Count
-    $compactDirectionalNextBankReferences = [regex]::Matches(
-        $disassembly,
-        '%(?:u?int)_179\b').Count
     $exactReceiverAccesses = [regex]::Matches(
         $disassembly,
         '(?m)^\s*%\w+\s*=\s*Op(?:InBounds)?AccessChain\s+' +
@@ -325,6 +366,17 @@ foreach ($moduleName in @(
     $isCacheModule =
         $receiverCacheFragmentModuleNames -contains $moduleName -or
         $isOwnershipLockedModule
+    $ownershipDisassembly = if ($isOwnershipLockedModule) {
+        Read-ProductionSpecializedSpirvDisassembly -ModulePath $modulePath
+    } else {
+        $disassembly
+    }
+    $compactDirectionalBaseReferences = [regex]::Matches(
+        $ownershipDisassembly,
+        '%(?:u?int)_178\b').Count
+    $compactDirectionalNextBankReferences = [regex]::Matches(
+        $ownershipDisassembly,
+        '%(?:u?int)_179\b').Count
     $expectedCacheSamples = if ($isCacheModule) { 1 } else { 0 }
     $expectedExactReceiverConstants = if ($isCacheModule) { 4 } else { 0 }
     $expectedExactReceiverAccesses = if ($isCacheModule) { 3 } else { 0 }
@@ -342,7 +394,7 @@ foreach ($moduleName in @(
         ($compactDirectionalBaseReferences -ne 0 -or
          $compactDirectionalNextBankReferences -ne 0)) {
         $violations.Add(
-            "${moduleName}: ownership-locked artifact retains compact directional L2 bindless references " +
+            "${moduleName}: specialized ownership-locked artifact retains compact directional L2 bindless references " +
             "base178=$compactDirectionalBaseReferences bank179=$compactDirectionalNextBankReferences; expected 0/0")
     }
     if ($receiverConstants -ne $expectedExactReceiverConstants -or
@@ -468,5 +520,5 @@ if ($violations.Count -ne 0) {
 
 Write-Host "Validated and verified $($receiverModuleNames.Count) production Simple-DDGI receiver modules use exactly one compact uvec4 load per inlined gather site, the exact bounded paging-demand/B1 contribution atomic protocol, no compute-state/source-cache access, and no obsolete SSGI artifact."
 Write-Host "Validated $($receiverCacheFragmentModuleNames.Count) cache-required forward modules each perform one aligned set-2/binding-1 receiver-surface admission read, conditionally read the matching binding-0 FP16 radiance entry, and retain the exact three-gather fallback; the $($giDisabledControlModuleNames.Count) paired controls contain none of those paths."
-Write-Host "Validated $($ownershipLockedReceiverCacheFragmentModuleNames.Count) ownership-locked cache/hybrid modules retain exact rejection/exception fallback while containing no compact directional L2 bindless references."
+Write-Host "Validated $($ownershipLockedReceiverCacheFragmentModuleNames.Count) ownership-locked cache/hybrid modules retain exact rollback fallback while their production-specialized IR contains no compact directional L2 bindless references."
 Write-Host "Validated the receiver-cache resolve publishes all four deterministic radiance and receiver-surface write paths through set-2 bindings 0 and 1 and contains no atomics."

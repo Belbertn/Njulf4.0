@@ -262,6 +262,45 @@ const uint FORWARD_DDGI_DIRECTIONAL_SUPPORT_WORD = 18u;
 const uint FORWARD_DDGI_DIRECTIONAL_FRAME_WORD = 19u;
 const float FORWARD_DDGI_DIRECTIONAL_MINIMUM_COMPATIBLE_WEIGHT = 0.125;
 
+// A 12x12 gather lattice entry commonly serves an entire fragment subgroup.
+// Only the elected lane performs a payload load when every active invocation
+// proves that it addresses the same entry and expects the same publication.
+// Helper invocations deliberately disqualify sharing: their participation is
+// implementation-defined and must not become authoritative for receiver data.
+bool ForwardDdgiDirectionalCanShareEntry(
+    uint entryWord,
+    uint expectedPublication)
+{
+    if (!NjulfPerformanceOptimizationEnabled(
+            NJULF_PERFORMANCE_DIRECTIONAL_LATTICE_SHARING))
+    {
+        return false;
+    }
+
+    uint electedEntryWord = subgroupBroadcastFirst(entryWord);
+    uint electedPublication = subgroupBroadcastFirst(expectedPublication);
+    uvec4 activeInvocations = subgroupBallot(true);
+    uvec4 matchingInvocations = subgroupBallot(
+        !gl_HelperInvocation &&
+        entryWord == electedEntryWord &&
+        expectedPublication == electedPublication);
+    return all(equal(activeInvocations, matchingInvocations));
+}
+
+uint ReadForwardDdgiDirectionalWord(
+    uint bufferIndex,
+    uint wordOffset,
+    bool shareEntry)
+{
+    if (!shareEntry)
+        return ReadStorageWordUniform(bufferIndex, wordOffset);
+
+    uint word = 0u;
+    if (subgroupElect())
+        word = ReadStorageWordUniform(bufferIndex, wordOffset);
+    return subgroupBroadcastFirst(word);
+}
+
 bool SampleForwardDdgiCompactDirectionalRadiance(
     vec2 fragmentCoordinate,
     float fragmentReverseZ,
@@ -344,9 +383,13 @@ bool SampleForwardDdgiCompactDirectionalRadiance(
             uint(coordinate.x);
         uint entryWord = entryIndex *
             FORWARD_DDGI_DIRECTIONAL_GATHER_ENTRY_WORDS;
-        if (ReadStorageWordUniform(
+        bool shareEntry = ForwardDdgiDirectionalCanShareEntry(
+            entryWord,
+            ddgiFrameIndex);
+        if (ReadForwardDdgiDirectionalWord(
                 gatherBufferIndex,
-                entryWord + FORWARD_DDGI_DIRECTIONAL_FRAME_WORD) !=
+                entryWord + FORWARD_DDGI_DIRECTIONAL_FRAME_WORD,
+                shareEntry) !=
             ddgiFrameIndex)
         {
             continue;
@@ -354,12 +397,14 @@ bool SampleForwardDdgiCompactDirectionalRadiance(
 
         uint surfaceWord = entryIndex * 2u;
         uvec2 surface = uvec2(
-            ReadStorageWordUniform(
+            ReadForwardDdgiDirectionalWord(
                 gatherSurfaceBufferIndex,
-                surfaceWord),
-            ReadStorageWordUniform(
+                surfaceWord,
+                shareEntry),
+            ReadForwardDdgiDirectionalWord(
                 gatherSurfaceBufferIndex,
-                surfaceWord + 1u));
+                surfaceWord + 1u,
+                shareEntry));
         uint reason = SimpleDdgiReceiverSurfaceEvaluateFragment(
             surface,
             uvec2(coordinate),
@@ -377,9 +422,10 @@ bool SampleForwardDdgiCompactDirectionalRadiance(
 
         float candidateWeight = candidateWeights[candidateIndex];
         compatibleWeight += candidateWeight;
-        float support = unpackHalf2x16(ReadStorageWordUniform(
+        float support = unpackHalf2x16(ReadForwardDdgiDirectionalWord(
             gatherBufferIndex,
-            entryWord + FORWARD_DDGI_DIRECTIONAL_SUPPORT_WORD)).x;
+            entryWord + FORWARD_DDGI_DIRECTIONAL_SUPPORT_WORD,
+            shareEntry)).x;
         if (!(support > 0.0) || isnan(support) || isinf(support))
             continue;
         float weightedSupport = candidateWeight * clamp(support, 0.0, 1.0);
@@ -388,10 +434,11 @@ bool SampleForwardDdgiCompactDirectionalRadiance(
              word < FORWARD_DDGI_DIRECTIONAL_COEFFICIENT_WORDS;
              word++)
         {
-            vec2 values = unpackHalf2x16(ReadStorageWordUniform(
+            vec2 values = unpackHalf2x16(ReadForwardDdgiDirectionalWord(
                 gatherBufferIndex,
                 entryWord + FORWARD_DDGI_DIRECTIONAL_COEFFICIENT_WORD +
-                    word));
+                    word,
+                shareEntry));
             if (any(isnan(values)) || any(isinf(values)))
                 return false;
             uint firstValueIndex = word * 2u;

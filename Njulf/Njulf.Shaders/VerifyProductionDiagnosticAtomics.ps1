@@ -179,52 +179,52 @@ $algorithmicAtomicCounts = @{
     'particle.vert.spv' = 14
     'foliage_grass.mesh.spv' = 14
     # Authored foliage additionally performs the bounded physical-residency
-    # range-demand transaction. Resolved mappings retain five fail-closed
-    # validation branches, each with subgroup-aggregated total and typed
-    # attribution adds. These are functional streaming atomics rather than
-    # optional renderer diagnostics.
+    # range-demand transaction. Receiver-attribution programs intentionally
+    # preserve function boundaries (-Od), so their shared validation sites
+    # appear once in static SPIR-V instead of once per inlined call path.
+    # These remain functional streaming atomics, not optional diagnostics.
     'foliage_mesh.mesh.spv' = 32
-    'foliage_mesh_b1.mesh.spv' = 18
-    # Exact B1 production variants add only bounded reservation, publication,
-    # and overflow accounting. Surface programs have seven additional adds;
-    # fog/particle and the receiver cache have six because their producer
-    # completion ownership is emitted by the enclosing pass.
-    'forward_opaque_ddgi_b1.frag.spv' = 21
-    'forward_opaque_ddgi_b1_provenance.frag.spv' = 21
-    'forward_opaque_simple_ddgi_b1.frag.spv' = 21
-    'forward_opaque_simple_ddgi_b1_provenance.frag.spv' = 21
-    'forward_opaque_simple_full_input_ddgi_b1.frag.spv' = 21
-    'forward_opaque_simple_full_input_ddgi_b1_provenance.frag.spv' = 21
-    'forward_transparent_ddgi_b1.frag.spv' = 34
-    # ThinGlass adds the same seven exact surface-attribution operations to its
-    # four functional receiver operations.
-    'forward_transparent_thin_glass_ddgi_b1.frag.spv' = 24
-    'forward_weighted_oit_ddgi_b1.frag.spv' = 34
+    'foliage_mesh_b1.mesh.spv' = 6
+    # Exact B1 programs are compiled with preserved function boundaries to
+    # avoid pathological native-driver compilation. The counts below pin the
+    # outlined reservation, publication, overflow, and receiver operations;
+    # runtime call multiplicity is intentionally not represented by duplicate
+    # static instructions.
+    'forward_opaque_ddgi_b1.frag.spv' = 9
+    'forward_opaque_ddgi_b1_provenance.frag.spv' = 9
+    'forward_opaque_simple_ddgi_b1.frag.spv' = 9
+    'forward_opaque_simple_ddgi_b1_provenance.frag.spv' = 9
+    'forward_opaque_simple_full_input_ddgi_b1.frag.spv' = 9
+    'forward_opaque_simple_full_input_ddgi_b1_provenance.frag.spv' = 9
+    'forward_transparent_ddgi_b1.frag.spv' = 16
+    # ThinGlass omits one ordinary transparent reflection-owner site.
+    'forward_transparent_thin_glass_ddgi_b1.frag.spv' = 15
+    'forward_weighted_oit_ddgi_b1.frag.spv' = 16
     # glslc outlines the shared receiver/hit-gather machinery in the combined
     # ray+B1 programs, so their static SPIR-V instruction count is lower than
     # the non-ray B1 siblings while preserving the bounded runtime operations.
     'forward_transparent_ray_ddgi_b1.frag.spv' = 20
     'forward_weighted_oit_ray_ddgi_b1.frag.spv' = 20
-    'foliage_forward_ddgi_b1.frag.spv' = 21
-    'foliage_forward_ddgi_b1_provenance.frag.spv' = 21
-    'fog_b1.comp.spv' = 20
-    'particle_b1.vert.spv' = 20
+    'foliage_forward_ddgi_b1.frag.spv' = 9
+    'foliage_forward_ddgi_b1_provenance.frag.spv' = 9
+    'fog_b1.comp.spv' = 9
+    'particle_b1.vert.spv' = 9
     # The frame-local opaque cache executes the same three exact gather sites
     # while residency demand stays disabled.
     'ddgi_simple_receiver_cache.comp.spv' = 3
-    # Adaptive generation retains the same three gather sites. Its classifier
-    # owns the bounded work-list reservations plus the exact missing-lattice
-    # compaction append. Adaptive B1 variants now emit exact attribution for
-    # overlapping cells so the authoritative tail dispatch can skip them.
+    # Adaptive generation retains the same three gather sites. The B1 variants
+    # share two outlined attribution operations with those gathers. Its
+    # classifier owns both specialization branches: the compact rollback
+    # reservation and the row-major selected-count publication.
     'ddgi_simple_receiver_cache_adaptive.comp.spv' = 3
-    'ddgi_simple_receiver_cache_adaptive_b1.comp.spv' = 9
-    'ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv' = 9
-    'ddgi_simple_receiver_cache_classify.comp.spv' = 10
+    'ddgi_simple_receiver_cache_adaptive_b1.comp.spv' = 5
+    'ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv' = 5
+    'ddgi_simple_receiver_cache_classify.comp.spv' = 11
     # The frozen depth-only benchmark uses the identical gather producer but
     # deliberately omits the surface sidecar. Its three functional gather
     # atomics must remain equivalent to the pre-surface-cache implementation.
     'ddgi_simple_receiver_cache_legacy.comp.spv' = 3
-    'ddgi_simple_receiver_cache_b1.comp.spv' = 9
+    'ddgi_simple_receiver_cache_b1.comp.spv' = 5
 
     # Qualification counters exist only in explicitly selected diagnostic
     # artifacts. Pin their complete static add count here so no diagnostic

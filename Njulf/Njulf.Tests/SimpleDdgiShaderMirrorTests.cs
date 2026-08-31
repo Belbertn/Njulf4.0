@@ -1015,9 +1015,19 @@ namespace Njulf.Tests
                 Assert.That(cacheSampling, Does.Contain(
                     "pushConstants.CurrentFrameIndex"));
                 Assert.That(cacheSampling, Does.Contain(
-                    "entryWord + FORWARD_DDGI_DIRECTIONAL_FRAME_WORD) !="));
+                    "entryWord + FORWARD_DDGI_DIRECTIONAL_FRAME_WORD,"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "shareEntry) !="));
                 Assert.That(cacheSampling, Does.Contain(
                     "ddgiFrameIndex"));
+                Assert.That(forward, Does.Contain(
+                    "NJULF_PERFORMANCE_DIRECTIONAL_LATTICE_SHARING"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "ForwardDdgiDirectionalCanShareEntry("));
+                Assert.That(cacheSampling, Does.Contain(
+                    "!gl_HelperInvocation"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "ReadForwardDdgiDirectionalWord("));
                 Assert.That(forward, Does.Contain(
                     "receiverCompactDirectionalResolved ="));
                 Assert.That(forward, Does.Contain(
