@@ -63,12 +63,33 @@
 // paths without multiplying embedded SPIR-V artifacts.
 const uint NJULF_PERFORMANCE_HYBRID_PROJECTION_ELISION = 1u << 3u;
 const uint NJULF_PERFORMANCE_SCREEN_LOCAL_RECEIVER = 1u << 4u;
+const uint NJULF_PERFORMANCE_SPLIT_HYBRID_FORWARD = 1u << 5u;
+const uint NJULF_RECEIVER_CACHE_LANE_COMBINED = 0u;
+const uint NJULF_RECEIVER_CACHE_LANE_ACCEPTED = 1u;
+const uint NJULF_RECEIVER_CACHE_LANE_EXACT_FALLBACK = 2u;
+layout(constant_id = 30) const uint
+    NjulfReceiverCacheLane = NJULF_RECEIVER_CACHE_LANE_COMBINED;
 layout(constant_id = 31) const uint
     NjulfPerformanceOptimizationMask = 0x7fffffffu;
 
 bool NjulfPerformanceOptimizationEnabled(uint feature)
 {
     return (NjulfPerformanceOptimizationMask & feature) == feature;
+}
+
+bool NjulfReceiverCacheAcceptedLane()
+{
+    return NjulfPerformanceOptimizationEnabled(
+            NJULF_PERFORMANCE_SPLIT_HYBRID_FORWARD) &&
+        NjulfReceiverCacheLane == NJULF_RECEIVER_CACHE_LANE_ACCEPTED;
+}
+
+bool NjulfReceiverCacheExactFallbackLane()
+{
+    return NjulfPerformanceOptimizationEnabled(
+            NJULF_PERFORMANCE_SPLIT_HYBRID_FORWARD) &&
+        NjulfReceiverCacheLane ==
+            NJULF_RECEIVER_CACHE_LANE_EXACT_FALLBACK;
 }
 
 // Ordinary forward variants consume the current frame's depth prepass. The
@@ -5691,6 +5712,45 @@ void main()
     }
 
     vec3 geometricNormal = normalize(fragNormal) * (gl_FrontFacing ? 1.0 : -1.0);
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+#if FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+    ForwardDdgiReceiverCacheAdmission receiverCacheAdmission;
+    receiverCacheAdmission.EntryIndex = ForwardDdgiReceiverCacheEntryIndex(
+        ForwardScreenPixel(),
+        pc.Push.ScreenDimensions);
+    receiverCacheAdmission.Reason = SIMPLE_DDGI_RECEIVER_SURFACE_ACCEPTED;
+    bool receiverCacheAccepted = true;
+    RecordLegacyForwardDdgiReceiverCacheAdmission(
+        pc.Push.CurrentFrameIndex);
+#else
+    // Resolve the complementary split before normal and material-extension
+    // shading. Coverage and sidedness have already matched the depth-prepass
+    // survivor, so discarding here cannot create a coverage disagreement.
+    ForwardDdgiReceiverCacheAdmission receiverCacheAdmission =
+        EvaluateForwardDdgiReceiverCacheAdmission(
+            ForwardScreenPixel(),
+            gl_FragCoord.z,
+            fragWorldPosition,
+            geometricNormal,
+            pc.Push);
+    bool receiverCacheAccepted =
+        ForwardDdgiReceiverCacheAdmissionAccepted(receiverCacheAdmission);
+    RecordForwardDdgiReceiverCacheAdmission(
+        pc.Push.CurrentFrameIndex,
+        receiverCacheAdmission.Reason);
+    if (NjulfReceiverCacheAcceptedLane() && !receiverCacheAccepted)
+        discard;
+    if (NjulfReceiverCacheExactFallbackLane() && receiverCacheAccepted)
+        discard;
+#endif
+#if NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW
+    WriteForwardColor(vec4(
+        ForwardDdgiReceiverCacheAdmissionDebugColor(
+            receiverCacheAdmission.Reason),
+        1.0));
+    return;
+#endif
+#endif
     vec3 shadowNormal = geometricNormal;
     bool useNormalTexture = material.NormalTextureIndex != DEFAULT_NORMAL_TEXTURE &&
         material.NormalScaleBias.x > 0.001;
@@ -6301,41 +6361,13 @@ void main()
     float ddgiDirectionalConfidence = 0.0;
     float indirectSpecularVisibility = 1.0;
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
-#if FORWARD_DDGI_RECEIVER_CACHE_LEGACY
-    ForwardDdgiReceiverCacheAdmission receiverCacheAdmission;
-    receiverCacheAdmission.EntryIndex = ForwardDdgiReceiverCacheEntryIndex(
-        ForwardScreenPixel(),
-        pc.Push.ScreenDimensions);
-    receiverCacheAdmission.Reason = SIMPLE_DDGI_RECEIVER_SURFACE_ACCEPTED;
-    bool receiverCacheAccepted = true;
-    RecordLegacyForwardDdgiReceiverCacheAdmission(
-        pc.Push.CurrentFrameIndex);
-#else
-    ForwardDdgiReceiverCacheAdmission receiverCacheAdmission =
-        EvaluateForwardDdgiReceiverCacheAdmission(
-            ForwardScreenPixel(),
-            gl_FragCoord.z,
-            fragWorldPosition,
-            geometricNormal,
-            pc.Push);
-    bool receiverCacheAccepted =
-        ForwardDdgiReceiverCacheAdmissionAccepted(receiverCacheAdmission);
-    RecordForwardDdgiReceiverCacheAdmission(
-        pc.Push.CurrentFrameIndex,
-        receiverCacheAdmission.Reason);
-#endif
     ForwardDdgiReceiverCacheSample cachedGather;
     cachedGather.Packed = uvec4(0u);
-#if NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW
-    WriteForwardColor(vec4(
-        ForwardDdgiReceiverCacheAdmissionDebugColor(
-            receiverCacheAdmission.Reason),
-        1.0));
-    return;
-#endif
 #endif
 #if !FORWARD_GLOBAL_ILLUMINATION_DISABLED && \
     !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+    if (!NjulfReceiverCacheAcceptedLane())
+    {
     bool directionalGlobalIlluminationEnabled = geometryDecal
         ? ForwardDecalGlobalIlluminationEnabled()
         : ForwardGlobalIlluminationEnabled() != 0u;
@@ -6491,6 +6523,7 @@ void main()
                     1.0);
             }
         }
+    }
     }
 #endif
 
@@ -6912,7 +6945,8 @@ void main()
 
         finalDiffuseIndirect = cachedDdgiDiffuse + cachedEnvironmentDiffuse;
 #if !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
-        if (ForwardAmbientOcclusionBentNormalMode() == 2u && bentNormalValid)
+        if (!NjulfReceiverCacheAcceptedLane() &&
+            ForwardAmbientOcclusionBentNormalMode() == 2u && bentNormalValid)
         {
             // Ultra's DDGI lobe is also bent-normal dependent. Re-evaluate
             // only that lobe from the canonical gather while retaining the
@@ -6955,7 +6989,7 @@ void main()
 #endif
     }
 #if !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
-    else
+    if (!NjulfReceiverCacheAcceptedLane() && !receiverCacheAccepted)
     {
 #endif
 #endif

@@ -2356,10 +2356,16 @@ namespace Njulf.Rendering.Pipeline
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled,
                 disabledBenchmarkPipeline);
+            bool receiverCacheSplit =
+                ShouldUseHybridReflectionReceiverCacheSplit(
+                    sceneData,
+                    pipelineKey);
             if (!TryResolveForwardOpaquePipeline(
                     pipelineKey,
                     receiverCacheEnabled,
-                    out Silk.NET.Vulkan.Pipeline pipeline))
+                    receiverCacheSplit,
+                    out VkPipeline pipeline,
+                    out VkPipeline receiverCacheFallbackPipeline))
             {
                 if (!receiverCacheEnabled)
                 {
@@ -2380,6 +2386,8 @@ namespace Njulf.Rendering.Pipeline
                         $"No exact opaque fallback pipeline is available for {pipelineKey}.");
                 }
                 _simpleDdgiReceiverCacheAvailableForCurrentView = false;
+                receiverCacheSplit = false;
+                receiverCacheFallbackPipeline = default;
                 SetSimpleDdgiReceiverCacheFallback(
                     SimpleDdgiReceiverCacheFallbackReason.PipelineUnavailable,
                     "surface-aware opaque pipeline unavailable; exact pipeline selected");
@@ -2485,6 +2493,18 @@ namespace Njulf.Rendering.Pipeline
             if (!_recordingTraceResolutionNearFieldSource)
                 sceneData.ForwardTaskInvocations += meshletCount;
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
+            if (receiverCacheSplit)
+            {
+                _context.Api.CmdBindPipeline(
+                    cmd,
+                    PipelineBindPoint.Graphics,
+                    receiverCacheFallbackPipeline);
+                _context.ExtMeshShader.CmdDrawMeshTask(
+                    cmd,
+                    (uint)meshletCount,
+                    1,
+                    1);
+            }
         }
 
         private void DrawCompactedForwardBucketsIndirect(
@@ -2699,10 +2719,16 @@ namespace Njulf.Rendering.Pipeline
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled,
                 disabledBenchmarkPipeline);
+            bool receiverCacheSplit =
+                ShouldUseHybridReflectionReceiverCacheSplit(
+                    sceneData,
+                    pipelineKey);
             if (!TryResolveForwardOpaquePipeline(
                     pipelineKey,
                     receiverCacheEnabled,
-                    out Silk.NET.Vulkan.Pipeline pipeline))
+                    receiverCacheSplit,
+                    out VkPipeline pipeline,
+                    out VkPipeline receiverCacheFallbackPipeline))
             {
                 if (!receiverCacheEnabled)
                 {
@@ -2723,6 +2749,8 @@ namespace Njulf.Rendering.Pipeline
                         $"No exact indirect opaque fallback pipeline is available for {pipelineKey}.");
                 }
                 _simpleDdgiReceiverCacheAvailableForCurrentView = false;
+                receiverCacheSplit = false;
+                receiverCacheFallbackPipeline = default;
                 SetSimpleDdgiReceiverCacheFallback(
                     SimpleDdgiReceiverCacheFallbackReason.PipelineUnavailable,
                     "surface-aware indirect opaque pipeline unavailable; exact pipeline selected");
@@ -2854,13 +2882,29 @@ namespace Njulf.Rendering.Pipeline
                 indirectOffset,
                 1,
                 (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+            if (receiverCacheSplit)
+            {
+                _context.Api.CmdBindPipeline(
+                    cmd,
+                    PipelineBindPoint.Graphics,
+                    receiverCacheFallbackPipeline);
+                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                    cmd,
+                    indirect,
+                    indirectOffset,
+                    1,
+                    (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+            }
         }
 
         private bool TryResolveForwardOpaquePipeline(
             in ForwardOpaquePipelineKey pipelineKey,
             bool receiverCacheEnabled,
-            out VkPipeline pipeline)
+            bool receiverCacheSplit,
+            out VkPipeline pipeline,
+            out VkPipeline receiverCacheFallbackPipeline)
         {
+            receiverCacheFallbackPipeline = default;
             ForwardOpaquePipelineFeatures nonCacheDiagnosticFeatures =
                 pipelineKey.Features &
                 ~(ForwardOpaquePipelineFeatures.ReceiverCache |
@@ -2913,6 +2957,21 @@ namespace Njulf.Rendering.Pipeline
                 return _meshPipeline.TryResolveReceiverCacheDiagnosticsPipeline(
                     pipelineKey.Family,
                     out pipeline);
+            }
+
+            if (receiverCacheSplit)
+            {
+                bool nearField = pipelineKey.Has(
+                    ForwardOpaquePipelineFeatures.NearFieldDirectSource);
+                bool caustic = pipelineKey.Has(
+                    ForwardOpaquePipelineFeatures.GiCausticReceiver);
+                return _meshPipeline
+                    .TryResolveHybridReflectionCacheSplitPipelines(
+                        pipelineKey.Family,
+                        nearField,
+                        caustic,
+                        out pipeline,
+                        out receiverCacheFallbackPipeline);
             }
 
             return _meshPipeline.TryResolveForwardOpaquePipeline(
@@ -3684,6 +3743,34 @@ namespace Njulf.Rendering.Pipeline
             }
 
             return new ForwardOpaquePipelineKey(family, features);
+        }
+
+        private bool ShouldUseHybridReflectionReceiverCacheSplit(
+            Data.SceneRenderingData sceneData,
+            in ForwardOpaquePipelineKey pipelineKey)
+        {
+            // Alpha-mask attribution and Ultra's bent-DDGI mode can require
+            // an exact gather on a cache-accepted fragment, so they retain the
+            // combined quality path. DdgiHigh's opaque hybrid receiver has
+            // complementary cache/exact ownership and can use two lower-
+            // pressure native programs specialized from one SPIR-V artifact.
+            return _settings.IsPerformanceOptimizationEnabled(
+                       PerformanceOptimizationFeature
+                           .SplitHybridForwardPrograms) &&
+                   pipelineKey.Has(
+                       ForwardOpaquePipelineFeatures.ReceiverCache) &&
+                   pipelineKey.Has(
+                       ForwardOpaquePipelineFeatures.HybridReflectionReceiver) &&
+                   sceneData.MaskedMeshletCount <= 0 &&
+                   sceneData.AmbientOcclusionBentNormalMode !=
+                       AmbientOcclusionBentNormalMode.EnvironmentAndDdgi &&
+                   !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
+                   !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
+                   _simpleDdgiReceiverCacheEffectiveMode !=
+                       SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark &&
+                   !_settings.Diagnostics.DdgiForwardEstimateCountersEnabled &&
+                   _settings.GlobalIllumination.DebugView ==
+                       GlobalIlluminationDebugView.None;
         }
 
         private bool ShouldUseProductionForwardGiDisabledPipeline(

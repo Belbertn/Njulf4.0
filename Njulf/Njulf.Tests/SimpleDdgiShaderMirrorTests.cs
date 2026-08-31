@@ -945,7 +945,17 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain(
                     "layout(constant_id = 31) const uint"));
                 Assert.That(forward, Does.Contain(
+                    "layout(constant_id = 30) const uint"));
+                Assert.That(forward, Does.Contain(
                     "NJULF_PERFORMANCE_SCREEN_LOCAL_RECEIVER"));
+                Assert.That(forward, Does.Contain(
+                    "NJULF_PERFORMANCE_SPLIT_HYBRID_FORWARD"));
+                Assert.That(forward, Does.Contain(
+                    "if (NjulfReceiverCacheAcceptedLane() && !receiverCacheAccepted)"));
+                Assert.That(forward, Does.Contain(
+                    "if (NjulfReceiverCacheExactFallbackLane() && receiverCacheAccepted)"));
+                Assert.That(forward, Does.Contain(
+                    "if (!NjulfReceiverCacheAcceptedLane())"));
                 Assert.That(forward, Does.Contain(
                     "ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *"));
                 Assert.That(forward, Does.Contain(
@@ -1064,6 +1074,20 @@ namespace Njulf.Tests
                     "TryResolveReceiverCacheLegacyPipeline("));
                 Assert.That(meshPipeline, Does.Contain(
                     "TryResolveReceiverCacheDebugPipeline("));
+                Assert.That(meshPipeline, Does.Contain(
+                    "TryResolveHybridReflectionCacheSplitPipelines("));
+                Assert.That(meshPipeline, Does.Contain(
+                    "ForwardReceiverCacheLaneSpecializationConstantId"));
+                Assert.That(meshPipeline, Does.Contain(
+                    "MapEntryCount = 2u"));
+                Assert.That(pass, Does.Contain(
+                    "ShouldUseHybridReflectionReceiverCacheSplit("));
+                Assert.That(pass, Does.Contain(
+                    "receiverCacheFallbackPipeline"));
+                Assert.That(shaderProject, Does.Not.Contain(
+                    "cache_exact_fallback_hybrid_reflection.frag"));
+                Assert.That(shaderProject, Does.Not.Contain(
+                    "cache_combined_hybrid_reflection.frag"));
             });
         }
 

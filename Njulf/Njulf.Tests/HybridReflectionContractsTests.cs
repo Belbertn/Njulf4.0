@@ -46,6 +46,18 @@ public sealed class HybridReflectionContractsTests
             Assert.That(
                 MeshPipeline.ForwardPerformanceSpecializationConstantId,
                 Is.EqualTo(31u));
+            Assert.That(
+                MeshPipeline.ForwardReceiverCacheLaneSpecializationConstantId,
+                Is.EqualTo(30u));
+            Assert.That(
+                MeshPipeline.ForwardReceiverCacheCombinedLane,
+                Is.Zero);
+            Assert.That(
+                MeshPipeline.ForwardReceiverCacheAcceptedLane,
+                Is.EqualTo(1u));
+            Assert.That(
+                MeshPipeline.ForwardReceiverCacheExactFallbackLane,
+                Is.EqualTo(2u));
         });
     }
 
@@ -1242,9 +1254,11 @@ public sealed class HybridReflectionContractsTests
                 Is.GreaterThan(backgroundPublication),
                 "Screen pipelines must remain unavailable until background preparation returns successfully.");
             Assert.That(preparation, Does.Contain(
-                "for (int receiver = 0; receiver < 2; receiver++)"));
+                "receiver < requiredLaneCount"));
             Assert.That(preparation, Does.Contain(
-                "receiverCacheRequired: receiver != 0"));
+                "receiverLane: receiver"));
+            Assert.That(mesh, Does.Contain(
+                "private const int HybridReflectionLaneCount = 4;"));
             Assert.That(preparation, Does.Contain(
                 "RendererBuildConfiguration.FastPipelineStartup"));
             Assert.That(preparation, Does.Contain(

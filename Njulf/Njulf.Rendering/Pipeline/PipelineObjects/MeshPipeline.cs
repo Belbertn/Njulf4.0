@@ -74,7 +74,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
     public sealed unsafe class MeshPipeline : IDisposable
     {
         private const string EntryPoint = "main";
+        internal const uint ForwardReceiverCacheLaneSpecializationConstantId =
+            30u;
         internal const uint ForwardPerformanceSpecializationConstantId = 31u;
+        internal const uint ForwardReceiverCacheCombinedLane = 0u;
+        internal const uint ForwardReceiverCacheAcceptedLane = 1u;
+        internal const uint ForwardReceiverCacheExactFallbackLane = 2u;
         private const PerformanceOptimizationFeature
             ForwardPerformanceSpecializationFeatures =
                 PerformanceOptimizationFeature
@@ -195,10 +200,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline;
         private VkPipeline _forwardCompactedSimpleReceiverCacheCombinedAdvancedGiPipeline;
         private VkPipeline _forwardCompactedSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline;
-        // [receiver-cache 0..1, C4/C5 combination 0..3,
-        //  base pipeline family 0..5].
+        private const int HybridReflectionExactLane = 0;
+        private const int HybridReflectionCacheCombinedPipelineLane = 1;
+        private const int HybridReflectionCacheAcceptedPipelineLane = 2;
+        private const int HybridReflectionCacheFallbackPipelineLane = 3;
+        private const int HybridReflectionLaneCount = 4;
+        // [exact/cache-combined/cache-accepted/cache-fallback lane,
+        //  C4/C5 combination 0..3, base pipeline family 0..5]. The split
+        // lanes reuse the cache-required SPIR-V and specialize native code at
+        // pipeline creation instead of multiplying embedded shader payloads.
         private readonly VkPipeline[,,] _hybridReflectionPipelines =
-            new VkPipeline[2, 4, 6];
+            new VkPipeline[HybridReflectionLaneCount, 4, 6];
         private readonly VkPipeline[] _forwardOpaquePipelineCache =
             new VkPipeline[ForwardOpaquePipelineKey.CacheEntryCount];
         private readonly bool[] _forwardOpaquePipelineCacheValid =
@@ -1103,10 +1115,44 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             int combination = (giCausticReceiverEnabled ? 1 : 0) |
                 (nearFieldDirectSourceEnabled ? 2 : 0);
-            int receiver = receiverCacheRequired ? 1 : 0;
+            int receiver = receiverCacheRequired
+                ? HybridReflectionCacheCombinedPipelineLane
+                : HybridReflectionExactLane;
             hybridPipeline =
                 _hybridReflectionPipelines[receiver, combination, family];
             return hybridPipeline.Handle != 0;
+        }
+
+        public bool TryResolveHybridReflectionCacheSplitPipelines(
+            ForwardOpaquePipelineFamily requestedFamily,
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled,
+            out VkPipeline acceptedPipeline,
+            out VkPipeline fallbackPipeline)
+        {
+            acceptedPipeline = default;
+            fallbackPipeline = default;
+            if (!HybridReflectionAttachmentEnabled ||
+                !Settings.IsPerformanceOptimizationEnabled(
+                    PerformanceOptimizationFeature.SplitHybridForwardPrograms))
+            {
+                return false;
+            }
+
+            int family = (int)ResolveEffectiveForwardOpaquePipelineFamily(
+                requestedFamily);
+            int combination = (giCausticReceiverEnabled ? 1 : 0) |
+                (nearFieldDirectSourceEnabled ? 2 : 0);
+            acceptedPipeline = _hybridReflectionPipelines[
+                HybridReflectionCacheAcceptedPipelineLane,
+                combination,
+                family];
+            fallbackPipeline = _hybridReflectionPipelines[
+                HybridReflectionCacheFallbackPipelineLane,
+                combination,
+                family];
+            return acceptedPipeline.Handle != 0 &&
+                fallbackPipeline.Handle != 0;
         }
 
         public bool AreHybridReflectionPipelinesReady(
@@ -1124,7 +1170,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             int familyCount = RendererBuildConfiguration.FastPipelineStartup
                 ? 1
                 : 6;
-            for (int receiver = 0; receiver < 2; receiver++)
+            int requiredLaneCount = Settings.IsPerformanceOptimizationEnabled(
+                PerformanceOptimizationFeature.SplitHybridForwardPrograms)
+                ? HybridReflectionLaneCount
+                : HybridReflectionCacheAcceptedPipelineLane;
+            for (int receiver = 0;
+                 receiver < requiredLaneCount;
+                 receiver++)
             {
                 for (int family = firstFamily;
                      family < firstFamily + familyCount;
@@ -1155,7 +1207,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             int familyCount = RendererBuildConfiguration.FastPipelineStartup
                 ? 1
                 : 6;
-            for (int receiver = 0; receiver < 2; receiver++)
+            int requiredLaneCount = Settings.IsPerformanceOptimizationEnabled(
+                PerformanceOptimizationFeature.SplitHybridForwardPrograms)
+                ? HybridReflectionLaneCount
+                : HybridReflectionCacheAcceptedPipelineLane;
+            for (int receiver = 0;
+                 receiver < requiredLaneCount;
+                 receiver++)
             {
                 for (int family = firstFamily;
                      family < firstFamily + familyCount;
@@ -1168,7 +1226,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         !TryCreateHybridReflectionPipeline(
                             combination,
                             family,
-                            receiverCacheRequired: receiver != 0))
+                            receiverLane: receiver))
                     {
                         return false;
                     }
@@ -3630,8 +3688,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private bool TryCreateHybridReflectionPipeline(
             int combination,
             int family,
-            bool receiverCacheRequired)
+            int receiverLane)
         {
+            bool receiverCacheRequired = receiverLane !=
+                HybridReflectionExactLane;
+            uint receiverCacheLane = receiverLane switch
+            {
+                HybridReflectionCacheAcceptedPipelineLane =>
+                    ForwardReceiverCacheAcceptedLane,
+                HybridReflectionCacheFallbackPipelineLane =>
+                    ForwardReceiverCacheExactFallbackLane,
+                _ => ForwardReceiverCacheCombinedLane
+            };
             bool giCaustic = (combination & 1) != 0;
             bool nearField = (combination & 2) != 0;
             bool simple = family is 2 or 3 or 4 or 5;
@@ -3704,13 +3772,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     quaternaryColorFormat: quaternary,
                     quinaryColorFormat: quinary,
                     senaryColorFormat: senary,
-                    hybridReflectionReceiverEnabled: true);
+                    hybridReflectionReceiverEnabled: true,
+                    forwardReceiverCacheLane: receiverCacheLane);
                 _context.SetDebugName(
                     pipeline.Handle,
                     ObjectType.Pipeline,
-                    $"Hybrid Reflection Forward Pipeline R{(receiverCacheRequired ? 1 : 0)} C{combination} F{family}");
+                    $"Hybrid Reflection Forward Pipeline L{receiverLane} C{combination} F{family}");
                 _hybridReflectionPipelines[
-                    receiverCacheRequired ? 1 : 0,
+                    receiverLane,
                     combination,
                     family] = pipeline;
                 HybridReflectionFailureReason = "valid";
@@ -4322,7 +4391,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? materialTransportProvenanceFormat = null,
             PipelineLayout pipelineLayout = default,
             bool hybridReflectionReceiverEnabled = false,
-            bool destinationColorModulationBlend = false)
+            bool destinationColorModulationBlend = false,
+            uint forwardReceiverCacheLane =
+                ForwardReceiverCacheCombinedLane)
         {
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
@@ -4332,7 +4403,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             uint performanceSpecializationMask =
                 ResolveForwardPerformanceSpecializationMask(Settings);
             string performanceIdentity = usesPerformanceSpecialization
-                ? $".performance-{performanceSpecializationMask:x8}"
+                ? $".receiver-lane-{forwardReceiverCacheLane}.performance-{performanceSpecializationMask:x8}"
                 : string.Empty;
 
             try
@@ -4383,6 +4454,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                             usesPerformanceSpecialization,
                         fragmentPerformanceOptimizationMask:
                             performanceSpecializationMask,
+                        fragmentReceiverCacheLane:
+                            forwardReceiverCacheLane,
                         artifactId));
             }
             catch (Exception exception)
@@ -4568,6 +4641,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 dynamicRasterState: false,
                 fragmentPerformanceSpecialization: false,
                 fragmentPerformanceOptimizationMask: 0u,
+                fragmentReceiverCacheLane:
+                    ForwardReceiverCacheCombinedLane,
                 artifactId);
 
         private VkPipeline CreateGraphicsPipeline(
@@ -4593,22 +4668,33 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool dynamicRasterState,
             bool fragmentPerformanceSpecialization,
             uint fragmentPerformanceOptimizationMask,
+            uint fragmentReceiverCacheLane,
             PipelineArtifactId artifactId)
         {
-            uint specializationData =
-                fragmentPerformanceOptimizationMask;
-            var specializationEntry = new SpecializationMapEntry
+            var specializationData = stackalloc uint[2];
+            specializationData[0] = fragmentReceiverCacheLane;
+            specializationData[1] = fragmentPerformanceOptimizationMask;
+            var specializationEntries =
+                stackalloc SpecializationMapEntry[2];
+            specializationEntries[0] = new SpecializationMapEntry
+            {
+                ConstantID =
+                    ForwardReceiverCacheLaneSpecializationConstantId,
+                Offset = 0u,
+                Size = (nuint)sizeof(uint)
+            };
+            specializationEntries[1] = new SpecializationMapEntry
             {
                 ConstantID = ForwardPerformanceSpecializationConstantId,
-                Offset = 0u,
+                Offset = (uint)sizeof(uint),
                 Size = (nuint)sizeof(uint)
             };
             var specializationInfo = new SpecializationInfo
             {
-                MapEntryCount = 1u,
-                PMapEntries = &specializationEntry,
-                DataSize = (nuint)sizeof(uint),
-                PData = &specializationData
+                MapEntryCount = 2u,
+                PMapEntries = specializationEntries,
+                DataSize = (nuint)(2 * sizeof(uint)),
+                PData = specializationData
             };
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             int stageCount = 0;
@@ -5522,7 +5608,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private void DestroyHybridReflectionPipelines()
         {
             HybridReflectionAttachmentEnabled = false;
-            for (int receiver = 0; receiver < 2; receiver++)
+            for (int receiver = 0;
+                 receiver < HybridReflectionLaneCount;
+                 receiver++)
             {
                 for (int combination = 0; combination < 4; combination++)
                 {
