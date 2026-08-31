@@ -85,7 +85,9 @@ public sealed record SampleSmokeOptions(
     SimpleDdgiReceiverCacheMode? SimpleDdgiReceiverCacheModeOverride = null,
     bool? SimpleDdgiTransportAccelerationEnabledOverride = null,
     int? SimpleDdgiTransportAcceleratedSweepCountOverride = null,
-    string? GiAllOnQualificationReportPath = null)
+    string? GiAllOnQualificationReportPath = null,
+    double? MaximumFramesPerSecondOverride = null,
+    bool? VSyncOverride = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
     public SampleBenchmarkQualitySequenceOptions BenchmarkQualitySequence { get; init; } =

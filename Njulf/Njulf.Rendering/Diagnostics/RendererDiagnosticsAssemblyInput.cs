@@ -81,6 +81,17 @@ internal readonly record struct RendererDiagnosticsCaptureInput(
 
 internal readonly record struct RendererDiagnosticsFrameInput(
     long AcquireImageMicroseconds,
+    long SwapchainImageOwnerWaitMicroseconds,
+    long FrameResourceRecycleWaitMicroseconds,
     long QueueSubmitMicroseconds,
     long PresentMicroseconds,
+    double MaximumFramesPerSecond,
+    long FramePacingWaitMicroseconds,
+    int FrameResourceContext,
+    ulong FrameResourceOwnerSubmissionSerial,
+    uint SwapchainImageIndex,
+    ulong SwapchainImageOwnerSubmissionSerial,
+    int SwapchainImageOwnerFrameContext,
+    int AcquireSemaphoreSlot,
+    ulong PendingSubmissionSerial,
     string LastRenderTargetRecreateReason);

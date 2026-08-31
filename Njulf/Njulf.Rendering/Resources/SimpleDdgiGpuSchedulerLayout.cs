@@ -99,7 +99,7 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     // dispatch dimension.
     public const int RayBucketMetadataStrideBytes = 16;
     public const int FrameBytes = 224;
-    public const int VolumePolicyStrideBytes = 176;
+    public const int VolumePolicyStrideBytes = 192;
     public const int DirtyRegionStrideBytes = 80;
     public const int LaneScalarStrideBytes = sizeof(uint);
     // The first 64 words are the stable diagnostic ABI. Sixteen private words
@@ -108,7 +108,10 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     // eligible-work-class counters + 3 exact eligible-ring counters.
     // Four trailing counters expose residual seeds, dependent wakes,
     // threshold rejections, and conservative complete-sweep fallbacks.
-    public const int CounterBytes = 384;
+    // The original 64-word diagnostic prefix and words 64..95 remain ABI
+    // stable. Words 96..127 hold fail-closed emission and bounded scroll-cohort
+    // state, including one validation word for each possible volume.
+    public const int CounterBytes = 512;
     // One 1 KiB epoch-stamped reduction record keeps the audit summary below
     // the plan's readback budget while leaving room for future counters.
     public const int AuditSummaryBytes = 1024;

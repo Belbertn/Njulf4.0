@@ -376,13 +376,19 @@ vec4 ResolveMeshletWorldCenterRadius(
     return vec4(worldCenter.xyz, worldRadius);
 }
 
-vec4 ResolveMeshletWorldCenterRadius(GPUMeshletDrawCommand command)
+bool ReadCompactionMeshlet(
+    inout GPUMeshletDrawCommand command,
+    out GPUMeshlet meshlet)
 {
-    return ResolveMeshletWorldCenterRadius(
-        command,
-        ReadMeshlet(
-            command.MeshletIndex,
-            pc.Push.CurrentFrameIndex));
+    uint resolvedAddress;
+    bool valid = TryReadMeshlet(
+        command.MeshletIndex,
+        pc.Push.CurrentFrameIndex,
+        meshlet,
+        resolvedAddress);
+    if (valid)
+        command.MeshletIndex = resolvedAddress;
+    return valid;
 }
 
 bool IsNormalConeCullEligible(GPUMeshletDrawCommand command)
@@ -1446,10 +1452,14 @@ void ProcessExpandedDirectionalShadowRange(
         vec4 worldSphere = vec4(0.0);
         if (valid)
         {
-            GPUMeshlet meshlet = ReadMeshlet(
-                command.MeshletIndex,
-                pc.Push.CurrentFrameIndex);
-            worldSphere = ResolveMeshletWorldCenterRadius(command, meshlet);
+            GPUMeshlet meshlet;
+            valid = ReadCompactionMeshlet(command, meshlet);
+            if (valid)
+            {
+                worldSphere = ResolveMeshletWorldCenterRadius(
+                    command,
+                    meshlet);
+            }
         }
         bool doubleSided = IsDoubleSided(command);
 
@@ -1599,9 +1609,9 @@ void ProcessExpandedMeshletRange(
             ditherTarget,
             ditherThreshold);
 
-        GPUMeshlet meshlet = ReadMeshlet(
-            command.MeshletIndex,
-            pc.Push.CurrentFrameIndex);
+        GPUMeshlet meshlet = EmptyMeshlet();
+        if (valid)
+            valid = ReadCompactionMeshlet(command, meshlet);
         vec4 worldCenterRadius = ResolveMeshletWorldCenterRadius(
             command,
             meshlet);
@@ -2318,9 +2328,9 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
     if (!ApplyGpuLodSelection(command, effectiveLod, 0u))
         return;
 
-    GPUMeshlet meshlet = ReadMeshlet(
-        command.MeshletIndex,
-        pc.Push.CurrentFrameIndex);
+    GPUMeshlet meshlet;
+    if (!ReadCompactionMeshlet(command, meshlet))
+        return;
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
         pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId *
@@ -2443,9 +2453,9 @@ void ProcessDepthCandidate(
     if (!ApplyGpuLodSelection(command, effectiveLod, 0u))
         return;
 
-    GPUMeshlet meshlet = ReadMeshlet(
-        command.MeshletIndex,
-        pc.Push.CurrentFrameIndex);
+    GPUMeshlet meshlet;
+    if (!ReadCompactionMeshlet(command, meshlet))
+        return;
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
         pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId *
@@ -2514,9 +2524,9 @@ void ProcessDirectionalShadowCandidate(
     if (!ApplyConservativeDirectionalShadowLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias))
         return;
 
-    GPUMeshlet meshlet = ReadMeshlet(
-        command.MeshletIndex,
-        pc.Push.CurrentFrameIndex);
+    GPUMeshlet meshlet;
+    if (!ReadCompactionMeshlet(command, meshlet))
+        return;
     vec4 worldSphere = ResolveMeshletWorldCenterRadius(command, meshlet);
     uint cascadeCount = min(pc.Push.DirectionalShadowCascadeCount, SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT);
     for (uint cascade = 0u; cascade < cascadeCount; cascade++)

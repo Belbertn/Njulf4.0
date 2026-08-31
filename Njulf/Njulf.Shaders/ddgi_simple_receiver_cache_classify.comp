@@ -62,6 +62,11 @@ layout(std430, set = 2, binding = 10) buffer ReceiverGatherStampBlock
     uint Entries[];
 } ReceiverGatherStamps;
 
+layout(std430, set = 2, binding = 11) buffer ReceiverMissingPrefixBlock
+{
+    uint Entries[];
+} ReceiverMissingPrefixes;
+
 layout(push_constant) uniform SimpleDdgiReceiverCacheAdaptivePushBlock
 {
     mat4 InverseViewProjectionMatrix;
@@ -98,6 +103,8 @@ const uint RECEIVER_ADAPTIVE_FULL_COUNT = 13u;
 const uint RECEIVER_ADAPTIVE_HALF_COUNT = 14u;
 const uint RECEIVER_ADAPTIVE_QUARTER_COUNT = 15u;
 const uint RECEIVER_ADAPTIVE_REUSE_COUNT = 16u;
+const uint RECEIVER_ADAPTIVE_MISSING_FEEDBACK_COUNT = 17u;
+const uint RECEIVER_ADAPTIVE_MISSING_FEEDBACK_INDIRECT = 18u;
 const uint RECEIVER_ADAPTIVE_METADATA_VALID = 1u;
 const float RECEIVER_NORMAL_RELATIVE_EPSILON = 0.000001;
 
@@ -113,6 +120,8 @@ shared uint SharedMaximumMotion;
 shared uint SharedSurfaceX[64];
 shared uint SharedSurfaceY[64];
 shared uint SharedSurfaceValid[64];
+shared uint SharedMissingFlags[64];
+shared uint SharedMissingCount;
 
 uint DivideRoundUp(uint value, uint divisor)
 {
@@ -789,6 +798,83 @@ void FinalizeIndirectArguments()
     ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_RESOLVE_INDIRECT + 2u] = 1u;
 }
 
+uint MissingFeedbackLinearIndex()
+{
+    return gl_WorkGroupID.x * 64u + gl_LocalInvocationIndex;
+}
+
+void CountMissingFeedbackWork()
+{
+    uint localIndex = gl_LocalInvocationIndex;
+    if (localIndex == 0u)
+        SharedMissingCount = 0u;
+    barrier();
+
+    uint linearIndex = MissingFeedbackLinearIndex();
+    uint capacity = pc.GatherWidth * pc.GatherHeight;
+    bool missing = linearIndex < capacity &&
+        ReceiverGatherStamps.Entries[linearIndex] != pc.FrameStamp;
+    SharedMissingFlags[localIndex] = missing ? 1u : 0u;
+    if (missing)
+        atomicAdd(SharedMissingCount, 1u);
+    barrier();
+
+    if (localIndex == 0u)
+        ReceiverMissingPrefixes.Entries[gl_WorkGroupID.x] =
+            SharedMissingCount;
+}
+
+void PrefixMissingFeedbackWork()
+{
+    if (gl_GlobalInvocationID.x != 0u ||
+        gl_GlobalInvocationID.y != 0u)
+    {
+        return;
+    }
+
+    uint capacity = pc.GatherWidth * pc.GatherHeight;
+    uint groupCount = DivideRoundUp(capacity, 64u);
+    uint missingCount = 0u;
+    for (uint group = 0u; group < groupCount; group++)
+    {
+        uint count = ReceiverMissingPrefixes.Entries[group];
+        ReceiverMissingPrefixes.Entries[group] = missingCount;
+        missingCount += count;
+    }
+
+    ReceiverAdaptiveControl.Words[
+        RECEIVER_ADAPTIVE_MISSING_FEEDBACK_COUNT] = missingCount;
+    ReceiverAdaptiveControl.Words[
+        RECEIVER_ADAPTIVE_MISSING_FEEDBACK_INDIRECT + 0u] =
+            DivideRoundUp(missingCount, 64u);
+    ReceiverAdaptiveControl.Words[
+        RECEIVER_ADAPTIVE_MISSING_FEEDBACK_INDIRECT + 1u] = 1u;
+    ReceiverAdaptiveControl.Words[
+        RECEIVER_ADAPTIVE_MISSING_FEEDBACK_INDIRECT + 2u] = 1u;
+}
+
+void ScatterMissingFeedbackWork()
+{
+    uint localIndex = gl_LocalInvocationIndex;
+    uint linearIndex = MissingFeedbackLinearIndex();
+    uint capacity = pc.GatherWidth * pc.GatherHeight;
+    bool missing = linearIndex < capacity &&
+        ReceiverGatherStamps.Entries[linearIndex] != pc.FrameStamp;
+    SharedMissingFlags[localIndex] = missing ? 1u : 0u;
+    barrier();
+    if (!missing)
+        return;
+
+    uint localRank = 0u;
+    for (uint prior = 0u; prior < localIndex; prior++)
+        localRank += SharedMissingFlags[prior];
+    uint outputIndex =
+        ReceiverMissingPrefixes.Entries[gl_WorkGroupID.x] + localRank;
+    ReceiverGatherWork.Entries[outputIndex] = uvec2(
+        linearIndex % pc.GatherWidth,
+        linearIndex / pc.GatherWidth);
+}
+
 void SeedCanonicalHistory()
 {
     uvec2 coordinate = gl_GlobalInvocationID.xy;
@@ -825,4 +911,10 @@ void main()
         FinalizeIndirectArguments();
     else if (pc.ClassifyPhase == 3u)
         SeedCanonicalHistory();
+    else if (pc.ClassifyPhase == 4u)
+        CountMissingFeedbackWork();
+    else if (pc.ClassifyPhase == 5u)
+        PrefixMissingFeedbackWork();
+    else if (pc.ClassifyPhase == 6u)
+        ScatterMissingFeedbackWork();
 }

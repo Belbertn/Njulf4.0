@@ -343,7 +343,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v23";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v24";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1920;
@@ -364,10 +364,15 @@ public sealed class SampleSponzaGiCaptureContract
         FullSourceRefreshSweepFrameCount + TailCertificationSettleFrameCount;
     public const int VerticalTraversalDurationSeconds = 16;
     public const float MotionTraversalDistance = 2.5f;
+    public const float FastOverlappingMovementDistance = 6.0f;
+    public const float RotationCutRadians = MathF.PI * 2.0f / 3.0f;
+    public const float TrueTeleportDistance = 512.0f;
     public const int MotionOutboundFrameCount = 120;
     public const int MotionPauseFrameCount = 60;
     public const int MotionReturnFrameCount = 120;
     public const string MotionTraversalName = "SponzaPlazaHotspotTriggerTraversal";
+    public const string WorldXMotionTraversalName =
+        "SponzaPlazaWorldXTraversal";
     public const string VerticalTraversalName =
         "SponzaPlazaUpperFacadeVerticalTraversal";
     // One frame presents the requested state, one spans the two-frame GPU timing
@@ -550,9 +555,58 @@ public sealed class SampleSponzaGiCaptureContract
     /// hold for one second, then return to the byte-identical start camera.
     /// Each leg uses smoothstep so the path has no artificial velocity jump.
     /// </summary>
-    public SampleSponzaGiCameraBookmark SampleMotionTraversalFrame(int frameIndex)
+    public SampleSponzaGiCameraBookmark SampleMotionTraversalFrame(
+        int frameIndex) => SampleWorldZMotionTraversalFrame(frameIndex);
+
+    public SampleSponzaGiCameraBookmark SampleWorldZMotionTraversalFrame(
+        int frameIndex)
     {
-        int frameCount = MotionTraversalFrameCount;
+        float distance = ResolveMotionTraversalDistance(frameIndex);
+        return LowBookmark with
+        {
+            Name = MotionTraversalName,
+            Position = LowBookmark.Position + new Vector3(0.0f, 0.0f, distance)
+        };
+    }
+
+    public SampleSponzaGiCameraBookmark SampleWorldXMotionTraversalFrame(
+        int frameIndex)
+    {
+        float distance = ResolveMotionTraversalDistance(frameIndex);
+        return LowBookmark with
+        {
+            Name = WorldXMotionTraversalName,
+            Position = LowBookmark.Position + new Vector3(distance, 0.0f, 0.0f)
+        };
+    }
+
+    public SampleSponzaGiCameraBookmark FastOverlappingMovementBookmark =>
+        LowBookmark with
+        {
+            Name = "SponzaFastOverlappingWorldXCut",
+            Position = LowBookmark.Position +
+                new Vector3(FastOverlappingMovementDistance, 0.0f, 0.0f)
+        };
+
+    public SampleSponzaGiCameraBookmark RotationCutBookmark =>
+        LowBookmark with
+        {
+            Name = "SponzaRotationCutNoTranslation",
+            Yaw = LowBookmark.Yaw + RotationCutRadians
+        };
+
+    public SampleSponzaGiCameraBookmark TrueTeleportBookmark =>
+        LowBookmark with
+        {
+            Name = "SponzaTrueNoOverlapTeleport",
+            Position = LowBookmark.Position +
+                new Vector3(TrueTeleportDistance, 0.0f, 0.0f)
+        };
+
+    private static float ResolveMotionTraversalDistance(int frameIndex)
+    {
+        int frameCount = MotionOutboundFrameCount + MotionPauseFrameCount +
+            MotionReturnFrameCount;
         if (frameIndex < 0 || frameIndex >= frameCount)
         {
             throw new ArgumentOutOfRangeException(
@@ -561,32 +615,22 @@ public sealed class SampleSponzaGiCaptureContract
                 $"The motion traversal contains frames 0 through {frameCount - 1}.");
         }
 
-        float distance;
         if (frameIndex < MotionOutboundFrameCount)
         {
             float linear = MotionOutboundFrameCount <= 1
                 ? 1.0f
                 : frameIndex / (float)(MotionOutboundFrameCount - 1);
-            distance = MotionTraversalDistance * SmoothStep(linear);
+            return MotionTraversalDistance * SmoothStep(linear);
         }
-        else if (frameIndex < MotionOutboundFrameCount + MotionPauseFrameCount)
-        {
-            distance = MotionTraversalDistance;
-        }
-        else
-        {
-            int returnFrame = frameIndex - MotionOutboundFrameCount - MotionPauseFrameCount;
-            float linear = MotionReturnFrameCount <= 1
-                ? 1.0f
-                : returnFrame / (float)(MotionReturnFrameCount - 1);
-            distance = MotionTraversalDistance * (1.0f - SmoothStep(linear));
-        }
+        if (frameIndex < MotionOutboundFrameCount + MotionPauseFrameCount)
+            return MotionTraversalDistance;
 
-        return LowBookmark with
-        {
-            Name = MotionTraversalName,
-            Position = LowBookmark.Position + new Vector3(0.0f, 0.0f, distance)
-        };
+        int returnFrame = frameIndex - MotionOutboundFrameCount -
+            MotionPauseFrameCount;
+        float returnLinear = MotionReturnFrameCount <= 1
+            ? 1.0f
+            : returnFrame / (float)(MotionReturnFrameCount - 1);
+        return MotionTraversalDistance * (1.0f - SmoothStep(returnLinear));
     }
 
     /// <summary>
@@ -1764,10 +1808,14 @@ public sealed class SampleSponzaGiCaptureContract
         Append(builder, "coverage-oracle-full-fixed-trajectory");
         Append(builder, VerticalTraversalFrameCount);
         Append(builder, MotionTraversalDistance);
+        Append(builder, FastOverlappingMovementDistance);
+        Append(builder, RotationCutRadians);
+        Append(builder, TrueTeleportDistance);
         Append(builder, MotionOutboundFrameCount);
         Append(builder, MotionPauseFrameCount);
         Append(builder, MotionReturnFrameCount);
         Append(builder, MotionTraversalName);
+        Append(builder, WorldXMotionTraversalName);
         Append(builder, VerticalTraversalName);
         Append(builder, SampleSponzaGiTemporalTrace.SchemaVersion);
         Append(builder, SampleSponzaGiTemporalTrace.Capacity);
@@ -1805,6 +1853,9 @@ public sealed class SampleSponzaGiCaptureContract
         Append(builder, DirectionalLightShadowStrength);
         AppendBookmark(builder, LowBookmark);
         AppendBookmark(builder, HighBookmark);
+        AppendBookmark(builder, FastOverlappingMovementBookmark);
+        AppendBookmark(builder, RotationCutBookmark);
+        AppendBookmark(builder, TrueTeleportBookmark);
         AppendVector(builder, SceneBounds.Min);
         AppendVector(builder, SceneBounds.Max);
         foreach (SampleSponzaGiReceiverRoi roi in ReceiverRois)
@@ -2103,7 +2154,7 @@ public sealed class SampleSponzaGiCaptureContract
 /// </summary>
 public sealed class SampleSponzaGiTemporalTrace
 {
-    public const string SchemaVersion = "simple-ddgi-sponza-temporal-trace/v6";
+    public const string SchemaVersion = "simple-ddgi-sponza-temporal-trace/v7";
     public const int Capacity = 960;
 
     private static readonly JsonSerializerOptions TraceJsonOptions = new()
@@ -2156,6 +2207,28 @@ public sealed class SampleSponzaGiTemporalTrace
             CameraCut = diagnostics.HiZPolicyCameraCut,
             Recentered = diagnostics.SimpleDdgiRecentered,
             FramesSinceRecenter = diagnostics.SimpleDdgiFramesSinceLastRecenter,
+            AtlasCleared = diagnostics.SimpleDdgiAtlasCleared,
+            FrameRayBucket0 = diagnostics.SimpleDdgiFrameRayBucket0,
+            FrameRayBucket1 = diagnostics.SimpleDdgiFrameRayBucket1,
+            FrameRayBucket2 = diagnostics.SimpleDdgiFrameRayBucket2,
+            FrameRayBucket3 = diagnostics.SimpleDdgiFrameRayBucket3,
+            FrameRayBucket4 = diagnostics.SimpleDdgiFrameRayBucket4,
+            FrameRayBucket5 = diagnostics.SimpleDdgiFrameRayBucket5,
+            NearScrollCardinality = diagnostics.SimpleDdgiNearScrollCardinality,
+            MidScrollCardinality = diagnostics.SimpleDdgiMidScrollCardinality,
+            FarScrollCardinality = diagnostics.SimpleDdgiFarScrollCardinality,
+            ScrollPlannedExpectedCount =
+                diagnostics.SimpleDdgiScrollRepairExpectedProbeCount,
+            ScrollExpectedCount = diagnostics.SimpleDdgiScrollGpuExpectedCount,
+            ScrollAcceptedCount = diagnostics.SimpleDdgiScrollGpuAcceptedCount,
+            ScrollTracedCount = diagnostics.SimpleDdgiScrollGpuTracedCount,
+            ScrollCommittedCount = diagnostics.SimpleDdgiScrollGpuCommittedCount,
+            ScrollUnbucketedCount = diagnostics.SimpleDdgiScrollUnbucketedCount,
+            ScrollCohortFailure = diagnostics.SimpleDdgiScrollCohortFailure,
+            RebuildingRingMask = diagnostics.SimpleDdgiRebuildingRingMask,
+            NearRebaseState = diagnostics.SimpleDdgiNearRebaseState,
+            MidRebaseState = diagnostics.SimpleDdgiMidRebaseState,
+            FarRebaseState = diagnostics.SimpleDdgiFarRebaseState,
             ResidencyAvailable = residency.IsAvailable,
             ResidencyFeedbackValid = residency.FeedbackValid,
             ResidencyFeedbackFrameSerial = residency.FeedbackFrameSerial,
@@ -2315,6 +2388,7 @@ public sealed class SampleSponzaGiTemporalTrace
             capacity = Capacity,
             totalSampleCount = _totalSampleCount,
             reflectionGate = SampleSponzaGiReflectionGate.Evaluate(entries),
+            scrollSummary = SampleSponzaDdgiScrollSummary.Evaluate(entries),
             entries
         };
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(payload, TraceJsonOptions);
@@ -2338,6 +2412,27 @@ public readonly record struct SampleSponzaGiTemporalTraceEntry
     public int CameraCut { get; init; }
     public int Recentered { get; init; }
     public int FramesSinceRecenter { get; init; }
+    public int AtlasCleared { get; init; }
+    public uint FrameRayBucket0 { get; init; }
+    public uint FrameRayBucket1 { get; init; }
+    public uint FrameRayBucket2 { get; init; }
+    public uint FrameRayBucket3 { get; init; }
+    public uint FrameRayBucket4 { get; init; }
+    public uint FrameRayBucket5 { get; init; }
+    public int NearScrollCardinality { get; init; }
+    public int MidScrollCardinality { get; init; }
+    public int FarScrollCardinality { get; init; }
+    public int ScrollPlannedExpectedCount { get; init; }
+    public uint ScrollExpectedCount { get; init; }
+    public uint ScrollAcceptedCount { get; init; }
+    public uint ScrollTracedCount { get; init; }
+    public uint ScrollCommittedCount { get; init; }
+    public uint ScrollUnbucketedCount { get; init; }
+    public SimpleDdgiScrollCohortFailureReason ScrollCohortFailure { get; init; }
+    public uint RebuildingRingMask { get; init; }
+    public SimpleDdgiRebaseState NearRebaseState { get; init; }
+    public SimpleDdgiRebaseState MidRebaseState { get; init; }
+    public SimpleDdgiRebaseState FarRebaseState { get; init; }
     public bool ResidencyAvailable { get; init; }
     public bool ResidencyFeedbackValid { get; init; }
     public ulong ResidencyFeedbackFrameSerial { get; init; }
@@ -2431,6 +2526,77 @@ public readonly record struct SampleSponzaGiTemporalTraceEntry
     public uint HybridReflectionProbeFallbackCount { get; init; }
     public uint HybridReflectionEnvironmentFallbackCount { get; init; }
     public long GpuHybridReflectionDdgiBaseMicroseconds { get; init; }
+}
+
+public sealed record SampleSponzaDdgiScrollSummary(
+    int ScrollEventFrameCount,
+    int CompleteScrollFrameCount,
+    int CohortFailureFrameCount,
+    int RebaseFrameCount,
+    int AtlasClearFrameCount,
+    ulong ExpectedProbeTotal,
+    ulong AcceptedProbeTotal,
+    ulong TracedProbeTotal,
+    ulong CommittedProbeTotal,
+    ulong UnbucketedProbeTotal,
+    SimpleDdgiScrollCohortFailureReason FailureReasons)
+{
+    public static SampleSponzaDdgiScrollSummary Evaluate(
+        IReadOnlyList<SampleSponzaGiTemporalTraceEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        int events = 0;
+        int complete = 0;
+        int failures = 0;
+        int rebases = 0;
+        int clears = 0;
+        ulong expected = 0UL;
+        ulong accepted = 0UL;
+        ulong traced = 0UL;
+        ulong committed = 0UL;
+        ulong unbucketed = 0UL;
+        SimpleDdgiScrollCohortFailureReason reasons =
+            SimpleDdgiScrollCohortFailureReason.None;
+        foreach (SampleSponzaGiTemporalTraceEntry entry in entries)
+        {
+            bool scrollEvent = entry.ScrollPlannedExpectedCount != 0 ||
+                entry.ScrollExpectedCount != 0u;
+            events += scrollEvent ? 1 : 0;
+            bool frameComplete = entry.ScrollExpectedCount != 0u &&
+                entry.ScrollCohortFailure ==
+                    SimpleDdgiScrollCohortFailureReason.None &&
+                entry.ScrollUnbucketedCount == 0u &&
+                entry.ScrollExpectedCount == entry.ScrollAcceptedCount &&
+                entry.ScrollAcceptedCount == entry.ScrollTracedCount &&
+                entry.ScrollTracedCount == entry.ScrollCommittedCount;
+            complete += frameComplete ? 1 : 0;
+            failures += entry.ScrollCohortFailure !=
+                    SimpleDdgiScrollCohortFailureReason.None ||
+                entry.ScrollUnbucketedCount != 0u
+                    ? 1
+                    : 0;
+            rebases += entry.RebuildingRingMask != 0u ? 1 : 0;
+            clears += entry.AtlasCleared != 0 ? 1 : 0;
+            expected += entry.ScrollExpectedCount;
+            accepted += entry.ScrollAcceptedCount;
+            traced += entry.ScrollTracedCount;
+            committed += entry.ScrollCommittedCount;
+            unbucketed += entry.ScrollUnbucketedCount;
+            reasons |= entry.ScrollCohortFailure;
+        }
+        return new SampleSponzaDdgiScrollSummary(
+            events,
+            complete,
+            failures,
+            rebases,
+            clears,
+            expected,
+            accepted,
+            traced,
+            committed,
+            unbucketed,
+            reasons);
+    }
 }
 
 public sealed record SampleSponzaGiReflectionGateResult(

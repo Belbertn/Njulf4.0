@@ -20,6 +20,7 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
 {
     private static readonly string[] ShaderNames =
     [
+        "ddgi_simple_schedule_validate_scroll_cohorts.comp.spv",
         "ddgi_simple_schedule_commit_local.comp.spv",
         "ddgi_simple_schedule_commit_propagation.comp.spv",
         "ddgi_simple_schedule_feedback_partial.comp.spv",
@@ -92,8 +93,7 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
             _volumeManager.GpuSchedulerFrameExecutionAvailable &&
             _volumeManager.ProbeCount > 0 &&
             _volumeManager.GpuScheduler.IsReady &&
-            _pipelines[2].Handle != 0 &&
-            _pipelines[3].Handle != 0;
+            PipelinesAreReady();
     }
 
     public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -106,26 +106,28 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
             _volumeManager.GpuSchedulerPrivateVisibilityOffsetWords;
         bool resident = _volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident;
 
+        DispatchScrollCohortValidation(cmd, pushConstants);
+
         // Mirror mode deliberately skips lifecycle mutation: the CPU queue and
         // CPU state remain authoritative. It still receives the same fixed
         // feedback reduction for delayed validation tooling.
         if (resident)
         {
             DispatchResidentLocal(cmd, pushConstants);
-            DispatchIndirect(cmd, pushConstants, 1,
+            DispatchIndirect(cmd, pushConstants, 2, 1,
                 scheduler.GetIndirectCommandOffset(SimpleDdgiSchedulerDispatchSlot.CommitPropagation));
         }
 
         uint partialGroupCount = CalculateFeedbackPartialGroupCount(
             _volumeManager.ProbeCount);
         pushConstants.Stage = partialGroupCount;
-        _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[2]);
+        _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[3]);
         BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
         PushConstants(cmd, pushConstants);
         _context.Api.CmdDispatch(cmd, partialGroupCount, 1, 1);
         InsertStorageBarrier(cmd);
 
-        _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[3]);
+        _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[4]);
         PushConstants(cmd, pushConstants);
         _context.Api.CmdDispatch(cmd, 1, 1, 1);
         InsertStorageBarrier(cmd);
@@ -164,10 +166,12 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
             scheduler.BuildPushConstants();
         pushConstants.PrivateVisibilityAtlasOffsetWords =
             _volumeManager.GpuSchedulerPrivateVisibilityOffsetWords;
+        DispatchScrollCohortValidation(cmd, pushConstants);
         DispatchResidentLocal(cmd, pushConstants);
         DispatchIndirect(
             cmd,
             pushConstants,
+            2,
             1,
             scheduler.GetIndirectCommandOffset(
                 SimpleDdgiSchedulerDispatchSlot.CommitPropagation));
@@ -180,9 +184,38 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         DispatchIndirect(
             cmd,
             pushConstants,
+            1,
             0,
             _volumeManager.GpuScheduler.GetIndirectCommandOffset(
                 SimpleDdgiSchedulerDispatchSlot.CommitLocal));
+    }
+
+    private void DispatchScrollCohortValidation(
+        CommandBuffer cmd,
+        GPUSimpleDdgiSchedulePushConstants pushConstants)
+    {
+        pushConstants.Stage = 0u;
+        _context.Api.CmdBindPipeline(
+            cmd,
+            PipelineBindPoint.Compute,
+            _pipelines[0]);
+        BindBindlessStorageAndTextures(
+            cmd,
+            _pipelineLayout,
+            PipelineBindPoint.Compute);
+        PushConstants(cmd, pushConstants);
+        _context.Api.CmdDispatch(cmd, 1u, 1u, 1u);
+        InsertStorageBarrier(cmd);
+    }
+
+    private bool PipelinesAreReady()
+    {
+        for (int i = 0; i < _pipelines.Length; i++)
+        {
+            if (_pipelines[i].Handle == 0)
+                return false;
+        }
+        return true;
     }
 
     public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -214,11 +247,15 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
     private void DispatchIndirect(
         CommandBuffer cmd,
         GPUSimpleDdgiSchedulePushConstants pushConstants,
-        uint stage,
+        int pipelineIndex,
+        uint pushStage,
         ulong offset)
     {
-        pushConstants.Stage = stage;
-        _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[checked((int)stage)]);
+        pushConstants.Stage = pushStage;
+        _context.Api.CmdBindPipeline(
+            cmd,
+            PipelineBindPoint.Compute,
+            _pipelines[pipelineIndex]);
         BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
         PushConstants(cmd, pushConstants);
         InsertIndirectCommandReadBarrier(cmd);

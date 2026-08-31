@@ -1754,6 +1754,19 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
+    public void VolumeRemapClassification_RefinementOnlyChangeRetainsBaseOwnership()
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveVolumeRemapKind(
+                tableRemapped: true,
+                toroidalScrollingEnabled: true,
+                topologyCountsMatch: false,
+                allVolumesCompatible: false,
+                refinementOnlyChange: true),
+            Is.EqualTo(SimpleDdgiVolumeRemapKind.RefinementTopologyChange));
+    }
+
+    [Test]
     public void CompatibleToroidalScroll_RepairsExposedSlabsWithoutOpeningGlobalConvergence()
     {
         Assert.Multiple(() =>

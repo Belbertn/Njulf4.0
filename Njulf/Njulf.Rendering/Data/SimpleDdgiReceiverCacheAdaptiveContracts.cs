@@ -21,7 +21,7 @@ public enum SimpleDdgiReceiverCacheRate : uint
 /// </summary>
 public static class SimpleDdgiReceiverCacheAdaptiveAbi
 {
-    public const uint Version = 1u;
+    public const uint Version = 2u;
     public const uint SchedulingTileScale = 8u;
     public const uint WorkgroupInvocationCount = 64u;
     public const ulong MetadataEntryBytes = 16u;
@@ -29,7 +29,7 @@ public static class SimpleDdgiReceiverCacheAdaptiveAbi
     public const ulong GatherWorkEntryBytes = 8u;
     public const ulong ResolveTileEntryBytes = 8u;
     public const ulong GatherStampEntryBytes = 4u;
-    public const ulong ControlBytes = 80u;
+    public const ulong ControlBytes = 96u;
 
     public const uint GatherCountWord = 0u;
     public const uint ResolveCountWord = 1u;
@@ -43,11 +43,15 @@ public static class SimpleDdgiReceiverCacheAdaptiveAbi
     public const uint HalfTileCountWord = 14u;
     public const uint QuarterTileCountWord = 15u;
     public const uint ReuseTileCountWord = 16u;
+    public const uint MissingFeedbackCountWord = 17u;
+    public const uint MissingFeedbackIndirectWord = 18u;
 
     public const ulong GatherIndirectByteOffset =
         GatherIndirectWord * sizeof(uint);
     public const ulong ResolveIndirectByteOffset =
         ResolveIndirectWord * sizeof(uint);
+    public const ulong MissingFeedbackIndirectByteOffset =
+        MissingFeedbackIndirectWord * sizeof(uint);
 
     public static uint DivideRoundUp(uint value, uint divisor)
     {
@@ -86,6 +90,13 @@ public static class SimpleDdgiReceiverCacheAdaptiveAbi
         uint gatherWidth,
         uint gatherHeight) =>
         checked((ulong)gatherWidth * gatherHeight * GatherStampEntryBytes);
+
+    public static ulong RequiredMissingPrefixBytes(
+        uint gatherWidth,
+        uint gatherHeight) =>
+        checked((ulong)DivideRoundUp(
+            checked(gatherWidth * gatherHeight),
+            WorkgroupInvocationCount) * sizeof(uint));
 
     /// <summary>
     /// The compactor emits each gather coordinate and each resolve tile at
@@ -202,7 +213,10 @@ public static class SimpleDdgiReceiverCacheRateSelector
 /// <summary>
 /// CPU-owned invalidation identity. Camera translation/rotation are omitted:
 /// corrected motion vectors own ordinary reprojection. Projection, content,
-/// material, lighting, DDGI-source, mode, and generation changes fail closed.
+/// material, lighting, DDGI-source, mode, and physical-ownership changes fail
+/// closed. A compatible toroidal scroll advances the logical volume-table
+/// generation while retaining physical history, so that diagnostic epoch is
+/// deliberately excluded from compatibility.
 /// </summary>
 public readonly record struct SimpleDdgiReceiverCacheHistoryIdentity(
     uint CacheWidth,
@@ -228,6 +242,13 @@ public readonly record struct SimpleDdgiReceiverCacheHistoryIdentity(
     public static bool IsImmediatelyPrevious(ulong current, ulong previous) =>
         current != 0UL && previous != 0UL &&
         previous != ulong.MaxValue && previous + 1UL == current;
+
+    public bool IsHistoryCompatibleWith(
+        in SimpleDdgiReceiverCacheHistoryIdentity other) =>
+        this with
+        {
+            VolumeResourceGeneration = other.VolumeResourceGeneration
+        } == other;
 }
 
 /// <summary>
@@ -266,6 +287,7 @@ public readonly record struct SimpleDdgiReceiverCacheFrameToken(
 public readonly record struct SimpleDdgiReceiverCacheAdaptiveCounters(
     int ReadbackValid,
     uint GatherWorkCount,
+    uint MissingFeedbackWorkCount,
     uint ResolveTileCount,
     uint OverflowFlags,
     uint AcceptedEntryCount,

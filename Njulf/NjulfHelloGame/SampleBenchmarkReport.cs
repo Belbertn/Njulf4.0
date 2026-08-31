@@ -364,7 +364,9 @@ public sealed record SampleBenchmarkCpuCohortEvidence(
     SampleBenchmarkTimingStats AccelerationStructureBuildMilliseconds,
     SampleBenchmarkTimingStats PrimaryCommandRecordMilliseconds,
     SampleBenchmarkTimingStats SecondaryCommandRecordMilliseconds,
-    SampleBenchmarkTimingStats FrameFenceWaitMilliseconds)
+    SampleBenchmarkTimingStats FrameFenceWaitMilliseconds,
+    SampleBenchmarkTimingStats SwapchainImageOwnerWaitMilliseconds,
+    SampleBenchmarkTimingStats FrameResourceRecycleWaitMilliseconds)
 {
     public static SampleBenchmarkCpuCohortEvidence Empty(string name) => new(
         name,
@@ -382,7 +384,11 @@ public sealed record SampleBenchmarkCpuCohortEvidence(
         SampleBenchmarkTimingStats.Empty($"{name} acceleration structure build"),
         SampleBenchmarkTimingStats.Empty($"{name} primary command record"),
         SampleBenchmarkTimingStats.Empty($"{name} secondary command record"),
-        SampleBenchmarkTimingStats.Empty($"{name} frame-fence wait"));
+        SampleBenchmarkTimingStats.Empty($"{name} frame-fence wait"),
+        SampleBenchmarkTimingStats.Empty(
+            $"{name} swapchain-image owner wait"),
+        SampleBenchmarkTimingStats.Empty(
+            $"{name} frame-resource recycle wait"));
 }
 
 /// <summary>
@@ -412,6 +418,8 @@ public sealed record SampleBenchmarkCpuSlowFrame
     public long CpuPrimaryCommandRecordMicroseconds { get; init; }
     public long CpuSecondaryCommandRecordMicroseconds { get; init; }
     public long CpuWaitForFrameFenceMicroseconds { get; init; }
+    public long CpuSwapchainImageOwnerWaitMicroseconds { get; init; }
+    public long CpuFrameResourceRecycleWaitMicroseconds { get; init; }
     public long RuntimeStallMicrosecondsThisFrame { get; init; }
     public long CpuReflectionProbeCaptureRecordMicroseconds { get; init; }
     public long CpuReflectionProbePrefilterRecordMicroseconds { get; init; }

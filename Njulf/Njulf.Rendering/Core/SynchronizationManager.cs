@@ -13,6 +13,12 @@ namespace Njulf.Rendering.Core
     /// </summary>
     public unsafe class SynchronizationManager : IDisposable
     {
+        // One semaphore beyond the maximum number of outstanding frame
+        // submissions lets the CPU acquire an image before choosing/recycling
+        // a frame-resource context. Binary acquire semaphores are reused only
+        // after their consuming submission fence completes.
+        public const int ImageAvailableSemaphoreCount = FramesInFlight + 1;
+
         private readonly VulkanContext _context;
         
         // Per-frame synchronization primitives
@@ -35,7 +41,8 @@ namespace Njulf.Rendering.Core
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             
-            _imageAvailableSemaphores = new Semaphore[FramesInFlight];
+            _imageAvailableSemaphores =
+                new Semaphore[ImageAvailableSemaphoreCount];
             _inFlightFences = new Fence[FramesInFlight];
             
             CreateSynchronizationPrimitives();
@@ -44,7 +51,7 @@ namespace Njulf.Rendering.Core
         
         private unsafe void CreateSynchronizationPrimitives()
         {
-            for (int i = 0; i < FramesInFlight; i++)
+            for (int i = 0; i < ImageAvailableSemaphoreCount; i++)
             {
                 // Image available semaphore (signaled by swapchain acquire)
                 var semaphoreInfo = new SemaphoreCreateInfo
@@ -55,15 +62,21 @@ namespace Njulf.Rendering.Core
                     _context.Device, &semaphoreInfo, null, out _imageAvailableSemaphores[i]);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create image available semaphore", result);
-                _context.SetDebugName(_imageAvailableSemaphores[i].Handle, ObjectType.Semaphore, $"Image Available Semaphore Frame {i}");
-                
+                _context.SetDebugName(
+                    _imageAvailableSemaphores[i].Handle,
+                    ObjectType.Semaphore,
+                    $"Image Available Semaphore Slot {i}");
+            }
+
+            for (int i = 0; i < FramesInFlight; i++)
+            {
                 // In-flight fence (signaled by graphics queue submit, waited by CPU)
                 var fenceInfo = new FenceCreateInfo
                 {
                     SType = StructureType.FenceCreateInfo,
                     Flags = FenceCreateFlags.SignaledBit
                 };
-                result = _context.Api.CreateFence(
+                Result result = _context.Api.CreateFence(
                     _context.Device, &fenceInfo, null, out _inFlightFences[i]);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create in-flight fence", result);
@@ -112,7 +125,15 @@ namespace Njulf.Rendering.Core
         /// </summary>
         public Semaphore GetImageAvailableSemaphore(int frameIndex = -1)
         {
-            return _imageAvailableSemaphores[frameIndex < 0 ? _currentFrame : frameIndex];
+            int index = frameIndex < 0 ? _currentFrame : frameIndex;
+            if ((uint)index >= (uint)_imageAvailableSemaphores.Length)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(frameIndex),
+                    "Image-available semaphore slot is out of range.");
+            }
+
+            return _imageAvailableSemaphores[index];
         }
         
         /// <summary>
@@ -200,6 +221,26 @@ namespace Njulf.Rendering.Core
             if (result != Result.Success)
                 throw new VulkanException("Failed to wait for in-flight fence", result);
         }
+
+        /// <summary>
+        /// Polls a frame-resource fence without introducing a CPU wait.
+        /// </summary>
+        public bool IsFenceSignaled(int frameIndex)
+        {
+            if ((uint)frameIndex >= (uint)_inFlightFences.Length)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex));
+
+            Result result = _context.Api.GetFenceStatus(
+                _context.Device,
+                _inFlightFences[frameIndex]);
+            if (result == Result.Success)
+                return true;
+            if (result == Result.NotReady)
+                return false;
+            throw new VulkanException(
+                "Failed to query in-flight fence status",
+                result);
+        }
         
         /// <summary>
         /// Resets the current frame's in-flight fence.
@@ -221,6 +262,13 @@ namespace Njulf.Rendering.Core
         public void AdvanceFrame()
         {
             _currentFrame = (_currentFrame + 1) % FramesInFlight;
+        }
+
+        public void SetCurrentFrame(int frameIndex)
+        {
+            if ((uint)frameIndex >= FramesInFlight)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex));
+            _currentFrame = frameIndex;
         }
         
         /// <summary>
@@ -245,11 +293,14 @@ namespace Njulf.Rendering.Core
             _disposed = true;
             
             // Destroy per-frame primitives
-            for (int i = 0; i < FramesInFlight; i++)
+            for (int i = 0; i < ImageAvailableSemaphoreCount; i++)
             {
                 if (_imageAvailableSemaphores[i].Handle != 0)
                     _context.Api.DestroySemaphore(_context.Device, _imageAvailableSemaphores[i], null);
-                
+            }
+
+            for (int i = 0; i < FramesInFlight; i++)
+            {
                 if (_inFlightFences[i].Handle != 0)
                     _context.Api.DestroyFence(_context.Device, _inFlightFences[i], null);
             }

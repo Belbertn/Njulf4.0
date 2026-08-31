@@ -189,7 +189,9 @@ public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
             // 3x3x3 dependent bounds. Work beyond this bounded proxy remains
             // ordinary post-forward work and therefore preserves fairness.
             _commitPass.ExecuteResidentLocalAndPropagation(cmd);
-            _publishPass.ExecuteSampledOnly(cmd);
+            _publishPass.ExecuteSampledOnly(
+                cmd,
+                publishIndirectCommand: false);
         }
         finally
         {

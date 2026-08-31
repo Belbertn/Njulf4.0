@@ -1,5 +1,6 @@
 using System.IO;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
@@ -120,6 +121,20 @@ public sealed class VolumetricFogTests
                 "GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount"));
             Assert.That(source, Does.Not.Contain(
                 "int bounceProbeCapacity = Math.Max"));
+        });
+    }
+
+    [Test]
+    public void DdgiBounceSidecar_ResetsOnlyForPhysicalOwnershipReplacement()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                FroxelFogRenderer.RequiresDdgiSidecarReset(7u, 7u),
+                Is.False);
+            Assert.That(
+                FroxelFogRenderer.RequiresDdgiSidecarReset(7u, 8u),
+                Is.True);
         });
     }
 

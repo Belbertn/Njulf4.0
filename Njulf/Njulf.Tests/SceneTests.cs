@@ -1,6 +1,7 @@
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Rendering;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -242,6 +243,81 @@ namespace Njulf.Tests
                 Assert.That(enabledRevision, Is.GreaterThan(offsetRevision));
                 Assert.That(scene.RenderPayloadRevision, Is.EqualTo(enabledRevision));
             });
+        }
+
+        [Test]
+        public void VolumetricDensityRevision_TracksOnlyVolumeListAndContent()
+        {
+            using var scene = new Scene();
+            var volume = new VolumetricDensityVolume();
+            uint initialRevision = scene.VolumetricDensityRevision;
+
+            scene.Add(volume);
+            uint addedRevision = scene.VolumetricDensityRevision;
+
+            var renderObject = new RenderObject("mesh", "material");
+            scene.Add(renderObject);
+            renderObject.Position = new Vector3(1f, 2f, 3f);
+            uint unrelatedMutationRevision =
+                scene.VolumetricDensityRevision;
+
+            volume.Priority = 7;
+            uint changedRevision = scene.VolumetricDensityRevision;
+            volume.Priority = 7;
+            uint unchangedRevision = scene.VolumetricDensityRevision;
+
+            scene.Remove(volume);
+            uint removedRevision = scene.VolumetricDensityRevision;
+            scene.Add(volume);
+            uint readdedRevision = scene.VolumetricDensityRevision;
+            scene.Clear();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(addedRevision, Is.GreaterThan(initialRevision));
+                Assert.That(unrelatedMutationRevision, Is.EqualTo(addedRevision));
+                Assert.That(changedRevision, Is.GreaterThan(addedRevision));
+                Assert.That(unchangedRevision, Is.EqualTo(changedRevision));
+                Assert.That(removedRevision, Is.GreaterThan(changedRevision));
+                Assert.That(readdedRevision, Is.GreaterThan(removedRevision));
+                Assert.That(
+                    scene.VolumetricDensityRevision,
+                    Is.GreaterThan(readdedRevision));
+            });
+        }
+
+        [Test]
+        public void VolumetricDensitySnapshot_PreservesEnabledPriorityOrdering()
+        {
+            var low = new VolumetricDensityVolume
+            {
+                Id = Guid.Parse("30000000-0000-0000-0000-000000000000"),
+                Priority = 1
+            };
+            var highLater = new VolumetricDensityVolume
+            {
+                Id = Guid.Parse("20000000-0000-0000-0000-000000000000"),
+                Priority = 9
+            };
+            var disabled = new VolumetricDensityVolume
+            {
+                Id = Guid.Parse("00000000-0000-0000-0000-000000000001"),
+                Priority = 100,
+                Enabled = false
+            };
+            var highEarlier = new VolumetricDensityVolume
+            {
+                Id = Guid.Parse("10000000-0000-0000-0000-000000000000"),
+                Priority = 9
+            };
+
+            VolumetricDensityVolume[] sorted = VulkanRenderer
+                .CreateSortedVolumetricDensityVolumeSnapshot(
+                    [low, highLater, disabled, highEarlier]);
+
+            Assert.That(
+                sorted,
+                Is.EqualTo(new[] { highEarlier, highLater, low }));
         }
 
         private sealed class DisposableUpdateable : IUpdateable, System.IDisposable

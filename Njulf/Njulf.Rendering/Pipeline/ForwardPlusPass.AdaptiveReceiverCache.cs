@@ -18,7 +18,7 @@ namespace Njulf.Rendering.Pipeline;
 
 public sealed unsafe partial class ForwardPlusPass
 {
-    private const int AdaptiveReceiverDescriptorBindingCount = 11;
+    private const int AdaptiveReceiverDescriptorBindingCount = 12;
 
     private readonly BufferHandle[] _adaptiveReceiverMetadataBuffers =
         new BufferHandle[FramesInFlight];
@@ -31,6 +31,8 @@ public sealed unsafe partial class ForwardPlusPass
     private readonly BufferHandle[] _adaptiveReceiverControlBuffers =
         new BufferHandle[FramesInFlight];
     private readonly BufferHandle[] _adaptiveReceiverGatherStampBuffers =
+        new BufferHandle[FramesInFlight];
+    private readonly BufferHandle[] _adaptiveReceiverMissingPrefixBuffers =
         new BufferHandle[FramesInFlight];
     private readonly BufferHandle[] _adaptiveReceiverReadbackBuffers =
         new BufferHandle[FramesInFlight];
@@ -49,6 +51,8 @@ public sealed unsafe partial class ForwardPlusPass
     private PipelineLayout _adaptiveReceiverPipelineLayout;
     private VkPipeline _adaptiveReceiverClassifyPipeline;
     private VkPipeline _adaptiveReceiverGatherPipeline;
+    private VkPipeline _adaptiveReceiverFeedbackGatherPipeline;
+    private VkPipeline _adaptiveReceiverMissingFeedbackGatherPipeline;
     private VkPipeline _adaptiveReceiverResolvePipeline;
     private bool _adaptiveReceiverInitializationAttempted;
     private bool _adaptiveReceiverInitializationFailed;
@@ -59,6 +63,7 @@ public sealed unsafe partial class ForwardPlusPass
     private ulong _adaptiveReceiverGatherWorkBytes;
     private ulong _adaptiveReceiverResolveTileBytes;
     private ulong _adaptiveReceiverGatherStampBytes;
+    private ulong _adaptiveReceiverMissingPrefixBytes;
     private SimpleDdgiReceiverCacheFrameToken _adaptiveReceiverFrameToken;
     private SimpleDdgiReceiverCacheAdaptiveCounters _adaptiveReceiverCounters;
 
@@ -74,7 +79,8 @@ public sealed unsafe partial class ForwardPlusPass
          _adaptiveReceiverGatherWorkBytes +
          _adaptiveReceiverResolveTileBytes +
          SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes +
-         _adaptiveReceiverGatherStampBytes) * FramesInFlight);
+         _adaptiveReceiverGatherStampBytes +
+         _adaptiveReceiverMissingPrefixBytes) * FramesInFlight);
 
     private bool TryEnsureSimpleDdgiReceiverCacheAdaptiveResources()
     {
@@ -107,6 +113,14 @@ public sealed unsafe partial class ForwardPlusPass
                     CreateSimpleDdgiReceiverCacheAdaptivePipeline(
                         "ddgi_simple_receiver_cache_adaptive.comp.spv",
                         "Simple DDGI Receiver Cache Adaptive Gather Pipeline");
+                _adaptiveReceiverFeedbackGatherPipeline =
+                    CreateSimpleDdgiReceiverCacheAdaptivePipeline(
+                        "ddgi_simple_receiver_cache_adaptive_b1.comp.spv",
+                        "Simple DDGI Receiver Cache Adaptive Exact Feedback Gather Pipeline");
+                _adaptiveReceiverMissingFeedbackGatherPipeline =
+                    CreateSimpleDdgiReceiverCacheAdaptivePipeline(
+                        "ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv",
+                        "Simple DDGI Receiver Cache Adaptive Missing Feedback Gather Pipeline");
                 _adaptiveReceiverResolvePipeline =
                     CreateSimpleDdgiReceiverCacheAdaptivePipeline(
                         "ddgi_simple_receiver_cache_resolve_adaptive.comp.spv",
@@ -135,6 +149,8 @@ public sealed unsafe partial class ForwardPlusPass
     {
         if (_adaptiveReceiverClassifyPipeline.Handle == 0 ||
             _adaptiveReceiverGatherPipeline.Handle == 0 ||
+            _adaptiveReceiverFeedbackGatherPipeline.Handle == 0 ||
+            _adaptiveReceiverMissingFeedbackGatherPipeline.Handle == 0 ||
             _adaptiveReceiverResolvePipeline.Handle == 0 ||
             _adaptiveReceiverPipelineLayout.Handle == 0 ||
             _adaptiveReceiverResourceGeneration == 0u)
@@ -150,6 +166,7 @@ public sealed unsafe partial class ForwardPlusPass
                 !_adaptiveReceiverResolveTileBuffers[i].IsValid ||
                 !_adaptiveReceiverControlBuffers[i].IsValid ||
                 !_adaptiveReceiverGatherStampBuffers[i].IsValid ||
+                !_adaptiveReceiverMissingPrefixBuffers[i].IsValid ||
                 !_adaptiveReceiverReadbackBuffers[i].IsValid ||
                 _adaptiveReceiverDescriptorSets[i].Handle == 0)
             {
@@ -374,11 +391,16 @@ public sealed unsafe partial class ForwardPlusPass
             SimpleDdgiReceiverCacheAdaptiveAbi.RequiredGatherStampBytes(
                 _simpleDdgiReceiverGatherWidth,
                 _simpleDdgiReceiverGatherHeight);
+        ulong missingPrefixBytes =
+            SimpleDdgiReceiverCacheAdaptiveAbi.RequiredMissingPrefixBytes(
+                _simpleDdgiReceiverGatherWidth,
+                _simpleDdgiReceiverGatherHeight);
         bool matches = _adaptiveReceiverMetadataBytes == metadataBytes &&
             _adaptiveReceiverTileScheduleBytes == tileScheduleBytes &&
             _adaptiveReceiverGatherWorkBytes == gatherWorkBytes &&
             _adaptiveReceiverResolveTileBytes == resolveTileBytes &&
-            _adaptiveReceiverGatherStampBytes == gatherStampBytes;
+            _adaptiveReceiverGatherStampBytes == gatherStampBytes &&
+            _adaptiveReceiverMissingPrefixBytes == missingPrefixBytes;
         for (int i = 0; i < FramesInFlight; ++i)
         {
             matches &= _adaptiveReceiverMetadataBuffers[i].IsValid &&
@@ -387,6 +409,7 @@ public sealed unsafe partial class ForwardPlusPass
                 _adaptiveReceiverResolveTileBuffers[i].IsValid &&
                 _adaptiveReceiverControlBuffers[i].IsValid &&
                 _adaptiveReceiverGatherStampBuffers[i].IsValid &&
+                _adaptiveReceiverMissingPrefixBuffers[i].IsValid &&
                 _adaptiveReceiverReadbackBuffers[i].IsValid;
         }
         if (matches)
@@ -398,6 +421,7 @@ public sealed unsafe partial class ForwardPlusPass
         var resolveTiles = NewInvalidHandleArray();
         var controls = NewInvalidHandleArray();
         var gatherStamps = NewInvalidHandleArray();
+        var missingPrefixes = NewInvalidHandleArray();
         var readbacks = NewInvalidHandleArray();
         try
         {
@@ -430,6 +454,10 @@ public sealed unsafe partial class ForwardPlusPass
                     gatherStampBytes,
                     BufferUsageFlags.StorageBufferBit,
                     $"Simple DDGI Adaptive Receiver Gather Stamps Frame {i}");
+                missingPrefixes[i] = CreateAdaptiveDeviceBuffer(
+                    missingPrefixBytes,
+                    BufferUsageFlags.StorageBufferBit,
+                    $"Simple DDGI Adaptive Receiver Missing Prefix Frame {i}");
                 readbacks[i] = _bufferManager.CreateBuffer(
                     SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
                     BufferUsageFlags.TransferDstBit,
@@ -459,11 +487,13 @@ public sealed unsafe partial class ForwardPlusPass
                 resolveTiles,
                 controls,
                 gatherStamps,
+                missingPrefixes,
                 metadataBytes,
                 tileScheduleBytes,
                 gatherWorkBytes,
                 resolveTileBytes,
-                gatherStampBytes);
+                gatherStampBytes,
+                missingPrefixBytes);
         }
         catch
         {
@@ -473,6 +503,7 @@ public sealed unsafe partial class ForwardPlusPass
             DestroyHandleArray(resolveTiles);
             DestroyHandleArray(controls);
             DestroyHandleArray(gatherStamps);
+            DestroyHandleArray(missingPrefixes);
             DestroyHandleArray(readbacks);
             throw;
         }
@@ -489,12 +520,16 @@ public sealed unsafe partial class ForwardPlusPass
         SwapAdaptiveHandleArray(
             _adaptiveReceiverGatherStampBuffers,
             gatherStamps);
+        SwapAdaptiveHandleArray(
+            _adaptiveReceiverMissingPrefixBuffers,
+            missingPrefixes);
         SwapAdaptiveHandleArray(_adaptiveReceiverReadbackBuffers, readbacks);
         _adaptiveReceiverMetadataBytes = metadataBytes;
         _adaptiveReceiverTileScheduleBytes = tileScheduleBytes;
         _adaptiveReceiverGatherWorkBytes = gatherWorkBytes;
         _adaptiveReceiverResolveTileBytes = resolveTileBytes;
         _adaptiveReceiverGatherStampBytes = gatherStampBytes;
+        _adaptiveReceiverMissingPrefixBytes = missingPrefixBytes;
         _adaptiveReceiverResourceGeneration =
             _adaptiveReceiverResourceGeneration == uint.MaxValue
                 ? 1u
@@ -562,11 +597,13 @@ public sealed unsafe partial class ForwardPlusPass
         BufferHandle[] resolveTiles,
         BufferHandle[] controls,
         BufferHandle[] gatherStamps,
+        BufferHandle[] missingPrefixes,
         ulong metadataBytes,
         ulong tileScheduleBytes,
         ulong gatherWorkBytes,
         ulong resolveTileBytes,
-        ulong gatherStampBytes)
+        ulong gatherStampBytes,
+        ulong missingPrefixBytes)
     {
         if (_bufferManager is null)
             throw new InvalidOperationException("Buffer manager is unavailable.");
@@ -611,6 +648,9 @@ public sealed unsafe partial class ForwardPlusPass
                 controls[frame],
                 SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes);
             infos[10] = DescriptorInfo(gatherStamps[frame], gatherStampBytes);
+            infos[11] = DescriptorInfo(
+                missingPrefixes[frame],
+                missingPrefixBytes);
 
             for (uint binding = 0u;
                  binding < AdaptiveReceiverDescriptorBindingCount;
@@ -698,7 +738,8 @@ public sealed unsafe partial class ForwardPlusPass
             SimpleDdgiReceiverCacheHistoryIdentity.IsImmediatelyPrevious(
                 sceneData.DdgiFrameSerial,
                 _adaptiveReceiverHistorySerials[previous]) &&
-            _adaptiveReceiverHistoryIdentities[previous] == identity;
+            _adaptiveReceiverHistoryIdentities[previous]
+                .IsHistoryCompatibleWith(identity);
     }
 
     private uint BuildAdaptiveReceiverFrameStamp(ulong frameSerial)
@@ -775,35 +816,60 @@ public sealed unsafe partial class ForwardPlusPass
             &local);
     }
 
-    private void AdaptiveReceiverMemoryBarrier(
-        CommandBuffer commandBuffer,
+    private BufferMemoryBarrier2 CreateAdaptiveReceiverBufferBarrier(
+        BufferHandle handle,
+        ulong size,
         PipelineStageFlags2 sourceStages,
         AccessFlags2 sourceAccess,
         PipelineStageFlags2 destinationStages,
-        AccessFlags2 destinationAccess)
+        AccessFlags2 destinationAccess,
+        ulong offset = 0UL)
     {
-        var barrier = new MemoryBarrier2
+        if (_bufferManager is null || !handle.IsValid || size == 0UL)
+            throw new InvalidOperationException(
+                "Adaptive receiver barrier resource is unavailable.");
+        return BarrierBuilder.BufferBarrier(
+            _bufferManager.GetBuffer(handle),
+            sourceStages,
+            sourceAccess,
+            destinationStages,
+            destinationAccess,
+            offset,
+            size);
+    }
+
+    private void ExecuteAdaptiveReceiverBarriers(
+        CommandBuffer commandBuffer,
+        ReadOnlySpan<BufferMemoryBarrier2> barriers)
+    {
+        fixed (BufferMemoryBarrier2* barrierPointer = barriers)
         {
-            SType = StructureType.MemoryBarrier2,
-            SrcStageMask = sourceStages,
-            SrcAccessMask = sourceAccess,
-            DstStageMask = destinationStages,
-            DstAccessMask = destinationAccess
-        };
-        var dependency = new DependencyInfo
-        {
-            SType = StructureType.DependencyInfo,
-            MemoryBarrierCount = 1,
-            PMemoryBarriers = &barrier
-        };
-        _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
+            var dependency = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = checked((uint)barriers.Length),
+                PBufferMemoryBarriers = barrierPointer
+            };
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
+        }
+    }
+
+    private void ExecuteAdaptiveReceiverBarrier(
+        CommandBuffer commandBuffer,
+        BufferMemoryBarrier2 barrier)
+    {
+        Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[1];
+        barriers[0] = barrier;
+        ExecuteAdaptiveReceiverBarriers(commandBuffer, barriers);
     }
 
     private bool DispatchSimpleDdgiReceiverCacheAdaptive(
         CommandBuffer commandBuffer,
         int frameIndex,
         SceneRenderingData sceneData,
-        Extent2D renderExtent)
+        Extent2D renderExtent,
+        in SimpleDdgiReceiverFeedbackCaptureProducerContract
+            feedbackProducer)
     {
         _adaptiveReceiverExecutedForCurrentView = false;
         ObserveCompletedAdaptiveReceiverReadback(frameIndex);
@@ -832,13 +898,16 @@ public sealed unsafe partial class ForwardPlusPass
             0UL,
             SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
             0u);
-        AdaptiveReceiverMemoryBarrier(
+        ExecuteAdaptiveReceiverBarrier(
             commandBuffer,
-            PipelineStageFlags2.TransferBit,
-            AccessFlags2.TransferWriteBit,
-            PipelineStageFlags2.ComputeShaderBit,
-            AccessFlags2.ShaderStorageReadBit |
-            AccessFlags2.ShaderStorageWriteBit);
+            CreateAdaptiveReceiverBufferBarrier(
+                controlHandle,
+                SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.ShaderStorageWriteBit));
 
         _context.Api.CmdBindPipeline(
             commandBuffer,
@@ -860,13 +929,26 @@ public sealed unsafe partial class ForwardPlusPass
                 _simpleDdgiReceiverCacheHeight),
             1u);
 
-        AdaptiveReceiverMemoryBarrier(
-            commandBuffer,
+        Span<BufferMemoryBarrier2> classifyToCompact =
+            stackalloc BufferMemoryBarrier2[2];
+        classifyToCompact[0] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverTileScheduleBuffers[frameIndex],
+            _adaptiveReceiverTileScheduleBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        classifyToCompact[1] = CreateAdaptiveReceiverBufferBarrier(
+            controlHandle,
+            SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit |
-            AccessFlags2.ShaderStorageWriteBit);
+                AccessFlags2.ShaderStorageWriteBit);
+        ExecuteAdaptiveReceiverBarriers(
+            commandBuffer,
+            classifyToCompact);
         adaptivePush.ClassifyPhase = 1u;
         PushAdaptiveReceiverConstants(commandBuffer, adaptivePush);
         _context.Api.CmdDispatch(
@@ -879,30 +961,46 @@ public sealed unsafe partial class ForwardPlusPass
                 SimpleDdgiReceiverCacheWorkgroupSize),
             1u);
 
-        AdaptiveReceiverMemoryBarrier(
+        ExecuteAdaptiveReceiverBarrier(
             commandBuffer,
-            PipelineStageFlags2.ComputeShaderBit,
-            AccessFlags2.ShaderStorageWriteBit,
-            PipelineStageFlags2.ComputeShaderBit,
-            AccessFlags2.ShaderStorageReadBit |
-            AccessFlags2.ShaderStorageWriteBit);
+            CreateAdaptiveReceiverBufferBarrier(
+                controlHandle,
+                SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.ShaderStorageWriteBit));
         adaptivePush.ClassifyPhase = 2u;
         PushAdaptiveReceiverConstants(commandBuffer, adaptivePush);
         _context.Api.CmdDispatch(commandBuffer, 1u, 1u, 1u);
 
-        AdaptiveReceiverMemoryBarrier(
-            commandBuffer,
+        Span<BufferMemoryBarrier2> finalizeToGather =
+            stackalloc BufferMemoryBarrier2[2];
+        finalizeToGather[0] = CreateAdaptiveReceiverBufferBarrier(
+            controlHandle,
+            SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
             PipelineStageFlags2.ComputeShaderBit |
-            PipelineStageFlags2.DrawIndirectBit,
+                PipelineStageFlags2.DrawIndirectBit,
             AccessFlags2.ShaderStorageReadBit |
-            AccessFlags2.IndirectCommandReadBit);
+                AccessFlags2.IndirectCommandReadBit);
+        finalizeToGather[1] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverGatherWorkBuffers[frameIndex],
+            _adaptiveReceiverGatherWorkBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        ExecuteAdaptiveReceiverBarriers(commandBuffer, finalizeToGather);
 
         _context.Api.CmdBindPipeline(
             commandBuffer,
             PipelineBindPoint.Compute,
-            _adaptiveReceiverGatherPipeline);
+            feedbackProducer.IsAvailable
+                ? _adaptiveReceiverFeedbackGatherPipeline
+                : _adaptiveReceiverGatherPipeline);
         BindAdaptiveReceiverDescriptors(commandBuffer, frameIndex);
         var gatherPush = new GPUSimpleDdgiReceiverCachePushConstants
         {
@@ -920,10 +1018,18 @@ public sealed unsafe partial class ForwardPlusPass
                 (BindlessIndex.SimpleDdgiReceiverGatherBufferBase +
                  frameIndex)),
             ReceiverScale = SimpleDdgiReceiverGatherScale,
-            FeedbackControlOffsetWords = 0u,
-            FeedbackSamplePeriod = 0u,
-            FeedbackSamplePhase = 0u,
-            FeedbackMaximumOwnersPerTile = 0u,
+            FeedbackControlOffsetWords = feedbackProducer.IsAvailable
+                ? feedbackProducer.CandidateControlOffsetWords
+                : 0u,
+            FeedbackSamplePeriod = feedbackProducer.IsAvailable
+                ? feedbackProducer.ScreenSamplingPeriod
+                : 0u,
+            FeedbackSamplePhase = feedbackProducer.IsAvailable
+                ? feedbackProducer.ScreenSamplingPhase
+                : 0u,
+            FeedbackMaximumOwnersPerTile = feedbackProducer.IsAvailable
+                ? feedbackProducer.MaximumUniqueGatherOwnersPerTile
+                : 0u,
             SurfaceBufferIndex = checked((uint)
                 (BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase +
                  frameIndex))
@@ -934,13 +1040,67 @@ public sealed unsafe partial class ForwardPlusPass
             control,
             SimpleDdgiReceiverCacheAdaptiveAbi.GatherIndirectByteOffset);
 
-        AdaptiveReceiverMemoryBarrier(
-            commandBuffer,
+        Span<BufferMemoryBarrier2> gatherToResolve =
+            stackalloc BufferMemoryBarrier2[8];
+        gatherToResolve[0] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverCacheBuffers[frameIndex],
+            _simpleDdgiReceiverCacheBufferBytes,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit);
+        gatherToResolve[1] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverCacheSurfaceBuffers[frameIndex],
+            _simpleDdgiReceiverCacheSurfaceBufferBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit);
+        gatherToResolve[2] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverMetadataBuffers[frameIndex],
+            _adaptiveReceiverMetadataBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit);
+        gatherToResolve[3] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverTileScheduleBuffers[frameIndex],
+            _adaptiveReceiverTileScheduleBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        gatherToResolve[4] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverResolveTileBuffers[frameIndex],
+            _adaptiveReceiverResolveTileBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        gatherToResolve[5] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverGatherStampBuffers[frameIndex],
+            _adaptiveReceiverGatherStampBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        gatherToResolve[6] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverGatherBuffers[frameIndex],
+            _simpleDdgiReceiverGatherBufferBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        gatherToResolve[7] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverGatherSurfaceBuffers[frameIndex],
+            _simpleDdgiReceiverGatherSurfaceBufferBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        ExecuteAdaptiveReceiverBarriers(commandBuffer, gatherToResolve);
 
         _context.Api.CmdBindPipeline(
             commandBuffer,
@@ -976,13 +1136,43 @@ public sealed unsafe partial class ForwardPlusPass
             control,
             SimpleDdgiReceiverCacheAdaptiveAbi.ResolveIndirectByteOffset);
 
-        AdaptiveReceiverMemoryBarrier(
-            commandBuffer,
+        Span<BufferMemoryBarrier2> resolveToConsumers =
+            stackalloc BufferMemoryBarrier2[3];
+        resolveToConsumers[0] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverCacheBuffers[frameIndex],
+            _simpleDdgiReceiverCacheBufferBytes,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
             PipelineStageFlags2.FragmentShaderBit |
+                PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        resolveToConsumers[1] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverCacheSurfaceBuffers[frameIndex],
+            _simpleDdgiReceiverCacheSurfaceBufferBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.FragmentShaderBit |
+                PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        resolveToConsumers[2] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverMetadataBuffers[frameIndex],
+            _adaptiveReceiverMetadataBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit);
+        ExecuteAdaptiveReceiverBarriers(
+            commandBuffer,
+            resolveToConsumers);
+        if (feedbackProducer.IsAvailable)
+        {
+            DispatchAdaptiveReceiverMissingFeedback(
+                commandBuffer,
+                frameIndex,
+                feedbackProducer,
+                adaptivePush,
+                gatherPush);
+        }
         RecordAdaptiveReceiverReadback(commandBuffer, frameIndex);
 
         _adaptiveReceiverHistorySerials[frameIndex] =
@@ -1006,6 +1196,136 @@ public sealed unsafe partial class ForwardPlusPass
         return true;
     }
 
+    private void DispatchAdaptiveReceiverMissingFeedback(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        in SimpleDdgiReceiverFeedbackCaptureProducerContract producer,
+        GPUSimpleDdgiReceiverCacheAdaptivePushConstants adaptivePush,
+        GPUSimpleDdgiReceiverCachePushConstants gatherPush)
+    {
+        uint workgroupCount =
+            SimpleDdgiReceiverCacheAdaptiveAbi.DivideRoundUp(
+                checked(_simpleDdgiReceiverGatherWidth *
+                    _simpleDdgiReceiverGatherHeight),
+                SimpleDdgiReceiverCacheAdaptiveAbi
+                    .WorkgroupInvocationCount);
+        _context.Api.CmdBindPipeline(
+            commandBuffer,
+            PipelineBindPoint.Compute,
+            _adaptiveReceiverClassifyPipeline);
+        BindAdaptiveReceiverDescriptors(commandBuffer, frameIndex);
+
+        adaptivePush.ClassifyPhase = 4u;
+        PushAdaptiveReceiverConstants(commandBuffer, adaptivePush);
+        _context.Api.CmdDispatch(commandBuffer, workgroupCount, 1u, 1u);
+        ExecuteAdaptiveReceiverBarrier(
+            commandBuffer,
+            CreateAdaptiveReceiverBufferBarrier(
+                _adaptiveReceiverMissingPrefixBuffers[frameIndex],
+                _adaptiveReceiverMissingPrefixBytes,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.ShaderStorageWriteBit));
+
+        adaptivePush.ClassifyPhase = 5u;
+        PushAdaptiveReceiverConstants(commandBuffer, adaptivePush);
+        _context.Api.CmdDispatch(commandBuffer, 1u, 1u, 1u);
+        Span<BufferMemoryBarrier2> prefixToScatter =
+            stackalloc BufferMemoryBarrier2[2];
+        prefixToScatter[0] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverMissingPrefixBuffers[frameIndex],
+            _adaptiveReceiverMissingPrefixBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        prefixToScatter[1] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverControlBuffers[frameIndex],
+            SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit |
+                PipelineStageFlags2.DrawIndirectBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.IndirectCommandReadBit);
+        ExecuteAdaptiveReceiverBarriers(commandBuffer, prefixToScatter);
+
+        adaptivePush.ClassifyPhase = 6u;
+        PushAdaptiveReceiverConstants(commandBuffer, adaptivePush);
+        _context.Api.CmdDispatch(commandBuffer, workgroupCount, 1u, 1u);
+
+        ulong candidateOffsetBytes = checked(
+            (ulong)producer.CandidateControlOffsetWords * sizeof(uint));
+        ulong candidateEndBytes = checked(
+            (ulong)producer.CandidateRecordOffsetWords * sizeof(uint) +
+            (ulong)producer.CandidateRecordCount *
+                producer.CandidateRecordStrideBytes);
+        Span<BufferMemoryBarrier2> scatterToFeedback =
+            stackalloc BufferMemoryBarrier2[2];
+        scatterToFeedback[0] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverGatherWorkBuffers[frameIndex],
+            _adaptiveReceiverGatherWorkBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        scatterToFeedback[1] = CreateAdaptiveReceiverBufferBarrier(
+            producer.CandidateBuffer,
+            candidateEndBytes - candidateOffsetBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+            candidateOffsetBytes);
+        ExecuteAdaptiveReceiverBarriers(commandBuffer, scatterToFeedback);
+
+        _context.Api.CmdBindPipeline(
+            commandBuffer,
+            PipelineBindPoint.Compute,
+            _adaptiveReceiverMissingFeedbackGatherPipeline);
+        BindAdaptiveReceiverDescriptors(commandBuffer, frameIndex);
+        PushAdaptiveReceiverConstants(commandBuffer, gatherPush);
+        _context.Api.CmdDispatchIndirect(
+            commandBuffer,
+            _bufferManager!.GetBuffer(
+                _adaptiveReceiverControlBuffers[frameIndex]),
+            SimpleDdgiReceiverCacheAdaptiveAbi
+                .MissingFeedbackIndirectByteOffset);
+
+        Span<BufferMemoryBarrier2> feedbackToConsumers =
+            stackalloc BufferMemoryBarrier2[3];
+        feedbackToConsumers[0] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverGatherBuffers[frameIndex],
+            _simpleDdgiReceiverGatherBufferBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit |
+                PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        feedbackToConsumers[1] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverGatherSurfaceBuffers[frameIndex],
+            _simpleDdgiReceiverGatherSurfaceBufferBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit |
+                PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        feedbackToConsumers[2] = CreateAdaptiveReceiverBufferBarrier(
+            producer.CandidateBuffer,
+            candidateEndBytes - candidateOffsetBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit,
+            candidateOffsetBytes);
+        ExecuteAdaptiveReceiverBarriers(
+            commandBuffer,
+            feedbackToConsumers);
+    }
+
     private bool SeedSimpleDdgiReceiverCacheAdaptiveHistory(
         CommandBuffer commandBuffer,
         int frameIndex,
@@ -1018,13 +1338,23 @@ public sealed unsafe partial class ForwardPlusPass
             return false;
         }
 
-        AdaptiveReceiverMemoryBarrier(
-            commandBuffer,
+        Span<BufferMemoryBarrier2> canonicalToSeed =
+            stackalloc BufferMemoryBarrier2[2];
+        canonicalToSeed[0] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverCacheBuffers[frameIndex],
+            _simpleDdgiReceiverCacheBufferBytes,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
             PipelineStageFlags2.ComputeShaderBit,
-            AccessFlags2.ShaderStorageReadBit |
-            AccessFlags2.ShaderStorageWriteBit);
+            AccessFlags2.ShaderStorageReadBit);
+        canonicalToSeed[1] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverCacheSurfaceBuffers[frameIndex],
+            _simpleDdgiReceiverCacheSurfaceBufferBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        ExecuteAdaptiveReceiverBarriers(commandBuffer, canonicalToSeed);
         _context.Api.CmdBindPipeline(
             commandBuffer,
             PipelineBindPoint.Compute,
@@ -1044,13 +1374,39 @@ public sealed unsafe partial class ForwardPlusPass
             SimpleDdgiReceiverCacheAdaptiveAbi.TileHeight(
                 _simpleDdgiReceiverCacheHeight),
             1u);
-        AdaptiveReceiverMemoryBarrier(
-            commandBuffer,
+        Span<BufferMemoryBarrier2> seedToConsumers =
+            stackalloc BufferMemoryBarrier2[4];
+        seedToConsumers[0] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverCacheBuffers[frameIndex],
+            _simpleDdgiReceiverCacheBufferBytes,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
             PipelineStageFlags2.ComputeShaderBit |
-            PipelineStageFlags2.FragmentShaderBit,
+                PipelineStageFlags2.FragmentShaderBit,
             AccessFlags2.ShaderStorageReadBit);
+        seedToConsumers[1] = CreateAdaptiveReceiverBufferBarrier(
+            _simpleDdgiReceiverCacheSurfaceBuffers[frameIndex],
+            _simpleDdgiReceiverCacheSurfaceBufferBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit |
+                PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        seedToConsumers[2] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverMetadataBuffers[frameIndex],
+            _adaptiveReceiverMetadataBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        seedToConsumers[3] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverTileScheduleBuffers[frameIndex],
+            _adaptiveReceiverTileScheduleBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        ExecuteAdaptiveReceiverBarriers(commandBuffer, seedToConsumers);
 
         _adaptiveReceiverHistorySerials[frameIndex] =
             sceneData.DdgiFrameSerial;
@@ -1071,12 +1427,15 @@ public sealed unsafe partial class ForwardPlusPass
         {
             return;
         }
-        AdaptiveReceiverMemoryBarrier(
+        ExecuteAdaptiveReceiverBarrier(
             commandBuffer,
-            PipelineStageFlags2.ComputeShaderBit,
-            AccessFlags2.ShaderStorageWriteBit,
-            PipelineStageFlags2.TransferBit,
-            AccessFlags2.TransferReadBit);
+            CreateAdaptiveReceiverBufferBarrier(
+                _adaptiveReceiverControlBuffers[frameIndex],
+                SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit));
         VkBuffer source = _bufferManager.GetBuffer(
             _adaptiveReceiverControlBuffers[frameIndex]);
         VkBuffer destination = _bufferManager.GetBuffer(
@@ -1093,12 +1452,15 @@ public sealed unsafe partial class ForwardPlusPass
             destination,
             1,
             &copy);
-        AdaptiveReceiverMemoryBarrier(
+        ExecuteAdaptiveReceiverBarrier(
             commandBuffer,
-            PipelineStageFlags2.TransferBit,
-            AccessFlags2.TransferWriteBit,
-            PipelineStageFlags2.HostBit,
-            AccessFlags2.HostReadBit);
+            CreateAdaptiveReceiverBufferBarrier(
+                _adaptiveReceiverReadbackBuffers[frameIndex],
+                SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.HostBit,
+                AccessFlags2.HostReadBit));
         _adaptiveReceiverReadbackRecorded[frameIndex] = true;
     }
 
@@ -1129,6 +1491,8 @@ public sealed unsafe partial class ForwardPlusPass
                 new SimpleDdgiReceiverCacheAdaptiveCounters(
                     1,
                     words[SimpleDdgiReceiverCacheAdaptiveAbi.GatherCountWord],
+                    words[SimpleDdgiReceiverCacheAdaptiveAbi
+                        .MissingFeedbackCountWord],
                     words[SimpleDdgiReceiverCacheAdaptiveAbi.ResolveCountWord],
                     words[SimpleDdgiReceiverCacheAdaptiveAbi.OverflowFlagsWord],
                     words[SimpleDdgiReceiverCacheAdaptiveAbi
@@ -1153,12 +1517,14 @@ public sealed unsafe partial class ForwardPlusPass
         DestroyHandleArray(_adaptiveReceiverResolveTileBuffers);
         DestroyHandleArray(_adaptiveReceiverControlBuffers);
         DestroyHandleArray(_adaptiveReceiverGatherStampBuffers);
+        DestroyHandleArray(_adaptiveReceiverMissingPrefixBuffers);
         DestroyHandleArray(_adaptiveReceiverReadbackBuffers);
         _adaptiveReceiverMetadataBytes = 0UL;
         _adaptiveReceiverTileScheduleBytes = 0UL;
         _adaptiveReceiverGatherWorkBytes = 0UL;
         _adaptiveReceiverResolveTileBytes = 0UL;
         _adaptiveReceiverGatherStampBytes = 0UL;
+        _adaptiveReceiverMissingPrefixBytes = 0UL;
         _adaptiveReceiverResourceGeneration = 0u;
         _adaptiveReceiverExecutedForCurrentView = false;
         InvalidateSimpleDdgiReceiverCacheAdaptiveHistory();
@@ -1167,6 +1533,10 @@ public sealed unsafe partial class ForwardPlusPass
             return;
 
         DestroyAdaptiveReceiverPipeline(ref _adaptiveReceiverResolvePipeline);
+        DestroyAdaptiveReceiverPipeline(
+            ref _adaptiveReceiverMissingFeedbackGatherPipeline);
+        DestroyAdaptiveReceiverPipeline(
+            ref _adaptiveReceiverFeedbackGatherPipeline);
         DestroyAdaptiveReceiverPipeline(ref _adaptiveReceiverGatherPipeline);
         DestroyAdaptiveReceiverPipeline(ref _adaptiveReceiverClassifyPipeline);
         if (_adaptiveReceiverPipelineLayout.Handle != 0)

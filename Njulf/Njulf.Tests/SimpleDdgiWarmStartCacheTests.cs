@@ -173,6 +173,37 @@ public sealed class SimpleDdgiWarmStartCacheTests
         });
     }
 
+    [Test]
+    public void WarmPrior_IsSingleShotPerPhysicalOwnershipAndNeverRearmsOnScroll()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldApplyPersistentWarmStartPrior(
+                    archiveReady: true,
+                    initialLiveWorkStarted: false,
+                    appliedPhysicalOwnershipGeneration: 0u,
+                    currentPhysicalOwnershipGeneration: 7u),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldApplyPersistentWarmStartPrior(
+                    archiveReady: true,
+                    initialLiveWorkStarted: false,
+                    appliedPhysicalOwnershipGeneration: 7u,
+                    currentPhysicalOwnershipGeneration: 7u),
+                Is.False,
+                "A logical toroidal scroll retains physical ownership.");
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldApplyPersistentWarmStartPrior(
+                    archiveReady: true,
+                    initialLiveWorkStarted: true,
+                    appliedPhysicalOwnershipGeneration: 0u,
+                    currentPhysicalOwnershipGeneration: 8u),
+                Is.False,
+                "A late archive must never overwrite live probe transactions.");
+        });
+    }
+
     private static bool TryDecode(
         byte[] encoded,
         SimpleDdgiWarmStartIdentity identity) =>

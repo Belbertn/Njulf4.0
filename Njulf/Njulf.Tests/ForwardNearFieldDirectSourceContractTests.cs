@@ -202,6 +202,45 @@ public sealed class ForwardNearFieldDirectSourceContractTests
     }
 
     [Test]
+    public void CacheRequiredHybridVariants_LockExclusiveOpaqueGiOwnership()
+    {
+        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string shaderProject = ReadRepoText(
+            "Njulf.Shaders", "Njulf.Shaders.csproj");
+        string spirvVerification = ReadRepoText(
+            "Njulf.Shaders", "VerifySimpleDdgiReceiverContract.ps1");
+        string normalizedForward = Regex.Replace(forward, @"\s+", " ");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Regex.Matches(
+                    shaderProject,
+                    "<NearFieldDirectSourceShaderVariant Include=\"forward_opaque[^\"]*cache_required_hybrid_reflection\\.frag\">")
+                    .Count,
+                Is.EqualTo(12));
+            Assert.That(
+                Regex.Matches(
+                    shaderProject,
+                    "-DFORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED=1")
+                    .Count,
+                Is.EqualTo(12));
+            Assert.That(forward, Does.Contain(
+                "#if FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED"));
+            Assert.That(normalizedForward, Does.Contain(
+                "receiverCompactDirectionalResolved || receiverCacheAccepted"));
+            Assert.That(normalizedForward, Does.Contain(
+                "!receiverCacheAccepted || !receiverCompactDirectionalResolved"));
+            Assert.That(spirvVerification, Does.Contain(
+                "$ownershipLockedReceiverCacheFragmentModuleNames"));
+            Assert.That(spirvVerification, Does.Contain(
+                "compact directional L2 bindless references"));
+            Assert.That(spirvVerification, Does.Contain(
+                "%(?:u?int)_178\\b"));
+        });
+    }
+
+    [Test]
     public void CombinedC4C5Variant_UsesFrozenFourAttachmentAbiAndEveryOpaqueFamily()
     {
         string forward = ReadRepoText("Njulf.Shaders", "forward.frag");

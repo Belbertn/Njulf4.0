@@ -109,6 +109,34 @@ public sealed class GiWarningEvaluatorTests
     }
 
     [Test]
+    public void Evaluate_CompatibleToroidalScrollRemainsObservableAsSteadyState()
+    {
+        var evaluator = new GiWarningEvaluator();
+        RendererDiagnostics black = CreateSteadyDiagnostics() with
+        {
+            DdgiForwardSimplePathSampleCount = 1_000,
+            DdgiForwardZeroFinalIndirectCount = 900,
+            DdgiForwardZeroDdgiAndZeroIblCount = 900
+        };
+
+        evaluator.Evaluate(black);
+        evaluator.Evaluate(black);
+        GiWarningEvaluationResult scroll = evaluator.Evaluate(black with
+        {
+            SimpleDdgiRecentered = 1,
+            SimpleDdgiAtlasPreservedOnRecenter = 1,
+            SimpleDdgiScrollCommittedCascadeCount = 1
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scroll.BlackFrame.TransientState, Is.False);
+            Assert.That(scroll.BlackFrame.ConsecutiveLargeAreaFrames, Is.EqualTo(3));
+            Assert.That(scroll.BlackFrame.LargeAreaBlackout, Is.True);
+        });
+    }
+
+    [Test]
     public void Evaluate_UnavailableCountersAreNotReportedAsHealthyZeros()
     {
         var evaluator = new GiWarningEvaluator();

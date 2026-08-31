@@ -6,101 +6,56 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+const uint EmitBucketCount = 6u;
+
+uint EmitBucketScratchWord(uint groupIndex, uint bucket)
+{
+    return pc.CandidateGroupLaneCountsOffsetWords +
+        groupIndex * EmitBucketCount + bucket;
+}
+
 void main()
 {
     if (gl_GlobalInvocationID.x != 0u)
         return;
 
-    // Reset leaves every consumer command at x=0.  An overflow is a failed
-    // transaction, not a partial schedule: do not publish any indirect work.
+    // Reset leaves every consumer command at x=0. An overflow is a failed
+    // transaction, not a partial schedule: do not publish indirect work.
     if (SchedulerArenaRead(
-            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW) != 0u)
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW) != 0u)
+    {
         return;
+    }
 
     uint accepted = min(
-        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
         SchedulerRequestCapacity());
-    if (SchedulerUrgentRelight())
+    uint groupCount = SchedulerGroupsFor(SchedulerRequestCapacity());
+    uint bucketOffset = 0u;
+
+    // Convert the fixed six counters per workgroup into stable exclusive
+    // prefixes. This scans O(6 * workgroups), rather than rereading every
+    // accepted update once for every bucket.
+    for (uint bucket = 0u; bucket < EmitBucketCount; bucket++)
     {
-        // Low byte is incremented only by successful CommitLocal invocations.
-        // The cap is 255, so that atomic cannot carry into the accepted byte.
-        uint telemetry = ((SchedulerFrame(12u) & 0xffffu) << 16u) |
-            (min(accepted, 255u) << 8u);
+        uint bucketCount = 0u;
+        for (uint group = 0u; group < groupCount; group++)
+        {
+            uint scratchWord = EmitBucketScratchWord(group, bucket);
+            uint groupBucketCount = SchedulerArenaRead(scratchWord);
+            SchedulerArenaWrite(scratchWord, bucketCount);
+            bucketCount += groupBucketCount;
+        }
+
         SchedulerArenaWrite(
             pc.CountersOffsetWords +
-                SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_TELEMETRY,
-            telemetry);
-    }
-    // Count the six fixed ray buckets in admission order.  This bounded linear
-    // pass keeps the queue order deterministic; atomic append order is never a
-    // scheduling tie-break.
-    for (uint bucket = 0u; bucket < 6u; bucket++)
-        SchedulerArenaWrite(
-            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket,
-            0u);
+                SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket,
+            bucketCount);
 
-    for (uint updateIndex = 0u; updateIndex < accepted; updateIndex++)
-    {
-        uint probeIndex;
-        uint volumeIndex;
-        uint flags;
-        uint metadata;
-        uint sourceRayCount;
-        uint sourceLightingGeneration;
-        SchedulerReadUpdate(updateIndex, probeIndex, volumeIndex, flags, metadata,
-            sourceRayCount, sourceLightingGeneration);
-        uint rayCount = clamp((flags & SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_MASK) >>
-            SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT,
-            1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
-        SchedulerWriteOutcome(
-            updateIndex,
-            probeIndex,
-            volumeIndex,
-            metadata & 0x00ffffffu,
-            sourceRayCount,
-            rayCount,
-            flags);
-        // The outcome starts with a zero completion mask. When an optional
-        // producer is not part of this transaction, emit records that explicit
-        // no-op completion on behalf of that absent producer; commit therefore
-        // never mistakes an uninitialized bit for a successful omission.
-        if (!SchedulerTransportV2())
-            SchedulerMarkOutcomeComplete(
-                updateIndex,
-                SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED);
-        if (!SchedulerSampledPublicationRequired() ||
-            SchedulerUrgentRelight())
-            SchedulerMarkOutcomeComplete(
-                updateIndex,
-                SIMPLE_DDGI_SCHEDULER_SAMPLED_PUBLISH_NOT_REQUIRED);
-        for (uint bucket = 0u; bucket < 6u; bucket++)
-        {
-            if (rayCount == SchedulerFrame(32u + bucket))
-            {
-                SchedulerArenaAtomicAdd(
-                    pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket,
-                    1u);
-                break;
-            }
-        }
-    }
-
-    uint bucketOffset = 0u;
-    for (uint bucket = 0u; bucket < 6u; bucket++)
-    {
         uint rayCount = SchedulerFrame(32u + bucket);
-        uint bucketCount = SchedulerArenaRead(
-            pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket);
-        uint commandBase = pc.RayBucketCommandsOffsetWords +
-            bucket * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_COMMAND_WORDS;
-        SchedulerArenaWrite(commandBase + 0u,
-            rayCount == 0u ? 0u : SchedulerGroupsFor(bucketCount * rayCount));
-        // This four-word prefix is read directly by vkCmdDispatchIndirect.
-        // Queue metadata must not occupy Y/Z: a bucket offset/count there
-        // would multiply the ray-query dispatch and can trigger a watchdog.
-        SchedulerArenaWrite(commandBase + 1u, 1u);
-        SchedulerArenaWrite(commandBase + 2u, 1u);
-        SchedulerArenaWrite(commandBase + 3u, 0u);
         uint metadataBase = pc.RayBucketMetadataOffsetWords +
             bucket * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS;
         SchedulerArenaWrite(metadataBase + 0u, bucketOffset);
@@ -110,56 +65,84 @@ void main()
         bucketOffset += bucketCount;
     }
 
-    // Stable bucket compaction into the canonical queue is performed only by
-    // resident mode. Mirror mode retains the exact GPU records in the arena so
-    // validation can inspect them without changing CPU rendering authority.
-    for (uint bucket = 0u; bucket < 6u; bucket++)
+    uint classifiedUnbucketed = SchedulerArenaRead(
+        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_UNBUCKETED);
+    uint derivedUnbucketed = accepted > bucketOffset
+        ? accepted - bucketOffset
+        : 0u;
+    uint unbucketed = max(classifiedUnbucketed, derivedUnbucketed);
+    SchedulerArenaWrite(
+        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_UNBUCKETED,
+        unbucketed);
+    if (unbucketed != 0u || bucketOffset != accepted)
     {
-        uint rayCount = SchedulerFrame(32u + bucket);
-        if (rayCount == 0u)
-            continue;
-        uint queueOffset = SchedulerArenaRead(
-            pc.RayBucketMetadataOffsetWords +
-            bucket * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS);
-        uint rank = 0u;
-        for (uint updateIndex = 0u; updateIndex < accepted; updateIndex++)
-        {
-            uint probeIndex;
-            uint volumeIndex;
-            uint flags;
-            uint metadata;
-            uint sourceRayCount;
-            uint sourceLightingGeneration;
-            SchedulerReadUpdate(updateIndex, probeIndex, volumeIndex, flags, metadata,
-                sourceRayCount, sourceLightingGeneration);
-            uint candidateRayCount = clamp((flags & SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_MASK) >>
-                SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT,
-                1u, SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
-            if (candidateRayCount != rayCount)
-                continue;
-            if (SchedulerGpuResident())
-                SchedulerCopyUpdateToQueue(updateIndex, queueOffset + rank);
-            rank++;
-        }
+        // Reset left every producer/consumer command inert. Export feedback so
+        // the host can name this exact fallback, but publish no queue consumer
+        // that could observe a stale tail record.
+        SchedulerArenaWrite(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_EMISSION_FAILURE,
+            1u);
+        SchedulerWriteIndirect(
+            SIMPLE_DDGI_SCHEDULER_DISPATCH_FEEDBACK,
+            1u,
+            1u,
+            1u);
+        return;
     }
 
-    // Trace and transport are consumed through the six per-ray-count bucket
-    // commands above. Their legacy aggregate slots are intentionally inert;
-    // putting an aggregate count there would reintroduce a second, divergent
-    // dispatch formula.
-    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_TRACE,
-        0u, 1u, 1u);
-    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_RELOCATE,
-        SchedulerGroupsFor(accepted), 1u, 1u);
-    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_TRANSPORT,
-        0u, 1u, 1u);
+    for (uint bucket = 0u; bucket < EmitBucketCount; bucket++)
+    {
+        uint metadataBase = pc.RayBucketMetadataOffsetWords +
+            bucket * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS;
+        uint bucketCount = SchedulerArenaRead(metadataBase + 1u);
+        uint rayCount = SchedulerArenaRead(metadataBase + 2u);
+        uint commandBase = pc.RayBucketCommandsOffsetWords +
+            bucket * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_COMMAND_WORDS;
+        SchedulerArenaWrite(
+            commandBase + 0u,
+            rayCount == 0u
+                ? 0u
+                : SchedulerGroupsFor(bucketCount * rayCount));
+        SchedulerArenaWrite(commandBase + 1u, 1u);
+        SchedulerArenaWrite(commandBase + 2u, 1u);
+        SchedulerArenaWrite(commandBase + 3u, 0u);
+    }
+
+    // Trace and transport consume the six per-ray-count bucket commands.
+    // Their legacy aggregate slots stay inert to avoid a divergent formula.
+    SchedulerWriteIndirect(
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_TRACE,
+        0u,
+        1u,
+        1u);
+    SchedulerWriteIndirect(
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_RELOCATE,
+        SchedulerGroupsFor(accepted),
+        1u,
+        1u);
+    SchedulerWriteIndirect(
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_TRANSPORT,
+        0u,
+        1u,
+        1u);
     SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_BLEND,
         accepted, 1u, 1u);
     SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_PUBLISH,
         accepted, 1u, 1u);
-    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMMIT_LOCAL,
-        SchedulerGroupsFor(accepted), 1u, 1u);
-    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMMIT_PROPAGATION,
-        SchedulerGroupsFor(accepted), 1u, 1u);
-    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_FEEDBACK, 1u, 1u, 1u);
+    SchedulerWriteIndirect(
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_COMMIT_LOCAL,
+        SchedulerGroupsFor(accepted),
+        1u,
+        1u);
+    SchedulerWriteIndirect(
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_COMMIT_PROPAGATION,
+        SchedulerGroupsFor(accepted),
+        1u,
+        1u);
+    SchedulerWriteIndirect(
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_FEEDBACK,
+        1u,
+        1u,
+        1u);
 }

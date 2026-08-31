@@ -66,6 +66,45 @@ public readonly record struct SimpleDdgiReceiverContributionEvidence(
     public bool HasReflections => (ConsumerMask & (1u << 31)) != 0u;
 }
 
+public readonly record struct SimpleDdgiScrollCohortEvidence(
+    uint UnbucketedUpdateCount,
+    uint FailureReasonBits,
+    uint ExpectedCount,
+    uint AcceptedCount,
+    uint TracedCount,
+    uint CommittedCount)
+{
+    public SimpleDdgiScrollCohortFailureReason FailureReason =>
+        (SimpleDdgiScrollCohortFailureReason)FailureReasonBits;
+
+    public bool IsComplete =>
+        FailureReason == SimpleDdgiScrollCohortFailureReason.None &&
+        UnbucketedUpdateCount == 0u &&
+        ExpectedCount == AcceptedCount &&
+        AcceptedCount == TracedCount &&
+        TracedCount == CommittedCount;
+}
+
+public readonly record struct SimpleDdgiRingRebaseEvidence(
+    uint NearPacked,
+    uint MidPacked,
+    uint FarPacked)
+{
+    public uint GetPacked(int ringIndex) => ringIndex switch
+    {
+        0 => NearPacked,
+        1 => MidPacked,
+        2 => FarPacked,
+        _ => throw new ArgumentOutOfRangeException(nameof(ringIndex))
+    };
+
+    public uint PendingProbeCount(int ringIndex) =>
+        GetPacked(ringIndex) & 0xffffu;
+
+    public uint TransactionSerialLow(int ringIndex) =>
+        GetPacked(ringIndex) >> 16;
+}
+
 /// <summary>
 /// Owns the resident Simple-DDGI scheduler arena and its delayed, bounded
 /// feedback channel.  The class intentionally contains no CPU queue or
@@ -128,6 +167,8 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     private SimpleDdgiUrgentRelightEvidence _lastUrgentRelightEvidence;
     private SimpleDdgiAdaptiveRayEvidence _lastAdaptiveRayEvidence;
     private uint _lastFeedbackTransportTopologyGeneration;
+    private SimpleDdgiScrollCohortEvidence _lastScrollCohortEvidence;
+    private SimpleDdgiRingRebaseEvidence _lastRingRebaseEvidence;
     private ulong _currentPolicyHash;
     private ulong _previousPolicyHash;
     private bool _policiesInitialized;
@@ -230,6 +271,22 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         {
             lock (_lock)
                 return _lastReceiverContributionEvidence;
+        }
+    }
+    public SimpleDdgiScrollCohortEvidence LastScrollCohortEvidence
+    {
+        get
+        {
+            lock (_lock)
+                return _lastScrollCohortEvidence;
+        }
+    }
+    public SimpleDdgiRingRebaseEvidence LastRingRebaseEvidence
+    {
+        get
+        {
+            lock (_lock)
+                return _lastRingRebaseEvidence;
         }
     }
     public SimpleDdgiAdaptiveRayEvidence LastAdaptiveRayEvidence
@@ -1078,6 +1135,25 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
             _lastFeedbackTransportTopologyGeneration = feedbackWords[
                 SimpleDdgiSchedulerAbi
                     .FeedbackTransportTopologyGenerationOffsetWords];
+            _lastScrollCohortEvidence = new(
+                feedbackWords[
+                    SimpleDdgiSchedulerAbi.FeedbackUnbucketedUpdateOffsetWords],
+                feedbackWords[
+                    SimpleDdgiSchedulerAbi.FeedbackScrollCohortFailureOffsetWords],
+                feedbackWords[
+                    SimpleDdgiSchedulerAbi.FeedbackScrollExpectedOffsetWords],
+                feedbackWords[
+                    SimpleDdgiSchedulerAbi.FeedbackScrollAcceptedOffsetWords],
+                feedbackWords[
+                    SimpleDdgiSchedulerAbi.FeedbackScrollTracedOffsetWords],
+                feedbackWords[
+                    SimpleDdgiSchedulerAbi.FeedbackScrollCommittedOffsetWords]);
+            int rebaseRingBase =
+                SimpleDdgiSchedulerAbi.FeedbackRebaseRingOffsetWords;
+            _lastRingRebaseEvidence = new(
+                feedbackWords[rebaseRingBase + 0],
+                feedbackWords[rebaseRingBase + 1],
+                feedbackWords[rebaseRingBase + 2]);
             int savedRingBase =
                 SimpleDdgiSchedulerAbi.FeedbackAdaptiveSavedRayRingOffsetWords;
             int errorRingBase =

@@ -22,6 +22,7 @@ namespace Njulf.Rendering.Core
         private Image[] _images = Array.Empty<Image>();
         private ImageView[] _imageViews = Array.Empty<ImageView>();
         private SurfaceFormatKHR _surfaceFormat;
+        private PresentModeKHR _presentMode;
         private Extent2D _extent;
         
         // Depth resources
@@ -44,6 +45,7 @@ namespace Njulf.Rendering.Core
         public ImageView[] ImageViews => _imageViews;
         public Extent2D Extent => _extent;
         public Format SurfaceFormat => _surfaceFormat.Format;
+        public PresentModeKHR PresentMode => _presentMode;
         public Image[] Images => _images;
         public Format DepthFormat => _depthFormat;
         public Image DepthImage => _depthImage;
@@ -150,7 +152,9 @@ namespace Njulf.Rendering.Core
                 _context.KhrSurface.GetPhysicalDeviceSurfacePresentModes(
                     _context.PhysicalDevice, _surface, &presentModeCount, modesPtr);
             
-            PresentModeKHR presentMode = ChooseSwapPresentMode(presentModes);
+            PresentModeKHR presentMode = ChooseSwapPresentMode(
+                presentModes,
+                _window.VSync);
             
             _extent = extent;
             
@@ -190,6 +194,7 @@ namespace Njulf.Rendering.Core
                 _context.Device, &swapchainCreateInfo, null, out _swapchain);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create swapchain", result);
+            _presentMode = presentMode;
             _context.SetDebugName(_swapchain.Handle, ObjectType.SwapchainKhr, "Main Swapchain");
             
             // Get swapchain images
@@ -224,7 +229,10 @@ namespace Njulf.Rendering.Core
             if (_resourceGeneration == 0)
                 _resourceGeneration = 1;
 
-            System.Diagnostics.Debug.WriteLine($"Swapchain created with {actualImageCount} images ({_extent.Width}x{_extent.Height}).");
+            System.Diagnostics.Debug.WriteLine(
+                $"Swapchain created with {actualImageCount} images " +
+                $"({_extent.Width}x{_extent.Height}), presentMode={_presentMode}, " +
+                $"vsync={_window.VSync}.");
         }
         
         private SurfaceFormatKHR ChooseSwapSurfaceFormat(SurfaceFormatKHR[] availableFormats)
@@ -250,21 +258,44 @@ namespace Njulf.Rendering.Core
             return availableFormats[0];
         }
         
-        private PresentModeKHR ChooseSwapPresentMode(PresentModeKHR[] availablePresentModes)
+        internal static PresentModeKHR ChooseSwapPresentMode(
+            ReadOnlySpan<PresentModeKHR> availablePresentModes,
+            bool vSync)
         {
-            foreach (var availablePresentMode in availablePresentModes)
+            if (availablePresentModes.IsEmpty)
             {
-                if (availablePresentMode == PresentModeKHR.MailboxKhr)
-                    return availablePresentMode;
+                throw new ArgumentException(
+                    "At least one Vulkan present mode must be available.",
+                    nameof(availablePresentModes));
             }
-            
-            foreach (var availablePresentMode in availablePresentModes)
+
+            ReadOnlySpan<PresentModeKHR> preferences = vSync
+                ?
+                [
+                    PresentModeKHR.FifoKhr,
+                    PresentModeKHR.MailboxKhr,
+                    PresentModeKHR.FifoRelaxedKhr
+                ]
+                :
+                [
+                    PresentModeKHR.ImmediateKhr,
+                    PresentModeKHR.MailboxKhr,
+                    PresentModeKHR.FifoRelaxedKhr,
+                    PresentModeKHR.FifoKhr
+                ];
+            foreach (PresentModeKHR preferred in preferences)
             {
-                if (availablePresentMode == PresentModeKHR.FifoKhr)
-                    return availablePresentMode;
+                foreach (PresentModeKHR available in availablePresentModes)
+                {
+                    if (available == preferred)
+                        return available;
+                }
             }
-            
-            return PresentModeKHR.ImmediateKhr;
+
+            // FIFO is mandatory on conformant Vulkan implementations, but a
+            // defensive fallback keeps the policy deterministic for mocked or
+            // incomplete capability lists.
+            return availablePresentModes[0];
         }
         
         private static Extent2D ChooseSwapExtent(IWindow window, SurfaceCapabilitiesKHR capabilities)

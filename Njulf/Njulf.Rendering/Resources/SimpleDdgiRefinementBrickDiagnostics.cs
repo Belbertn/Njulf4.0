@@ -17,4 +17,13 @@ public readonly record struct SimpleDdgiRefinementBrickDiagnostics(
     /// its bounded publication handoff.
     /// </summary>
     public float ReceiverBlendWeight { get; init; }
+
+    /// <summary>
+    /// Bit <c>n</c> is set when refinement slot <c>n</c> changed physical
+    /// ownership this frame and must independently rebuild receiver authority.
+    /// </summary>
+    public uint ChangedSlotMask { get; init; }
+
+    /// <summary>Bit mask of refinement slots currently backed by a live brick.</summary>
+    public uint ActiveSlotMask { get; init; }
 }

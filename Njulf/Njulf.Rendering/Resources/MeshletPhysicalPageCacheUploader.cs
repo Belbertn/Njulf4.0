@@ -49,10 +49,47 @@ public sealed record MeshletPhysicalPageCacheSnapshot(
     long UnpublishedMappingCount,
     MeshletPhysicalBankSnapshot Banks);
 
-internal sealed record MeshletPhysicalFrameStateSnapshot(
-    GPUMeshletPageTableEntry[] PageTable,
-    uint[] RangeStateWords,
-    ulong RangeStateRevision);
+internal sealed class MeshletPhysicalFrameStateSnapshot
+{
+    private readonly Dictionary<int, CapturedPackedPage> _packedPages;
+
+    public MeshletPhysicalFrameStateSnapshot(
+        GPUMeshletPageTableEntry[] pageTable,
+        uint[] rangeStateWords,
+        ulong rangeStateRevision,
+        Dictionary<int, CapturedPackedPage> packedPages)
+    {
+        PageTable = pageTable;
+        RangeStateWords = rangeStateWords;
+        RangeStateRevision = rangeStateRevision;
+        _packedPages = packedPages;
+    }
+
+    public GPUMeshletPageTableEntry[] PageTable { get; }
+    public uint[] RangeStateWords { get; }
+    public ulong RangeStateRevision { get; }
+
+    public ReadOnlyMemory<byte> GetPackedPage(
+        int globalPageId,
+        int physicalSlot)
+    {
+        if (!_packedPages.TryGetValue(
+                globalPageId,
+                out CapturedPackedPage page))
+        {
+            throw new ArgumentOutOfRangeException(nameof(globalPageId));
+        }
+        if (page.PhysicalSlot != physicalSlot)
+        {
+            throw new ArgumentOutOfRangeException(nameof(physicalSlot));
+        }
+        return page.PageBytes;
+    }
+
+    internal readonly record struct CapturedPackedPage(
+        int PhysicalSlot,
+        ReadOnlyMemory<byte> PageBytes);
+}
 
 /// <summary>
 /// Backend-neutral physical cache implementation used by tests and by Vulkan
@@ -327,10 +364,10 @@ public sealed class MeshletPhysicalPageCacheUploader :
     }
 
     /// <summary>
-    /// Captures the page table and whole-range readiness under one lock and
-    /// publishes the exact range snapshot that the current command buffer will
-    /// consume. CPU submission must resolve against this recorded snapshot,
-    /// not against worker mutations that occur later in the frame.
+    /// Captures the page table, its referenced packed pages, and whole-range
+    /// readiness under one lock and publishes the exact state that the current
+    /// command buffer will consume. CPU submission must resolve against this
+    /// recorded snapshot, not against worker mutations later in the frame.
     /// </summary>
     internal MeshletPhysicalFrameStateSnapshot
         CaptureFrameStateForRecording(int frameSlot)
@@ -341,6 +378,9 @@ public sealed class MeshletPhysicalPageCacheUploader :
             ThrowIfDisposedNoLock();
             GPUMeshletPageTableEntry[] pageTable =
                 CapturePageTableNoLock(frameSlot);
+            Dictionary<int, MeshletPhysicalFrameStateSnapshot.CapturedPackedPage>
+                packedPages =
+                CapturePackedPagesNoLock(pageTable);
             uint[] rangeState = CaptureRangeStateWordsNoLock(frameSlot);
             ulong revision = _rangeStateRevisions[frameSlot];
             _recordedRangeStateWords[frameSlot] = rangeState;
@@ -348,7 +388,8 @@ public sealed class MeshletPhysicalPageCacheUploader :
             return new MeshletPhysicalFrameStateSnapshot(
                 pageTable,
                 rangeState,
-                revision);
+                revision,
+                packedPages);
         }
     }
 
@@ -375,6 +416,18 @@ public sealed class MeshletPhysicalPageCacheUploader :
             return wordIndex < words.Length &&
                 (words[wordIndex] &
                  (1u << (int)(rangeIndex & 31u))) != 0u;
+        }
+    }
+
+    internal void ReplaceRecordedRangeState(
+        int frameSlot,
+        ReadOnlySpan<uint> rangeStateWords)
+    {
+        ValidateFrameSlot(frameSlot);
+        lock (_lock)
+        {
+            ThrowIfDisposedNoLock();
+            _recordedRangeStateWords[frameSlot] = rangeStateWords.ToArray();
         }
     }
 
@@ -672,6 +725,42 @@ public sealed class MeshletPhysicalPageCacheUploader :
                  _pageTables[frameSlot])
         {
             result[pageId] = entry;
+        }
+        return result;
+    }
+
+    private Dictionary<int, MeshletPhysicalFrameStateSnapshot.CapturedPackedPage>
+        CapturePackedPagesNoLock(
+        ReadOnlySpan<GPUMeshletPageTableEntry> pageTable)
+    {
+        var result = new Dictionary<
+            int,
+            MeshletPhysicalFrameStateSnapshot.CapturedPackedPage>();
+        for (int pageId = 0; pageId < pageTable.Length; pageId++)
+        {
+            GPUMeshletPageTableEntry entry = pageTable[pageId];
+            if (!entry.IsResident ||
+                entry.BankIndex >= MeshletPhysicalBankAllocator.MaximumBankCount ||
+                entry.PageIndexInBank >= MeshletPhysicalBankAllocator.PagesPerBank)
+            {
+                continue;
+            }
+
+            int physicalSlot = checked(
+                (int)entry.BankIndex *
+                    MeshletPhysicalBankAllocator.PagesPerBank +
+                (int)entry.PageIndexInBank);
+            if (!_packedSlots.TryGetValue(physicalSlot, out PackedSlot packed) ||
+                packed.PageId != pageId)
+            {
+                continue;
+            }
+
+            result.Add(
+                pageId,
+                new MeshletPhysicalFrameStateSnapshot.CapturedPackedPage(
+                    physicalSlot,
+                    packed.PageBytes));
         }
         return result;
     }

@@ -19,6 +19,15 @@ public sealed record VulkanMeshletPhysicalResidencySnapshot(
     long CompletedDemandKeyCount,
     long DemandOverflowCount,
     long InvalidShaderMappingCount,
+    uint LastCompletedFrameInvalidShaderMappingCount,
+    long InvalidShaderMissingPageMappingCount,
+    long InvalidShaderPageHeaderCount,
+    long InvalidShaderRecordBoundsCount,
+    long InvalidShaderLocalAddressCount,
+    long InvalidShaderResolvedMappingCount,
+    long RangePublicationMismatchCount,
+    ulong LastCompletedFeedbackFrameSerial,
+    int LastCompletedFeedbackFrameSlot,
     string LatestFailure);
 
 /// <summary>
@@ -30,18 +39,22 @@ public sealed record VulkanMeshletPhysicalResidencySnapshot(
 public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
 {
     private const ulong MinimumStorageBufferBytes = 16;
-    private const ulong FeedbackCounterBytes = 16;
+    private const ulong FeedbackCounterBytes = 48;
     private const int FrameCount = 2;
     private const int DemandHeaderWordCount = 4;
     private const int FeedbackOverflowWord = 0;
     private const int FeedbackAcceptedDemandWord = 1;
     private const int FeedbackInvalidMappingWord = 2;
+    private const int FeedbackInvalidMappingMissingPageWord = 4;
+    private const int FeedbackInvalidMappingPageHeaderWord = 5;
+    private const int FeedbackInvalidMappingRecordBoundsWord = 6;
+    private const int FeedbackInvalidMappingLocalAddressWord = 7;
+    private const int FeedbackInvalidMappingResolvedWord = 8;
 
     private static readonly PipelineStageFlags2 ConsumerStages =
         PipelineStageFlags2.ComputeShaderBit |
         PipelineStageFlags2.TaskShaderBitExt |
-        PipelineStageFlags2.MeshShaderBitExt |
-        PipelineStageFlags2.FragmentShaderBit;
+        PipelineStageFlags2.MeshShaderBitExt;
 
     private readonly VulkanContext _context;
     private readonly BufferManager _bufferManager;
@@ -57,6 +70,9 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
     private readonly BufferHandle[] _rangeStates =
         [BufferHandle.Invalid, BufferHandle.Invalid];
     private readonly ulong[] _rangeStateBytes = new ulong[FrameCount];
+    private readonly BufferHandle[] _resolvedMappings =
+        [BufferHandle.Invalid, BufferHandle.Invalid];
+    private readonly ulong[] _resolvedMappingBytes = new ulong[FrameCount];
     private readonly BufferHandle[] _demandBuffers =
         [BufferHandle.Invalid, BufferHandle.Invalid];
     private readonly ulong[] _demandBufferBytes = new ulong[FrameCount];
@@ -67,11 +83,13 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
     private readonly BufferHandle[] _feedbackReadbackBuffers =
         [BufferHandle.Invalid, BufferHandle.Invalid];
     private readonly bool[] _readbackRecorded = new bool[FrameCount];
+    private readonly ulong[] _feedbackFrameSerials = new ulong[FrameCount];
     private readonly BufferHandle[] _banks =
         new BufferHandle[MeshletPhysicalBankAllocator.MaximumBankCount];
     private readonly List<BufferHandle> _immediateRetirements = [];
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly object _tickLock = new();
+    private readonly MeshletResolvedMappingTable _resolvedMappingTable = new();
 
     private BufferHandle _virtualMappings = BufferHandle.Invalid;
     private ulong _virtualMappingBytes;
@@ -85,6 +103,15 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
     private long _completedDemandKeyCount;
     private long _demandOverflowCount;
     private long _invalidShaderMappingCount;
+    private long _invalidShaderMissingPageMappingCount;
+    private long _invalidShaderPageHeaderCount;
+    private long _invalidShaderRecordBoundsCount;
+    private long _invalidShaderLocalAddressCount;
+    private long _invalidShaderResolvedMappingCount;
+    private long _rangePublicationMismatchCount;
+    private uint _lastCompletedFrameInvalidShaderMappingCount;
+    private ulong _lastCompletedFeedbackFrameSerial;
+    private int _lastCompletedFeedbackFrameSlot = -1;
     private ulong _lastRecordedUploadBytes;
     private int _streamingRangeCount;
     private string _latestFailure = string.Empty;
@@ -146,6 +173,15 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
             RegisterBuffer(
                 BindlessIndex.MeshletStreamingRangeStateBufferBase + frame,
                 _rangeStates[frame],
+                MinimumStorageBufferBytes);
+
+            _resolvedMappings[frame] = CreateStorageBuffer(
+                MinimumStorageBufferBytes,
+                $"Meshlet Resolved Mapping Table [{frame}]");
+            _resolvedMappingBytes[frame] = MinimumStorageBufferBytes;
+            RegisterBuffer(
+                BindlessIndex.MeshletResolvedMappingBufferBase + frame,
+                _resolvedMappings[frame],
                 MinimumStorageBufferBytes);
 
             ulong demandBytes = CalculateDemandBufferBytes(
@@ -249,6 +285,7 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
         ValidateFrame(frameSlot);
 
         var writtenBuffers = new HashSet<BufferHandle>();
+        var physicalPageWriteRanges = new List<BufferWriteRange>();
         ulong recordedBytes = 0;
         IReadOnlyList<MeshletPackedPageUpload> uploads =
             _uploader.CaptureUnrecordedUploads();
@@ -276,7 +313,10 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
                     upload.GlobalPageId,
                     upload.PhysicalSlot,
                     SaturatingAdd(submissionSerial, 1));
-                writtenBuffers.Add(bank);
+                physicalPageWriteRanges.Add(new BufferWriteRange(
+                    bank,
+                    destinationOffset,
+                    checked((ulong)upload.PageBytes.Length)));
                 recordedBytes = checked(
                     recordedBytes + (ulong)upload.PageBytes.Length);
                 Interlocked.Increment(ref _recordedPageCount);
@@ -292,6 +332,31 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
                 _latestFailure =
                     $"physical-page-record:{ex.GetType().Name}:{ex.Message}";
                 Interlocked.Increment(ref _failedPageRecordCount);
+            }
+        }
+
+        if (_uploader.TryCaptureImmutableContracts(
+                out GPUMeshletVirtualMapping[] mappings,
+                out GPUMeshletStreamingRange[] ranges,
+                out ulong contractRevision))
+        {
+            try
+            {
+                UploadImmutableContracts(
+                    commandBuffer,
+                    mappings,
+                    ranges,
+                    immutableRetirementFence,
+                    writtenBuffers);
+                _resolvedMappingTable.SetContracts(mappings, ranges);
+                _uploader.MarkImmutableContractsRecorded(
+                    contractRevision,
+                    SaturatingAdd(submissionSerial, 1));
+            }
+            catch
+            {
+                _uploader.RestoreImmutableContractsDirty();
+                throw;
             }
         }
 
@@ -322,7 +387,70 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
         }
         writtenBuffers.Add(_pageTables[frameSlot]);
 
-        uint[] rangeState = frameState.RangeStateWords;
+        MeshletResolvedMappingUpdate resolvedUpdate =
+            _resolvedMappingTable.Update(
+                frameSlot,
+                pageTable,
+                frameState.RangeStateWords,
+                frameState.GetPackedPage);
+        uint[] rangeState = resolvedUpdate.PublishedRangeStateWords;
+        if (resolvedUpdate.InvalidReadyRanges.Count != 0)
+        {
+            foreach (int invalidRange in resolvedUpdate.InvalidReadyRanges)
+                _uploader.SetRangeReady(invalidRange, ready: false);
+            _uploader.ReplaceRecordedRangeState(frameSlot, rangeState);
+            Interlocked.Add(
+                ref _rangePublicationMismatchCount,
+                resolvedUpdate.InvalidReadyRanges.Count);
+            _latestFailure =
+                $"range-publication:{resolvedUpdate.InvalidReadyRanges.Count} ready ranges lacked complete resolved mappings";
+        }
+
+        ulong requiredResolvedMappingBytes = Math.Max(
+            MinimumStorageBufferBytes,
+            checked((ulong)Math.Max(1, resolvedUpdate.Mappings.Length) *
+                (ulong)Marshal.SizeOf<GPUMeshletResolvedMapping>()));
+        BufferHandle previousResolvedMapping = _resolvedMappings[frameSlot];
+        EnsureResizableBuffer(
+            ref _resolvedMappings[frameSlot],
+            ref _resolvedMappingBytes[frameSlot],
+            requiredResolvedMappingBytes,
+            BindlessIndex.MeshletResolvedMappingBufferBase + frameSlot,
+            $"Meshlet Resolved Mapping Table [{frameSlot}]",
+            immutableRetirementFence);
+        bool resolvedMappingReplaced =
+            previousResolvedMapping != _resolvedMappings[frameSlot];
+        if (resolvedMappingReplaced)
+        {
+            Fill(
+                commandBuffer,
+                _resolvedMappings[frameSlot],
+                _resolvedMappingBytes[frameSlot],
+                uint.MaxValue);
+            writtenBuffers.Add(_resolvedMappings[frameSlot]);
+        }
+        foreach (MeshletResolvedMappingDirtyRange dirtyRange in
+                 resolvedUpdate.DirtyRanges)
+        {
+            ReadOnlySpan<GPUMeshletResolvedMapping> dirtyMappings =
+                resolvedUpdate.Mappings.AsSpan(
+                    dirtyRange.FirstMapping,
+                    dirtyRange.MappingCount);
+            GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                _stagingRing,
+                commandBuffer,
+                _resolvedMappings[frameSlot],
+                dirtyMappings,
+                checked((ulong)dirtyRange.FirstMapping *
+                    (ulong)Marshal.SizeOf<GPUMeshletResolvedMapping>()));
+            recordedBytes = checked(
+                recordedBytes +
+                (ulong)dirtyRange.MappingCount *
+                (ulong)Marshal.SizeOf<GPUMeshletResolvedMapping>());
+            writtenBuffers.Add(_resolvedMappings[frameSlot]);
+        }
         ulong requiredRangeStateBytes = Math.Max(
             MinimumStorageBufferBytes,
             checked((ulong)Math.Max(1, rangeState.Length) * sizeof(uint)));
@@ -346,30 +474,6 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
         }
         writtenBuffers.Add(_rangeStates[frameSlot]);
 
-        if (_uploader.TryCaptureImmutableContracts(
-                out GPUMeshletVirtualMapping[] mappings,
-                out GPUMeshletStreamingRange[] ranges,
-                out ulong contractRevision))
-        {
-            try
-            {
-                UploadImmutableContracts(
-                    commandBuffer,
-                    mappings,
-                    ranges,
-                    immutableRetirementFence,
-                    writtenBuffers);
-                _uploader.MarkImmutableContractsRecorded(
-                    contractRevision,
-                    SaturatingAdd(submissionSerial, 1));
-            }
-            catch
-            {
-                _uploader.RestoreImmutableContractsDirty();
-                throw;
-            }
-        }
-
         FillZero(
             commandBuffer,
             _demandBuffers[frameSlot],
@@ -392,20 +496,46 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
             commandBuffer,
             _feedbackBuffers[frameSlot],
             FeedbackCounterBytes);
+        _feedbackFrameSerials[frameSlot] = submissionSerial;
         writtenBuffers.Add(_demandBuffers[frameSlot]);
         writtenBuffers.Add(_feedbackBuffers[frameSlot]);
 
-        BufferMemoryBarrier2[] barriers = writtenBuffers
-            .Select(handle => BarrierBuilder.BufferBarrier(
+        var barriers = new List<BufferMemoryBarrier2>(
+            writtenBuffers.Count + physicalPageWriteRanges.Count);
+        foreach (BufferHandle handle in writtenBuffers)
+        {
+            bool shaderWritable =
+                handle.Equals(_demandBuffers[frameSlot]) ||
+                handle.Equals(_feedbackBuffers[frameSlot]);
+            barriers.Add(BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(handle),
                 PipelineStageFlags2.TransferBit,
                 AccessFlags2.TransferWriteBit,
                 ConsumerStages,
                 AccessFlags2.ShaderStorageReadBit |
-                AccessFlags2.ShaderStorageWriteBit))
-            .ToArray();
-        if (barriers.Length != 0)
-            BarrierBuilder.ExecuteBarrier(commandBuffer, bufferBarriers: barriers);
+                (shaderWritable
+                    ? AccessFlags2.ShaderStorageWriteBit
+                    : AccessFlags2.None),
+                0,
+                _bufferManager.GetBufferSize(handle)));
+        }
+        foreach (BufferWriteRange range in physicalPageWriteRanges)
+        {
+            barriers.Add(BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(range.Buffer),
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                ConsumerStages,
+                AccessFlags2.ShaderStorageReadBit,
+                range.Offset,
+                range.Size));
+        }
+        if (barriers.Count != 0)
+        {
+            BarrierBuilder.ExecuteBarrier(
+                commandBuffer,
+                bufferBarriers: barriers.ToArray());
+        }
         _lastRecordedUploadBytes = recordedBytes;
     }
 
@@ -468,6 +598,11 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
         }
         writtenBuffers.Add(_streamingRanges);
     }
+
+    private readonly record struct BufferWriteRange(
+        BufferHandle Buffer,
+        ulong Offset,
+        ulong Size);
 
     private void EnsureDemandBuffers(
         int rangeCount,
@@ -641,6 +776,26 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
         Interlocked.Add(
             ref _invalidShaderMappingCount,
             feedbackWords[FeedbackInvalidMappingWord]);
+        _lastCompletedFrameInvalidShaderMappingCount =
+            feedbackWords[FeedbackInvalidMappingWord];
+        Interlocked.Add(
+            ref _invalidShaderMissingPageMappingCount,
+            feedbackWords[FeedbackInvalidMappingMissingPageWord]);
+        Interlocked.Add(
+            ref _invalidShaderPageHeaderCount,
+            feedbackWords[FeedbackInvalidMappingPageHeaderWord]);
+        Interlocked.Add(
+            ref _invalidShaderRecordBoundsCount,
+            feedbackWords[FeedbackInvalidMappingRecordBoundsWord]);
+        Interlocked.Add(
+            ref _invalidShaderLocalAddressCount,
+            feedbackWords[FeedbackInvalidMappingLocalAddressWord]);
+        Interlocked.Add(
+            ref _invalidShaderResolvedMappingCount,
+            feedbackWords[FeedbackInvalidMappingResolvedWord]);
+        _lastCompletedFeedbackFrameSerial =
+            _feedbackFrameSerials[frameSlot];
+        _lastCompletedFeedbackFrameSlot = frameSlot;
         _readbackRecorded[frameSlot] = false;
     }
 
@@ -738,12 +893,21 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
         BufferHandle handle,
         ulong bytes)
     {
+        Fill(commandBuffer, handle, bytes, 0u);
+    }
+
+    private void Fill(
+        CommandBuffer commandBuffer,
+        BufferHandle handle,
+        ulong bytes,
+        uint value)
+    {
         _context.Api.CmdFillBuffer(
             commandBuffer,
             _bufferManager.GetBuffer(handle),
             0,
             bytes,
-            0);
+            value);
     }
 
     private void Retire(BufferHandle handle, Fence fence)
@@ -772,6 +936,15 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
             Interlocked.Read(ref _completedDemandKeyCount),
             Interlocked.Read(ref _demandOverflowCount),
             Interlocked.Read(ref _invalidShaderMappingCount),
+            _lastCompletedFrameInvalidShaderMappingCount,
+            Interlocked.Read(ref _invalidShaderMissingPageMappingCount),
+            Interlocked.Read(ref _invalidShaderPageHeaderCount),
+            Interlocked.Read(ref _invalidShaderRecordBoundsCount),
+            Interlocked.Read(ref _invalidShaderLocalAddressCount),
+            Interlocked.Read(ref _invalidShaderResolvedMappingCount),
+            Interlocked.Read(ref _rangePublicationMismatchCount),
+            _lastCompletedFeedbackFrameSerial,
+            _lastCompletedFeedbackFrameSlot,
             _latestFailure);
     }
 
@@ -844,6 +1017,8 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
         foreach (BufferHandle handle in _pageTables)
             Destroy(handle);
         foreach (BufferHandle handle in _rangeStates)
+            Destroy(handle);
+        foreach (BufferHandle handle in _resolvedMappings)
             Destroy(handle);
         foreach (BufferHandle handle in _demandBuffers)
             Destroy(handle);

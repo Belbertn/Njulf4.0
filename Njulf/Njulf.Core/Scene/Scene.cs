@@ -33,6 +33,7 @@ namespace Njulf.Core.Scene
         private bool _disposeInProgress;
         private bool _disposed;
         private uint _reflectionProbeRevision;
+        private uint _volumetricDensityRevision;
         private ulong _mutationSerial;
         private ulong _renderPayloadRevision;
         private Color _ambientLight = new(0.2f, 0.2f, 0.2f, 1f);
@@ -83,6 +84,11 @@ namespace Njulf.Core.Scene
         public IReadOnlyList<IUpdateable> Updateables => _readOnlyUpdateables;
         public IReadOnlyList<ReflectionProbe> ReflectionProbes => _readOnlyReflectionProbes;
         public uint ReflectionProbeRevision => _reflectionProbeRevision;
+        /// <summary>
+        /// O(1) invalidation token for the enabled/order-sensitive local
+        /// volumetric-density list consumed by the renderer.
+        /// </summary>
+        public uint VolumetricDensityRevision => _volumetricDensityRevision;
         public IReadOnlyList<GlobalIlluminationProbeVolume> GlobalIlluminationProbeVolumes => _readOnlyGlobalIlluminationProbeVolumes;
         public IReadOnlyList<VolumetricDensityVolume> VolumetricDensityVolumes => _readOnlyVolumetricDensityVolumes;
         public IReadOnlyList<ParticleEffectInstance> ParticleEffects => _readOnlyParticleEffects;
@@ -142,6 +148,7 @@ namespace Njulf.Core.Scene
             EnsureCanAdd(densityVolume);
             _volumetricDensityVolumes.Add(densityVolume);
             densityVolume.Changed += OnVolumetricDensityVolumeChanged;
+            AdvanceVolumetricDensityRevision();
             PublishMutation(
                 densityVolume,
                 SceneMutationKind.Added | SceneMutationKind.Volumetrics,
@@ -264,6 +271,7 @@ namespace Njulf.Core.Scene
             if (_volumetricDensityVolumes.Remove(densityVolume))
             {
                 densityVolume.Changed -= OnVolumetricDensityVolumeChanged;
+                AdvanceVolumetricDensityRevision();
                 PublishMutation(
                     densityVolume,
                     SceneMutationKind.Removed | SceneMutationKind.Volumetrics,
@@ -389,8 +397,16 @@ namespace Njulf.Core.Scene
                 renderObject.Changed -= OnRenderObjectChanged;
             foreach (ParticleEffectInstance particleEffect in _particleEffects)
                 particleEffect.Changed -= OnParticleEffectChanged;
-            foreach (VolumetricDensityVolume densityVolume in _volumetricDensityVolumes)
-                densityVolume.Changed -= OnVolumetricDensityVolumeChanged;
+            if (_volumetricDensityVolumes.Count > 0)
+            {
+                foreach (VolumetricDensityVolume densityVolume in
+                         _volumetricDensityVolumes)
+                {
+                    densityVolume.Changed -=
+                        OnVolumetricDensityVolumeChanged;
+                }
+                AdvanceVolumetricDensityRevision();
+            }
             foreach (StaticInstanceBatch batch in _staticInstanceBatches)
                 batch.Changed -= OnStaticInstanceBatchChanged;
             foreach (FoliagePatch patch in _foliagePatches)
@@ -437,13 +453,16 @@ namespace Njulf.Core.Scene
 
         private void OnVolumetricDensityVolumeChanged(
             VolumetricDensityVolume densityVolume,
-            BoundingBox previousBounds) =>
+            BoundingBox previousBounds)
+        {
+            AdvanceVolumetricDensityRevision();
             PublishMutation(
                 densityVolume,
                 SceneMutationKind.Volumetrics | SceneMutationKind.Content,
                 previousBounds,
                 densityVolume.Bounds,
                 densityVolume.Revision);
+        }
 
         private void OnStaticInstanceBatchChanged(StaticInstanceBatch batch) =>
             PublishMutation(
@@ -527,6 +546,12 @@ namespace Njulf.Core.Scene
 
         private void AdvanceReflectionProbeRevision() =>
             _reflectionProbeRevision = _reflectionProbeRevision == uint.MaxValue ? 1u : _reflectionProbeRevision + 1u;
+
+        private void AdvanceVolumetricDensityRevision() =>
+            _volumetricDensityRevision =
+                _volumetricDensityRevision == uint.MaxValue
+                    ? 1u
+                    : _volumetricDensityRevision + 1u;
 
         /// <summary>Finds a scene-owned entity by its stable identifier.</summary>
         public IIdentifiedSceneEntity? FindById(Guid id)

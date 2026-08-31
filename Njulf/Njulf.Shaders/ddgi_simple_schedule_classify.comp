@@ -408,7 +408,11 @@ void main()
     }
     bool zeroSupport = fresh || relocationRetry || activeWeight <= 0.0001 ||
         (SchedulerTransportV2() && sourceRays == 0u && !inactive);
-    bool visibleZeroSupport = visible && zeroSupport;
+    // A committed scroll cohort has one scheduler class and one reserved
+    // cardinality irrespective of the visibility heuristic. Classifying a
+    // visible exposed slot as zero-support would move it out of mandatory
+    // phase 11 and leave the atomic scroll transaction permanently incomplete.
+    bool visibleZeroSupport = visible && zeroSupport && !scrollExposed;
     uint packedPropagation = SchedulerArenaRead(schedulerStateBase + 11u);
     float propagatedResidual = unpackHalf2x16(
         packedPropagation & 0xffffu).x;

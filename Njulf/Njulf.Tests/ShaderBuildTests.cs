@@ -51,10 +51,15 @@ public sealed class ShaderBuildTests
         "ddgi_simple_receiver_cache_b1.comp",
         "ddgi_simple_receiver_cache_classify.comp",
         "ddgi_simple_receiver_cache_adaptive.comp",
+        "ddgi_simple_receiver_cache_adaptive_b1.comp",
+        "ddgi_simple_receiver_cache_adaptive_b1_missing.comp",
         "ddgi_simple_receiver_cache_resolve_adaptive.comp",
         "ddgi_simple_schedule_admit_tail.comp",
         "ddgi_simple_schedule_feedback_partial.comp",
         "ddgi_simple_schedule_materialize.comp",
+        "ddgi_simple_schedule_emit_classify.comp",
+        "ddgi_simple_schedule_emit_scatter.comp",
+        "ddgi_simple_schedule_validate_scroll_cohorts.comp",
         "farfield_voxelize.comp",
         "farfield_jumpflood.comp",
         "froxel_noise.comp",
@@ -101,7 +106,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(399));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(404));
 
         foreach (string shaderName in RequiredShaders)
         {

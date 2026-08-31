@@ -63,6 +63,12 @@ void main()
             candidateReasons,
             sourceWork)
         : (sourceWork ? requiredSourceRayCount : 0u);
+    sourceRayCount = SchedulerResolveScrollBootstrapSourceRayCount(
+        probeIndex,
+        volumeIndex,
+        candidateReasons,
+        sourceWork,
+        sourceRayCount);
     if (SchedulerTransportV2() || sourceWork)
         activeRayCount = sourceRayCount;
 

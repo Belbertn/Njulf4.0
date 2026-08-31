@@ -1034,8 +1034,16 @@ namespace Njulf.Rendering.Descriptors
         public const int FoliageImpostorViewBuffer =
             FoliageAuthoredInstanceCommandBufferFrame1 + 1;
 
-        public const int StaticBufferCount =
+        /// <summary>Fence-safe resolved physical meshlet mappings for frame 0.</summary>
+        public const int MeshletResolvedMappingBufferBase =
             FoliageImpostorViewBuffer + 1;
+
+        /// <summary>Fence-safe resolved physical meshlet mappings for frame 1.</summary>
+        public const int MeshletResolvedMappingBufferFrame1 =
+            MeshletResolvedMappingBufferBase + 1;
+
+        public const int StaticBufferCount =
+            MeshletResolvedMappingBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1224,6 +1232,8 @@ namespace Njulf.Rendering.Descriptors
                     FoliageAuthoredInstanceCommandBufferBase => nameof(FoliageAuthoredInstanceCommandBufferBase),
                     FoliageAuthoredInstanceCommandBufferFrame1 => nameof(FoliageAuthoredInstanceCommandBufferFrame1),
                     FoliageImpostorViewBuffer => nameof(FoliageImpostorViewBuffer),
+                    MeshletResolvedMappingBufferBase => nameof(MeshletResolvedMappingBufferBase),
+                    MeshletResolvedMappingBufferFrame1 => nameof(MeshletResolvedMappingBufferFrame1),
                     SceneOpaqueCompactedMeshletDrawBufferBase => nameof(SceneOpaqueCompactedMeshletDrawBufferBase),
                     SceneOpaqueCompactedMeshletDrawBufferFrame1 => nameof(SceneOpaqueCompactedMeshletDrawBufferFrame1),
                     SceneSimpleOpaqueCompactedMeshletDrawBufferBase => nameof(SceneSimpleOpaqueCompactedMeshletDrawBufferBase),

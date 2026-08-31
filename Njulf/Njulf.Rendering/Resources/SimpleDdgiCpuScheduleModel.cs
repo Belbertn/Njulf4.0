@@ -86,6 +86,13 @@ public static class SimpleDdgiSchedulerAbi
     public const int FeedbackAdaptiveMaximumErrorRingOffsetWords = 1002;
     public const int FeedbackAdaptiveSavedRayContentOffsetWords = 1005;
     public const int FeedbackAdaptiveMaximumErrorContentOffsetWords = 1009;
+    public const int FeedbackUnbucketedUpdateOffsetWords = 1013;
+    public const int FeedbackScrollCohortFailureOffsetWords = 1014;
+    public const int FeedbackScrollExpectedOffsetWords = 1015;
+    public const int FeedbackScrollAcceptedOffsetWords = 1016;
+    public const int FeedbackScrollTracedOffsetWords = 1017;
+    public const int FeedbackScrollCommittedOffsetWords = 1018;
+    public const int FeedbackRebaseRingOffsetWords = 1019;
     public const int AdaptiveRayRingBucketCount = 3;
     public const int AdaptiveRayContentBucketCount = 4;
     public const int FeedbackLivenessWordCount =
@@ -370,19 +377,58 @@ public readonly record struct SimpleDdgiCpuVolumePolicy(
     int SchedulingWeight,
     bool Active)
 {
+    /// <summary>
+    /// Complete exposed cohort owned by a committed toroidal-scroll
+    /// transaction. Admission must service this many probes before unrelated
+    /// work from the volume can consume its quota.
+    /// </summary>
+    public int MandatoryScrollRepairCount { get; init; }
+
+    /// <summary>Reserved source-ray cardinality for each mandatory repair.</summary>
+    public uint ScrollBootstrapRaysPerProbe { get; init; }
+
     public SimpleDdgiCpuVolumePolicy Normalize()
     {
         int capacity = Math.Max(0, ProbeCapacity);
-        int minimum = Math.Clamp(MinimumQuota, 0, capacity);
+        int mandatoryScrollRepairCount = Math.Clamp(
+            MandatoryScrollRepairCount,
+            0,
+            capacity);
+        int minimum = Math.Max(
+            Math.Clamp(MinimumQuota, 0, capacity),
+            mandatoryScrollRepairCount);
         int maximum = Math.Clamp(PreferredMaximumQuota, minimum, capacity);
         return this with
         {
             ProbeCapacity = capacity,
             MinimumQuota = minimum,
             PreferredMaximumQuota = maximum,
-            SchedulingWeight = Math.Max(0, SchedulingWeight)
+            SchedulingWeight = Math.Max(0, SchedulingWeight),
+            MandatoryScrollRepairCount = mandatoryScrollRepairCount,
+            ScrollBootstrapRaysPerProbe = mandatoryScrollRepairCount == 0
+                ? 0u
+                : Math.Clamp(
+                    ScrollBootstrapRaysPerProbe,
+                    1u,
+                    (uint)GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe)
         };
     }
+}
+
+[Flags]
+public enum SimpleDdgiScrollCohortFailureReason : uint
+{
+    None = 0,
+    CountMismatch = 1u << 0,
+    TransactionSerialMismatch = 1u << 1,
+    RayCardinalityMismatch = 1u << 2,
+    TraceIncomplete = 1u << 3,
+    TransportIncomplete = 1u << 4,
+    PublicationIncomplete = 1u << 5,
+    ProducerFailure = 1u << 6,
+    UnexpectedProbe = 1u << 7,
+    TransactionMismatch = 1u << 8,
+    EmissionFailure = 1u << 9
 }
 
 public readonly record struct SimpleDdgiCpuSchedulePolicy(
@@ -715,6 +761,37 @@ public static class SimpleDdgiCpuScheduleModel
         int primaryRejected = 0;
         int sourceRejected = 0;
 
+        // Mirror resident admission phase 11. A scroll is committed only after
+        // reserving this entire exposed cohort, so it must execute before any
+        // unrelated request or primary-ray work can spend that reservation.
+        AdmitCandidates(
+            candidates,
+            candidateLanes,
+            volumePolicies,
+            policy,
+            committedSourceLightingGenerations,
+            committedSourceEpochs,
+            outputQueue,
+            laneCandidateCounts,
+            laneAcceptedCounts,
+            laneCursors,
+            admittedCandidates,
+            quotas,
+            volumeUsage,
+            classReservations,
+            classUsage,
+            workClassFilter: SimpleDdgiSchedulerWorkClass.FreshExposedVisible,
+            categoryFilter: SimpleDdgiSchedulerTransportCategory.HardSourceRepair,
+            reservedPass: false,
+            requestBudget: requestBudget,
+            ref accepted,
+            ref primaryRays,
+            ref sourceRays,
+            ref requestRejected,
+            ref primaryRejected,
+            ref sourceRejected,
+            mandatoryScrollPass: true);
+
         // Keep the same eleven phases as the production CPU queue builder:
         // per-volume class reservations, visible urgent classes, source cohort,
         // routine source validation, cached solver, ring maintenance, then a
@@ -887,7 +964,8 @@ public static class SimpleDdgiCpuScheduleModel
         ref ulong acceptedSourceRays,
         ref int requestBudgetRejected,
         ref int primaryBudgetRejected,
-        ref int sourceBudgetRejected)
+        ref int sourceBudgetRejected,
+        bool mandatoryScrollPass = false)
     {
         if (acceptedCount >= requestBudget)
             return;
@@ -979,6 +1057,38 @@ public static class SimpleDdgiCpuScheduleModel
                                     continue;
                                 }
 
+                                SimpleDdgiCpuVolumePolicy normalizedVolume =
+                                    volumePolicies[candidateVolume].Normalize();
+                                int mandatoryRepairCount = Math.Min(
+                                    normalizedVolume.MandatoryScrollRepairCount,
+                                    quotas[candidateVolume]);
+                                bool mandatoryScrollPending =
+                                    volumeUsage[candidateVolume] < mandatoryRepairCount;
+                                bool mandatoryScrollCandidate =
+                                    candidateClass ==
+                                        SimpleDdgiSchedulerWorkClass.FreshExposedVisible &&
+                                    candidateCategory ==
+                                        SimpleDdgiSchedulerTransportCategory.HardSourceRepair &&
+                                    (candidateReasons &
+                                        SimpleDdgiSchedulerCandidateReason.ScrollExposed) != 0;
+                                if (!mandatoryScrollPass &&
+                                    mandatoryRepairCount > 0)
+                                {
+                                    continue;
+                                }
+                                if (mandatoryScrollPass &&
+                                    (!mandatoryScrollPending ||
+                                        !mandatoryScrollCandidate))
+                                {
+                                    continue;
+                                }
+                                if (!mandatoryScrollPass &&
+                                    mandatoryScrollPending &&
+                                    !mandatoryScrollCandidate)
+                                {
+                                    continue;
+                                }
+
                                 int classBase = candidateVolume * (int)SimpleDdgiSchedulerWorkClass.Count;
                                 int classLimit = reservedPass
                                     ? classReservations[classBase + workClass]
@@ -1031,6 +1141,12 @@ public static class SimpleDdgiCpuScheduleModel
                                     candidate.SourceRayCount != 0u;
                                 if (sourceWork || cachedV2Work)
                                     activeRays = sourceRays;
+                                if (mandatoryScrollPending && mandatoryScrollCandidate)
+                                {
+                                    sourceRays = normalizedVolume
+                                        .ScrollBootstrapRaysPerProbe;
+                                    activeRays = sourceRays;
+                                }
                                 ulong primaryCost = sourceWork ? activeRays : 0UL;
                                 ulong sourceCost = sourceWork ? sourceRays : 0UL;
                                 if (primaryCost > policy.PrimaryRayBudget ||
@@ -1211,7 +1327,12 @@ public static class SimpleDdgiCpuScheduleModel
             int overflow = minimumTotal - requestBudget;
             for (int i = count - 1; i >= 0 && overflow > 0; i--)
             {
-                int reduction = Math.Min(quotas[i], overflow);
+                int mandatoryFloor = volumes[i].Active
+                    ? volumes[i].MandatoryScrollRepairCount
+                    : 0;
+                int reduction = Math.Min(
+                    Math.Max(0, quotas[i] - mandatoryFloor),
+                    overflow);
                 quotas[i] -= reduction;
                 overflow -= reduction;
             }

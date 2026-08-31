@@ -19,7 +19,7 @@ const uint SIMPLE_DDGI_SCHEDULER_MAX_RAYS = 256u;
 const uint SIMPLE_DDGI_SCHEDULER_INVALID_PROBE = 0xffffffffu;
 const uint SIMPLE_DDGI_SCHEDULER_WORKGROUP_SIZE = 64u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_WORDS = 1024u;
-const uint SIMPLE_DDGI_SCHEDULER_VOLUME_POLICY_WORDS = 44u;
+const uint SIMPLE_DDGI_SCHEDULER_VOLUME_POLICY_WORDS = 48u;
 // The public candidate record is eight words. Resident classification stores
 // only probe, volume, class/transport, and tier/reasons. Admission re-reads the
 // immutable generation, uses the input index as sequence ordinal, and derives
@@ -61,7 +61,7 @@ const uint SIMPLE_DDGI_SCHEDULER_VOLUME_KIND_REFINEMENT = 3u;
 // of a VkDispatchIndirectCommand.
 const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS = 4u;
 const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_COMMAND_WORDS = 4u;
-const uint SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS = 96u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS = 128u;
 // GPUSimpleDdgiParams word 63 carries a one-based arena offset. Keep the
 // compact two-word/two-bank ABI synchronized with ddgi_simple_shared.glsl and
 // SimpleDdgiGpuSchedulerLayout.
@@ -276,6 +276,26 @@ const uint SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_FULL_SWEEP_FALLBACK = 93u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_TELEMETRY = 94u;
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_CONTROL = 95u;
 const uint SIMPLE_DDGI_SCHEDULER_TRANSIENT_COUNTER_WORDS = 94u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_UNBUCKETED = 96u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_EMISSION_FAILURE = 97u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_EXPECTED = 98u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_ACCEPTED = 99u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_TRACED = 100u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COMMITTED = 101u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_FAILURE = 102u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_STATE_BASE = 112u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_STATE_COUNT = 16u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_VALID = 1u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_COUNT_MISMATCH = 1u << 0u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_SERIAL_MISMATCH = 1u << 1u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_CARDINALITY_MISMATCH = 1u << 2u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_TRACE_INCOMPLETE = 1u << 3u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_TRANSPORT_INCOMPLETE = 1u << 4u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_PUBLICATION_INCOMPLETE = 1u << 5u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_PRODUCER_FAILURE = 1u << 6u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_UNEXPECTED_PROBE = 1u << 7u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_TRANSACTION_MISMATCH = 1u << 8u;
+const uint SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_EMISSION_FAILURE = 1u << 9u;
 
 // Transaction-predicate witnesses are a bitset rather than counters: every
 // failed request already contributes to the transaction category above, while
@@ -314,6 +334,13 @@ const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_SAVED_RING_OFFSET = 999u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_ERROR_RING_OFFSET = 1002u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_SAVED_CONTENT_OFFSET = 1005u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_ERROR_CONTENT_OFFSET = 1009u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_UNBUCKETED_OFFSET = 1013u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_SCROLL_COHORT_FAILURE_OFFSET = 1014u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_SCROLL_EXPECTED_OFFSET = 1015u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_SCROLL_ACCEPTED_OFFSET = 1016u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_SCROLL_TRACED_OFFSET = 1017u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_SCROLL_COMMITTED_OFFSET = 1018u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_REBASE_RING_OFFSET = 1019u;
 
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_RESET = 0u;
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_CLASSIFY = 1u;
@@ -841,6 +868,22 @@ uint SchedulerVolumeRing(uint volumeIndex) { return SchedulerVolumeWord(volumeIn
 uint SchedulerVolumeSourceOrdinal(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 4u); }
 uint SchedulerVolumeFullRays(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 30u); }
 uint SchedulerVolumeMaintenanceRays(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 31u); }
+uint SchedulerVolumeScrollTransactionSerial(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 44u); }
+uint SchedulerVolumeScrollExpectedRepairCount(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 45u); }
+uint SchedulerVolumeScrollBootstrapRays(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 46u); }
+uint SchedulerVolumeScrollFlags(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 47u); }
+bool SchedulerVolumeHasMandatoryScrollRepair(uint volumeIndex)
+{
+    return (SchedulerVolumeScrollFlags(volumeIndex) & 1u) != 0u &&
+        SchedulerVolumeScrollExpectedRepairCount(volumeIndex) != 0u;
+}
+
+bool SchedulerVolumeIsRebuilding(uint volumeIndex)
+{
+    return SchedulerVolumeKind(volumeIndex) ==
+            SIMPLE_DDGI_SCHEDULER_VOLUME_KIND_RING &&
+        (SchedulerVolumeScrollFlags(volumeIndex) & 4u) != 0u;
+}
 
 uint SchedulerAdaptiveMinimumSourceRays(uint volumeIndex)
 {
@@ -939,6 +982,65 @@ bool SchedulerAdaptivePromotionDue(
         residual > tolerance * 2.0;
 }
 
+bool SchedulerProbeIsCurrentScrollExposed(
+    uint probeIndex,
+    uint volumeIndex)
+{
+    uint firstProbe = SchedulerVolumeFirstProbe(volumeIndex);
+    uint probeCount = SchedulerVolumeProbeCount(volumeIndex);
+    if (probeIndex < firstProbe || probeIndex - firstProbe >= probeCount ||
+        (SchedulerVolumeWord(volumeIndex, 25u) & 2u) == 0u)
+    {
+        return false;
+    }
+
+    uint countX = max(SchedulerVolumeWord(volumeIndex, 16u), 1u);
+    uint countY = max(SchedulerVolumeWord(volumeIndex, 17u), 1u);
+    uint countZ = max(SchedulerVolumeWord(volumeIndex, 18u), 1u);
+    uint physical = probeIndex - firstProbe;
+    uint physicalZ = physical / (countX * countY);
+    uint remainder = physical - physicalZ * countX * countY;
+    uint physicalY = remainder / countX;
+    uint physicalX = remainder - physicalY * countX;
+    uint logicalX = (physicalX + countX -
+        SchedulerVolumeWord(volumeIndex, 22u) % countX) % countX;
+    uint logicalY = (physicalY + countY -
+        SchedulerVolumeWord(volumeIndex, 23u) % countY) % countY;
+    uint logicalZ = (physicalZ + countZ -
+        SchedulerVolumeWord(volumeIndex, 24u) % countZ) % countZ;
+    int deltaX = int(SchedulerVolumeWord(volumeIndex, 36u));
+    int deltaY = int(SchedulerVolumeWord(volumeIndex, 37u));
+    int deltaZ = int(SchedulerVolumeWord(volumeIndex, 38u));
+    return (deltaX != 0 || deltaY != 0 || deltaZ != 0) &&
+        (int(logicalX) - deltaX < 0 ||
+         int(logicalX) - deltaX >= int(countX) ||
+         int(logicalY) - deltaY < 0 ||
+         int(logicalY) - deltaY >= int(countY) ||
+         int(logicalZ) - deltaZ < 0 ||
+         int(logicalZ) - deltaZ >= int(countZ));
+}
+
+uint SchedulerResolveScrollBootstrapSourceRayCount(
+    uint probeIndex,
+    uint volumeIndex,
+    uint candidateReasons,
+    bool sourceWork,
+    uint fallback)
+{
+    if (!sourceWork ||
+        (candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) == 0u ||
+        !SchedulerVolumeHasMandatoryScrollRepair(volumeIndex) ||
+        !SchedulerProbeIsCurrentScrollExposed(probeIndex, volumeIndex))
+    {
+        return fallback;
+    }
+
+    return clamp(
+        SchedulerVolumeScrollBootstrapRays(volumeIndex),
+        1u,
+        SchedulerAdaptiveMaximumSourceRays(volumeIndex));
+}
+
 uint SchedulerResolveAdaptiveSourceRayCount(
     uint probeIndex,
     uint volumeIndex,
@@ -946,6 +1048,14 @@ uint SchedulerResolveAdaptiveSourceRayCount(
     bool sourceWork)
 {
     uint maximum = SchedulerAdaptiveMaximumSourceRays(volumeIndex);
+    uint scrollBootstrap = SchedulerResolveScrollBootstrapSourceRayCount(
+        probeIndex,
+        volumeIndex,
+        candidateReasons,
+        sourceWork,
+        0u);
+    if (scrollBootstrap != 0u)
+        return scrollBootstrap;
     if (!SchedulerTransportV2() || !SchedulerAdaptiveRayCardinality())
         return maximum;
 
@@ -1933,9 +2043,18 @@ void SchedulerWriteOutcome(
     // particular, a cached-solver update must not erase an already valid
     // source cache or advance its routine-source timestamp.
     SchedulerArenaWrite(base + 10u, updateFlags);
-    // The bounded count occupies the low half; blend transactionally appends
-    // its quantized quadrature witness in the otherwise unused high half.
-    SchedulerArenaWrite(base + 11u, max(rayInvocationCount, 1u) & 0xffffu);
+    // The bounded count occupies the low half. Ordinary updates let blend append
+    // a quantized quadrature witness to the high half. Mandatory scroll updates
+    // use that mutually exclusive half for a compact transaction serial; the
+    // outcome cannot survive enough scheduler generations for a 16-bit alias.
+    uint countAndWitnessOrScrollSerial =
+        max(rayInvocationCount, 1u) & 0xffffu;
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL) != 0u)
+    {
+        countAndWitnessOrScrollSerial |=
+            (SchedulerVolumeScrollTransactionSerial(volumeIndex) & 0xffffu) << 16u;
+    }
+    SchedulerArenaWrite(base + 11u, countAndWitnessOrScrollSerial);
     // Producer completion counters. Trace uses word 12; transport uses word 13.
     // These cannot carry transaction metadata because every ray atomically
     // increments them before CommitLocal validates the outcome.

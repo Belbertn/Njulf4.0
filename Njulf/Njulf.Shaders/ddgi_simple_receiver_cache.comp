@@ -14,6 +14,14 @@
 #define NJULF_DDGI_RECEIVER_CACHE_LEGACY 0
 #endif
 
+#ifndef NJULF_DDGI_RECEIVER_CACHE_PRESERVE_ADAPTIVE_CONTRIBUTION
+#define NJULF_DDGI_RECEIVER_CACHE_PRESERVE_ADAPTIVE_CONTRIBUTION 0
+#endif
+
+#ifndef NJULF_DDGI_RECEIVER_CACHE_MISSING_FEEDBACK
+#define NJULF_DDGI_RECEIVER_CACHE_MISSING_FEEDBACK 0
+#endif
+
 #if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
 #define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
 #define SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER 1
@@ -32,7 +40,8 @@
 // scheduler-priority bank.
 #define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT 0u
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE false
-#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION && \
+    !NJULF_DDGI_RECEIVER_CACHE_PRESERVE_ADAPTIVE_CONTRIBUTION
 #define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE false
 #else
 #define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE (((gl_GlobalInvocationID.x & 3u) == 0u) && ((gl_GlobalInvocationID.y & 3u) == 0u))
@@ -65,6 +74,9 @@ layout(std430, set = 2, binding = 10) buffer ReceiverGatherStampBlock
 {
     uint Entries[];
 } ReceiverGatherStamps;
+
+const uint RECEIVER_ADAPTIVE_GATHER_COUNT = 0u;
+const uint RECEIVER_ADAPTIVE_MISSING_FEEDBACK_COUNT = 17u;
 #endif
 
 const float RECEIVER_NORMAL_RELATIVE_EPSILON = 0.000001;
@@ -589,7 +601,13 @@ void main()
 
 #if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
     uint workIndex = gl_WorkGroupID.x * 64u + gl_LocalInvocationIndex;
-    uint workCount = ReceiverAdaptiveControl.Words[0];
+#if NJULF_DDGI_RECEIVER_CACHE_MISSING_FEEDBACK
+    uint workCount = ReceiverAdaptiveControl.Words[
+        RECEIVER_ADAPTIVE_MISSING_FEEDBACK_COUNT];
+#else
+    uint workCount = ReceiverAdaptiveControl.Words[
+        RECEIVER_ADAPTIVE_GATHER_COUNT];
+#endif
     if (workIndex >= workCount)
         return;
     uvec2 cacheCoord = ReceiverGatherWork.Entries[workIndex];

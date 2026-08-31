@@ -220,6 +220,14 @@ internal sealed class SampleDiagnosticsReporter
             $"signatureUs={diagnostics.CpuPayloadSignatureMicroseconds}, objectCullUs={diagnostics.CpuObjectCullMicroseconds}, " +
             $"meshletCullUs={diagnostics.CpuMeshletCullMicroseconds}, materialUploadUs={diagnostics.CpuMaterialUploadMicroseconds}, " +
             $"uploadUs={diagnostics.CpuUploadMicroseconds}, payloadRebuilt={diagnostics.ScenePayloadRebuilt}.");
+        Console.WriteLine(
+            $"Frame diagnostics pacing: maxFps={(diagnostics.MaximumFramesPerSecond == 0.0 ? "unlimited" : diagnostics.MaximumFramesPerSecond.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}, " +
+            $"vsyncPresentMode={diagnostics.SwapchainPresentMode}, pacingWaitUs={diagnostics.CpuFramePacingWaitMicroseconds}, " +
+            $"fenceWaitUs={diagnostics.CpuWaitForFrameFenceMicroseconds} " +
+            $"(imageOwner={diagnostics.CpuSwapchainImageOwnerWaitMicroseconds}, resourceRecycle={diagnostics.CpuFrameResourceRecycleWaitMicroseconds}), " +
+            $"acquireUs={diagnostics.CpuAcquireImageMicroseconds}, resourceContext={diagnostics.FrameResourceContext}:owner{diagnostics.FrameResourceOwnerSubmissionSerial}, " +
+            $"image={diagnostics.SwapchainImageIndex}:owner{diagnostics.SwapchainImageOwnerSubmissionSerial}/context{diagnostics.SwapchainImageOwnerFrameContext}, " +
+            $"acquireSlot={diagnostics.AcquireSemaphoreSlot}, submit={diagnostics.PendingSubmissionSerial}.");
         string gpuMemoryBudget = FormatGpuMemoryBudget(diagnostics);
         Console.WriteLine(
             $"Frame diagnostics budget: profile='{diagnostics.ActiveBudgetProfileName}', overall={diagnostics.BudgetOverallStatus}, " +
@@ -479,6 +487,9 @@ internal sealed class SampleDiagnosticsReporter
             $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, relocation={diagnostics.DdgiProbeRelocationCount}, " +
             $"simpleState active/probes/updated/recenter/preserve/clear/fresh={diagnostics.SimpleDdgiActive}/{diagnostics.SimpleDdgiProbeCount}/{diagnostics.SimpleDdgiProbesUpdated}/" +
             $"{diagnostics.SimpleDdgiRecentered}/{diagnostics.SimpleDdgiAtlasPreservedOnRecenter}/{diagnostics.SimpleDdgiAtlasCleared}/{diagnostics.SimpleDdgiAtlasFresh}, " +
+            $"scroll expected/accepted/traced/committed/unbucketed/failure=" +
+            $"{diagnostics.SimpleDdgiScrollGpuExpectedCount}/{diagnostics.SimpleDdgiScrollGpuAcceptedCount}/{diagnostics.SimpleDdgiScrollGpuTracedCount}/{diagnostics.SimpleDdgiScrollGpuCommittedCount}/{diagnostics.SimpleDdgiScrollUnbucketedCount}/{diagnostics.SimpleDdgiScrollCohortFailure}, " +
+            $"scrollBuckets={diagnostics.SimpleDdgiFrameRayBucket0}/{diagnostics.SimpleDdgiFrameRayBucket1}/{diagnostics.SimpleDdgiFrameRayBucket2}/{diagnostics.SimpleDdgiFrameRayBucket3}/{diagnostics.SimpleDdgiFrameRayBucket4}/{diagnostics.SimpleDdgiFrameRayBucket5}, rebaseMask={diagnostics.SimpleDdgiRebuildingRingMask}, " +
             $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
             $"cacheGeneration={diagnostics.DdgiCacheGeneration}, cacheFrame={diagnostics.DdgiLastUpdatedFrameSerial}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, cacheLatencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
             $"ddgiClipmapCoverage attempts/ok/fail/avgEdgeFade/avgBlend=" +

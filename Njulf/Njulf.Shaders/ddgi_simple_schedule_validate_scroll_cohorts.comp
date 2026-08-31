@@ -1,0 +1,223 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+// Mandatory scroll repair is deliberately validated by one bounded GPU scan.
+// This runs after every producer and before CommitLocal, and never reads a
+// probe back to the CPU. Classification admits at most one candidate for each
+// virtual probe, so membership + the exact geometric count proves that the
+// complete exposed set is present without an O(N^2) duplicate scan.
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+uint ScrollExposedProbeCount(uint volumeIndex)
+{
+    uint countX = max(SchedulerVolumeWord(volumeIndex, 16u), 1u);
+    uint countY = max(SchedulerVolumeWord(volumeIndex, 17u), 1u);
+    uint countZ = max(SchedulerVolumeWord(volumeIndex, 18u), 1u);
+    int deltaX = int(SchedulerVolumeWord(volumeIndex, 36u));
+    int deltaY = int(SchedulerVolumeWord(volumeIndex, 37u));
+    int deltaZ = int(SchedulerVolumeWord(volumeIndex, 38u));
+    uint overlapX = uint(max(int(countX) - abs(deltaX), 0));
+    uint overlapY = uint(max(int(countY) - abs(deltaY), 0));
+    uint overlapZ = uint(max(int(countZ) - abs(deltaZ), 0));
+    return countX * countY * countZ - overlapX * overlapY * overlapZ;
+}
+
+void main()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
+    uint activeVolumeCount = min(
+        SchedulerActiveVolumeCount(),
+        SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES);
+    uint volumeAccepted[SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES];
+    uint volumeFailure[SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES];
+    uint scrollExpected = 0u;
+    uint scrollAccepted = 0u;
+    uint scrollTraced = 0u;
+    uint globalFatalFailure = 0u;
+
+    if (SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_EMISSION_FAILURE) != 0u)
+    {
+        globalFatalFailure |=
+            SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_EMISSION_FAILURE;
+    }
+
+    for (uint volume = 0u;
+         volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES;
+         volume++)
+    {
+        volumeAccepted[volume] = 0u;
+        volumeFailure[volume] = 0u;
+        SchedulerArenaWrite(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_STATE_BASE +
+                volume,
+            0u);
+        if (volume >= activeVolumeCount ||
+            !SchedulerVolumeHasMandatoryScrollRepair(volume))
+        {
+            continue;
+        }
+
+        uint expected = SchedulerVolumeScrollExpectedRepairCount(volume);
+        scrollExpected += expected;
+        if (expected != ScrollExposedProbeCount(volume))
+        {
+            volumeFailure[volume] |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_COUNT_MISMATCH;
+        }
+    }
+
+    uint accepted = min(
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
+        SchedulerRequestCapacity());
+    for (uint outcomeIndex = 0u;
+         outcomeIndex < accepted;
+         outcomeIndex++)
+    {
+        uint outcomeBase = pc.OutcomesOffsetWords +
+            outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
+        uint updateFlags = SchedulerArenaRead(outcomeBase + 10u);
+        if ((updateFlags & SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL) == 0u)
+            continue;
+
+        uint probeIndex = SchedulerArenaRead(outcomeBase + 5u);
+        uint volumeIndex;
+        if (!SchedulerFindVolume(probeIndex, volumeIndex) ||
+            volumeIndex >= activeVolumeCount ||
+            !SchedulerVolumeHasMandatoryScrollRepair(volumeIndex))
+        {
+            globalFatalFailure |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_UNEXPECTED_PROBE;
+            continue;
+        }
+        if (!SchedulerProbeIsCurrentScrollExposed(probeIndex, volumeIndex))
+        {
+            volumeFailure[volumeIndex] |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_UNEXPECTED_PROBE;
+            continue;
+        }
+
+        volumeAccepted[volumeIndex]++;
+        scrollAccepted++;
+
+        uint packedCountAndScrollSerial = SchedulerArenaRead(outcomeBase + 11u);
+        if ((packedCountAndScrollSerial >> 16u) !=
+            (SchedulerVolumeScrollTransactionSerial(volumeIndex) & 0xffffu))
+        {
+            volumeFailure[volumeIndex] |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_SERIAL_MISMATCH;
+        }
+
+        uint expectedRays = packedCountAndScrollSerial & 0xffffu;
+        if (expectedRays == 0u || expectedRays !=
+            SchedulerVolumeScrollBootstrapRays(volumeIndex))
+        {
+            volumeFailure[volumeIndex] |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_CARDINALITY_MISMATCH;
+        }
+
+        uint requiredMask = SchedulerArenaRead(outcomeBase + 7u);
+        uint completionMask = SchedulerArenaRead(outcomeBase + 8u);
+        uint traceInvocationCount = SchedulerArenaRead(outcomeBase + 12u);
+        bool traceComplete =
+            (completionMask & SIMPLE_DDGI_SCHEDULER_COMPLETE_TRACE) != 0u &&
+            traceInvocationCount == expectedRays;
+        if (traceComplete)
+            scrollTraced++;
+        else
+            volumeFailure[volumeIndex] |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_TRACE_INCOMPLETE;
+
+        bool transportRequired =
+            (requiredMask & SIMPLE_DDGI_SCHEDULER_COMPLETE_TRANSPORT) != 0u;
+        uint transportInvocationCount = SchedulerArenaRead(outcomeBase + 13u);
+        bool transportComplete = transportRequired
+            ? (completionMask & SIMPLE_DDGI_SCHEDULER_COMPLETE_TRANSPORT) != 0u &&
+                transportInvocationCount == expectedRays
+            : (completionMask &
+                SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED) != 0u;
+        if (!transportComplete)
+        {
+            volumeFailure[volumeIndex] |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_TRANSPORT_INCOMPLETE;
+        }
+
+        uint publicationMask = requiredMask & ~(
+            SIMPLE_DDGI_SCHEDULER_COMPLETE_TRACE |
+            SIMPLE_DDGI_SCHEDULER_COMPLETE_TRANSPORT |
+            SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED);
+        if ((completionMask & publicationMask) != publicationMask)
+        {
+            volumeFailure[volumeIndex] |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_PUBLICATION_INCOMPLETE;
+        }
+        if (SchedulerArenaRead(outcomeBase + 9u) != 0u)
+        {
+            volumeFailure[volumeIndex] |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_PRODUCER_FAILURE;
+        }
+        if (SchedulerArenaRead(outcomeBase + 0u) !=
+                SchedulerQueueGeneration() ||
+            SchedulerArenaRead(outcomeBase + 1u) !=
+                SchedulerResourceGeneration() ||
+            SchedulerArenaRead(outcomeBase + 2u) !=
+                SchedulerVolumeGeneration() ||
+            SchedulerArenaRead(outcomeBase + 3u) !=
+                SchedulerSourceGeneration() ||
+            SchedulerArenaRead(outcomeBase + 4u) !=
+                SchedulerTransportGeneration() ||
+            SchedulerArenaRead(outcomeBase + 6u) == 0u)
+        {
+            volumeFailure[volumeIndex] |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_TRANSACTION_MISMATCH;
+        }
+    }
+
+    uint cohortFailure = globalFatalFailure;
+    for (uint volume = 0u; volume < activeVolumeCount; volume++)
+    {
+        if (!SchedulerVolumeHasMandatoryScrollRepair(volume))
+            continue;
+        if (volumeAccepted[volume] !=
+            SchedulerVolumeScrollExpectedRepairCount(volume))
+        {
+            volumeFailure[volume] |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_COUNT_MISMATCH;
+        }
+        volumeFailure[volume] |= globalFatalFailure;
+        cohortFailure |= volumeFailure[volume];
+        SchedulerArenaWrite(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_STATE_BASE +
+                volume,
+            volumeFailure[volume] == 0u
+                ? SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_VALID
+                : 0u);
+    }
+
+    SchedulerArenaWrite(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_EXPECTED,
+        scrollExpected);
+    SchedulerArenaWrite(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_ACCEPTED,
+        scrollAccepted);
+    SchedulerArenaWrite(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_TRACED,
+        scrollTraced);
+    SchedulerArenaWrite(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_FAILURE,
+        cohortFailure);
+}

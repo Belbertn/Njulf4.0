@@ -439,17 +439,7 @@ internal sealed class HelloGame : Game
                             volumetricTemporalCapture
             ? Silk.NET.Windowing.WindowBorder.Hidden
             : Silk.NET.Windowing.WindowBorder.Resizable;
-        VSync = _smokeOptions.KhronosMaterialGiRenderedGate is null &&
-                !(_smokeOptions.TailDdgiLongSoak ||
-                  (_smokeOptions.Benchmark.Enabled &&
-                   _smokeOptions.Benchmark.DisableVSync) ||
-                  _smokeOptions.BenchmarkQualitySequence.Enabled ||
-                  !string.IsNullOrWhiteSpace(
-                      _smokeOptions.GiAllOnQualificationReportPath) ||
-                  sponzaTemporalCapture ||
-                  volumetricTemporalCapture ||
-                  !string.IsNullOrWhiteSpace(
-                      _smokeOptions.BistroQualityCaptureDirectory));
+        (VSync, MaximumFramesPerSecond) = ResolveFramePacing(_smokeOptions);
     }
 
     private bool IsStartupWaitSatisfied(VulkanRenderer renderer)
@@ -605,6 +595,33 @@ internal sealed class HelloGame : Game
                    options.GiAllOnQualificationReportPath) ||
                !string.IsNullOrWhiteSpace(options.SponzaGiCaptureDirectory) ||
                !string.IsNullOrWhiteSpace(options.BistroQualityCaptureDirectory);
+    }
+
+    internal static (bool VSync, double MaximumFramesPerSecond)
+        ResolveFramePacing(SampleSmokeOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        bool sponzaTemporalCapture = !string.IsNullOrWhiteSpace(
+            options.SponzaTemporalCaptureDirectory);
+        bool volumetricTemporalCapture = !string.IsNullOrWhiteSpace(
+            options.VolumetricTemporalCaptureDirectory);
+        bool defaultVSync =
+            options.KhronosMaterialGiRenderedGate is null &&
+            !(options.TailDdgiLongSoak ||
+              (options.Benchmark.Enabled &&
+               options.Benchmark.DisableVSync) ||
+              options.BenchmarkQualitySequence.Enabled ||
+              !string.IsNullOrWhiteSpace(
+                  options.GiAllOnQualificationReportPath) ||
+              sponzaTemporalCapture ||
+              volumetricTemporalCapture ||
+              !string.IsNullOrWhiteSpace(
+                  options.BistroQualityCaptureDirectory));
+        bool vSync = options.VSyncOverride ?? defaultVSync;
+        double maximumFramesPerSecond =
+            options.MaximumFramesPerSecondOverride ??
+            (vSync ? 60.0 : 0.0);
+        return (vSync, maximumFramesPerSecond);
     }
 
     internal string? RequestedAdvancedGiStartupProfilePath =>
@@ -1144,7 +1161,9 @@ internal sealed class HelloGame : Game
                             renderer.Settings));
             Console.WriteLine(
                 $"Benchmark armed: warmup={_smokeOptions.Benchmark.WarmupFrameCount}, " +
-                $"measure={_smokeOptions.Benchmark.MeasureFrameCount}, vsync={(VSync ? "on" : "off")}");
+                $"measure={_smokeOptions.Benchmark.MeasureFrameCount}, " +
+                $"vsync={(VSync ? "on" : "off")}, " +
+                $"maxFps={(MaximumFramesPerSecond == 0.0 ? "unlimited" : MaximumFramesPerSecond.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))}");
         }
         if (_smokeOptions.BenchmarkQualitySequence.Enabled)
         {

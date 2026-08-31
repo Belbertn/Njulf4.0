@@ -283,7 +283,8 @@ internal sealed class SimpleDdgiFrameCoordinator
             emissive.RefinementDemands,
             visibleReceiverFocus,
             request.View.CameraForward,
-            automaticRefinementDemand);
+            automaticRefinementDemand,
+            request.Identity.CameraCutSerial);
 
         _guidingConfiguration = CompileGuidingConfiguration(
             simpleDdgiActive,

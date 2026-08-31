@@ -16,6 +16,8 @@
 #define NJULF_COMMON_GLSL
 
 #extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
 
 uint NextSimpleDdgiPhysicalGeneration(uint generation)
 {
@@ -316,7 +318,9 @@ const int AUTOMATIC_PLANAR_REFLECTION_BUFFER_INDEX = 771;
 const int FOLIAGE_AUTHORED_INSTANCE_COMMAND_BUFFER_BASE_INDEX = 772;
 const int FOLIAGE_AUTHORED_INSTANCE_COMMAND_BUFFER_FRAME1_INDEX = 773;
 const int FOLIAGE_IMPOSTOR_VIEW_BUFFER_INDEX = 774;
-const int STATIC_BUFFER_COUNT = 775;
+const int MESHLET_RESOLVED_MAPPING_BUFFER_BASE_INDEX = 775;
+const int MESHLET_RESOLVED_MAPPING_BUFFER_FRAME1_INDEX = 776;
+const int STATIC_BUFFER_COUNT = 777;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -2729,7 +2733,9 @@ const uint SIMPLE_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_COUNTER =
     SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 15u;
 const uint SIMPLE_DDGI_RECEIVER_CACHE_LEGACY_FRAGMENT_COUNTER =
     SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 16u;
-const uint SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_COUNT = 17u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_DIRECTIONAL_EVALUATION_COUNTER =
+    SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE + 17u;
+const uint SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_COUNT = 18u;
 const float SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_SUM_SCALE = 256.0;
 const float SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_MAX_SCALE = 65535.0;
 const float DDGI_MANY_LIGHT_PDF_SCALE = 1048576.0;
@@ -3639,7 +3645,9 @@ GPUVertexSimple FetchRenderableVertexSimple(GPUMeshlet meshlet, uint localVertex
 }
 
 const uint MESHLET_VIRTUAL_ADDRESS_BIT = 0x80000000u;
-const uint MESHLET_VIRTUAL_ADDRESS_INDEX_MASK = 0x7fffffffu;
+const uint MESHLET_RESOLVED_ADDRESS_BIT = 0x40000000u;
+const uint MESHLET_ADDRESS_TAG_MASK = 0xc0000000u;
+const uint MESHLET_VIRTUAL_ADDRESS_INDEX_MASK = 0x3fffffffu;
 const uint MESHLET_PAGED_LOCAL_ADDRESS_BIT = 0x80000000u;
 const uint MESHLET_PAGED_LOCAL_BANK_SHIFT = 24u;
 const uint MESHLET_PAGED_LOCAL_BANK_MASK = 0x0fu;
@@ -3655,6 +3663,11 @@ const uint MESHLET_STREAMING_DEMAND_HEADER_WORD_COUNT = 4u;
 const uint MESHLET_STREAMING_DEMAND_OVERFLOW_COUNTER = 0u;
 const uint MESHLET_STREAMING_DEMAND_ACCEPTED_COUNTER = 1u;
 const uint MESHLET_STREAMING_INVALID_DEMAND_COUNTER = 3u;
+const uint MESHLET_STREAMING_INVALID_MAPPING_MISSING_PAGE_COUNTER = 4u;
+const uint MESHLET_STREAMING_INVALID_MAPPING_PAGE_HEADER_COUNTER = 5u;
+const uint MESHLET_STREAMING_INVALID_MAPPING_RECORD_BOUNDS_COUNTER = 6u;
+const uint MESHLET_STREAMING_INVALID_MAPPING_LOCAL_ADDRESS_COUNTER = 7u;
+const uint MESHLET_STREAMING_INVALID_MAPPING_RESOLVED_COUNTER = 8u;
 
 GPUMeshlet EmptyMeshlet()
 {
@@ -3674,15 +3687,28 @@ GPUMeshlet EmptyMeshlet()
     return meshlet;
 }
 
-void IncrementMeshletInvalidMapping(uint frameIndex)
+// Invalid mappings are uncommon once publication is healthy, but a broken
+// range can make every lane hit the same feedback word. Preserve the exact
+// invocation count while issuing one pair of atomics per active subgroup.
+void IncrementMeshletInvalidMapping(
+    uint frameIndex,
+    uint causeCounter)
 {
     uint bufferIndex =
         uint(MESHLET_STREAMING_FEEDBACK_COUNTER_BUFFER_BASE_INDEX) +
         frameIndex;
-    atomicAdd(
-        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
-            MESHLET_STREAMING_INVALID_MAPPING_COUNTER],
-        1u);
+    uint invalidCount = subgroupBallotBitCount(subgroupBallot(true));
+    if (subgroupElect() && invalidCount != 0u)
+    {
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+                MESHLET_STREAMING_INVALID_MAPPING_COUNTER],
+            invalidCount);
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+                causeCounter],
+            invalidCount);
+    }
 }
 
 GPUMeshlet ReadPackedMeshletAt(uint bufferIndex, uint baseWord)
@@ -3744,17 +3770,102 @@ GPUMeshlet ReadPackedMeshletAt(uint bufferIndex, uint baseWord)
 
 bool RequestMeshletStreamingRange(uint rangeIndex, uint frameIndex);
 
-GPUMeshlet ReadMeshlet(uint meshletAddress, uint frameIndex)
+bool TryReadMeshlet(
+    uint meshletAddress,
+    uint frameIndex,
+    out GPUMeshlet meshlet,
+    out uint resolvedAddress)
 {
-    if ((meshletAddress & MESHLET_VIRTUAL_ADDRESS_BIT) == 0u)
+    resolvedAddress = meshletAddress;
+    uint addressTag = meshletAddress & MESHLET_ADDRESS_TAG_MASK;
+    if (addressTag == 0u)
     {
         uint baseWord = meshletAddress *
             uint(SIZEOF_GPU_MESHLET / 4);
-        return ReadPackedMeshletAt(uint(MESHLET_BUFFER_INDEX), baseWord);
+        meshlet = ReadPackedMeshletAt(
+            uint(MESHLET_BUFFER_INDEX),
+            baseWord);
+        return true;
     }
 
     uint virtualIndex = meshletAddress &
         MESHLET_VIRTUAL_ADDRESS_INDEX_MASK;
+    if (addressTag == MESHLET_RESOLVED_ADDRESS_BIT)
+    {
+        uint resolvedBuffer =
+            uint(MESHLET_RESOLVED_MAPPING_BUFFER_BASE_INDEX) + frameIndex;
+        uint resolvedWord = virtualIndex * 4u;
+        uint meshletRecordAddress = ReadStorageWord(
+            resolvedBuffer,
+            resolvedWord + 0u);
+        uint vertexSectionAddress = ReadStorageWord(
+            resolvedBuffer,
+            resolvedWord + 1u);
+        uint triangleSectionAddress = ReadStorageWord(
+            resolvedBuffer,
+            resolvedWord + 2u);
+        uint virtualVertexOffset = ReadStorageWord(
+            resolvedBuffer,
+            resolvedWord + 3u);
+        uint bankIndex = (meshletRecordAddress >>
+            MESHLET_PAGED_LOCAL_BANK_SHIFT) &
+            MESHLET_PAGED_LOCAL_BANK_MASK;
+        bool valid = meshletRecordAddress != 0xffffffffu &&
+            vertexSectionAddress != 0xffffffffu &&
+            triangleSectionAddress != 0xffffffffu &&
+            bankIndex < uint(MESHLET_PHYSICAL_PAGE_BANK_BUFFER_COUNT) &&
+            ((vertexSectionAddress >> MESHLET_PAGED_LOCAL_BANK_SHIFT) &
+                MESHLET_PAGED_LOCAL_BANK_MASK) == bankIndex &&
+            ((triangleSectionAddress >> MESHLET_PAGED_LOCAL_BANK_SHIFT) &
+                MESHLET_PAGED_LOCAL_BANK_MASK) == bankIndex;
+        if (!valid)
+        {
+            IncrementMeshletInvalidMapping(
+                frameIndex,
+                MESHLET_STREAMING_INVALID_MAPPING_RESOLVED_COUNTER);
+            meshlet = EmptyMeshlet();
+            return false;
+        }
+
+        uint pageBuffer =
+            uint(MESHLET_PHYSICAL_PAGE_BANK_BUFFER_BASE_INDEX) + bankIndex;
+        meshlet = ReadPackedMeshletAt(
+            pageBuffer,
+            meshletRecordAddress & MESHLET_PAGED_LOCAL_WORD_MASK);
+        meshlet.VertexOffset += virtualVertexOffset;
+        uint vertexLocalWord =
+            (vertexSectionAddress & MESHLET_PAGED_LOCAL_WORD_MASK) +
+            meshlet.LocalVertexOffset;
+        uint triangleLocalWord =
+            (triangleSectionAddress & MESHLET_PAGED_LOCAL_WORD_MASK) +
+            meshlet.LocalTriangleOffset;
+        if (vertexLocalWord > MESHLET_PAGED_LOCAL_WORD_MASK ||
+            triangleLocalWord > MESHLET_PAGED_LOCAL_WORD_MASK)
+        {
+            IncrementMeshletInvalidMapping(
+                frameIndex,
+                MESHLET_STREAMING_INVALID_MAPPING_RESOLVED_COUNTER);
+            meshlet = EmptyMeshlet();
+            return false;
+        }
+        meshlet.LocalVertexOffset = MESHLET_PAGED_LOCAL_ADDRESS_BIT |
+            (bankIndex << MESHLET_PAGED_LOCAL_BANK_SHIFT) |
+            vertexLocalWord;
+        meshlet.LocalTriangleOffset = MESHLET_PAGED_LOCAL_ADDRESS_BIT |
+            (bankIndex << MESHLET_PAGED_LOCAL_BANK_SHIFT) |
+            triangleLocalWord;
+        return true;
+    }
+
+    if (addressTag != MESHLET_VIRTUAL_ADDRESS_BIT)
+    {
+        IncrementMeshletInvalidMapping(
+            frameIndex,
+            MESHLET_STREAMING_INVALID_MAPPING_RESOLVED_COUNTER);
+        meshlet = EmptyMeshlet();
+        return false;
+    }
+
     uint mappingWord = virtualIndex * 4u;
     uint globalPageId = ReadStorageWord(
         uint(MESHLET_VIRTUAL_MAPPING_BUFFER_INDEX),
@@ -3785,8 +3896,11 @@ GPUMeshlet ReadMeshlet(uint meshletAddress, uint frameIndex)
         RequestMeshletStreamingRange(
             mappingFlags >> 8u,
             frameIndex);
-        IncrementMeshletInvalidMapping(frameIndex);
-        return EmptyMeshlet();
+        IncrementMeshletInvalidMapping(
+            frameIndex,
+            MESHLET_STREAMING_INVALID_MAPPING_MISSING_PAGE_COUNTER);
+        meshlet = EmptyMeshlet();
+        return false;
     }
 
     uint pageBuffer =
@@ -3812,8 +3926,11 @@ GPUMeshlet ReadMeshlet(uint meshletAddress, uint frameIndex)
         vertexWordOffset >= MESHLET_PHYSICAL_PAGE_WORD_COUNT ||
         triangleWordOffset >= MESHLET_PHYSICAL_PAGE_WORD_COUNT)
     {
-        IncrementMeshletInvalidMapping(frameIndex);
-        return EmptyMeshlet();
+        IncrementMeshletInvalidMapping(
+            frameIndex,
+            MESHLET_STREAMING_INVALID_MAPPING_PAGE_HEADER_COUNTER);
+        meshlet = EmptyMeshlet();
+        return false;
     }
 
     uint meshletBaseWord = pageBaseWord + meshletWordOffset +
@@ -3821,10 +3938,13 @@ GPUMeshlet ReadMeshlet(uint meshletAddress, uint frameIndex)
     if (meshletBaseWord + uint(SIZEOF_GPU_MESHLET / 4) >
         pageBaseWord + MESHLET_PHYSICAL_PAGE_WORD_COUNT)
     {
-        IncrementMeshletInvalidMapping(frameIndex);
-        return EmptyMeshlet();
+        IncrementMeshletInvalidMapping(
+            frameIndex,
+            MESHLET_STREAMING_INVALID_MAPPING_RECORD_BOUNDS_COUNTER);
+        meshlet = EmptyMeshlet();
+        return false;
     }
-    GPUMeshlet meshlet = ReadPackedMeshletAt(
+    meshlet = ReadPackedMeshletAt(
         pageBuffer,
         meshletBaseWord);
     meshlet.VertexOffset += virtualVertexOffset;
@@ -3835,8 +3955,11 @@ GPUMeshlet ReadMeshlet(uint meshletAddress, uint frameIndex)
     if (vertexLocalWord > MESHLET_PAGED_LOCAL_WORD_MASK ||
         triangleLocalWord > MESHLET_PAGED_LOCAL_WORD_MASK)
     {
-        IncrementMeshletInvalidMapping(frameIndex);
-        return EmptyMeshlet();
+        IncrementMeshletInvalidMapping(
+            frameIndex,
+            MESHLET_STREAMING_INVALID_MAPPING_LOCAL_ADDRESS_COUNTER);
+        meshlet = EmptyMeshlet();
+        return false;
     }
     meshlet.LocalVertexOffset = MESHLET_PAGED_LOCAL_ADDRESS_BIT |
         (bankIndex << MESHLET_PAGED_LOCAL_BANK_SHIFT) |
@@ -3844,6 +3967,19 @@ GPUMeshlet ReadMeshlet(uint meshletAddress, uint frameIndex)
     meshlet.LocalTriangleOffset = MESHLET_PAGED_LOCAL_ADDRESS_BIT |
         (bankIndex << MESHLET_PAGED_LOCAL_BANK_SHIFT) |
         triangleLocalWord;
+    resolvedAddress = MESHLET_RESOLVED_ADDRESS_BIT | virtualIndex;
+    return true;
+}
+
+GPUMeshlet ReadMeshlet(uint meshletAddress, uint frameIndex)
+{
+    GPUMeshlet meshlet;
+    uint resolvedAddress;
+    TryReadMeshlet(
+        meshletAddress,
+        frameIndex,
+        meshlet,
+        resolvedAddress);
     return meshlet;
 }
 
@@ -3944,7 +4080,7 @@ GPUMeshletStreamingRangeData ReadMeshletStreamingRange(uint rangeIndex)
 // The frame-local bitset is cleared at the fence-safe start of each frame.
 // It deduplicates visible range keys before the bounded append buffer is read
 // back by the CPU on the next reuse of this frame slot.
-bool RequestMeshletStreamingRange(uint rangeIndex, uint frameIndex)
+bool RequestMeshletStreamingRangeSingle(uint rangeIndex, uint frameIndex)
 {
     if (rangeIndex == 0xffffffffu)
         return false;
@@ -3999,6 +4135,35 @@ bool RequestMeshletStreamingRange(uint rangeIndex, uint frameIndex)
             MESHLET_STREAMING_DEMAND_OVERFLOW_COUNTER],
         1u);
     return false;
+}
+
+// Coalesce identical requests before touching the global frame bitset. The
+// bitset remains the cross-workgroup authority; this removes its worst
+// same-range contention without changing which keys are eventually emitted.
+bool RequestMeshletStreamingRange(uint rangeIndex, uint frameIndex)
+{
+    uvec4 remaining = subgroupBallot(true);
+    bool accepted = false;
+    while (subgroupBallotBitCount(remaining) != 0u)
+    {
+        uint leader = subgroupBallotFindLSB(remaining);
+        uint candidate = subgroupBroadcast(rangeIndex, leader);
+        bool matches = rangeIndex == candidate;
+        bool leaderAccepted = false;
+        if (gl_SubgroupInvocationID == leader)
+        {
+            leaderAccepted = RequestMeshletStreamingRangeSingle(
+                candidate,
+                frameIndex);
+        }
+        bool candidateAccepted = subgroupBroadcast(
+            leaderAccepted,
+            leader);
+        if (matches)
+            accepted = candidateAccepted;
+        remaining &= ~subgroupBallot(matches);
+    }
+    return accepted;
 }
 
 GPUMeshInfo ReadSceneMeshInfo(uint meshIndex)

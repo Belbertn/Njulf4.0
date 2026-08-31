@@ -183,4 +183,70 @@ public sealed class RendererStartupLatencyPolicyTests
                 Is.True);
         });
     }
+
+    [Test]
+    public void RenderCriticalCacheWindowWaitsForAConcreteRenderThread()
+    {
+        string source = File.ReadAllText(
+            FindSourceFile(
+                "Njulf.Rendering",
+                "VulkanRenderer.cs"));
+        int beginFrame = source.IndexOf(
+            "public bool BeginFrame()",
+            StringComparison.Ordinal);
+        int ensureCanBeginFrame = source.IndexOf(
+            "_lifetime.EnsureCanBeginFrame();",
+            beginFrame,
+            StringComparison.Ordinal);
+        int markRenderCriticalFrames = source.IndexOf(
+            "MarkPipelineCacheRenderCriticalFramesStarted();",
+            ensureCanBeginFrame,
+            StringComparison.Ordinal);
+        int prepareSceneCore = source.IndexOf(
+            "private void PrepareSceneCore(",
+            StringComparison.Ordinal);
+        int markRenderCriticalFramesMethod = source.IndexOf(
+            "private void MarkPipelineCacheRenderCriticalFramesStarted()",
+            prepareSceneCore,
+            StringComparison.Ordinal);
+        string prepareSceneSource = source[
+            prepareSceneCore..markRenderCriticalFramesMethod];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(beginFrame, Is.GreaterThanOrEqualTo(0));
+            Assert.That(ensureCanBeginFrame, Is.GreaterThan(beginFrame));
+            Assert.That(
+                markRenderCriticalFrames,
+                Is.GreaterThan(ensureCanBeginFrame));
+            Assert.That(
+                prepareSceneSource,
+                Does.Not.Contain(".MarkRenderCriticalFramesStarted("));
+            Assert.That(
+                source,
+                Does.Contain(
+                    "pipelineCache.MarkRenderCriticalFramesStarted(renderThreadId);"));
+            Assert.That(
+                source,
+                Does.Contain("renderThreadId <= 0"));
+        });
+    }
+
+    private static string FindSourceFile(params string[] segments)
+    {
+        DirectoryInfo? directory =
+            new(TestContext.CurrentContext.TestDirectory);
+        while (directory != null)
+        {
+            string candidate = directory.FullName;
+            foreach (string segment in segments)
+                candidate = Path.Combine(candidate, segment);
+            if (File.Exists(candidate))
+                return candidate;
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException(
+            $"Could not locate source file '{Path.Combine(segments)}'.");
+    }
 }

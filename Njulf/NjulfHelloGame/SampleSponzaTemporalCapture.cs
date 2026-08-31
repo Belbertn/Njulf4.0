@@ -66,7 +66,7 @@ public sealed class SampleSponzaTemporalCaptureSequence
                 _stage,
                 _stageFrameIndex,
                 _contract.MotionTraversalFrameCount,
-                _contract.SampleMotionTraversalFrame(_stageFrameIndex),
+                _contract.SampleWorldXMotionTraversalFrame(_stageFrameIndex),
                 SampleSponzaTemporalCaptureContract.HorizontalRoute,
                 ResolveHorizontalPhase(_stageFrameIndex),
                 true),
@@ -163,9 +163,9 @@ public sealed class SampleSponzaTemporalCaptureSequence
 
 public static class SampleSponzaTemporalCaptureContract
 {
-    public const string SchemaVersion = "sponza-temporal-capture-contract/v1";
-    public const string RunSchemaVersion = "sponza-temporal-capture-run/v1";
-    public const string HorizontalRoute = "horizontal";
+    public const string SchemaVersion = "sponza-temporal-capture-contract/v2";
+    public const string RunSchemaVersion = "sponza-temporal-capture-run/v2";
+    public const string HorizontalRoute = "world-x";
     public const string VerticalRoute = "vertical";
     public const int Width = 1600;
     public const int Height = 900;
@@ -325,6 +325,27 @@ public sealed record SampleSponzaTemporalFrameArtifact
     public bool JitterEnabled { get; init; }
     public float JitterX { get; init; }
     public float JitterY { get; init; }
+    public uint DdgiFrameRayBucket0 { get; init; }
+    public uint DdgiFrameRayBucket1 { get; init; }
+    public uint DdgiFrameRayBucket2 { get; init; }
+    public uint DdgiFrameRayBucket3 { get; init; }
+    public uint DdgiFrameRayBucket4 { get; init; }
+    public uint DdgiFrameRayBucket5 { get; init; }
+    public int DdgiNearScrollCardinality { get; init; }
+    public int DdgiMidScrollCardinality { get; init; }
+    public int DdgiFarScrollCardinality { get; init; }
+    public int DdgiScrollPlannedExpectedCount { get; init; }
+    public uint DdgiScrollExpectedCount { get; init; }
+    public uint DdgiScrollAcceptedCount { get; init; }
+    public uint DdgiScrollTracedCount { get; init; }
+    public uint DdgiScrollCommittedCount { get; init; }
+    public uint DdgiScrollUnbucketedCount { get; init; }
+    public SimpleDdgiScrollCohortFailureReason DdgiScrollCohortFailure
+        { get; init; }
+    public uint DdgiRebuildingRingMask { get; init; }
+    public SimpleDdgiRebaseState DdgiNearRebaseState { get; init; }
+    public SimpleDdgiRebaseState DdgiMidRebaseState { get; init; }
+    public SimpleDdgiRebaseState DdgiFarRebaseState { get; init; }
 }
 
 public sealed record SampleSponzaTemporalRunManifest
@@ -373,6 +394,7 @@ public sealed class SampleSponzaTemporalCaptureRunner
     private SampleSponzaGiTemporalTrace _routeTrace = new();
     private SampleSponzaTemporalCaptureInstruction? _preparedInstruction;
     private RendererDiagnostics _lastDiagnostics = RendererDiagnostics.Empty;
+    private bool _renderDocRecenterCaptureAttempted;
     private bool _stopped;
 
     public SampleSponzaTemporalCaptureRunner(
@@ -438,6 +460,7 @@ public sealed class SampleSponzaTemporalCaptureRunner
             SampleSponzaTemporalCaptureInstruction instruction =
                 _sequence.CurrentInstruction;
             ApplyCamera(instruction.Camera, viewportWidth, viewportHeight);
+            QueueFirstLateralRecenterRenderDocCapture(instruction);
             if (instruction.CaptureFrame)
             {
                 string relativePath =
@@ -528,9 +551,35 @@ public sealed class SampleSponzaTemporalCaptureRunner
         settings.ResetRenderViewOverrides();
         settings.Debug.Enabled = true;
         settings.Debug.AllowScreenshots = true;
+        settings.Debug.AllowRenderDocCapture = true;
         settings.Debug.CpuSnapshotsEnabled = false;
         settings.Debug.AllowGpuTiming = true;
         _renderer.CaptureScenario = "SponzaTemporalStability";
+    }
+
+    private void QueueFirstLateralRecenterRenderDocCapture(
+        SampleSponzaTemporalCaptureInstruction instruction)
+    {
+        if (_renderDocRecenterCaptureAttempted ||
+            instruction.Stage != SampleSponzaTemporalCaptureStage.Horizontal ||
+            !string.Equals(
+                instruction.Phase,
+                "outbound",
+                StringComparison.Ordinal) ||
+            !_renderer.WouldSimpleDdgiNearRingRecenter(
+                _camera.Position,
+                _camera.Forward))
+        {
+            return;
+        }
+
+        _renderDocRecenterCaptureAttempted = true;
+        _renderer.RequestRenderDocCapture();
+        Console.WriteLine(
+            $"RenderDoc queued for first world-X DDGI recenter: " +
+            $"routeFrame={instruction.StageFrameIndex}, " +
+            $"camera=({_camera.Position.X:R},{_camera.Position.Y:R}," +
+            $"{_camera.Position.Z:R}).");
     }
 
     private void RecordCapturedFrame(
@@ -570,7 +619,28 @@ public sealed class SampleSponzaTemporalCaptureRunner
             MotionVectorsEnabled = diagnostics.MotionVectorsEnabled != 0,
             JitterEnabled = diagnostics.JitterEnabled != 0,
             JitterX = diagnostics.JitterX,
-            JitterY = diagnostics.JitterY
+            JitterY = diagnostics.JitterY,
+            DdgiFrameRayBucket0 = diagnostics.SimpleDdgiFrameRayBucket0,
+            DdgiFrameRayBucket1 = diagnostics.SimpleDdgiFrameRayBucket1,
+            DdgiFrameRayBucket2 = diagnostics.SimpleDdgiFrameRayBucket2,
+            DdgiFrameRayBucket3 = diagnostics.SimpleDdgiFrameRayBucket3,
+            DdgiFrameRayBucket4 = diagnostics.SimpleDdgiFrameRayBucket4,
+            DdgiFrameRayBucket5 = diagnostics.SimpleDdgiFrameRayBucket5,
+            DdgiNearScrollCardinality = diagnostics.SimpleDdgiNearScrollCardinality,
+            DdgiMidScrollCardinality = diagnostics.SimpleDdgiMidScrollCardinality,
+            DdgiFarScrollCardinality = diagnostics.SimpleDdgiFarScrollCardinality,
+            DdgiScrollPlannedExpectedCount =
+                diagnostics.SimpleDdgiScrollRepairExpectedProbeCount,
+            DdgiScrollExpectedCount = diagnostics.SimpleDdgiScrollGpuExpectedCount,
+            DdgiScrollAcceptedCount = diagnostics.SimpleDdgiScrollGpuAcceptedCount,
+            DdgiScrollTracedCount = diagnostics.SimpleDdgiScrollGpuTracedCount,
+            DdgiScrollCommittedCount = diagnostics.SimpleDdgiScrollGpuCommittedCount,
+            DdgiScrollUnbucketedCount = diagnostics.SimpleDdgiScrollUnbucketedCount,
+            DdgiScrollCohortFailure = diagnostics.SimpleDdgiScrollCohortFailure,
+            DdgiRebuildingRingMask = diagnostics.SimpleDdgiRebuildingRingMask,
+            DdgiNearRebaseState = diagnostics.SimpleDdgiNearRebaseState,
+            DdgiMidRebaseState = diagnostics.SimpleDdgiMidRebaseState,
+            DdgiFarRebaseState = diagnostics.SimpleDdgiFarRebaseState
         });
 
         SampleSponzaGiCaptureStage traceStage =

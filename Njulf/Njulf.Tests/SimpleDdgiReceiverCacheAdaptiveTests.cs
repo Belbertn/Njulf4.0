@@ -23,6 +23,10 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
             SimpleDdgiReceiverCacheAdaptiveAbi.RequiredResolveTileBytes(
                 cacheWidth,
                 cacheHeight);
+        ulong missingPrefixBytes =
+            SimpleDdgiReceiverCacheAdaptiveAbi.RequiredMissingPrefixBytes(
+                gatherWidth,
+                gatherHeight);
 
         Assert.Multiple(() =>
         {
@@ -34,6 +38,7 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
                 Is.EqualTo(68u));
             Assert.That(gatherBytes, Is.EqualTo(115_200UL));
             Assert.That(resolveBytes, Is.EqualTo(65_280UL));
+            Assert.That(missingPrefixBytes, Is.EqualTo(900UL));
             Assert.That(
                 SimpleDdgiReceiverCacheAdaptiveAbi
                     .CapacitiesCoverCanonicalWork(
@@ -60,6 +65,10 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
             Assert.That(
                 SimpleDdgiReceiverCacheAdaptiveAbi.ResolveIndirectByteOffset,
                 Is.EqualTo(28UL));
+            Assert.That(
+                SimpleDdgiReceiverCacheAdaptiveAbi
+                    .MissingFeedbackIndirectByteOffset,
+                Is.EqualTo(72UL));
         });
     }
 
@@ -89,7 +98,7 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
                 Is.EqualTo(16UL));
             Assert.That(
                 SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
-                Is.EqualTo(80UL));
+                Is.EqualTo(96UL));
         });
     }
 
@@ -180,6 +189,49 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
     }
 
     [Test]
+    public void HistoryIdentity_PreservesCompatibleToroidalScrollHistory()
+    {
+        var previous = new SimpleDdgiReceiverCacheHistoryIdentity(
+            960u,
+            540u,
+            160u,
+            90u,
+            1,
+            2,
+            3,
+            4,
+            10UL,
+            20UL,
+            30u,
+            40u,
+            50u,
+            60u,
+            70u,
+            80u,
+            90UL,
+            SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+            100u);
+        SimpleDdgiReceiverCacheHistoryIdentity scrolled = previous with
+        {
+            VolumeResourceGeneration = 41u
+        };
+        SimpleDdgiReceiverCacheHistoryIdentity replaced = scrolled with
+        {
+            TransportTopologyGeneration = 51u
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                previous.IsHistoryCompatibleWith(scrolled),
+                Is.True);
+            Assert.That(
+                previous.IsHistoryCompatibleWith(replaced),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void FrameToken_IsGenerationAndFrameScoped()
     {
         var token = new SimpleDdgiReceiverCacheFrameToken(
@@ -236,6 +288,8 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
             "ForwardPlusPass.AdaptiveReceiverCache.cs");
         string pass = ReadRepoText(
             "Njulf.Rendering", "Pipeline", "ForwardPlusPass.cs");
+        string shaderProject = ReadRepoText(
+            "Njulf.Shaders", "Njulf.Shaders.csproj");
 
         Assert.Multiple(() =>
         {
@@ -243,17 +297,37 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
             Assert.That(classify, Does.Contain("CompactGatherWork();"));
             Assert.That(classify, Does.Contain("FinalizeIndirectArguments();"));
             Assert.That(classify, Does.Contain("SeedCanonicalHistory();"));
+            Assert.That(classify, Does.Contain(
+                "CountMissingFeedbackWork();"));
+            Assert.That(classify, Does.Contain(
+                "PrefixMissingFeedbackWork();"));
+            Assert.That(classify, Does.Contain(
+                "ScatterMissingFeedbackWork();"));
+            Assert.That(classify, Does.Contain(
+                "ReceiverMissingPrefixes.Entries[gl_WorkGroupID.x]"));
             Assert.That(gather, Does.Contain(
                 "ReceiverGatherWork.Entries[workIndex]"));
             Assert.That(resolve, Does.Contain(
                 "ReceiverResolveTiles.Entries[resolveWorkIndex]"));
             Assert.That(runtime, Does.Contain("CmdDispatchIndirect("));
             Assert.That(runtime, Does.Contain(
+                "ddgi_simple_receiver_cache_adaptive_b1.comp.spv"));
+            Assert.That(runtime, Does.Contain(
+                "ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv"));
+            Assert.That(shaderProject, Does.Contain(
+                "NJULF_DDGI_RECEIVER_CACHE_PRESERVE_ADAPTIVE_CONTRIBUTION=1"));
+            Assert.That(shaderProject, Does.Contain(
+                "NJULF_DDGI_RECEIVER_CACHE_MISSING_FEEDBACK=1"));
+            Assert.That(gather, Does.Contain(
+                "RECEIVER_ADAPTIVE_MISSING_FEEDBACK_COUNT"));
+            Assert.That(runtime, Does.Contain(
                 "CapacitiesCoverCanonicalWork("));
             Assert.That(pass, Does.Contain(
                 "FeedbackVariantRequiresExact"));
             Assert.That(pass, Does.Contain(
                 "DispatchCanonicalSimpleDdgiReceiverCache("));
+            Assert.That(pass, Does.Not.Contain(
+                "DispatchSimpleDdgiReceiverFeedbackGather("));
         });
     }
 

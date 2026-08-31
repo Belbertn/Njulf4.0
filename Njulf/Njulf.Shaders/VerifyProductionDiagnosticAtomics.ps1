@@ -39,6 +39,8 @@ $schedulerModuleNames = @(
     'ddgi_simple_schedule_commit_propagation.comp.spv',
     'ddgi_simple_schedule_compact.comp.spv',
     'ddgi_simple_schedule_emit.comp.spv',
+    'ddgi_simple_schedule_emit_classify.comp.spv',
+    'ddgi_simple_schedule_emit_scatter.comp.spv',
     'ddgi_simple_schedule_feedback.comp.spv',
     'ddgi_simple_schedule_feedback_partial.comp.spv',
     'ddgi_simple_schedule_lane_base.comp.spv',
@@ -177,10 +179,12 @@ $algorithmicAtomicCounts = @{
     'particle.vert.spv' = 14
     'foliage_grass.mesh.spv' = 14
     # Authored foliage additionally performs the bounded physical-residency
-    # range-demand transaction. Its eight adds are functional streaming
-    # atomics rather than DDGI diagnostics.
-    'foliage_mesh.mesh.spv' = 22
-    'foliage_mesh_b1.mesh.spv' = 8
+    # range-demand transaction. Resolved mappings retain five fail-closed
+    # validation branches, each with subgroup-aggregated total and typed
+    # attribution adds. These are functional streaming atomics rather than
+    # optional renderer diagnostics.
+    'foliage_mesh.mesh.spv' = 32
+    'foliage_mesh_b1.mesh.spv' = 18
     # Exact B1 production variants add only bounded reservation, publication,
     # and overflow accounting. Surface programs have seven additional adds;
     # fog/particle and the receiver cache have six because their producer
@@ -208,10 +212,14 @@ $algorithmicAtomicCounts = @{
     # The frame-local opaque cache executes the same three exact gather sites
     # while residency demand stays disabled.
     'ddgi_simple_receiver_cache.comp.spv' = 3
-    # Adaptive generation retains the same three gather sites.  Its classifier
-    # owns nine bounded work-list reservation and overflow operations.
+    # Adaptive generation retains the same three gather sites. Its classifier
+    # owns the bounded work-list reservations plus the exact missing-lattice
+    # compaction append. Adaptive B1 variants now emit exact attribution for
+    # overlapping cells so the authoritative tail dispatch can skip them.
     'ddgi_simple_receiver_cache_adaptive.comp.spv' = 3
-    'ddgi_simple_receiver_cache_classify.comp.spv' = 9
+    'ddgi_simple_receiver_cache_adaptive_b1.comp.spv' = 9
+    'ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv' = 9
+    'ddgi_simple_receiver_cache_classify.comp.spv' = 10
     # The frozen depth-only benchmark uses the identical gather producer but
     # deliberately omits the surface sidecar. Its three functional gather
     # atomics must remain equivalent to the pre-surface-cache implementation.
@@ -222,9 +230,9 @@ $algorithmicAtomicCounts = @{
     # artifacts. Pin their complete static add count here so no diagnostic
     # operation can leak into the zero-add production/cache-debug siblings.
     'ddgi_simple_receiver_cache_resolve_diagnostics.comp.spv' = 6
-    'forward_opaque_ddgi_cache_required_diagnostics.frag.spv' = 25
-    'forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv' = 25
-    'forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv' = 25
+    'forward_opaque_ddgi_cache_required_diagnostics.frag.spv' = 26
+    'forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv' = 26
+    'forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv' = 26
 
     # Sparse page classification, reconciliation, fixed feedback reduction,
     # and generation-safe update lifecycle attribution.

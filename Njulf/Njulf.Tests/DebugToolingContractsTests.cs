@@ -177,9 +177,9 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.TransparentReflectionCounterCount,
                     Is.EqualTo(18));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterCount,
-                    Is.EqualTo(17));
+                    Is.EqualTo(18));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
-                    Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterBase + 17));
+                    Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterBase + 18));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount *
                                             sizeof(uint)));
@@ -228,6 +228,8 @@ namespace Njulf.Tests
                     "SIMPLE_DDGI_RECEIVER_CACHE_COUNTER_BASE ="));
                 Assert.That(commonShader, Does.Contain(
                     "SIMPLE_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_COUNTER ="));
+                Assert.That(commonShader, Does.Contain(
+                    "SIMPLE_DDGI_RECEIVER_CACHE_DIRECTIONAL_EVALUATION_COUNTER ="));
                 Assert.That(simpleSharedShader, Does.Contain(
                     "void RecordSimpleDdgiVolumeEnergyEvidence("));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -283,6 +285,8 @@ namespace Njulf.Tests
                 Assert.That(decoded.ForwardInsufficientSupportRejectCount, Is.EqualTo(114ul));
                 Assert.That(decoded.ExactFallbackFragmentCount, Is.EqualTo(115ul));
                 Assert.That(decoded.LegacyFragmentCount, Is.EqualTo(116ul));
+                Assert.That(decoded.DirectionalCacheEvaluationCount,
+                    Is.EqualTo(117ul));
             });
 
             Assert.Throws<ArgumentException>(() =>

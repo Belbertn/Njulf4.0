@@ -131,6 +131,8 @@ namespace Njulf.Rendering.Pipeline
         private SimpleDdgiReceiverCacheGpuCounters
             _completedSimpleDdgiReceiverCacheCounters =
                 SimpleDdgiReceiverCacheGpuCounters.Unavailable;
+        private readonly SimpleDdgiReceiverCacheLifetimeAccumulator
+            _receiverCacheLifetime = new();
         private bool _forwardGiDisabledBenchmarkPipelineUsedForCurrentView;
         private bool _forwardGiExactGatherUsedForCurrentView;
         private bool _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView;
@@ -235,6 +237,8 @@ namespace Njulf.Rendering.Pipeline
                             _simpleDdgiReceiverCachePipelineArtifact);
                 SimpleDdgiReceiverCacheGpuCounters counters =
                     _completedSimpleDdgiReceiverCacheCounters;
+                SimpleDdgiReceiverCacheLifetimeCounters lifetime =
+                    _receiverCacheLifetime.Snapshot;
                 SimpleDdgiReceiverCacheAdaptiveCounters adaptive =
                     _adaptiveReceiverCounters;
                 diagnostics = diagnostics with
@@ -249,6 +253,8 @@ namespace Njulf.Rendering.Pipeline
                         SimpleDdgiReceiverCacheAdaptiveBytes,
                     AdaptiveCounterReadbackValid = adaptive.ReadbackValid,
                     AdaptiveGatherWorkCount = adaptive.GatherWorkCount,
+                    AdaptiveMissingFeedbackWorkCount =
+                        adaptive.MissingFeedbackWorkCount,
                     AdaptiveResolveTileCount = adaptive.ResolveTileCount,
                     AdaptiveOverflowFlags = adaptive.OverflowFlags,
                     AdaptiveAcceptedEntryCount = adaptive.AcceptedEntryCount,
@@ -256,7 +262,23 @@ namespace Njulf.Rendering.Pipeline
                     AdaptiveFullTileCount = adaptive.FullTileCount,
                     AdaptiveHalfTileCount = adaptive.HalfTileCount,
                     AdaptiveQuarterTileCount = adaptive.QuarterTileCount,
-                    AdaptiveReuseTileCount = adaptive.ReuseTileCount
+                    AdaptiveReuseTileCount = adaptive.ReuseTileCount,
+                    LifetimeObservedFrameCount =
+                        lifetime.ObservedFrameCount,
+                    LifetimeResolveCandidateCount =
+                        lifetime.ResolveCandidateCount,
+                    LifetimeResolveValidCount =
+                        lifetime.ResolveValidCount,
+                    LifetimeForwardCandidateCount =
+                        lifetime.ForwardCandidateCount,
+                    LifetimeForwardAcceptedCount =
+                        lifetime.ForwardAcceptedCount,
+                    LifetimeExactFallbackFragmentCount =
+                        lifetime.ExactFallbackFragmentCount,
+                    LifetimeDirectionalCacheEvaluationCount =
+                        lifetime.DirectionalCacheEvaluationCount,
+                    LifetimeLegacyFragmentCount =
+                        lifetime.LegacyFragmentCount
                 };
                 if (diagnostics.EffectiveMode ==
                         SimpleDdgiReceiverCacheMode.Exact ||
@@ -293,7 +315,9 @@ namespace Njulf.Rendering.Pipeline
                         counters.ForwardInsufficientSupportRejectCount,
                     ExactFallbackFragmentCount =
                         counters.ExactFallbackFragmentCount,
-                    LegacyFragmentCount = counters.LegacyFragmentCount
+                    LegacyFragmentCount = counters.LegacyFragmentCount,
+                    DirectionalCacheEvaluationCount =
+                        counters.DirectionalCacheEvaluationCount
                 };
             }
         }
@@ -301,6 +325,7 @@ namespace Njulf.Rendering.Pipeline
         internal void ObserveCompletedSimpleDdgiReceiverCacheCounters(
             SimpleDdgiReceiverCacheGpuCounters counters)
         {
+            _receiverCacheLifetime.Observe(counters);
             _completedSimpleDdgiReceiverCacheCounters = counters;
         }
 
@@ -1463,7 +1488,7 @@ namespace Njulf.Rendering.Pipeline
                             }
                             _simpleDdgiReceiverCachePipelineArtifact =
                                 _adaptiveReceiverExecutedForCurrentView
-                                    ? "ddgi_simple_receiver_cache_{classify,adaptive,resolve-adaptive}.comp.spv@adaptive-abi-v1"
+                                    ? "ddgi_simple_receiver_cache_{classify,adaptive,adaptive-b1,adaptive-b1-missing,resolve-adaptive}.comp.spv@adaptive-abi-v2"
                                 : receiverCacheDebugView
                                     ? "forward_*_ddgi_cache_debug.frag.spv@surface-abi-v1"
                                     : _simpleDdgiReceiverCacheEffectiveMode ==
@@ -2885,23 +2910,16 @@ namespace Njulf.Rendering.Pipeline
                     receiverFeedbackProducer);
             }
 
-            // Shading and exact feedback are independent consumers. The
-            // adaptive lane owns the resolved receiver cache; when exact
-            // attribution is open, a second coarse-lattice producer records
-            // the authoritative feedback samples and directional tail without
-            // replacing that adaptive cache.
+            // The adaptive gather owns both cache shading and any overlapping
+            // exact samples. Its stable missing-cell pass completes the exact
+            // coarse lattice and directional tail without reshading cells that
+            // already ran adaptively.
             if (DispatchSimpleDdgiReceiverCacheAdaptive(
                     cmd,
                     frameIndex,
                     sceneData,
-                    renderExtent) &&
-                (!receiverFeedbackProducer.IsAvailable ||
-                 DispatchSimpleDdgiReceiverFeedbackGather(
-                     cmd,
-                     frameIndex,
-                     sceneData,
-                     renderExtent,
-                     receiverFeedbackProducer)))
+                    renderExtent,
+                    receiverFeedbackProducer))
             {
                 _simpleDdgiReceiverCacheFallbackReason =
                     SimpleDdgiReceiverCacheFallbackReason.None;
@@ -3157,38 +3175,6 @@ namespace Njulf.Rendering.Pipeline
                 PBufferMemoryBarriers = cacheBarriers
             };
             _context.Api.CmdPipelineBarrier2(cmd, &cacheDependency);
-            return true;
-        }
-
-        private bool DispatchSimpleDdgiReceiverFeedbackGather(
-            CommandBuffer cmd,
-            int frameIndex,
-            Data.SceneRenderingData sceneData,
-            Extent2D renderExtent,
-            in SimpleDdgiReceiverFeedbackCaptureProducerContract producer)
-        {
-            if (!producer.IsAvailable ||
-                !DispatchSimpleDdgiReceiverGather(
-                    cmd,
-                    frameIndex,
-                    sceneData,
-                    renderExtent,
-                    producer,
-                    legacyBenchmark: false))
-            {
-                return false;
-            }
-
-            // The feedback shader also refreshes the coarse directional tail
-            // consumed by receiver-cache fragments. Publish both that read and
-            // the exact-attribution candidate writes before their consumers.
-            AdaptiveReceiverMemoryBarrier(
-                cmd,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit |
-                    PipelineStageFlags2.FragmentShaderBit,
-                AccessFlags2.ShaderStorageReadBit);
             return true;
         }
 

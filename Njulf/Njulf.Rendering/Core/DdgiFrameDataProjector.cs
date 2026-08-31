@@ -731,6 +731,54 @@ internal static class DdgiFrameDataProjector
             manager.RecenteredThisFrame ? 1 : 0;
         sceneData.SimpleDdgiAtlasPreservedOnRecenter =
             manager.AtlasPreservedOnRecenterThisFrame ? 1 : 0;
+        sceneData.SimpleDdgiScrollCommittedCascadeCount =
+            manager.ScrollCommittedCascadeCount;
+        sceneData.SimpleDdgiScrollDeferredCascadeCount =
+            manager.ScrollDeferredCascadeCount;
+        sceneData.SimpleDdgiScrollExposedProbeCount =
+            manager.ScrollExposedProbeCount;
+        sceneData.SimpleDdgiScrollRepairExpectedProbeCount =
+            manager.ScrollRepairExpectedProbeCount;
+        sceneData.SimpleDdgiScrollReservedPrimaryRayCount =
+            manager.ScrollReservedPrimaryRayCount;
+        sceneData.SimpleDdgiScrollEmergencyRebaseCount =
+            manager.ScrollEmergencyRebaseCount;
+        sceneData.SimpleDdgiFrameRayBucket0 = manager.GetFrameRayBucket(0);
+        sceneData.SimpleDdgiFrameRayBucket1 = manager.GetFrameRayBucket(1);
+        sceneData.SimpleDdgiFrameRayBucket2 = manager.GetFrameRayBucket(2);
+        sceneData.SimpleDdgiFrameRayBucket3 = manager.GetFrameRayBucket(3);
+        sceneData.SimpleDdgiFrameRayBucket4 = manager.GetFrameRayBucket(4);
+        sceneData.SimpleDdgiFrameRayBucket5 = manager.GetFrameRayBucket(5);
+        sceneData.SimpleDdgiNearScrollCardinality =
+            manager.GetSelectedScrollCardinality(0);
+        sceneData.SimpleDdgiMidScrollCardinality =
+            manager.GetSelectedScrollCardinality(1);
+        sceneData.SimpleDdgiFarScrollCardinality =
+            manager.GetSelectedScrollCardinality(2);
+        SimpleDdgiScrollCohortEvidence scrollEvidence =
+            manager.GpuScheduler.LastScrollCohortEvidence;
+        sceneData.SimpleDdgiScrollGpuExpectedCount =
+            scrollEvidence.ExpectedCount;
+        sceneData.SimpleDdgiScrollGpuAcceptedCount =
+            scrollEvidence.AcceptedCount;
+        sceneData.SimpleDdgiScrollGpuTracedCount =
+            scrollEvidence.TracedCount;
+        sceneData.SimpleDdgiScrollGpuCommittedCount =
+            scrollEvidence.CommittedCount;
+        sceneData.SimpleDdgiScrollUnbucketedCount =
+            scrollEvidence.UnbucketedUpdateCount;
+        sceneData.SimpleDdgiScrollCohortFailure =
+            scrollEvidence.FailureReason;
+        sceneData.SimpleDdgiRebuildingRingMask = manager.RebuildingRingMask;
+        sceneData.SimpleDdgiNearRebaseState = manager.NearRingRebaseState;
+        sceneData.SimpleDdgiMidRebaseState = manager.MidRingRebaseState;
+        sceneData.SimpleDdgiFarRebaseState = manager.FarRingRebaseState;
+        sceneData.SimpleDdgiNearRebaseFadeFrame =
+            manager.GetRingRebaseFadeFrame(0);
+        sceneData.SimpleDdgiMidRebaseFadeFrame =
+            manager.GetRingRebaseFadeFrame(1);
+        sceneData.SimpleDdgiFarRebaseFadeFrame =
+            manager.GetRingRebaseFadeFrame(2);
         sceneData.SimpleDdgiAtlasCleared =
             manager.AtlasClearedThisFrame ? 1 : 0;
         sceneData.SimpleDdgiAtlasFresh = manager.AtlasFresh ? 1 : 0;

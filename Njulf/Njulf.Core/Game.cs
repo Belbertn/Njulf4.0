@@ -35,6 +35,9 @@ namespace Njulf.Core
         private bool _progressiveScenePreparationPending;
         private bool _contentLoaded;
         private long _runStartedTimestamp;
+        private readonly FramePacer _framePacer = new();
+        private double _maximumFramesPerSecond =
+            FramePacer.DefaultMaximumFramesPerSecond;
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "IDE0052:Remove unread private members", Justification = "Used for initialization tracking")]
         private bool _isInitialized = false;
 
@@ -44,6 +47,20 @@ namespace Njulf.Core
         public string WindowTitle { get; set; } = "Njulf Game";
         public WindowBorder WindowBorderStyle { get; set; } = WindowBorder.Resizable;
         public bool VSync { get; set; } = true;
+        /// <summary>
+        /// Maximum host render rate. Zero disables CPU pacing; Vulkan VSync may
+        /// still constrain presentation to the display refresh rate.
+        /// </summary>
+        public double MaximumFramesPerSecond
+        {
+            get => _maximumFramesPerSecond;
+            set
+            {
+                FramePacer.ValidateMaximumFramesPerSecond(value);
+                _maximumFramesPerSecond = value;
+            }
+        }
+        public long LastFramePacingWaitMicroseconds { get; private set; }
         public bool IsRunning => _isRunning;
 
         public IServiceProvider? Services => _services;
@@ -69,6 +86,8 @@ namespace Njulf.Core
             _isRunning = true;
             _isShuttingDown = false;
             _runStartedTimestamp = Stopwatch.GetTimestamp();
+            _framePacer.Reset();
+            LastFramePacingWaitMicroseconds = 0L;
 
             try
             {
@@ -340,9 +359,18 @@ namespace Njulf.Core
             if (!_isRunning || _renderer == null)
                 return;
 
+            IRenderer renderer = _renderer;
+            LastFramePacingWaitMicroseconds =
+                _framePacer.Wait(MaximumFramesPerSecond);
+            if (renderer is IRendererFramePacingDiagnostics pacingDiagnostics)
+            {
+                pacingDiagnostics.ReportFramePacing(
+                    MaximumFramesPerSecond,
+                    LastFramePacingWaitMicroseconds);
+            }
+
             ObservePipelinePreparation();
 
-            IRenderer renderer = _renderer;
             long frameStarted = Stopwatch.GetTimestamp();
             if (renderer.BeginFrame() != true)
                 return;
@@ -400,9 +428,22 @@ namespace Njulf.Core
                     GetElapsedMicroseconds(frameStarted);
                 if (_firstFrameLogged && frameMicroseconds > 100_000)
                 {
+                    RendererFrameBoundaryTiming boundaryTiming =
+                        renderer is IRendererFrameBoundaryTimingSource timingSource
+                            ? timingSource.LastFrameBoundaryTiming
+                            : default;
+                    long beginOtherMicroseconds = System.Math.Max(
+                        0L,
+                        beginFrameMicroseconds -
+                        boundaryTiming.FrameFenceWaitMicroseconds -
+                        boundaryTiming.SwapchainAcquireMicroseconds);
                     Console.WriteLine(
                         $"Render frame hitch: total={frameMicroseconds / 1000.0:F3}ms, " +
+                        $"pacing={LastFramePacingWaitMicroseconds / 1000.0:F3}ms, " +
                         $"begin={beginFrameMicroseconds / 1000.0:F3}ms, " +
+                        $"beginFence={boundaryTiming.FrameFenceWaitMicroseconds / 1000.0:F3}ms, " +
+                        $"beginAcquire={boundaryTiming.SwapchainAcquireMicroseconds / 1000.0:F3}ms, " +
+                        $"beginOther={beginOtherMicroseconds / 1000.0:F3}ms, " +
                         $"draw={drawMicroseconds / 1000.0:F3}ms, " +
                         $"end={endFrameMicroseconds / 1000.0:F3}ms, " +
                         $"presentedCallback={(frameMicroseconds - beginFrameMicroseconds - drawMicroseconds - endFrameMicroseconds) / 1000.0:F3}ms.");

@@ -133,10 +133,18 @@ internal sealed class RendererDiagnosticsAssembler
             input.Capture.MetadataProvider;
         long _lastAcquireImageMicroseconds =
             input.Frame.AcquireImageMicroseconds;
+        long _lastSwapchainImageOwnerWaitMicroseconds =
+            input.Frame.SwapchainImageOwnerWaitMicroseconds;
+        long _lastFrameResourceRecycleWaitMicroseconds =
+            input.Frame.FrameResourceRecycleWaitMicroseconds;
         long _lastQueueSubmitMicroseconds =
             input.Frame.QueueSubmitMicroseconds;
         long _lastPresentMicroseconds =
             input.Frame.PresentMicroseconds;
+        double _maximumFramesPerSecond =
+            input.Frame.MaximumFramesPerSecond;
+        long _framePacingWaitMicroseconds =
+            input.Frame.FramePacingWaitMicroseconds;
         string _lastRenderTargetRecreateReason =
             input.Frame.LastRenderTargetRecreateReason;
         bool MeshletDiagnosticCountersActive =
@@ -1053,6 +1061,36 @@ internal sealed class RendererDiagnosticsAssembler
             FarFieldPageTableBytes = giUsesSimpleDdgi ? sceneData.FarFieldPageTableBytes : 0UL,
             SimpleDdgiRecentered = giUsesSimpleDdgi ? sceneData.SimpleDdgiRecentered : 0,
             SimpleDdgiAtlasPreservedOnRecenter = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasPreservedOnRecenter : 0,
+            SimpleDdgiScrollCommittedCascadeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollCommittedCascadeCount : 0,
+            SimpleDdgiScrollDeferredCascadeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollDeferredCascadeCount : 0,
+            SimpleDdgiScrollExposedProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollExposedProbeCount : 0,
+            SimpleDdgiScrollRepairExpectedProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollRepairExpectedProbeCount : 0,
+            SimpleDdgiScrollReservedPrimaryRayCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollReservedPrimaryRayCount : 0UL,
+            SimpleDdgiScrollEmergencyRebaseCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollEmergencyRebaseCount : 0UL,
+            SimpleDdgiFrameRayBucket0 = giUsesSimpleDdgi ? sceneData.SimpleDdgiFrameRayBucket0 : 0u,
+            SimpleDdgiFrameRayBucket1 = giUsesSimpleDdgi ? sceneData.SimpleDdgiFrameRayBucket1 : 0u,
+            SimpleDdgiFrameRayBucket2 = giUsesSimpleDdgi ? sceneData.SimpleDdgiFrameRayBucket2 : 0u,
+            SimpleDdgiFrameRayBucket3 = giUsesSimpleDdgi ? sceneData.SimpleDdgiFrameRayBucket3 : 0u,
+            SimpleDdgiFrameRayBucket4 = giUsesSimpleDdgi ? sceneData.SimpleDdgiFrameRayBucket4 : 0u,
+            SimpleDdgiFrameRayBucket5 = giUsesSimpleDdgi ? sceneData.SimpleDdgiFrameRayBucket5 : 0u,
+            SimpleDdgiNearScrollCardinality = giUsesSimpleDdgi ? sceneData.SimpleDdgiNearScrollCardinality : 0,
+            SimpleDdgiMidScrollCardinality = giUsesSimpleDdgi ? sceneData.SimpleDdgiMidScrollCardinality : 0,
+            SimpleDdgiFarScrollCardinality = giUsesSimpleDdgi ? sceneData.SimpleDdgiFarScrollCardinality : 0,
+            SimpleDdgiScrollGpuExpectedCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollGpuExpectedCount : 0u,
+            SimpleDdgiScrollGpuAcceptedCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollGpuAcceptedCount : 0u,
+            SimpleDdgiScrollGpuTracedCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollGpuTracedCount : 0u,
+            SimpleDdgiScrollGpuCommittedCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollGpuCommittedCount : 0u,
+            SimpleDdgiScrollUnbucketedCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiScrollUnbucketedCount : 0u,
+            SimpleDdgiScrollCohortFailure = giUsesSimpleDdgi
+                ? sceneData.SimpleDdgiScrollCohortFailure
+                : SimpleDdgiScrollCohortFailureReason.None,
+            SimpleDdgiRebuildingRingMask = giUsesSimpleDdgi ? sceneData.SimpleDdgiRebuildingRingMask : 0u,
+            SimpleDdgiNearRebaseState = giUsesSimpleDdgi ? sceneData.SimpleDdgiNearRebaseState : SimpleDdgiRebaseState.Stable,
+            SimpleDdgiMidRebaseState = giUsesSimpleDdgi ? sceneData.SimpleDdgiMidRebaseState : SimpleDdgiRebaseState.Stable,
+            SimpleDdgiFarRebaseState = giUsesSimpleDdgi ? sceneData.SimpleDdgiFarRebaseState : SimpleDdgiRebaseState.Stable,
+            SimpleDdgiNearRebaseFadeFrame = giUsesSimpleDdgi ? sceneData.SimpleDdgiNearRebaseFadeFrame : 0,
+            SimpleDdgiMidRebaseFadeFrame = giUsesSimpleDdgi ? sceneData.SimpleDdgiMidRebaseFadeFrame : 0,
+            SimpleDdgiFarRebaseFadeFrame = giUsesSimpleDdgi ? sceneData.SimpleDdgiFarRebaseFadeFrame : 0,
             SimpleDdgiAtlasCleared = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasCleared : 0,
             SimpleDdgiAtlasFresh = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasFresh : 0,
             SimpleDdgiRecenterCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiRecenterCount : 0,
@@ -2396,7 +2434,8 @@ internal sealed class RendererDiagnosticsAssembler
                 meshletResidency?.Degraded == true ||
                 meshletResidencyReloadRequired ||
                 meshletVulkanResidency?.FailedPageRecordCount > 0 ||
-                meshletVulkanResidency?.InvalidShaderMappingCount > 0
+                meshletVulkanResidency?
+                    .LastCompletedFrameInvalidShaderMappingCount > 0
                     ? 1
                     : 0,
             MeshletPhysicalResidencyReloadRequired =
@@ -2452,6 +2491,30 @@ internal sealed class RendererDiagnosticsAssembler
             MeshletPhysicalResidencyInvalidMappingCount =
                 (meshletPageCache?.InvalidMappingCount ?? 0L) +
                 (meshletVulkanResidency?.InvalidShaderMappingCount ?? 0L),
+            MeshletPhysicalResidencyCpuInvalidMappingTotal =
+                meshletPageCache?.InvalidMappingCount ?? 0L,
+            MeshletPhysicalResidencyGpuInvalidMappingTotal =
+                meshletVulkanResidency?.InvalidShaderMappingCount ?? 0L,
+            MeshletPhysicalResidencyLastFrameInvalidMappingCount =
+                meshletVulkanResidency?
+                    .LastCompletedFrameInvalidShaderMappingCount ?? 0U,
+            MeshletPhysicalResidencyMissingPageMappingTotal =
+                meshletVulkanResidency?
+                    .InvalidShaderMissingPageMappingCount ?? 0L,
+            MeshletPhysicalResidencyInvalidPageHeaderTotal =
+                meshletVulkanResidency?.InvalidShaderPageHeaderCount ?? 0L,
+            MeshletPhysicalResidencyRecordBoundsFailureTotal =
+                meshletVulkanResidency?.InvalidShaderRecordBoundsCount ?? 0L,
+            MeshletPhysicalResidencyLocalAddressFailureTotal =
+                meshletVulkanResidency?.InvalidShaderLocalAddressCount ?? 0L,
+            MeshletPhysicalResidencyResolvedMappingFailureTotal =
+                meshletVulkanResidency?.InvalidShaderResolvedMappingCount ?? 0L,
+            MeshletPhysicalResidencyRangePublicationMismatchTotal =
+                meshletVulkanResidency?.RangePublicationMismatchCount ?? 0L,
+            MeshletPhysicalResidencyFeedbackFrameSerial =
+                meshletVulkanResidency?.LastCompletedFeedbackFrameSerial ?? 0UL,
+            MeshletPhysicalResidencyFeedbackFrameSlot =
+                meshletVulkanResidency?.LastCompletedFeedbackFrameSlot ?? -1,
             MeshletPhysicalResidencyFallbackReasonSummary =
                 meshletResidencyFallbackSummary,
             MeshletPhysicalResidencyLatestFailure =
@@ -2546,6 +2609,14 @@ internal sealed class RendererDiagnosticsAssembler
             SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize = sceneData.SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize,
             SceneSubmissionCounterBufferSize = sceneData.SceneSubmissionCounterBufferSize,
             SceneSubmissionOpaqueIndirectDispatchBufferSize = sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize,
+            SceneSubmissionCompactionFullPayloadClear =
+                sceneData.SceneSubmissionCompactionFullPayloadClear ? 1 : 0,
+            SceneSubmissionCompactionClearedBytes =
+                sceneData.SceneSubmissionCompactionClearedBytes,
+            SceneSubmissionCompactionResetBarrierCount =
+                sceneData.SceneSubmissionCompactionResetBarrierCount,
+            SceneSubmissionCompactionOutputBarrierCount =
+                sceneData.SceneSubmissionCompactionOutputBarrierCount,
             GpuCompositeMicroseconds = sceneData.GpuCompositeMicroseconds,
             GpuBloomExtractMicroseconds = sceneData.GpuBloomExtractMicroseconds,
             GpuBloomDownsampleMicroseconds = sceneData.GpuBloomDownsampleMicroseconds,
@@ -2988,8 +3059,28 @@ internal sealed class RendererDiagnosticsAssembler
             SwapchainEstimatedBytes = _swapchain.EstimatedBytes,
             SwapchainImageCount = (int)_swapchain.ImageCount,
             SwapchainFormat = _swapchain.SurfaceFormat.ToString(),
+            SwapchainPresentMode = _swapchain.PresentMode.ToString(),
+            MaximumFramesPerSecond = _maximumFramesPerSecond,
+            CpuFramePacingWaitMicroseconds =
+                _framePacingWaitMicroseconds,
             CpuAcquireImageMicroseconds = _lastAcquireImageMicroseconds,
-            CpuWaitForFrameFenceMicroseconds = _sync.LastFenceWaitMicroseconds,
+            CpuWaitForFrameFenceMicroseconds =
+                _lastSwapchainImageOwnerWaitMicroseconds +
+                _lastFrameResourceRecycleWaitMicroseconds,
+            CpuSwapchainImageOwnerWaitMicroseconds =
+                _lastSwapchainImageOwnerWaitMicroseconds,
+            CpuFrameResourceRecycleWaitMicroseconds =
+                _lastFrameResourceRecycleWaitMicroseconds,
+            FrameResourceContext = input.Frame.FrameResourceContext,
+            FrameResourceOwnerSubmissionSerial =
+                input.Frame.FrameResourceOwnerSubmissionSerial,
+            SwapchainImageIndex = input.Frame.SwapchainImageIndex,
+            SwapchainImageOwnerSubmissionSerial =
+                input.Frame.SwapchainImageOwnerSubmissionSerial,
+            SwapchainImageOwnerFrameContext =
+                input.Frame.SwapchainImageOwnerFrameContext,
+            AcquireSemaphoreSlot = input.Frame.AcquireSemaphoreSlot,
+            PendingSubmissionSerial = input.Frame.PendingSubmissionSerial,
             CpuQueueSubmitMicroseconds = _lastQueueSubmitMicroseconds,
             CpuPresentMicroseconds = _lastPresentMicroseconds,
             CpuFenceResetMicroseconds = _sync.LastFenceResetMicroseconds,

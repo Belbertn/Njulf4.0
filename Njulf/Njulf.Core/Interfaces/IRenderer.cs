@@ -22,6 +22,30 @@ namespace Njulf.Core.Interfaces
         bool IsFrameInProgress { get; }
     }
 
+    public readonly record struct RendererFrameBoundaryTiming(
+        long FrameFenceWaitMicroseconds,
+        long SwapchainAcquireMicroseconds);
+
+    /// <summary>
+    /// Optional host/renderer diagnostics bridge. It keeps host pacing outside
+    /// renderer timing while still publishing the configured limit and wait.
+    /// </summary>
+    public interface IRendererFramePacingDiagnostics
+    {
+        void ReportFramePacing(
+            double maximumFramesPerSecond,
+            long waitMicroseconds);
+    }
+
+    /// <summary>
+    /// Optional renderer timing source used to break BeginFrame into its two
+    /// potentially blocking Vulkan operations and remaining CPU work.
+    /// </summary>
+    public interface IRendererFrameBoundaryTimingSource
+    {
+        RendererFrameBoundaryTiming LastFrameBoundaryTiming { get; }
+    }
+
     /// <summary>
     /// Optional renderer capability for compiling the pipelines required by a
     /// fully loaded scene before its first frame is recorded.
@@ -59,6 +83,23 @@ namespace Njulf.Core.Interfaces
         ulong PipelinesCompleted,
         string Detail)
     {
+        /// <summary>
+        /// Native Vulkan pipeline creations that have entered the driver but
+        /// have not returned yet. This remains zero when the renderer is doing
+        /// non-pipeline startup work.
+        /// </summary>
+        public int ActivePipelineCount { get; init; }
+
+        /// <summary>
+        /// Elapsed time for the oldest active native pipeline creation.
+        /// </summary>
+        public long OldestActivePipelineMicroseconds { get; init; }
+
+        /// <summary>
+        /// Bounded, human-readable identities for the active pipelines.
+        /// </summary>
+        public string ActivePipelineSummary { get; init; } = string.Empty;
+
         public bool IsFullQuality =>
             Phase == RendererStartupPhase.FullQuality;
         public bool IsFaulted => Phase == RendererStartupPhase.Faulted;

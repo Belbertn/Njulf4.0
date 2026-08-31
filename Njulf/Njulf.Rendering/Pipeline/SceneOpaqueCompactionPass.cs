@@ -7,6 +7,7 @@ using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline.PipelineObjects;
+using Njulf.Rendering.Resources;
 using Njulf.Rendering.Utilities;
 using Silk.NET.Vulkan;
 using VkBuffer = Silk.NET.Vulkan.Buffer;
@@ -360,7 +361,29 @@ namespace Njulf.Rendering.Pipeline
             sceneData.SceneSubmissionCounterBufferSize = counterBuffer.ByteSize;
             sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize = indirectDispatchBuffer.ByteSize;
 
-            ResetOutputs(cmd, frameIndex, drawBuffer, simpleDrawBuffer, simpleNormalDrawBuffer, fullDrawBuffer, solidDepthDrawBuffer, maskedDepthDrawBuffer, counterBuffer, indirectDispatchBuffer);
+            SceneOpaqueResetPlan resetPlan = SceneOpaqueResetPlan.Create(
+                sceneData.SceneSubmissionIndirectMeshletDispatchEnabled,
+                sceneData.SceneSubmissionValidationCompareCpuGpuLists,
+                sceneData.DirectionalShadowCascadeCount,
+                directionalStaticShadowCascadeMask,
+                compactDirectionalDynamicShadows);
+            (ulong clearedBytes, int resetBarrierCount) = ResetOutputs(
+                cmd,
+                frameIndex,
+                resetPlan,
+                drawBuffer,
+                simpleDrawBuffer,
+                simpleNormalDrawBuffer,
+                fullDrawBuffer,
+                solidDepthDrawBuffer,
+                maskedDepthDrawBuffer,
+                counterBuffer,
+                indirectDispatchBuffer);
+            sceneData.SceneSubmissionCompactionFullPayloadClear =
+                resetPlan.ClearPayloads;
+            sceneData.SceneSubmissionCompactionClearedBytes = clearedBytes;
+            sceneData.SceneSubmissionCompactionResetBarrierCount =
+                resetBarrierCount;
             PrepareLodHistory(cmd, sceneData);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _meshPipeline.SceneOpaqueCompactionPipeline);
@@ -475,7 +498,30 @@ namespace Njulf.Rendering.Pipeline
                 &pushConstants);
 
             _context.Api.CmdDispatch(cmd, dispatchGroupCount, 1, 1);
-            RecordOutputBarrier(cmd, frameIndex, drawBuffer, simpleDrawBuffer, simpleNormalDrawBuffer, fullDrawBuffer, solidDepthDrawBuffer, maskedDepthDrawBuffer, counterBuffer, indirectDispatchBuffer);
+            sceneData.SceneSubmissionCompactionOutputBarrierCount =
+                RecordOutputBarrier(
+                    cmd,
+                    frameIndex,
+                    resetPlan,
+                    drawBuffer,
+                    simpleDrawBuffer,
+                    simpleNormalDrawBuffer,
+                    fullDrawBuffer,
+                    solidDepthDrawBuffer,
+                    maskedDepthDrawBuffer,
+                    counterBuffer,
+                    indirectDispatchBuffer,
+                    checked((uint)opaqueOutputCapacity),
+                    simpleOutputCapacity,
+                    simpleNormalOutputCapacity,
+                    fullOutputCapacity,
+                    solidDepthOutputCapacity,
+                    maskedDepthOutputCapacity,
+                    directionalStaticOutputCapacity,
+                    directionalDynamicOutputCapacity,
+                    sidedStreams,
+                    sceneData.ForwardVisibilityCompactionEnabled,
+                    sceneData.SceneSubmissionValidationCompareCpuGpuLists);
             RecordLodHistoryBarrier(cmd, frameIndex);
             RecordCounterReadback(cmd, frameIndex, counterBuffer);
             if (sceneData.SceneSubmissionValidationCompareCpuGpuLists)
@@ -1006,9 +1052,10 @@ namespace Njulf.Rendering.Pipeline
             _bindlessHeap.RegisterStorageBuffer(bindlessIndex, buffer, 0, Vk.WholeSize);
         }
 
-        private void ResetOutputs(
+        private (ulong ClearedBytes, int BarrierCount) ResetOutputs(
             CommandBuffer cmd,
             int frameIndex,
+            SceneOpaqueResetPlan resetPlan,
             RuntimeBuffer drawBuffer,
             RuntimeBuffer simpleDrawBuffer,
             RuntimeBuffer simpleNormalDrawBuffer,
@@ -1027,18 +1074,57 @@ namespace Njulf.Rendering.Pipeline
             VkBuffer counters = _bufferManager.GetBuffer(counterBuffer.Handle);
             VkBuffer indirect = _bufferManager.GetBuffer(indirectDispatchBuffer.Handle);
             _context.Api.CmdFillBuffer(cmd, counters, 0, counterBuffer.ByteSize, 0u);
-            _context.Api.CmdFillBuffer(cmd, draw, 0, drawBuffer.ByteSize, 0xffffffffu);
-            _context.Api.CmdFillBuffer(cmd, simpleDraw, 0, simpleDrawBuffer.ByteSize, 0xffffffffu);
-            _context.Api.CmdFillBuffer(cmd, simpleNormalDraw, 0, simpleNormalDrawBuffer.ByteSize, 0xffffffffu);
-            _context.Api.CmdFillBuffer(cmd, fullDraw, 0, fullDrawBuffer.ByteSize, 0xffffffffu);
-            _context.Api.CmdFillBuffer(cmd, solidDepthDraw, 0, solidDepthDrawBuffer.ByteSize, 0xffffffffu);
-            _context.Api.CmdFillBuffer(cmd, maskedDepthDraw, 0, maskedDepthDrawBuffer.ByteSize, 0xffffffffu);
-            for (int cascade = 0; cascade < DirectionalShadowCascadeCapacity; cascade++)
+            ulong clearedBytes = counterBuffer.ByteSize;
+            if (resetPlan.ClearPayloads)
             {
-                RuntimeBuffer staticShadow = _directionalStaticShadowCompactedDrawBuffers[frameIndex, cascade];
-                RuntimeBuffer dynamicShadow = _directionalDynamicShadowCompactedDrawBuffers[frameIndex, cascade];
-                _context.Api.CmdFillBuffer(cmd, _bufferManager.GetBuffer(staticShadow.Handle), 0, staticShadow.ByteSize, 0xffffffffu);
-                _context.Api.CmdFillBuffer(cmd, _bufferManager.GetBuffer(dynamicShadow.Handle), 0, dynamicShadow.ByteSize, 0xffffffffu);
+                _context.Api.CmdFillBuffer(cmd, draw, 0, drawBuffer.ByteSize, 0xffffffffu);
+                _context.Api.CmdFillBuffer(cmd, simpleDraw, 0, simpleDrawBuffer.ByteSize, 0xffffffffu);
+                _context.Api.CmdFillBuffer(cmd, simpleNormalDraw, 0, simpleNormalDrawBuffer.ByteSize, 0xffffffffu);
+                _context.Api.CmdFillBuffer(cmd, fullDraw, 0, fullDrawBuffer.ByteSize, 0xffffffffu);
+                _context.Api.CmdFillBuffer(cmd, solidDepthDraw, 0, solidDepthDrawBuffer.ByteSize, 0xffffffffu);
+                _context.Api.CmdFillBuffer(cmd, maskedDepthDraw, 0, maskedDepthDrawBuffer.ByteSize, 0xffffffffu);
+                clearedBytes = checked(
+                    clearedBytes + drawBuffer.ByteSize +
+                    simpleDrawBuffer.ByteSize +
+                    simpleNormalDrawBuffer.ByteSize +
+                    fullDrawBuffer.ByteSize +
+                    solidDepthDrawBuffer.ByteSize +
+                    maskedDepthDrawBuffer.ByteSize);
+                for (int cascade = 0;
+                     cascade < resetPlan.ActiveDirectionalCascadeCount;
+                     cascade++)
+                {
+                    RuntimeBuffer staticShadow =
+                        _directionalStaticShadowCompactedDrawBuffers[
+                            frameIndex,
+                            cascade];
+                    RuntimeBuffer dynamicShadow =
+                        _directionalDynamicShadowCompactedDrawBuffers[
+                            frameIndex,
+                            cascade];
+                    if (resetPlan.ClearsStaticShadowCascade(cascade))
+                    {
+                        _context.Api.CmdFillBuffer(
+                            cmd,
+                            _bufferManager.GetBuffer(staticShadow.Handle),
+                            0,
+                            staticShadow.ByteSize,
+                            0xffffffffu);
+                        clearedBytes = checked(
+                            clearedBytes + staticShadow.ByteSize);
+                    }
+                    if (resetPlan.ClearsDynamicShadowCascade(cascade))
+                    {
+                        _context.Api.CmdFillBuffer(
+                            cmd,
+                            _bufferManager.GetBuffer(dynamicShadow.Handle),
+                            0,
+                            dynamicShadow.ByteSize,
+                            0xffffffffu);
+                        clearedBytes = checked(
+                            clearedBytes + dynamicShadow.ByteSize);
+                    }
+                }
             }
             // Keep X=0, Y=1, Z=1 in one transfer write. Split fills overlap and do not
             // guarantee that the later Y/Z values win without an intervening barrier.
@@ -1055,6 +1141,8 @@ namespace Njulf.Rendering.Pipeline
                 };
             }
             _context.Api.CmdUpdateBuffer(cmd, indirect, 0, initialDispatchArgs);
+            clearedBytes = checked(
+                clearedBytes + indirectDispatchBuffer.ByteSize);
 
             Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[16];
             int barrierIndex = 0;
@@ -1066,74 +1154,95 @@ namespace Njulf.Rendering.Pipeline
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
                 0,
                 counterBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                draw,
-                PipelineStageFlags2.TransferBit,
-                AccessFlags2.TransferWriteBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
-                0,
-                drawBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                simpleDraw,
-                PipelineStageFlags2.TransferBit,
-                AccessFlags2.TransferWriteBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
-                0,
-                simpleDrawBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                simpleNormalDraw,
-                PipelineStageFlags2.TransferBit,
-                AccessFlags2.TransferWriteBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
-                0,
-                simpleNormalDrawBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                fullDraw,
-                PipelineStageFlags2.TransferBit,
-                AccessFlags2.TransferWriteBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
-                0,
-                fullDrawBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                solidDepthDraw,
-                PipelineStageFlags2.TransferBit,
-                AccessFlags2.TransferWriteBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
-                0,
-                solidDepthDrawBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                maskedDepthDraw,
-                PipelineStageFlags2.TransferBit,
-                AccessFlags2.TransferWriteBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
-                0,
-                maskedDepthDrawBuffer.ByteSize);
-            for (int cascade = 0; cascade < DirectionalShadowCascadeCapacity; cascade++)
+            if (resetPlan.ClearPayloads)
             {
-                RuntimeBuffer staticShadow = _directionalStaticShadowCompactedDrawBuffers[frameIndex, cascade];
-                RuntimeBuffer dynamicShadow = _directionalDynamicShadowCompactedDrawBuffers[frameIndex, cascade];
                 barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                    _bufferManager.GetBuffer(staticShadow.Handle),
+                    draw,
                     PipelineStageFlags2.TransferBit,
                     AccessFlags2.TransferWriteBit,
                     PipelineStageFlags2.ComputeShaderBit,
-                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                    AccessFlags2.ShaderStorageWriteBit,
                     0,
-                    staticShadow.ByteSize);
+                    drawBuffer.ByteSize);
                 barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                    _bufferManager.GetBuffer(dynamicShadow.Handle),
+                    simpleDraw,
                     PipelineStageFlags2.TransferBit,
                     AccessFlags2.TransferWriteBit,
                     PipelineStageFlags2.ComputeShaderBit,
-                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                    AccessFlags2.ShaderStorageWriteBit,
                     0,
-                    dynamicShadow.ByteSize);
+                    simpleDrawBuffer.ByteSize);
+                barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                    simpleNormalDraw,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferWriteBit,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageWriteBit,
+                    0,
+                    simpleNormalDrawBuffer.ByteSize);
+                barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                    fullDraw,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferWriteBit,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageWriteBit,
+                    0,
+                    fullDrawBuffer.ByteSize);
+                barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                    solidDepthDraw,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferWriteBit,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageWriteBit,
+                    0,
+                    solidDepthDrawBuffer.ByteSize);
+                barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                    maskedDepthDraw,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferWriteBit,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageWriteBit,
+                    0,
+                    maskedDepthDrawBuffer.ByteSize);
+                for (int cascade = 0;
+                     cascade < resetPlan.ActiveDirectionalCascadeCount;
+                     cascade++)
+                {
+                    RuntimeBuffer staticShadow =
+                        _directionalStaticShadowCompactedDrawBuffers[
+                            frameIndex,
+                            cascade];
+                    RuntimeBuffer dynamicShadow =
+                        _directionalDynamicShadowCompactedDrawBuffers[
+                            frameIndex,
+                            cascade];
+                    if (resetPlan.ClearsStaticShadowCascade(cascade))
+                    {
+                        barriers[barrierIndex++] =
+                            BarrierBuilder.BufferBarrier(
+                                _bufferManager.GetBuffer(
+                                    staticShadow.Handle),
+                                PipelineStageFlags2.TransferBit,
+                                AccessFlags2.TransferWriteBit,
+                                PipelineStageFlags2.ComputeShaderBit,
+                                AccessFlags2.ShaderStorageWriteBit,
+                                0,
+                                staticShadow.ByteSize);
+                    }
+                    if (resetPlan.ClearsDynamicShadowCascade(cascade))
+                    {
+                        barriers[barrierIndex++] =
+                            BarrierBuilder.BufferBarrier(
+                                _bufferManager.GetBuffer(
+                                    dynamicShadow.Handle),
+                                PipelineStageFlags2.TransferBit,
+                                AccessFlags2.TransferWriteBit,
+                                PipelineStageFlags2.ComputeShaderBit,
+                                AccessFlags2.ShaderStorageWriteBit,
+                                0,
+                                dynamicShadow.ByteSize);
+                    }
+                }
             }
             barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
                 indirect,
@@ -1144,11 +1253,13 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 indirectDispatchBuffer.ByteSize);
             ExecuteBarriers(cmd, barriers[..barrierIndex]);
+            return (clearedBytes, barrierIndex);
         }
 
-        private void RecordOutputBarrier(
+        private int RecordOutputBarrier(
             CommandBuffer cmd,
             int frameIndex,
+            SceneOpaqueResetPlan resetPlan,
             RuntimeBuffer drawBuffer,
             RuntimeBuffer simpleDrawBuffer,
             RuntimeBuffer simpleNormalDrawBuffer,
@@ -1156,97 +1267,187 @@ namespace Njulf.Rendering.Pipeline
             RuntimeBuffer solidDepthDrawBuffer,
             RuntimeBuffer maskedDepthDrawBuffer,
             RuntimeBuffer counterBuffer,
-            RuntimeBuffer indirectDispatchBuffer)
+            RuntimeBuffer indirectDispatchBuffer,
+            uint aggregateCapacity,
+            uint simpleCapacity,
+            uint simpleNormalCapacity,
+            uint fullCapacity,
+            uint solidDepthCapacity,
+            uint maskedDepthCapacity,
+            uint directionalStaticCapacity,
+            uint directionalDynamicCapacity,
+            bool sidedStreams,
+            bool forwardVisibilityCompactionEnabled,
+            bool validationReadbackEnabled)
         {
             Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[16];
             int barrierIndex = 0;
+            PipelineStageFlags2 payloadSourceStages =
+                PipelineStageFlags2.ComputeShaderBit |
+                (resetPlan.ClearPayloads
+                    ? PipelineStageFlags2.TransferBit
+                    : PipelineStageFlags2.None);
+            AccessFlags2 payloadSourceAccess =
+                AccessFlags2.ShaderStorageWriteBit |
+                (resetPlan.ClearPayloads
+                    ? AccessFlags2.TransferWriteBit
+                    : AccessFlags2.None);
             barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(counterBuffer.Handle),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.TransferBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
+                PipelineStageFlags2.TransferBit |
+                    PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.TransferWriteBit |
+                    AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.ComputeShaderBit |
+                    PipelineStageFlags2.TaskShaderBitExt |
+                    PipelineStageFlags2.TransferBit,
+                AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.TransferReadBit,
                 0,
                 counterBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                _bufferManager.GetBuffer(drawBuffer.Handle),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
-                0,
-                drawBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                _bufferManager.GetBuffer(simpleDrawBuffer.Handle),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
-                0,
-                simpleDrawBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                _bufferManager.GetBuffer(simpleNormalDrawBuffer.Handle),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
-                0,
-                simpleNormalDrawBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                _bufferManager.GetBuffer(fullDrawBuffer.Handle),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
-                0,
-                fullDrawBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                _bufferManager.GetBuffer(solidDepthDrawBuffer.Handle),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
-                0,
-                solidDepthDrawBuffer.ByteSize);
-            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                _bufferManager.GetBuffer(maskedDepthDrawBuffer.Handle),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
-                0,
-                maskedDepthDrawBuffer.ByteSize);
-            for (int cascade = 0; cascade < DirectionalShadowCascadeCapacity; cascade++)
+
+            if (validationReadbackEnabled && aggregateCapacity != 0u)
             {
-                RuntimeBuffer staticShadow = _directionalStaticShadowCompactedDrawBuffers[frameIndex, cascade];
-                RuntimeBuffer dynamicShadow = _directionalDynamicShadowCompactedDrawBuffers[frameIndex, cascade];
                 barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                    _bufferManager.GetBuffer(staticShadow.Handle),
-                    PipelineStageFlags2.ComputeShaderBit,
-                    AccessFlags2.ShaderStorageWriteBit,
-                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
-                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
+                    _bufferManager.GetBuffer(drawBuffer.Handle),
+                    payloadSourceStages,
+                    payloadSourceAccess,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferReadBit,
                     0,
-                    staticShadow.ByteSize);
-                barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                    _bufferManager.GetBuffer(dynamicShadow.Handle),
-                    PipelineStageFlags2.ComputeShaderBit,
-                    AccessFlags2.ShaderStorageWriteBit,
-                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
-                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
-                    0,
-                    dynamicShadow.ByteSize);
+                    PayloadBytes(drawBuffer, aggregateCapacity, false));
             }
+
+            PipelineStageFlags2 opaqueConsumerStages =
+                PipelineStageFlags2.MeshShaderBitExt |
+                (forwardVisibilityCompactionEnabled
+                    ? PipelineStageFlags2.ComputeShaderBit
+                    : PipelineStageFlags2.None);
+            AppendPayloadBarrier(
+                barriers,
+                ref barrierIndex,
+                payloadSourceStages,
+                payloadSourceAccess,
+                simpleDrawBuffer,
+                simpleCapacity,
+                sidedStreams,
+                opaqueConsumerStages);
+            AppendPayloadBarrier(
+                barriers,
+                ref barrierIndex,
+                payloadSourceStages,
+                payloadSourceAccess,
+                simpleNormalDrawBuffer,
+                simpleNormalCapacity,
+                sidedStreams,
+                opaqueConsumerStages);
+            AppendPayloadBarrier(
+                barriers,
+                ref barrierIndex,
+                payloadSourceStages,
+                payloadSourceAccess,
+                fullDrawBuffer,
+                fullCapacity,
+                sidedStreams,
+                opaqueConsumerStages);
+            AppendPayloadBarrier(
+                barriers,
+                ref barrierIndex,
+                payloadSourceStages,
+                payloadSourceAccess,
+                solidDepthDrawBuffer,
+                solidDepthCapacity,
+                sidedStreams,
+                PipelineStageFlags2.MeshShaderBitExt);
+            AppendPayloadBarrier(
+                barriers,
+                ref barrierIndex,
+                payloadSourceStages,
+                payloadSourceAccess,
+                maskedDepthDrawBuffer,
+                maskedDepthCapacity,
+                sidedStreams,
+                PipelineStageFlags2.MeshShaderBitExt);
+
+            for (int cascade = 0;
+                 cascade < resetPlan.ActiveDirectionalCascadeCount;
+                 cascade++)
+            {
+                if ((resetPlan.StaticShadowCascadeMask &
+                     (1u << cascade)) != 0u)
+                {
+                    AppendPayloadBarrier(
+                        barriers,
+                        ref barrierIndex,
+                        payloadSourceStages,
+                        payloadSourceAccess,
+                        _directionalStaticShadowCompactedDrawBuffers[
+                            frameIndex,
+                            cascade],
+                        directionalStaticCapacity,
+                        sidedStreams,
+                        PipelineStageFlags2.MeshShaderBitExt);
+                }
+                if (resetPlan.ClearDynamicShadowPayloads)
+                {
+                    AppendPayloadBarrier(
+                        barriers,
+                        ref barrierIndex,
+                        payloadSourceStages,
+                        payloadSourceAccess,
+                        _directionalDynamicShadowCompactedDrawBuffers[
+                            frameIndex,
+                            cascade],
+                        directionalDynamicCapacity,
+                        sidedStreams,
+                        PipelineStageFlags2.MeshShaderBitExt);
+                }
+            }
+
             barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(indirectDispatchBuffer.Handle),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TransferBit |
+                    PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.TransferWriteBit |
+                    AccessFlags2.ShaderStorageWriteBit,
                 PipelineStageFlags2.DrawIndirectBit,
                 AccessFlags2.IndirectCommandReadBit,
                 0,
                 indirectDispatchBuffer.ByteSize);
             ExecuteBarriers(cmd, barriers[..barrierIndex]);
+            return barrierIndex;
         }
+
+        private void AppendPayloadBarrier(
+            Span<BufferMemoryBarrier2> barriers,
+            ref int barrierIndex,
+            PipelineStageFlags2 sourceStages,
+            AccessFlags2 sourceAccess,
+            RuntimeBuffer buffer,
+            uint perSideCapacity,
+            bool sidedStreams,
+            PipelineStageFlags2 destinationStages)
+        {
+            if (perSideCapacity == 0u)
+                return;
+            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(buffer.Handle),
+                sourceStages,
+                sourceAccess,
+                destinationStages,
+                AccessFlags2.ShaderStorageReadBit,
+                0,
+                PayloadBytes(buffer, perSideCapacity, sidedStreams));
+        }
+
+        private static ulong PayloadBytes(
+            RuntimeBuffer buffer,
+            uint perSideCapacity,
+            bool sidedStreams) =>
+            Math.Min(
+                buffer.ByteSize,
+                checked((ulong)perSideCapacity * DrawCommandStride *
+                    (sidedStreams ? 2UL : 1UL)));
 
         private void RecordLodHistoryBarrier(
             CommandBuffer cmd,
@@ -1472,7 +1673,7 @@ namespace Njulf.Rendering.Pipeline
                 ? checked((uint)Math.Max(0, objectData[(int)command.InstanceId].MeshIndex))
                 : uint.MaxValue;
             return new ValidationCommandKey(
-                command.MeshletIndex,
+                NormalizeValidationMeshletAddress(command.MeshletIndex),
                 command.InstanceId,
                 meshIndex,
                 command.MaterialIndex,
@@ -1484,10 +1685,12 @@ namespace Njulf.Rendering.Pipeline
             IReadOnlyList<ValidationCommandKey> expectedCommands,
             ValidationPathBucket fallbackBucket)
         {
+            uint normalizedMeshletIndex =
+                NormalizeValidationMeshletAddress(command.MeshletIndex);
             for (int i = 0; i < expectedCommands.Count; i++)
             {
                 ValidationCommandKey expected = expectedCommands[i];
-                if (expected.MeshletIndex == command.MeshletIndex &&
+                if (expected.MeshletIndex == normalizedMeshletIndex &&
                     expected.InstanceId == command.InstanceId &&
                     expected.MaterialIndex == command.MaterialIndex)
                 {
@@ -1496,12 +1699,18 @@ namespace Njulf.Rendering.Pipeline
             }
 
             return new ValidationCommandKey(
-                command.MeshletIndex,
+                normalizedMeshletIndex,
                 command.InstanceId,
                 uint.MaxValue,
                 command.MaterialIndex,
                 fallbackBucket);
         }
+
+        private static uint NormalizeValidationMeshletAddress(uint address) =>
+            MeshletVirtualAddress.IsResolved(address)
+                ? MeshletVirtualAddress.Encode(
+                    MeshletVirtualAddress.DecodeResolved(address))
+                : address;
 
         private static int ClampUIntToInt(uint value)
         {

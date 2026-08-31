@@ -206,6 +206,7 @@ namespace Njulf.Rendering.Pipeline
         {
             if (IsGpuResidentMode)
             {
+                PublishRayBucketIndirectCommands(cmd);
                 for (int bucket = 0; bucket < SimpleDdgiGpuSchedulerLayout.MaxRayBucketCount; bucket++)
                 {
                     pushConstants.SchedulerRayBucketIndex = checked((uint)bucket);
@@ -445,6 +446,7 @@ namespace Njulf.Rendering.Pipeline
         {
             if (IsGpuResidentMode)
             {
+                PublishRayBucketIndirectCommands(cmd);
                 for (int bucket = 0; bucket < SimpleDdgiGpuSchedulerLayout.MaxRayBucketCount; bucket++)
                 {
                     pushConstants.SchedulerRayBucketIndex = checked((uint)bucket);
@@ -1226,7 +1228,7 @@ namespace Njulf.Rendering.Pipeline
             }
 
             ExecuteCanonicalOnly(cmd);
-            ExecuteSampledOnly(cmd);
+            ExecuteSampledOnly(cmd, publishIndirectCommand: false);
 
             // This is the receiver-visible publication boundary for an
             // accelerated transaction. Keep it separate from mere pipeline
@@ -1250,7 +1252,9 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        public void ExecuteCanonicalOnly(CommandBuffer cmd)
+        public void ExecuteCanonicalOnly(
+            CommandBuffer cmd,
+            bool publishIndirectCommand = true)
         {
             bool gpuResident = _volumeManager.SchedulerMode ==
                 SimpleDdgiSchedulerMode.GpuResident;
@@ -1262,7 +1266,8 @@ namespace Njulf.Rendering.Pipeline
             PushConstants(cmd, pushConstants);
             if (gpuResident)
             {
-                InsertIndirectCommandReadBarrier(cmd);
+                if (publishIndirectCommand)
+                    InsertIndirectCommandReadBarrier(cmd);
                 _context.Api.CmdDispatchIndirect(
                     cmd,
                     _volumeManager.GpuScheduler.GetArenaVkBuffer(),
@@ -1277,7 +1282,9 @@ namespace Njulf.Rendering.Pipeline
             InsertComputeStorageBarrier(cmd);
         }
 
-        public void ExecuteSampledOnly(CommandBuffer cmd)
+        public void ExecuteSampledOnly(
+            CommandBuffer cmd,
+            bool publishIndirectCommand = true)
         {
             bool gpuResident = _volumeManager.SchedulerMode ==
                 SimpleDdgiSchedulerMode.GpuResident;
@@ -1310,7 +1317,8 @@ namespace Njulf.Rendering.Pipeline
                 PushConstants(cmd, pushConstants);
                 if (gpuResident)
                 {
-                    InsertIndirectCommandReadBarrier(cmd);
+                    if (publishIndirectCommand)
+                        InsertIndirectCommandReadBarrier(cmd);
                     _context.Api.CmdDispatchIndirect(
                         cmd,
                         _volumeManager.GpuScheduler.GetArenaVkBuffer(),
@@ -1579,19 +1587,30 @@ namespace Njulf.Rendering.Pipeline
 
         private void InsertIndirectCommandReadBarrier(CommandBuffer cmd)
         {
-            var barrier = new MemoryBarrier2
+            SimpleDdgiGpuSchedulerLayout layout =
+                _volumeManager.GpuScheduler.Layout ??
+                throw new InvalidOperationException(
+                    "Simple DDGI scheduler layout is not resident.");
+            SimpleDdgiSchedulerArenaRegion command = layout.GetIndirectCommand(
+                SimpleDdgiSchedulerDispatchSlot.Publish);
+            var barrier = new BufferMemoryBarrier2
             {
-                SType = StructureType.MemoryBarrier2,
+                SType = StructureType.BufferMemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
                 DstStageMask = PipelineStageFlags2.DrawIndirectBit,
-                DstAccessMask = AccessFlags2.IndirectCommandReadBit
+                DstAccessMask = AccessFlags2.IndirectCommandReadBit,
+                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                Buffer = _volumeManager.GpuScheduler.GetArenaVkBuffer(),
+                Offset = command.Offset,
+                Size = command.ByteSize
             };
             var dependency = new DependencyInfo
             {
                 SType = StructureType.DependencyInfo,
-                MemoryBarrierCount = 1,
-                PMemoryBarriers = &barrier
+                BufferMemoryBarrierCount = 1,
+                PBufferMemoryBarriers = &barrier
             };
             _context.Api.CmdPipelineBarrier2(cmd, &dependency);
         }
@@ -1850,7 +1869,13 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 (uint)Marshal.SizeOf<GPUSimpleDdgiPushConstants>(),
                 &pushConstants);
-            InsertIndirectCommandReadBarrier(cmd);
+            SimpleDdgiGpuSchedulerLayout layout =
+                VolumeManager.GpuScheduler.Layout ??
+                throw new InvalidOperationException(
+                    "Simple DDGI scheduler layout is not resident.");
+            InsertIndirectCommandReadBarrier(
+                cmd,
+                layout.GetIndirectCommand(slot));
             _context.Api.CmdDispatchIndirect(
                 cmd,
                 VolumeManager.GpuScheduler.GetArenaVkBuffer(),
@@ -1869,11 +1894,19 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 (uint)Marshal.SizeOf<GPUSimpleDdgiPushConstants>(),
                 &pushConstants);
-            InsertIndirectCommandReadBarrier(cmd);
             _context.Api.CmdDispatchIndirect(
                 cmd,
                 VolumeManager.GpuScheduler.GetArenaVkBuffer(),
                 VolumeManager.GpuScheduler.GetRayBucketCommandOffset(bucketIndex));
+        }
+
+        protected void PublishRayBucketIndirectCommands(CommandBuffer cmd)
+        {
+            SimpleDdgiGpuSchedulerLayout layout =
+                VolumeManager.GpuScheduler.Layout ??
+                throw new InvalidOperationException(
+                    "Simple DDGI scheduler layout is not resident.");
+            InsertIndirectCommandReadBarrier(cmd, layout.RayBucketCommands);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -2360,21 +2393,28 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
         }
 
-        private void InsertIndirectCommandReadBarrier(CommandBuffer cmd)
+        private void InsertIndirectCommandReadBarrier(
+            CommandBuffer cmd,
+            SimpleDdgiSchedulerArenaRegion commandRegion)
         {
-            var memoryBarrier = new MemoryBarrier2
+            var memoryBarrier = new BufferMemoryBarrier2
             {
-                SType = StructureType.MemoryBarrier2,
+                SType = StructureType.BufferMemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
                 DstStageMask = PipelineStageFlags2.DrawIndirectBit,
-                DstAccessMask = AccessFlags2.IndirectCommandReadBit
+                DstAccessMask = AccessFlags2.IndirectCommandReadBit,
+                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                Buffer = VolumeManager.GpuScheduler.GetArenaVkBuffer(),
+                Offset = commandRegion.Offset,
+                Size = commandRegion.ByteSize
             };
             var dependencyInfo = new DependencyInfo
             {
                 SType = StructureType.DependencyInfo,
-                MemoryBarrierCount = 1,
-                PMemoryBarriers = &memoryBarrier
+                BufferMemoryBarrierCount = 1,
+                PBufferMemoryBarriers = &memoryBarrier
             };
             _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
         }

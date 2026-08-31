@@ -334,7 +334,7 @@ public sealed class SimpleDdgiFeedbackPartialReductionTests
             StringComparison.Ordinal);
         string execute = pass[executeStart..helperStart];
         int partialBind = execute.IndexOf(
-            "_pipelines[2]",
+            "_pipelines[3]",
             StringComparison.Ordinal);
         int partialDispatch = execute.IndexOf(
             "CmdDispatch(cmd, partialGroupCount, 1, 1)",
@@ -345,7 +345,7 @@ public sealed class SimpleDdgiFeedbackPartialReductionTests
             partialDispatch,
             StringComparison.Ordinal);
         int finalBind = execute.IndexOf(
-            "_pipelines[3]",
+            "_pipelines[4]",
             interStageBarrier,
             StringComparison.Ordinal);
         int finalDispatch = execute.IndexOf(
@@ -409,8 +409,9 @@ public sealed class SimpleDdgiFeedbackPartialReductionTests
                 StringComparison.Ordinal);
             Assert.That(partialName, Is.GreaterThanOrEqualTo(0));
             Assert.That(finalName, Is.GreaterThan(partialName));
+            Assert.That(normalizedPass, Does.Contain("PipelinesAreReady()"));
             Assert.That(normalizedPass, Does.Contain(
-                "_pipelines[2].Handle != 0 &&\n            _pipelines[3].Handle != 0"));
+                "for (int i = 0; i < _pipelines.Length; i++)"));
             Assert.That(partialBind, Is.GreaterThanOrEqualTo(0));
             Assert.That(partialDispatch, Is.GreaterThan(partialBind));
             Assert.That(interStageBarrier, Is.GreaterThan(partialDispatch));

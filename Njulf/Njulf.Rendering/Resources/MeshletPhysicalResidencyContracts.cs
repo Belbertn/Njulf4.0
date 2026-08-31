@@ -8,13 +8,16 @@ namespace Njulf.Rendering.Resources;
 
 /// <summary>
 /// Address-space contract shared by CPU submission and mesh shaders. Direct
-/// meshlet indices keep bit 31 clear; paged meshlets use it as an immutable
-/// virtual-table selector.
+/// meshlet indices keep bits 31 and 30 clear. Paged candidates use bit 31 as
+/// an immutable virtual-table selector; commands resolved by compaction use
+/// bit 30 to address the frame-local resolved table.
 /// </summary>
 public static class MeshletVirtualAddress
 {
     public const uint VirtualBit = 0x8000_0000u;
-    public const uint IndexMask = VirtualBit - 1u;
+    public const uint ResolvedBit = 0x4000_0000u;
+    public const uint TagMask = VirtualBit | ResolvedBit;
+    public const uint IndexMask = ResolvedBit - 1u;
 
     public static uint Encode(uint virtualTableIndex)
     {
@@ -27,13 +30,35 @@ public static class MeshletVirtualAddress
     }
 
     public static bool IsVirtual(uint address) =>
-        (address & VirtualBit) != 0;
+        (address & TagMask) == VirtualBit;
+
+    public static uint EncodeResolved(uint virtualTableIndex)
+    {
+        if (virtualTableIndex > IndexMask)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(virtualTableIndex));
+        }
+        return ResolvedBit | virtualTableIndex;
+    }
+
+    public static bool IsResolved(uint address) =>
+        (address & TagMask) == ResolvedBit;
 
     public static uint Decode(uint address)
     {
         if (!IsVirtual(address))
             throw new ArgumentException(
                 "The meshlet address is direct, not virtual.",
+                nameof(address));
+        return address & IndexMask;
+    }
+
+    public static uint DecodeResolved(uint address)
+    {
+        if (!IsResolved(address))
+            throw new ArgumentException(
+                "The meshlet address is not resolved.",
                 nameof(address));
         return address & IndexMask;
     }
@@ -76,6 +101,41 @@ public readonly record struct GPUMeshletVirtualMapping(
     uint PageLocalMeshletIndex,
     uint Flags,
     uint VertexOffset);
+
+/// <summary>
+/// Frame-local mapping produced after page-table publication. Addresses pack
+/// a four-bit physical bank and a 24-bit word offset, matching the mesh shader
+/// local-index address ABI. An invalid record is all ones.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+public readonly record struct GPUMeshletResolvedMapping(
+    uint MeshletRecordAddress,
+    uint VertexSectionAddress,
+    uint TriangleSectionAddress,
+    uint VertexOffset)
+{
+    public const uint InvalidAddress = uint.MaxValue;
+    public const uint BankShift = 24;
+    public const uint BankMask = 0x0fu;
+    public const uint WordMask = 0x00ff_ffffu;
+
+    public static GPUMeshletResolvedMapping Invalid => new(
+        InvalidAddress,
+        InvalidAddress,
+        InvalidAddress,
+        0u);
+
+    public bool IsValid => MeshletRecordAddress != InvalidAddress;
+
+    public static uint PackAddress(uint bankIndex, uint wordOffset)
+    {
+        if (bankIndex > BankMask)
+            throw new ArgumentOutOfRangeException(nameof(bankIndex));
+        if (wordOffset > WordMask)
+            throw new ArgumentOutOfRangeException(nameof(wordOffset));
+        return (bankIndex << (int)BankShift) | wordOffset;
+    }
+}
 
 [Flags]
 public enum MeshletStreamingRangeFlags : uint

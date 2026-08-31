@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Njulf.Core.Math;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering.Data;
@@ -218,9 +219,9 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
             Assert.That(contract.MotionTraversalFrameCount, Is.EqualTo(300));
-                Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v23"));
+                Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v24"));
             Assert.That(SampleSponzaGiTemporalTrace.SchemaVersion,
-                Is.EqualTo("simple-ddgi-sponza-temporal-trace/v6"));
+                Is.EqualTo("simple-ddgi-sponza-temporal-trace/v7"));
             Assert.That(SampleSponzaGiTemporalTrace.Capacity, Is.EqualTo(960));
                 Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_170));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
@@ -352,6 +353,57 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(
                 () => contract.SampleMotionTraversalFrame(contract.MotionTraversalFrameCount),
                 Throws.TypeOf<ArgumentOutOfRangeException>());
+        });
+    }
+
+    [Test]
+    public void CameraMotionValidationRoutes_CoverWorldXWorldZCutsAndTeleport()
+    {
+        SampleSponzaGiCaptureContract contract =
+            SampleSponzaGiCaptureContract.Default;
+        int outboundFrame =
+            SampleSponzaGiCaptureContract.MotionOutboundFrameCount - 1;
+        SampleSponzaGiCameraBookmark worldX =
+            contract.SampleWorldXMotionTraversalFrame(outboundFrame);
+        SampleSponzaGiCameraBookmark worldZ =
+            contract.SampleWorldZMotionTraversalFrame(outboundFrame);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                worldX.Position.X - contract.LowBookmark.Position.X,
+                Is.EqualTo(
+                    SampleSponzaGiCaptureContract.MotionTraversalDistance)
+                    .Within(1e-6f));
+            Assert.That(worldX.Position.Z,
+                Is.EqualTo(contract.LowBookmark.Position.Z));
+            Assert.That(
+                worldZ.Position.Z - contract.LowBookmark.Position.Z,
+                Is.EqualTo(
+                    SampleSponzaGiCaptureContract.MotionTraversalDistance)
+                    .Within(1e-6f));
+            Assert.That(worldZ.Position.X,
+                Is.EqualTo(contract.LowBookmark.Position.X));
+            Assert.That(
+                Vector3.Distance(
+                    contract.FastOverlappingMovementBookmark.Position,
+                    contract.LowBookmark.Position),
+                Is.EqualTo(6.0f).Within(1e-6f));
+            Assert.That(
+                MathF.Abs(
+                    contract.RotationCutBookmark.Yaw -
+                    contract.LowBookmark.Yaw),
+                Is.GreaterThan(MathF.PI / 3.0f));
+            Assert.That(
+                contract.RotationCutBookmark.Position,
+                Is.EqualTo(contract.LowBookmark.Position));
+            Assert.That(
+                Vector3.Distance(
+                    contract.TrueTeleportBookmark.Position,
+                    contract.LowBookmark.Position),
+                Is.EqualTo(
+                    SampleSponzaGiCaptureContract.TrueTeleportDistance)
+                    .Within(1e-6f));
         });
     }
 
@@ -549,7 +601,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
     }
 
     [Test]
-    public void TemporalTraceV6_WritesDdgiOwnershipAndAlignedProbeLifecycleJson()
+    public void TemporalTraceV7_WritesDdgiOwnershipScrollAndAlignedProbeLifecycleJson()
     {
         var trace = new SampleSponzaGiTemporalTrace();
         SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
@@ -587,7 +639,15 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             HybridReflectionDdgiFallbackCount = 17,
             HybridReflectionProbeFallbackCount = 0,
             HybridReflectionEnvironmentFallbackCount = 4,
-            GpuHybridReflectionDdgiBaseMicroseconds = 211
+            GpuHybridReflectionDdgiBaseMicroseconds = 211,
+            SimpleDdgiFrameRayBucket0 = 128,
+            SimpleDdgiFrameRayBucket1 = 32,
+            SimpleDdgiFrameRayBucket2 = 64,
+            SimpleDdgiNearScrollCardinality = 64,
+            SimpleDdgiScrollGpuExpectedCount = 392,
+            SimpleDdgiScrollGpuAcceptedCount = 392,
+            SimpleDdgiScrollGpuTracedCount = 392,
+            SimpleDdgiScrollGpuCommittedCount = 392
         };
         trace.Record(
             new SampleSponzaGiCaptureInstruction(
@@ -612,7 +672,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             {
                 Assert.That(
                     document.RootElement.GetProperty("schemaVersion").GetString(),
-                    Is.EqualTo("simple-ddgi-sponza-temporal-trace/v6"));
+                    Is.EqualTo("simple-ddgi-sponza-temporal-trace/v7"));
                 Assert.That(
                     document.RootElement.GetProperty("contractFingerprint").GetString(),
                     Is.EqualTo(contract.Fingerprint));
@@ -637,6 +697,13 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                     entry.GetProperty("gpuReflectionProbePublishMicroseconds")
                         .GetInt64(),
                     Is.EqualTo(43));
+                Assert.That(
+                    entry.GetProperty("nearScrollCardinality").GetInt32(),
+                    Is.EqualTo(64));
+                Assert.That(
+                    document.RootElement.GetProperty("scrollSummary")
+                        .GetProperty("completeScrollFrameCount").GetInt32(),
+                    Is.EqualTo(1));
                 Assert.That(
                     entry.GetProperty("hybridReflectionDdgiFallbackCount")
                         .GetUInt32(),

@@ -270,8 +270,8 @@ void PublishSimpleDdgiQuadratureWitness(
             max(relativeError.x, relativeError.y),
             max(relativeError.z, relativeError.w)), 0.0, 1.0);
         // Outcome word 11 reserves its low half for the bounded ray count.
-        // Encode 1..65535 in the high half (zero means unmeasured) to keep the
-        // 60-byte shipping outcome ABI and scheduler memory cap unchanged.
+        // Mandatory scroll records reserve the high half for their transaction
+        // serial, so only ordinary updates append the quadrature witness here.
         uint quantized = (!isnan(error) && !isinf(error) &&
                 boundedRayCount >= 2u)
             ? min(uint(round(error * 65534.0)) + 1u, 65535u)
@@ -281,12 +281,15 @@ void PublishSimpleDdgiQuadratureWitness(
             pc.SchedulerOutcomesOffsetWords +
                 update.outcomeIndex *
                     SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS + 11u);
-        WriteStorageWordUniform(
-            pc.SchedulerArenaBufferIndex,
-            pc.SchedulerOutcomesOffsetWords +
-                update.outcomeIndex *
-                    SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS + 11u,
-            (countAndWitness & 0xffffu) | (quantized << 16u));
+        if ((update.flags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) == 0u)
+        {
+            WriteStorageWordUniform(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords +
+                    update.outcomeIndex *
+                        SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS + 11u,
+                (countAndWitness & 0xffffu) | (quantized << 16u));
+        }
     }
     barrier();
 }

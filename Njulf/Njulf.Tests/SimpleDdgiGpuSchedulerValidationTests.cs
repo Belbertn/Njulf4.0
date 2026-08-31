@@ -9,6 +9,36 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiGpuSchedulerValidationTests
 {
     [Test]
+    public void MandatoryScrollShaderPhase_HasOneClassAndRunsBeforeOrdinaryWork()
+    {
+        string classify = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_classify.comp");
+        string admit = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_admit.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(classify, Does.Contain(
+                "bool visibleZeroSupport = visible && zeroSupport && !scrollExposed;"));
+            Assert.That(admit, Does.Contain(
+                "phaseOrdinal == 0u\n            ? 11u"));
+            Assert.That(admit, Does.Contain(
+                "SchedulerProbeIsCurrentScrollExposed("));
+            Assert.That(admit, Does.Contain(
+                "SchedulerVolumeScrollBootstrapRays(volumeIndex)"));
+            Assert.That(admit, Does.Contain(
+                "uint mandatoryRoom = requestBudget - min(assigned, requestBudget);"));
+            Assert.That(
+                admit.IndexOf("uint mandatoryRoom", StringComparison.Ordinal),
+                Is.LessThan(admit.IndexOf(
+                    "uint visiblePageBudget",
+                    StringComparison.Ordinal)));
+        });
+    }
+
+    [Test]
     public void RuntimeDiagnostics_ExportExactCommitRejections()
     {
         string projector = ReadRepoText(
@@ -76,8 +106,13 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
                     SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes /
                     sizeof(uint)));
             Assert.That(
+                SimpleDdgiSchedulerAbi.FeedbackRebaseRingOffsetWords + 3,
+                Is.LessThanOrEqualTo(
+                    SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes /
+                    sizeof(uint)));
+            Assert.That(
                 SimpleDdgiGpuSchedulerLayout.CounterBytes,
-                Is.EqualTo(96 * sizeof(uint)));
+                Is.EqualTo(128 * sizeof(uint)));
         });
     }
 
@@ -274,6 +309,82 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
     }
 
     [Test]
+    public void CpuOracle_AdmitsCompleteMandatoryScrollCohortBeforeCompetingWork()
+    {
+        var candidates = new[]
+        {
+            new GPUSimpleDdgiSchedulerCandidate
+            {
+                ProbeIndex = 90u,
+                VolumeIndex = 0u,
+                ExpectedPhysicalGeneration = 1u,
+                SequenceOrdinal = 0u,
+                WorkClassAndTransport =
+                    SimpleDdgiSchedulerAbi.PackCandidateWorkClassAndTransport(
+                        SimpleDdgiSchedulerWorkClass.VisibleZeroSupport,
+                        SimpleDdgiSchedulerTransportCategory.HardSourceRepair),
+                RayTierAndReasonFlags =
+                    SimpleDdgiSchedulerAbi.PackCandidateRayTierAndReasons(
+                        SimpleDdgiSchedulerRayTier.Full,
+                        SimpleDdgiSchedulerCandidateReason.Fresh |
+                        SimpleDdgiSchedulerCandidateReason.Visible),
+                ActiveRayCount = 4u,
+                SourceRayCount = 4u
+            },
+            CreateMandatoryScrollCandidate(10u, 1u),
+            CreateMandatoryScrollCandidate(11u, 2u)
+        };
+        var volumePolicy = new SimpleDdgiCpuVolumePolicy(
+            ProbeCapacity: 3,
+            MinimumQuota: 0,
+            PreferredMaximumQuota: 1,
+            SchedulingWeight: 1,
+            Active: true)
+        {
+            MandatoryScrollRepairCount = 2,
+            ScrollBootstrapRaysPerProbe = 2u
+        };
+        var queue = new GPUSimpleDdgiProbeUpdate[3];
+        var counts = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var accepted = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var cursors = new uint[SimpleDdgiSchedulerAbi.MaxLaneCount];
+
+        SimpleDdgiCpuScheduleResult result = SimpleDdgiCpuScheduleModel.Schedule(
+            candidates,
+            new[] { volumePolicy },
+            new SimpleDdgiCpuSchedulePolicy(
+                RequestBudget: 2,
+                PrimaryRayBudget: 4u,
+                SourceCohortRayBudget: 1u,
+                SourceLightingGeneration: 3u,
+                ActiveVolumeCount: 1,
+                DeterministicFixedBudget: true),
+            queue,
+            counts,
+            accepted,
+            cursors);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AcceptedRequestCount, Is.EqualTo(2));
+            Assert.That(result.AcceptedPrimaryRayCount, Is.EqualTo(4u));
+            Assert.That(result.AcceptedSourceRayCount, Is.EqualTo(4u));
+            Assert.That(queue[0].ProbeIndex, Is.EqualTo(10u));
+            Assert.That(queue[1].ProbeIndex, Is.EqualTo(11u));
+            Assert.That(
+                queue[0].Flags & SimpleDdgiSchedulerAbi.UpdateScrollExposedFlag,
+                Is.Not.Zero);
+            Assert.That(
+                queue[1].Flags & SimpleDdgiSchedulerAbi.UpdateScrollExposedFlag,
+                Is.Not.Zero);
+            Assert.That(
+                (queue[0].Flags & SimpleDdgiSchedulerAbi.UpdateRayCountMask) >>
+                    (int)SimpleDdgiSchedulerAbi.UpdateRayCountShift,
+                Is.EqualTo(2u));
+        });
+    }
+
+    [Test]
     public void CpuOracle_LightingSourceRepairRemainsCadenceLimited()
     {
         var candidates = new GPUSimpleDdgiSchedulerCandidate[3];
@@ -325,6 +436,27 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
             Assert.That(result.SourceCohortRejectedCount, Is.EqualTo(2));
         });
     }
+
+    private static GPUSimpleDdgiSchedulerCandidate CreateMandatoryScrollCandidate(
+        uint probeIndex,
+        uint sequenceOrdinal) => new()
+    {
+        ProbeIndex = probeIndex,
+        VolumeIndex = 0u,
+        ExpectedPhysicalGeneration = 1u,
+        SequenceOrdinal = sequenceOrdinal,
+        WorkClassAndTransport =
+            SimpleDdgiSchedulerAbi.PackCandidateWorkClassAndTransport(
+                SimpleDdgiSchedulerWorkClass.FreshExposedVisible,
+                SimpleDdgiSchedulerTransportCategory.HardSourceRepair),
+        RayTierAndReasonFlags =
+            SimpleDdgiSchedulerAbi.PackCandidateRayTierAndReasons(
+                SimpleDdgiSchedulerRayTier.Full,
+                SimpleDdgiSchedulerCandidateReason.ScrollExposed |
+                SimpleDdgiSchedulerCandidateReason.Visible),
+        ActiveRayCount = 8u,
+        SourceRayCount = 8u
+    };
 
     [Test]
     public void CpuOracleRejectsMalformedPackedCandidatesWithoutEmittingWork()

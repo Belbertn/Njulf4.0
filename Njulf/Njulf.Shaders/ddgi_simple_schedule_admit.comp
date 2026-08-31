@@ -162,8 +162,15 @@ void main()
                 SchedulerVolumeFullRays(volume),
                 1u,
                 SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
-        uint minimum = min(SchedulerVolumeWord(volume, 26u), capacity);
-        uint maximum = min(max(SchedulerVolumeWord(volume, 27u), minimum), capacity);
+        uint mandatoryRepair = SchedulerVolumeHasMandatoryScrollRepair(volume)
+            ? min(SchedulerVolumeScrollExpectedRepairCount(volume), capacity)
+            : 0u;
+        uint minimum = max(
+            min(SchedulerVolumeWord(volume, 26u), capacity),
+            mandatoryRepair);
+        uint maximum = min(max(
+            SchedulerVolumeWord(volume, 27u),
+            minimum), capacity);
         quotas[volume] = minimum;
         minimumTotal += minimum;
         quotaTotal += maximum;
@@ -179,7 +186,14 @@ void main()
                 uint volume = SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES - 1u - reverse;
                 if (volume >= activeVolumes || excess == 0u)
                     continue;
-                uint reduction = min(quotas[volume], excess);
+                uint mandatoryRepair = SchedulerVolumeHasMandatoryScrollRepair(volume)
+                    ? min(
+                        SchedulerVolumeScrollExpectedRepairCount(volume),
+                        SchedulerVolumeProbeCount(volume))
+                    : 0u;
+                uint reduction = min(
+                    quotas[volume] - min(quotas[volume], mandatoryRepair),
+                    excess);
                 quotas[volume] -= reduction;
                 excess -= reduction;
             }
@@ -295,6 +309,7 @@ void main()
             specializedPendingByVolume[volume] += pending;
             specializedPendingTotal += pending;
         }
+        uint assigned = 0u;
         for (uint volume = 0u;
              volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES;
              volume++)
@@ -312,17 +327,33 @@ void main()
                 pending);
             visiblePagePendingByVolume[volume] = visiblePagePending;
             visiblePagePendingTotal += visiblePagePending;
+
+            // Specialized source/solve quota distribution must preserve the
+            // exact phase-11 reservation established by the scroll planner.
+            // These candidates are disjoint from visible-page publication and
+            // execute first, so reserve them before sharing the residual tail
+            // envelope among any other source participants.
+            uint mandatoryRepair = tailSourceOnly &&
+                    SchedulerVolumeHasMandatoryScrollRepair(volume)
+                ? min(
+                    SchedulerVolumeScrollExpectedRepairCount(volume),
+                    pending)
+                : 0u;
+            uint mandatoryRoom = requestBudget - min(assigned, requestBudget);
+            mandatoryRepair = min(mandatoryRepair, mandatoryRoom);
+            quotas[volume] = mandatoryRepair;
+            assigned += mandatoryRepair;
         }
 
-        uint assigned = 0u;
         // Reserve the global source envelope for newly admitted visible pages
         // before proportional whole-field repair. Exact classification counters
         // avoid treating all fresh/zero-support work as page publication. The
         // allocator already bounds this cohort to the two-frame probe capacity,
         // so draining it first is both coherent and frame-budget neutral.
         uint visiblePageBudget = min(
-            requestBudget,
+            requestBudget - min(assigned, requestBudget),
             visiblePagePendingTotal);
+        uint visibleAssigned = 0u;
         if (visiblePageBudget != 0u)
         {
             for (uint volume = 0u;
@@ -330,18 +361,19 @@ void main()
                  volume++)
             {
                 uint pending = visiblePagePendingByVolume[volume];
-                if (pending == 0u || assigned >= visiblePageBudget)
+                if (pending == 0u || visibleAssigned >= visiblePageBudget)
                     continue;
                 uint share = min(
                     pending,
                     (visiblePageBudget * pending) /
                         visiblePagePendingTotal);
-                share = min(share, visiblePageBudget - assigned);
-                quotas[volume] = share;
-                assigned += share;
+                share = min(share, visiblePageBudget - visibleAssigned);
+                quotas[volume] += share;
+                visiblePageQuotas[volume] = share;
+                visibleAssigned += share;
             }
 
-            uint visibleRemainder = visiblePageBudget - assigned;
+            uint visibleRemainder = visiblePageBudget - visibleAssigned;
             while (visibleRemainder != 0u)
             {
                 bool progressed = false;
@@ -350,23 +382,19 @@ void main()
                          visibleRemainder != 0u;
                      volume++)
                 {
-                    if (quotas[volume] >= visiblePagePendingByVolume[volume])
+                    if (visiblePageQuotas[volume] >=
+                        visiblePagePendingByVolume[volume])
                         continue;
                     quotas[volume]++;
+                    visiblePageQuotas[volume]++;
                     visibleRemainder--;
                     progressed = true;
                 }
                 if (!progressed)
                     break;
             }
-            assigned = visiblePageBudget - visibleRemainder;
-        }
-
-        for (uint volume = 0u;
-             volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES;
-             volume++)
-        {
-            visiblePageQuotas[volume] = quotas[volume];
+            visibleAssigned = visiblePageBudget - visibleRemainder;
+            assigned += visibleAssigned;
         }
 
         // Return every unreserved request to the ordinary frozen source
@@ -564,6 +592,18 @@ void main()
                     classReservations[primaryBase + primaryClass] = min(maintenance, quotas[volume]);
                 }
             }
+            if (SchedulerVolumeHasMandatoryScrollRepair(volume))
+            {
+                uint mandatoryRepair = min(
+                    SchedulerVolumeScrollExpectedRepairCount(volume),
+                    quotas[volume]);
+                uint freshIndex = volume *
+                    SIMPLE_DDGI_SCHEDULER_WORK_CLASSES +
+                    SIMPLE_DDGI_SCHEDULER_WORK_FRESH_EXPOSED_VISIBLE;
+                classReservations[freshIndex] = max(
+                    classReservations[freshIndex],
+                    mandatoryRepair);
+            }
         }
     }
 
@@ -585,8 +625,18 @@ void main()
     // ordering and phase-four hard-source fallback used by the CPU oracle.
     uint firstPhase = tailSourceOnly ? 0u : (tailSolveOnly ? 6u : 0u);
     uint lastPhase = tailSourceOnly ? 0u : (tailSolveOnly ? 6u : 10u);
-    for (uint phase = firstPhase; phase <= lastPhase; phase++)
+    uint ordinaryPhaseCount = lastPhase - firstPhase + 1u;
+    // Phase 11 is deliberately executed first. A committed scroll cohort has
+    // reserved its complete request/ray cost; admitting any unrelated primary
+    // work before it would silently spend that reservation and recreate the
+    // moving-camera refresh artifact this transaction exists to prevent.
+    for (uint phaseOrdinal = 0u;
+         phaseOrdinal <= ordinaryPhaseCount;
+         phaseOrdinal++)
     {
+        uint phase = phaseOrdinal == 0u
+            ? 11u
+            : firstPhase + phaseOrdinal - 1u;
         for (uint activeIndex = 0u;
              activeIndex < SIMPLE_DDGI_SCHEDULER_MAX_LANES;
              activeIndex++)
@@ -605,10 +655,30 @@ void main()
                 workClass,
                 transport,
                 rayTier);
+            // A scrolling volume is frozen to its exact exposed cohort for
+            // this transaction. Admitting overlap maintenance after the
+            // reservation succeeds would make preserved atlas/state payloads
+            // change during an otherwise ordinary toroidal remap.
+            if (phase != 11u &&
+                SchedulerVolumeHasMandatoryScrollRepair(volumeIndex))
+            {
+                continue;
+            }
             bool tailSourceCohortPhase =
                 SchedulerTailCertification() && phase == 0u;
-            bool phaseMatches = phase == 10u;
-            if (SchedulerTailCertification() && phase <= 4u)
+            bool phaseMatches = false;
+            if (phase == 11u)
+            {
+                phaseMatches =
+                    SchedulerVolumeHasMandatoryScrollRepair(volumeIndex) &&
+                    workClass ==
+                        SIMPLE_DDGI_SCHEDULER_WORK_FRESH_EXPOSED_VISIBLE &&
+                    transport ==
+                        SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE;
+            }
+            else if (phase == 10u)
+                phaseMatches = true;
+            else if (SchedulerTailCertification() && phase <= 4u)
             {
                 phaseMatches = phase == 0u
                     ? transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
@@ -630,6 +700,23 @@ void main()
                     SIMPLE_DDGI_SCHEDULER_WORK_NEAR_MAINTENANCE + phase - 7u;
             if (!phaseMatches)
                 continue;
+                        uint mandatoryRepairCount =
+                            SchedulerVolumeHasMandatoryScrollRepair(volumeIndex)
+                                ? min(
+                                    SchedulerVolumeScrollExpectedRepairCount(volumeIndex),
+                                    quotas[volumeIndex])
+                                : 0u;
+                        bool mandatoryScrollPending =
+                            volumeIndex < activeVolumes &&
+                            volumeUsage[volumeIndex] < mandatoryRepairCount;
+                        if (mandatoryScrollPending &&
+                            (workClass !=
+                                SIMPLE_DDGI_SCHEDULER_WORK_FRESH_EXPOSED_VISIBLE ||
+                             transport !=
+                                SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE))
+                        {
+                            continue;
+                        }
                         // Quotas and class reservations are lane-invariant.
                         // Test them before walking compacted candidates and
                         // stop as soon as this lane has exhausted its only
@@ -648,6 +735,8 @@ void main()
                         uint classLimit = specializedTailPhase || phase == 10u || tailSourceCohortPhase
                             ? quotas[volumeIndex]
                             : classReservations[classBase + workClass];
+                        if (mandatoryScrollPending)
+                            classLimit = quotas[volumeIndex];
                         if (!specializedTailPhase &&
                             classUsage[classBase + workClass] >= classLimit)
                             continue;
@@ -677,6 +766,13 @@ void main()
                             SchedulerVolumeMaintenanceRays(volumeIndex),
                             1u,
                             SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+                        if (mandatoryScrollPending)
+                        {
+                            laneRequiredSourceRayCount = clamp(
+                                SchedulerVolumeScrollBootstrapRays(volumeIndex),
+                                1u,
+                                SchedulerVolumeFullRays(volumeIndex));
+                        }
                         if (laneSourceWork && !laneCanContainZeroPrimaryRelight &&
                             (primaryBudget == 0u ||
                                 laneRequiredSourceRayCount >
@@ -748,6 +844,15 @@ void main()
                                 candidateRayTier != rayTier ||
                                 candidateVolumeIndex != volumeIndex)
                                 continue;
+                            if (mandatoryScrollPending &&
+                                (!SchedulerProbeIsCurrentScrollExposed(
+                                    probeIndex,
+                                    volumeIndex) ||
+                                 (candidateReasons &
+                                    SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) == 0u))
+                            {
+                                continue;
+                            }
                             uint sequenceOrdinal = inputIndex;
                             uint expectedGeneration =
                                 (ReadStorageWordUniform(
@@ -836,6 +941,13 @@ void main()
                                     candidateReasons,
                                     sourceWork)
                                 : (sourceWork ? requiredSourceRayCount : 0u);
+                            sourceRayCount =
+                                SchedulerResolveScrollBootstrapSourceRayCount(
+                                    probeIndex,
+                                    volumeIndex,
+                                    candidateReasons,
+                                    sourceWork,
+                                    sourceRayCount);
                             // V2 evaluates the complete committed source
                             // prefix. Source refresh may atomically replace it
                             // with a promoted/demoted prefix; cached work keeps

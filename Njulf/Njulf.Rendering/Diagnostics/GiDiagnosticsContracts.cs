@@ -1776,7 +1776,8 @@ namespace Njulf.Rendering.Diagnostics
 
         private static bool IsTransient(RendererDiagnostics diagnostics, out string reason)
         {
-            if (diagnostics.SimpleDdgiRecentered != 0)
+            if (diagnostics.SimpleDdgiRecentered != 0 &&
+                diagnostics.SimpleDdgiAtlasPreservedOnRecenter == 0)
             {
                 reason = "DDGI recentered this frame.";
                 return true;

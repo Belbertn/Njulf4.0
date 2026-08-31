@@ -2931,6 +2931,7 @@ internal sealed class SampleInputController
             $"simpleActive={diagnostics.SimpleDdgiActive != 0}, probes={diagnostics.SimpleDdgiProbeCount}, " +
             $"updated={diagnostics.SimpleDdgiProbesUpdated}, rays={diagnostics.SimpleDdgiRaysPerFrame}, " +
             $"recenter={diagnostics.SimpleDdgiRecentered}, atlasFresh={diagnostics.SimpleDdgiAtlasFresh}, " +
+            $"scroll={diagnostics.SimpleDdgiScrollGpuExpectedCount}/{diagnostics.SimpleDdgiScrollGpuAcceptedCount}/{diagnostics.SimpleDdgiScrollGpuTracedCount}/{diagnostics.SimpleDdgiScrollGpuCommittedCount}, unbucketed={diagnostics.SimpleDdgiScrollUnbucketedCount}, cohort={diagnostics.SimpleDdgiScrollCohortFailure}, rebaseMask={diagnostics.SimpleDdgiRebuildingRingMask}, " +
             $"rayQuery={gi.EffectiveUseRayQueryBackend}/{diagnostics.GlobalIlluminationRayQueryActive}, " +
             $"debug={gi.DebugView}");
     }

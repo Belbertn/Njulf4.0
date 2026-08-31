@@ -9,6 +9,7 @@ using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
 using Silk.NET.Core.Native;
 using Silk.NET.Vulkan;
+using VkBuffer = Silk.NET.Vulkan.Buffer;
 using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline;
@@ -16,7 +17,7 @@ namespace Njulf.Rendering.Pipeline;
 /// <summary>
 /// Records the bounded GPU scheduler transaction.  Every stage is a direct,
 /// fixed-capacity dispatch; only the update consumers use the indirect commands
-/// produced by the final emit stage.  This keeps the scheduler itself easy to
+/// produced by the final emit sequence.  This keeps the scheduler itself easy to
 /// validate and prevents a stale indirect command from replaying prior work.
 /// </summary>
 public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
@@ -31,7 +32,9 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
         "ddgi_simple_schedule_admit_tail.comp.spv",
         "ddgi_simple_schedule_admit.comp.spv",
         "ddgi_simple_schedule_materialize.comp.spv",
-        "ddgi_simple_schedule_emit.comp.spv"
+        "ddgi_simple_schedule_emit_classify.comp.spv",
+        "ddgi_simple_schedule_emit.comp.spv",
+        "ddgi_simple_schedule_emit_scatter.comp.spv"
     ];
 
     private static readonly string[] TimingNames =
@@ -147,9 +150,12 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
             1,
             1,
             SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.RequestCapacity),
-            1
+            SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.RequestCapacity),
+            1,
+            SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.RequestCapacity)
         ];
-        for (int stage = 0; stage < groupCounts.Length; stage++)
+        const int EmitFirstStage = 8;
+        for (int stage = 0; stage < EmitFirstStage; stage++)
         {
             timestamps?.BeginPass(cmd, frameIndex, TimingNames[stage]);
             try
@@ -160,6 +166,21 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
             {
                 timestamps?.EndPass(cmd, frameIndex);
             }
+        }
+
+        timestamps?.BeginPass(cmd, frameIndex, TimingNames[EmitFirstStage]);
+        try
+        {
+            for (int stage = EmitFirstStage;
+                 stage < groupCounts.Length;
+                 stage++)
+            {
+                DispatchStage(cmd, pushConstants, stage, groupCounts[stage]);
+            }
+        }
+        finally
+        {
+            timestamps?.EndPass(cmd, frameIndex);
         }
     }
 
@@ -206,13 +227,7 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
             (uint)Marshal.SizeOf<GPUSimpleDdgiSchedulePushConstants>(),
             &pushConstants);
         _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
-        // Emit publishes the indirect command records consumed by the rest of
-        // the resident transaction. Those reads occur at DRAW_INDIRECT, not
-        // COMPUTE_SHADER, including when the commands dispatch compute work.
-        if (stage == _pipelines.Length - 1)
-            InsertStorageAndIndirectBarrier(cmd);
-        else
-            InsertStorageBarrier(cmd);
+        InsertStageBarrier(cmd, stage);
     }
 
     private void CreatePipelineCache()
@@ -299,65 +314,180 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
         }
     }
 
-    private void InsertStorageBarrier(CommandBuffer cmd)
+    private void InsertStageBarrier(CommandBuffer cmd, int stage)
     {
-        var barrier = new MemoryBarrier2
+        SimpleDdgiGpuSchedulerLayout layout =
+            _volumeManager.GpuScheduler.Layout ??
+            throw new InvalidOperationException(
+                "Simple DDGI scheduler layout is not resident.");
+        VkBuffer arena = _volumeManager.GpuScheduler.GetArenaVkBuffer();
+        Span<BufferMemoryBarrier2> barriers =
+            stackalloc BufferMemoryBarrier2[12];
+        int count = 0;
+
+        switch (stage)
         {
-            SType = StructureType.MemoryBarrier2,
-            SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
-            SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
-            DstStageMask = PipelineStageFlags2.ComputeShaderBit,
-            DstAccessMask = AccessFlags2.ShaderStorageReadBit |
-                            AccessFlags2.ShaderStorageWriteBit
-        };
-        var dependency = new DependencyInfo
+            case 0: // reset -> classify and all later schedule stages
+                AppendRegion(barriers, ref count, arena,
+                    layout.CandidateGroupLaneCounts);
+                AppendRange(barriers, ref count, arena,
+                    layout.LaneCandidateCounts.Offset,
+                    checked(layout.LaneAdmission.End -
+                        layout.LaneCandidateCounts.Offset));
+                AppendRegion(barriers, ref count, arena, layout.Counters);
+                AppendRegion(barriers, ref count, arena,
+                    layout.FeedbackSummary);
+                break;
+            case 1: // classify -> prefix/compact/admit
+                AppendRegion(barriers, ref count, arena, layout.CandidateInput);
+                AppendRegion(barriers, ref count, arena,
+                    layout.CandidateGroupLaneCounts);
+                AppendRegion(barriers, ref count, arena,
+                    layout.LaneCandidateCounts);
+                AppendRegion(barriers, ref count, arena, layout.Counters);
+                break;
+            case 2: // packed lane prefix -> lane-base/compact
+                AppendRegion(barriers, ref count, arena,
+                    layout.CandidateGroupLaneCounts);
+                AppendRange(barriers, ref count, arena,
+                    layout.LaneCandidateCounts.Offset,
+                    checked(layout.LanePrefixes.End -
+                        layout.LaneCandidateCounts.Offset));
+                break;
+            case 3: // lane-base -> compact/admit
+                AppendRegion(barriers, ref count, arena, layout.LanePrefixes);
+                AppendRegion(barriers, ref count, arena, layout.LaneTotals);
+                AppendRegion(barriers, ref count, arena, layout.LaneAdmission);
+                AppendRegion(barriers, ref count, arena, layout.Counters);
+                break;
+            case 4: // compact -> both admission variants
+                AppendRegion(barriers, ref count, arena, layout.CandidateOutput);
+                AppendRegion(barriers, ref count, arena, layout.Counters);
+                break;
+            case 5: // tail-specialized admission -> generic admission/materialize
+            case 6: // generic admission -> materialize
+                AppendRegion(barriers, ref count, arena, layout.CandidateInput);
+                AppendRegion(barriers, ref count, arena, layout.UpdateRecords);
+                AppendRegion(barriers, ref count, arena, layout.LaneCursors);
+                AppendRegion(barriers, ref count, arena, layout.LaneAdmission);
+                AppendRegion(barriers, ref count, arena, layout.Counters);
+                break;
+            case 7: // selection materialization -> emit
+                AppendRegion(barriers, ref count, arena, layout.UpdateRecords);
+                break;
+            case 8: // parallel bucket classify -> stable group prefix
+                AppendRegion(barriers, ref count, arena,
+                    layout.CandidateGroupLaneCounts);
+                AppendRegion(barriers, ref count, arena,
+                    layout.CandidateOutput);
+                // Classification atomically counts unmatched accepted records
+                // and initializes outcomes. Emit must observe both before it
+                // can publish any indirect consumer command.
+                AppendRegion(barriers, ref count, arena, layout.Counters);
+                AppendRegion(barriers, ref count, arena, layout.Outcomes);
+                break;
+            case 9: // stable group prefix -> stable queue scatter
+                AppendRegion(barriers, ref count, arena,
+                    layout.CandidateGroupLaneCounts);
+                AppendRegion(barriers, ref count, arena,
+                    layout.CandidateOutput);
+                AppendRegion(barriers, ref count, arena, layout.Counters);
+                AppendRegion(barriers, ref count, arena,
+                    layout.RayBucketMetadata);
+                break;
+            case 10: // stable queue scatter -> resident consumers
+                AppendRegion(barriers, ref count, arena, layout.Counters);
+                AppendRegion(barriers, ref count, arena, layout.Outcomes);
+                AppendRegion(barriers, ref count, arena,
+                    layout.RayBucketMetadata);
+                AppendRange(
+                    barriers,
+                    ref count,
+                    arena,
+                    layout.RayBucketCommands.Offset,
+                    layout.RayBucketCommands.ByteSize,
+                    PipelineStageFlags2.DrawIndirectBit,
+                    AccessFlags2.IndirectCommandReadBit);
+                AppendRange(
+                    barriers,
+                    ref count,
+                    arena,
+                    layout.IndirectCommands.Offset,
+                    layout.IndirectCommands.ByteSize,
+                    PipelineStageFlags2.DrawIndirectBit,
+                    AccessFlags2.IndirectCommandReadBit);
+                barriers[count++] = new BufferMemoryBarrier2
+                {
+                    SType = StructureType.BufferMemoryBarrier2,
+                    SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+                    SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+                    DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+                    DstAccessMask = AccessFlags2.ShaderStorageReadBit |
+                                    AccessFlags2.ShaderStorageWriteBit,
+                    SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                    DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                    Buffer = _volumeManager.GetProbeUpdateQueueVkBuffer(),
+                    Offset = 0,
+                    Size = _volumeManager.ProbeUpdateQueueBytes
+                };
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(stage));
+        }
+
+        fixed (BufferMemoryBarrier2* barrierPointer = barriers)
         {
-            SType = StructureType.DependencyInfo,
-            MemoryBarrierCount = 1,
-            PMemoryBarriers = &barrier
-        };
-        _context.Api.CmdPipelineBarrier2(cmd, &dependency);
+            var dependency = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = checked((uint)count),
+                PBufferMemoryBarriers = barrierPointer
+            };
+            _context.Api.CmdPipelineBarrier2(cmd, &dependency);
+        }
     }
 
-    private void InsertStorageAndIndirectBarrier(CommandBuffer cmd)
+    private static void AppendRegion(
+        Span<BufferMemoryBarrier2> barriers,
+        ref int count,
+        VkBuffer arena,
+        SimpleDdgiSchedulerArenaRegion region)
     {
-        BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[2];
-        barriers[0] = new()
+        AppendRange(
+            barriers,
+            ref count,
+            arena,
+            region.Offset,
+            region.ByteSize,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit);
+    }
+
+    private static void AppendRange(
+        Span<BufferMemoryBarrier2> barriers,
+        ref int count,
+        VkBuffer arena,
+        ulong offset,
+        ulong size,
+        PipelineStageFlags2 destinationStages =
+            PipelineStageFlags2.ComputeShaderBit,
+        AccessFlags2 destinationAccess =
+            AccessFlags2.ShaderStorageReadBit |
+            AccessFlags2.ShaderStorageWriteBit)
+    {
+        barriers[count++] = new BufferMemoryBarrier2
         {
             SType = StructureType.BufferMemoryBarrier2,
             SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
             SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
-            DstStageMask = PipelineStageFlags2.ComputeShaderBit |
-                           PipelineStageFlags2.DrawIndirectBit,
-            DstAccessMask = AccessFlags2.ShaderStorageReadBit |
-                            AccessFlags2.ShaderStorageWriteBit |
-                            AccessFlags2.IndirectCommandReadBit,
+            DstStageMask = destinationStages,
+            DstAccessMask = destinationAccess,
             SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
             DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-            Buffer = _volumeManager.GpuScheduler.GetArenaVkBuffer(),
-            Offset = 0,
-            Size = _volumeManager.GpuScheduler.Layout?.TotalBytes ?? 0UL
+            Buffer = arena,
+            Offset = offset,
+            Size = size
         };
-        barriers[1] = new()
-        {
-            SType = StructureType.BufferMemoryBarrier2,
-            SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
-            SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
-            DstStageMask = PipelineStageFlags2.ComputeShaderBit,
-            DstAccessMask = AccessFlags2.ShaderStorageReadBit |
-                            AccessFlags2.ShaderStorageWriteBit,
-            SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
-            DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-            Buffer = _volumeManager.GetProbeUpdateQueueVkBuffer(),
-            Offset = 0,
-            Size = _volumeManager.ProbeUpdateQueueBytes
-        };
-        var dependency = new DependencyInfo
-        {
-            SType = StructureType.DependencyInfo,
-            BufferMemoryBarrierCount = 2,
-            PBufferMemoryBarriers = barriers
-        };
-        _context.Api.CmdPipelineBarrier2(cmd, &dependency);
     }
 }

@@ -3255,7 +3255,7 @@ namespace Njulf.Rendering.Data
         public uint TransportTopologyGeneration;
     }
 
-    // 176 bytes.  Volume policy is uploaded only when topology, quality, or
+    // 192 bytes.  Volume policy is uploaded only when topology, quality, or
     // scheduler policy changes.  Current/previous origins and toroidal offsets
     // are explicit so a shader can fail closed on incompatible remaps.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -3306,6 +3306,13 @@ namespace Njulf.Rendering.Data
         // capacity is 32,768, so both authoritative compiler values fit.
         public uint CachePhysicalFirstAndCount;
         public uint CacheLayoutFlags;
+        // Camera-relative scroll transaction. A mandatory transaction is
+        // published only after the CPU planner has reserved the complete
+        // exposed cohort in both request and primary-ray budgets.
+        public uint ScrollTransactionSerial;
+        public uint ScrollExpectedRepairCount;
+        public uint ScrollBootstrapRaysPerProbe;
+        public uint ScrollFlags;
     }
 
     // 80 bytes. Minimum/Maximum are the scheduler influence bounds, while
@@ -3372,8 +3379,11 @@ namespace Njulf.Rendering.Data
         public bool IsValid => ProbeIndex != uint.MaxValue;
     }
 
-    // 60 bytes / fifteen uint words.  Update producers write transaction-private outcomes; commit
-    // is the first stage allowed to mutate receiver-visible lifecycle state.
+    // 60 bytes / fifteen uint words. Update producers write transaction-private
+    // outcomes; commit is the first stage allowed to mutate receiver-visible
+    // lifecycle state. For mandatory scroll records, the high half of
+    // ExpectedRayInvocationCount carries the low 16 bits of the exact
+    // CPU-planned scroll transaction serial instead of a quadrature witness.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiUpdateOutcome
     {
@@ -3389,8 +3399,10 @@ namespace Njulf.Rendering.Data
         public uint FailureReason;
         public uint UpdateFlags;
         // Low 16 bits carry the bounded expected/source ray count. The high
-        // 16 bits carry an optional quantized nested-prefix quadrature witness
-        // so adaptive cardinality does not grow the shipping scheduler arena.
+        // 16 bits carry either an optional quantized nested-prefix quadrature
+        // witness or, for mandatory scroll records, the transaction serial low
+        // half. These uses are mutually exclusive so the shipping arena does
+        // not grow.
         public uint ExpectedRayInvocationCount;
         public uint TraceInvocationCount;
         public uint TransportInvocationCount;

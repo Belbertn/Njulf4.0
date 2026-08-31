@@ -533,6 +533,15 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 #define FORWARD_DDGI_RECEIVER_CACHE_LEGACY 0
 #endif
 
+// The cache-required opaque hybrid artifact has a deliberately exclusive GI
+// ownership contract: the receiver cache owns admitted diffuse/visibility and
+// the deferred hybrid pass owns indirect specular.  Keep this opt-in so cache
+// artifacts without the hybrid receiver retain their compact directional L2
+// reconstruction.
+#ifndef FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED
+#define FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED 0
+#endif
+
 #ifndef NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW
 #define NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW 0
 #endif
@@ -543,6 +552,13 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED && !FORWARD_DDGI_RECEIVER_CACHE
 #error FORWARD_DDGI_RECEIVER_CACHE_REQUIRED requires FORWARD_DDGI_RECEIVER_CACHE
+#endif
+
+#if FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED && \
+    (!FORWARD_DDGI_RECEIVER_CACHE_REQUIRED || \
+     !NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT || \
+     (!defined(FORWARD_OPAQUE) && !defined(FORWARD_SIMPLE_OPAQUE)))
+#error FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED requires an opaque cache-required hybrid receiver artifact
 #endif
 
 #if FORWARD_DDGI_RECEIVER_CACHE_LEGACY && \
@@ -6341,10 +6357,23 @@ void main()
             directionalParams.probeCount > 0u;
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
         bool receiverCompactDirectionalResolved = !directionalConfigured;
+#if FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED
+        // Accepted opaque receivers have no forward directional-specular
+        // owner in this artifact.  Mark the directional requirement resolved
+        // without touching the compact L2 record; rejected/exception paths
+        // still fall through to the authoritative exact gather below.
+        receiverCompactDirectionalResolved =
+            receiverCompactDirectionalResolved || receiverCacheAccepted;
+#else
         if (receiverCacheAccepted && directionalConfigured)
         {
             vec3 compactDirectionalRadiance;
             float compactDirectionalConfidence;
+#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+            IncrementSimpleDdgiReceiverCacheDiagnostic(
+                pc.Push.CurrentFrameIndex,
+                SIMPLE_DDGI_RECEIVER_CACHE_DIRECTIONAL_EVALUATION_COUNTER);
+#endif
             receiverCompactDirectionalResolved =
                 SampleForwardDdgiCompactDirectionalRadiance(
                     ForwardScreenPixel(),
@@ -6365,6 +6394,7 @@ void main()
                 ddgiDirectionalConfidence = compactDirectionalConfidence;
             }
         }
+#endif
         bool exactGatherRequired =
             !receiverCacheAccepted ||
             !receiverCompactDirectionalResolved ||

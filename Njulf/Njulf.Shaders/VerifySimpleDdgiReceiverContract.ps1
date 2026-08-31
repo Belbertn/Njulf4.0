@@ -82,6 +82,27 @@ $receiverCacheFragmentModuleNames = @(
     'forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag.spv'
 )
 
+# These production DdgiHigh artifacts have an exclusive opaque GI owner split:
+# the receiver cache owns admitted diffuse/visibility and the deferred hybrid
+# pass owns indirect specular. Their rejected and exception lanes deliberately
+# retain the same exact gather as the cache-only artifacts, but the compact
+# directional L2 buffer (static bindless slots 178/179) must be absent from the
+# optimized SPIR-V.
+$ownershipLockedReceiverCacheFragmentModuleNames = @(
+    'forward_opaque_ddgi_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_simple_ddgi_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_simple_full_input_ddgi_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_ddgi_c4_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_simple_ddgi_c4_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_simple_full_input_ddgi_c4_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_ddgi_c5_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_simple_ddgi_c5_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_simple_full_input_ddgi_c5_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv',
+    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv'
+)
+
 $giDisabledControlModuleNames = @(
     'forward_opaque_gi_disabled.frag.spv',
     'forward_opaque_simple_gi_disabled.frag.spv',
@@ -94,6 +115,7 @@ $receiverCacheResolveModuleName =
 $expectedModuleNames = @(
     $receiverModuleNames
     $receiverCacheFragmentModuleNames
+    $ownershipLockedReceiverCacheFragmentModuleNames
     $giDisabledControlModuleNames
     $receiverCacheResolveModuleName
 )
@@ -165,8 +187,9 @@ foreach ($moduleName in $receiverModuleNames) {
     $expectedAtomicAdds = if ($moduleName -eq
         'foliage_mesh.mesh.spv') {
         # Physical meshlet residency contributes eight bounded range-demand
-        # bookkeeping adds in addition to the unchanged receiver protocol.
-        22
+        # bookkeeping adds plus ten subgroup-aggregated resolved-mapping
+        # validation/attribution adds in addition to the receiver protocol.
+        32
     } elseif (
         $transparentReflectionTelemetryModuleNames -contains $moduleName) {
         27
@@ -201,7 +224,10 @@ foreach ($moduleName in $receiverModuleNames) {
 # fragments then read the matching set-2/binding-0 uvec4 radiance entry; rejected
 # fragments retain the exact three-gather fallback and its paging protocol. Paired
 # GI-disabled controls declare and execute none of those paths.
-foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControlModuleNames)) {
+foreach ($moduleName in @(
+        $receiverCacheFragmentModuleNames +
+        $ownershipLockedReceiverCacheFragmentModuleNames +
+        $giDisabledControlModuleNames)) {
     $modulePath = Join-Path $resolvedDirectory $moduleName
     $validation = (& $spirvVal --target-env vulkan1.3 $modulePath 2>&1) -join [Environment]::NewLine
     if ($LASTEXITCODE -ne 0) {
@@ -222,6 +248,12 @@ foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControl
     $sourceCacheConstants = [regex]::Matches(
         $disassembly,
         '%(?:u?int)_' + $sourceCacheIndex + '\b').Count
+    $compactDirectionalBaseReferences = [regex]::Matches(
+        $disassembly,
+        '%(?:u?int)_178\b').Count
+    $compactDirectionalNextBankReferences = [regex]::Matches(
+        $disassembly,
+        '%(?:u?int)_179\b').Count
     $exactReceiverAccesses = [regex]::Matches(
         $disassembly,
         '(?m)^\s*%\w+\s*=\s*Op(?:InBounds)?AccessChain\s+' +
@@ -288,7 +320,11 @@ foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControl
         }
     }
 
-    $isCacheModule = $receiverCacheFragmentModuleNames -contains $moduleName
+    $isOwnershipLockedModule =
+        $ownershipLockedReceiverCacheFragmentModuleNames -contains $moduleName
+    $isCacheModule =
+        $receiverCacheFragmentModuleNames -contains $moduleName -or
+        $isOwnershipLockedModule
     $expectedCacheSamples = if ($isCacheModule) { 1 } else { 0 }
     $expectedExactReceiverConstants = if ($isCacheModule) { 4 } else { 0 }
     $expectedExactReceiverAccesses = if ($isCacheModule) { 3 } else { 0 }
@@ -301,6 +337,13 @@ foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControl
     if ($atomicInstructions -ne $expectedAtomicInstructions) {
         $violations.Add(
             "${moduleName}: found $atomicInstructions exact-fallback atomic instruction(s), expected $expectedAtomicInstructions")
+    }
+    if ($isOwnershipLockedModule -and
+        ($compactDirectionalBaseReferences -ne 0 -or
+         $compactDirectionalNextBankReferences -ne 0)) {
+        $violations.Add(
+            "${moduleName}: ownership-locked artifact retains compact directional L2 bindless references " +
+            "base178=$compactDirectionalBaseReferences bank179=$compactDirectionalNextBankReferences; expected 0/0")
     }
     if ($receiverConstants -ne $expectedExactReceiverConstants -or
         $exactReceiverAccesses -ne $expectedExactReceiverAccesses -or
@@ -425,4 +468,5 @@ if ($violations.Count -ne 0) {
 
 Write-Host "Validated and verified $($receiverModuleNames.Count) production Simple-DDGI receiver modules use exactly one compact uvec4 load per inlined gather site, the exact bounded paging-demand/B1 contribution atomic protocol, no compute-state/source-cache access, and no obsolete SSGI artifact."
 Write-Host "Validated $($receiverCacheFragmentModuleNames.Count) cache-required forward modules each perform one aligned set-2/binding-1 receiver-surface admission read, conditionally read the matching binding-0 FP16 radiance entry, and retain the exact three-gather fallback; the $($giDisabledControlModuleNames.Count) paired controls contain none of those paths."
+Write-Host "Validated $($ownershipLockedReceiverCacheFragmentModuleNames.Count) ownership-locked cache/hybrid modules retain exact rejection/exception fallback while containing no compact directional L2 bindless references."
 Write-Host "Validated the receiver-cache resolve publishes all four deterministic radiance and receiver-surface write paths through set-2 bindings 0 and 1 and contains no atomics."

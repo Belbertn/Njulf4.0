@@ -117,7 +117,6 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
     private ulong _previousCameraCutSerial = ulong.MaxValue;
     private ulong _allocatedBytes;
     private int _bounceProbeCapacity;
-    private uint _previousDdgiVolumeTableGeneration;
     private uint _previousDdgiOwnershipGeneration;
     private bool _historyValid;
     private bool _noiseInitialized;
@@ -156,6 +155,12 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
     internal bool IsActive { get; private set; }
     internal bool DirectionalL2Active => IsActive && _ddgi is
         { DirectionalRadianceMode: SimpleDdgiDirectionalRadianceMode.L2 };
+
+    internal static bool RequiresDdgiSidecarReset(
+        uint previousPhysicalOwnershipGeneration,
+        uint currentPhysicalOwnershipGeneration) =>
+        previousPhysicalOwnershipGeneration !=
+        currentPhysicalOwnershipGeneration;
 
     internal void Initialize()
     {
@@ -310,11 +315,11 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
         if (multipleScatteringIterations > 0)
             flags |= 1u << 3;
 
-        if (_previousDdgiVolumeTableGeneration != _ddgi.VolumeTableGeneration ||
-            _previousDdgiOwnershipGeneration != _ddgi.PhysicalOwnershipGeneration)
+        if (RequiresDdgiSidecarReset(
+                _previousDdgiOwnershipGeneration,
+                _ddgi.PhysicalOwnershipGeneration))
         {
             _sidecarCleared = false;
-            _previousDdgiVolumeTableGeneration = _ddgi.VolumeTableGeneration;
             _previousDdgiOwnershipGeneration = _ddgi.PhysicalOwnershipGeneration;
         }
 
@@ -1589,7 +1594,6 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
         _sidecarCleared = false;
         _outputFailureLatched = false;
         _outputFailureStatus = string.Empty;
-        _previousDdgiVolumeTableGeneration = 0u;
         _previousDdgiOwnershipGeneration = 0u;
         IsActive = false;
     }

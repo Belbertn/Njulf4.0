@@ -1222,6 +1222,17 @@ namespace Njulf.Rendering.Data
         public long MeshletPhysicalResidencyEvictionCount { get; init; }
         public long MeshletPhysicalResidencyRetryCount { get; init; }
         public long MeshletPhysicalResidencyInvalidMappingCount { get; init; }
+        public long MeshletPhysicalResidencyCpuInvalidMappingTotal { get; init; }
+        public long MeshletPhysicalResidencyGpuInvalidMappingTotal { get; init; }
+        public uint MeshletPhysicalResidencyLastFrameInvalidMappingCount { get; init; }
+        public long MeshletPhysicalResidencyMissingPageMappingTotal { get; init; }
+        public long MeshletPhysicalResidencyInvalidPageHeaderTotal { get; init; }
+        public long MeshletPhysicalResidencyRecordBoundsFailureTotal { get; init; }
+        public long MeshletPhysicalResidencyLocalAddressFailureTotal { get; init; }
+        public long MeshletPhysicalResidencyResolvedMappingFailureTotal { get; init; }
+        public long MeshletPhysicalResidencyRangePublicationMismatchTotal { get; init; }
+        public ulong MeshletPhysicalResidencyFeedbackFrameSerial { get; init; }
+        public int MeshletPhysicalResidencyFeedbackFrameSlot { get; init; } = -1;
         public string MeshletPhysicalResidencyFallbackReasonSummary
         {
             get;
@@ -1304,6 +1315,10 @@ namespace Njulf.Rendering.Data
         public ulong SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize { get; init; }
         public ulong SceneSubmissionCounterBufferSize { get; init; }
         public ulong SceneSubmissionOpaqueIndirectDispatchBufferSize { get; init; }
+        public int SceneSubmissionCompactionFullPayloadClear { get; init; }
+        public ulong SceneSubmissionCompactionClearedBytes { get; init; }
+        public int SceneSubmissionCompactionResetBarrierCount { get; init; }
+        public int SceneSubmissionCompactionOutputBarrierCount { get; init; }
         public long GpuCompositeMicroseconds { get; init; }
         public long GpuBloomExtractMicroseconds { get; init; }
         public long GpuBloomDownsampleMicroseconds { get; init; }
@@ -1792,6 +1807,35 @@ namespace Njulf.Rendering.Data
         public ulong FarFieldPageTableBytes { get; init; }
         public int SimpleDdgiRecentered { get; init; }
         public int SimpleDdgiAtlasPreservedOnRecenter { get; init; }
+        public int SimpleDdgiScrollCommittedCascadeCount { get; init; }
+        public int SimpleDdgiScrollDeferredCascadeCount { get; init; }
+        public int SimpleDdgiScrollExposedProbeCount { get; init; }
+        public int SimpleDdgiScrollRepairExpectedProbeCount { get; init; }
+        public ulong SimpleDdgiScrollReservedPrimaryRayCount { get; init; }
+        public ulong SimpleDdgiScrollEmergencyRebaseCount { get; init; }
+        public uint SimpleDdgiFrameRayBucket0 { get; init; }
+        public uint SimpleDdgiFrameRayBucket1 { get; init; }
+        public uint SimpleDdgiFrameRayBucket2 { get; init; }
+        public uint SimpleDdgiFrameRayBucket3 { get; init; }
+        public uint SimpleDdgiFrameRayBucket4 { get; init; }
+        public uint SimpleDdgiFrameRayBucket5 { get; init; }
+        public int SimpleDdgiNearScrollCardinality { get; init; }
+        public int SimpleDdgiMidScrollCardinality { get; init; }
+        public int SimpleDdgiFarScrollCardinality { get; init; }
+        public uint SimpleDdgiScrollGpuExpectedCount { get; init; }
+        public uint SimpleDdgiScrollGpuAcceptedCount { get; init; }
+        public uint SimpleDdgiScrollGpuTracedCount { get; init; }
+        public uint SimpleDdgiScrollGpuCommittedCount { get; init; }
+        public uint SimpleDdgiScrollUnbucketedCount { get; init; }
+        public SimpleDdgiScrollCohortFailureReason
+            SimpleDdgiScrollCohortFailure { get; init; }
+        public uint SimpleDdgiRebuildingRingMask { get; init; }
+        public SimpleDdgiRebaseState SimpleDdgiNearRebaseState { get; init; }
+        public SimpleDdgiRebaseState SimpleDdgiMidRebaseState { get; init; }
+        public SimpleDdgiRebaseState SimpleDdgiFarRebaseState { get; init; }
+        public int SimpleDdgiNearRebaseFadeFrame { get; init; }
+        public int SimpleDdgiMidRebaseFadeFrame { get; init; }
+        public int SimpleDdgiFarRebaseFadeFrame { get; init; }
         public int SimpleDdgiAtlasCleared { get; init; }
         public int SimpleDdgiAtlasFresh { get; init; }
         public int SimpleDdgiRecenterCount { get; init; }
@@ -2387,8 +2431,20 @@ namespace Njulf.Rendering.Data
         public ulong SwapchainEstimatedBytes { get; init; }
         public int SwapchainImageCount { get; init; }
         public string SwapchainFormat { get; init; } = string.Empty;
+        public string SwapchainPresentMode { get; init; } = string.Empty;
+        public double MaximumFramesPerSecond { get; init; }
+        public long CpuFramePacingWaitMicroseconds { get; init; }
         public long CpuAcquireImageMicroseconds { get; init; }
         public long CpuWaitForFrameFenceMicroseconds { get; init; }
+        public long CpuSwapchainImageOwnerWaitMicroseconds { get; init; }
+        public long CpuFrameResourceRecycleWaitMicroseconds { get; init; }
+        public int FrameResourceContext { get; init; }
+        public ulong FrameResourceOwnerSubmissionSerial { get; init; }
+        public uint SwapchainImageIndex { get; init; }
+        public ulong SwapchainImageOwnerSubmissionSerial { get; init; }
+        public int SwapchainImageOwnerFrameContext { get; init; } = -1;
+        public int AcquireSemaphoreSlot { get; init; }
+        public ulong PendingSubmissionSerial { get; init; }
         public long CpuQueueSubmitMicroseconds { get; init; }
         public long CpuPresentMicroseconds { get; init; }
         public long CpuFenceResetMicroseconds { get; init; }

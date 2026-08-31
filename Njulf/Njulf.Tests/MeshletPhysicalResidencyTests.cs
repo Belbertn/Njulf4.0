@@ -17,15 +17,45 @@ public sealed class MeshletPhysicalResidencyTests
     public void VirtualAddress_PreservesDirectAndVirtualDomains()
     {
         uint encoded = MeshletVirtualAddress.Encode(1234);
+        uint resolved = MeshletVirtualAddress.EncodeResolved(1234);
         Assert.Multiple(() =>
         {
             Assert.That(MeshletVirtualAddress.IsVirtual(1234), Is.False);
             Assert.That(MeshletVirtualAddress.IsVirtual(encoded), Is.True);
+            Assert.That(MeshletVirtualAddress.IsResolved(encoded), Is.False);
+            Assert.That(MeshletVirtualAddress.IsVirtual(resolved), Is.False);
+            Assert.That(MeshletVirtualAddress.IsResolved(resolved), Is.True);
             Assert.That(MeshletVirtualAddress.Decode(encoded),
+                Is.EqualTo(1234));
+            Assert.That(MeshletVirtualAddress.DecodeResolved(resolved),
                 Is.EqualTo(1234));
             Assert.That(
                 () => MeshletVirtualAddress.Encode(
                     MeshletVirtualAddress.IndexMask + 1u),
+                Throws.TypeOf<ArgumentOutOfRangeException>());
+            Assert.That(
+                () => MeshletVirtualAddress.EncodeResolved(
+                    MeshletVirtualAddress.IndexMask + 1u),
+                Throws.TypeOf<ArgumentOutOfRangeException>());
+        });
+    }
+
+    [Test]
+    public void ResolvedMapping_PacksPhysicalBankAndWordAddress()
+    {
+        uint packed = GPUMeshletResolvedMapping.PackAddress(
+            bankIndex: 15,
+            wordOffset: GPUMeshletResolvedMapping.WordMask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(packed >> 24, Is.EqualTo(15u));
+            Assert.That(
+                packed & GPUMeshletResolvedMapping.WordMask,
+                Is.EqualTo(GPUMeshletResolvedMapping.WordMask));
+            Assert.That(GPUMeshletResolvedMapping.Invalid.IsValid, Is.False);
+            Assert.That(
+                () => GPUMeshletResolvedMapping.PackAddress(16, 0),
                 Throws.TypeOf<ArgumentOutOfRangeException>());
         });
     }
@@ -119,6 +149,46 @@ public sealed class MeshletPhysicalResidencyTests
     }
 
     [Test]
+    public async Task PhysicalUploader_FrameSnapshotKeepsMatchingPackedPageGeneration()
+    {
+        using var uploader = new MeshletPhysicalPageCacheUploader(4);
+        MeshletPageUploadTicket first = await uploader.BeginUploadAsync(
+            pageId: 0,
+            physicalSlot: 0,
+            CreateDecodedPage(vertexOffset: 2),
+            submissionSerial: 0);
+        uploader.PublishResident(first.PageId, first.PhysicalSlot);
+        MeshletPhysicalFrameStateSnapshot recorded =
+            uploader.CaptureFrameStateForRecording(0);
+        byte[] recordedBytes = recorded.GetPackedPage(0, 0).ToArray();
+
+        uploader.UnpublishResident(0, 0, retireAfterSerial: 1);
+        MeshletPageUploadTicket replacement = await uploader.BeginUploadAsync(
+            pageId: 1,
+            physicalSlot: 0,
+            CreateDecodedPage(vertexOffset: 19),
+            submissionSerial: 1);
+        uploader.PublishResident(replacement.PageId, replacement.PhysicalSlot);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                recorded.GetPackedPage(0, 0).ToArray()
+                    .SequenceEqual(recordedBytes),
+                Is.True,
+                "A recorded table must retain the packed bytes from its own generation.");
+            Assert.That(
+                uploader.GetPackedPage(0).ToArray().SequenceEqual(recordedBytes),
+                Is.False,
+                "The live slot should contain the replacement generation.");
+            Assert.That(
+                () => recorded.GetPackedPage(1, 0),
+                Throws.TypeOf<ArgumentOutOfRangeException>(),
+                "A physical slot must not alias a different global page in the recorded snapshot.");
+        });
+    }
+
+    [Test]
     public async Task Coordinator_BootstrapRequiresPinnedRangeReadyInBothFrameSlots()
     {
         using var uploader = new MeshletPhysicalPageCacheUploader(4);
@@ -181,6 +251,65 @@ public sealed class MeshletPhysicalResidencyTests
             Assert.That(
                 packed.PageBytes.AsSpan(packed.UsedBytes).ToArray(),
                 Is.All.Zero);
+        });
+    }
+
+    [Test]
+    public void ResolvedMappingTable_UpdatesChangedPagesAndRejectsFalseReadiness()
+    {
+        MeshletGpuPagePackResult packed = MeshletGpuPagePacker.Pack(
+            CreateDecodedPage(vertexOffset: 2),
+            globalVertexOffset: 10);
+        GPUMeshletPhysicalPageHeader header =
+            MeshletGpuPagePacker.ReadHeader(packed.PageBytes);
+        var table = new MeshletResolvedMappingTable();
+        table.SetContracts(
+            [new GPUMeshletVirtualMapping(0, 0, 0, 10)],
+            [new GPUMeshletStreamingRange(
+                0, 1, 0, 1,
+                MeshletStreamingRangeFlags.PinnedFallback,
+                uint.MaxValue, 0, 0)]);
+        GPUMeshletPageTableEntry[] resident =
+        [
+            new GPUMeshletPageTableEntry(
+                0, 0, 1, MeshletGpuPageTableFlags.Resident)
+        ];
+
+        MeshletResolvedMappingUpdate first = table.Update(
+            0,
+            resident,
+            [1u],
+            (_, _) => packed.PageBytes);
+        GPUMeshletResolvedMapping firstMapping = first.Mappings[0];
+        uint firstPublishedRangeState = first.PublishedRangeStateWords[0];
+        int firstDirtyRangeCount = first.DirtyRanges.Count;
+        MeshletResolvedMappingUpdate unchanged = table.Update(
+            0,
+            resident,
+            [1u],
+            (_, _) => packed.PageBytes);
+        MeshletResolvedMappingUpdate missing = table.Update(
+            0,
+            [GPUMeshletPageTableEntry.Unmapped],
+            [1u],
+            (_, _) => packed.PageBytes);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstMapping.IsValid, Is.True);
+            Assert.That(
+                firstMapping.MeshletRecordAddress,
+                Is.EqualTo(header.MeshletWordOffset));
+            Assert.That(firstMapping.VertexOffset, Is.EqualTo(10u));
+            Assert.That(firstPublishedRangeState & 1u,
+                Is.EqualTo(1u));
+            Assert.That(firstDirtyRangeCount, Is.EqualTo(1));
+            Assert.That(unchanged.DirtyRanges, Is.Empty);
+            Assert.That(missing.Mappings[0].IsValid, Is.False);
+            Assert.That(missing.PublishedRangeStateWords[0] & 1u,
+                Is.Zero);
+            Assert.That(missing.InvalidReadyRanges,
+                Is.EqualTo(new[] { 0 }));
         });
     }
 

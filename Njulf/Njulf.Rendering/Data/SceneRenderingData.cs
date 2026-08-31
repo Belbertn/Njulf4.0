@@ -632,6 +632,10 @@ namespace Njulf.Rendering.Data
         public ulong SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize { get; set; }
         public ulong SceneSubmissionCounterBufferSize { get; set; }
         public ulong SceneSubmissionOpaqueIndirectDispatchBufferSize { get; set; }
+        public bool SceneSubmissionCompactionFullPayloadClear { get; set; }
+        public ulong SceneSubmissionCompactionClearedBytes { get; set; }
+        public int SceneSubmissionCompactionResetBarrierCount { get; set; }
+        public int SceneSubmissionCompactionOutputBarrierCount { get; set; }
         public int MeshletCountTotal { get; set; }
         public int MeshletCountSubmittedCpu { get; set; }
         public float AvgTrianglesPerSubmittedMeshlet { get; set; }
@@ -1404,6 +1408,35 @@ namespace Njulf.Rendering.Data
         public ulong FarFieldPageTableBytes { get; set; }
         public int SimpleDdgiRecentered { get; set; }
         public int SimpleDdgiAtlasPreservedOnRecenter { get; set; }
+        public int SimpleDdgiScrollCommittedCascadeCount { get; set; }
+        public int SimpleDdgiScrollDeferredCascadeCount { get; set; }
+        public int SimpleDdgiScrollExposedProbeCount { get; set; }
+        public int SimpleDdgiScrollRepairExpectedProbeCount { get; set; }
+        public ulong SimpleDdgiScrollReservedPrimaryRayCount { get; set; }
+        public ulong SimpleDdgiScrollEmergencyRebaseCount { get; set; }
+        public uint SimpleDdgiFrameRayBucket0 { get; set; }
+        public uint SimpleDdgiFrameRayBucket1 { get; set; }
+        public uint SimpleDdgiFrameRayBucket2 { get; set; }
+        public uint SimpleDdgiFrameRayBucket3 { get; set; }
+        public uint SimpleDdgiFrameRayBucket4 { get; set; }
+        public uint SimpleDdgiFrameRayBucket5 { get; set; }
+        public int SimpleDdgiNearScrollCardinality { get; set; }
+        public int SimpleDdgiMidScrollCardinality { get; set; }
+        public int SimpleDdgiFarScrollCardinality { get; set; }
+        public uint SimpleDdgiScrollGpuExpectedCount { get; set; }
+        public uint SimpleDdgiScrollGpuAcceptedCount { get; set; }
+        public uint SimpleDdgiScrollGpuTracedCount { get; set; }
+        public uint SimpleDdgiScrollGpuCommittedCount { get; set; }
+        public uint SimpleDdgiScrollUnbucketedCount { get; set; }
+        public SimpleDdgiScrollCohortFailureReason
+            SimpleDdgiScrollCohortFailure { get; set; }
+        public uint SimpleDdgiRebuildingRingMask { get; set; }
+        public SimpleDdgiRebaseState SimpleDdgiNearRebaseState { get; set; }
+        public SimpleDdgiRebaseState SimpleDdgiMidRebaseState { get; set; }
+        public SimpleDdgiRebaseState SimpleDdgiFarRebaseState { get; set; }
+        public int SimpleDdgiNearRebaseFadeFrame { get; set; }
+        public int SimpleDdgiMidRebaseFadeFrame { get; set; }
+        public int SimpleDdgiFarRebaseFadeFrame { get; set; }
         public int SimpleDdgiAtlasCleared { get; set; }
         public int SimpleDdgiAtlasFresh { get; set; }
         public int SimpleDdgiRecenterCount { get; set; }
@@ -1856,11 +1889,62 @@ namespace Njulf.Rendering.Data
             MaterialExtensionData.Clear();
             SkinningDispatches.Clear();
             ParticleBatches.Clear();
+            DdgiVolumeDiagnostics.Clear();
             ObjectDebugSnapshots.Clear();
             FrameIndex = 0;
             TemporalSampleIndex = 0;
             DdgiFrameSerial = 0;
             SceneContentRevision = 0;
+            GiTransportMaterialRevision = 0;
+            ClearColor = new Vector4(0.2f, 0.2f, 0.2f, 1f);
+            ViewMatrix = Matrix4x4.Identity;
+            ProjectionMatrix = Matrix4x4.Identity;
+            ViewProjectionMatrix = Matrix4x4.Identity;
+            InverseViewMatrix = Matrix4x4.Identity;
+            InverseProjectionMatrix = Matrix4x4.Identity;
+            InverseViewProjectionMatrix = Matrix4x4.Identity;
+            CameraPosition = Vector3.Zero;
+            GiCausticReceiverPayloadCompleted = false;
+            GiCausticReceiverPayloadFrameSerial = 0;
+            DdgiReceiverDiffuseReflectanceLuminance = 0f;
+            DdgiReceiverDiffuseReflectanceSampleCount = 0;
+            DdgiTraceOneSidedBackFaceAlbedoLuminance = 0f;
+            DdgiTraceOneSidedBackFaceHitCount = 0;
+            DdgiTraceOpaqueAlbedoLuminance = 0f;
+            DdgiTraceOpaqueHitCount = 0;
+            DdgiTraceThinSurfaceAlbedoLuminance = 0f;
+            DdgiTraceThinSurfaceHitCount = 0;
+            DdgiTraceUnsupportedTransmissionAlbedoLuminance = 0f;
+            DdgiTraceUnsupportedTransmissionHitCount = 0;
+            DdgiTraceReflectDisabledAlbedoLuminance = 0f;
+            DdgiTraceReflectDisabledHitCount = 0;
+            SimpleDdgiTransportConfiguredSourceRefreshFrames = 0;
+            ObjectBufferSize = 0;
+            MaterialBufferSize = 0;
+            InstanceBufferSize = 0;
+            SceneInstanceCandidateBufferSize = 0;
+            TransparentMeshletDrawBufferSize = 0;
+            TiledLightHeaderBufferSize = 0;
+            TiledLightIndexBufferSize = 0;
+            ObjectDataBuffer = BufferHandle.Invalid;
+            MaterialDataBuffer = BufferHandle.Invalid;
+            InstanceBuffer = BufferHandle.Invalid;
+            SceneInstanceCandidateBuffer = BufferHandle.Invalid;
+            MeshletDrawBuffer = BufferHandle.Invalid;
+            FullOpaqueMeshletDrawBuffer = BufferHandle.Invalid;
+            SimpleNormalOpaqueMeshletDrawBuffer = BufferHandle.Invalid;
+            SolidDepthMeshletDrawBuffer = BufferHandle.Invalid;
+            MaskedDepthMeshletDrawBuffer = BufferHandle.Invalid;
+            PackedMeshletDrawBuffer = BufferHandle.Invalid;
+            PackedFullOpaqueMeshletDrawBuffer = BufferHandle.Invalid;
+            PackedSimpleNormalOpaqueMeshletDrawBuffer = BufferHandle.Invalid;
+            PackedSolidDepthMeshletDrawBuffer = BufferHandle.Invalid;
+            PackedMaskedDepthMeshletDrawBuffer = BufferHandle.Invalid;
+            MeshletTaskFrameDataBuffer = BufferHandle.Invalid;
+            TransparentMeshletDrawBuffer = BufferHandle.Invalid;
+            TiledLightHeaderBuffer = BufferHandle.Invalid;
+            TiledLightIndexBuffer = BufferHandle.Invalid;
+            Time = 0f;
             CaptureCameraYawRadians = 0;
             CaptureCameraPitchRadians = 0;
             CaptureCameraFieldOfViewRadians = 0;
@@ -1904,6 +1988,7 @@ namespace Njulf.Rendering.Data
             TransparentSortCandidateCount = 0;
             TransparentSortMicroseconds = 0;
             TransparentOverflowCount = 0;
+            PostFirstPresentPipelineSpecializationsReady = true;
             TransparentPipelinePartitioningEnabled = false;
             TransparentPipelinePartitioningEffective = false;
             TransparentPipelineRunCount = 0;
@@ -1927,6 +2012,16 @@ namespace Njulf.Rendering.Data
             TubeLightCount = 0;
             AreaLightCount = 0;
             TextureCount = 0;
+            CurrentFrameIndex = 0;
+            ScreenWidth = 0;
+            ScreenHeight = 0;
+            TileCountX = 0;
+            TileCountY = 0;
+            HiZMipCount = 0;
+            OcclusionCullingEnabled = true;
+            OcclusionBias = 0.0005f;
+            DepthPrePassEnabled = true;
+            HiZBuildEnabled = true;
             TransparentPassEnabled = true;
             TransparencyMode = TransparencyMode.SortedAlphaBlend;
             TransparencyDebugView = TransparencyDebugView.None;
@@ -1937,7 +2032,7 @@ namespace Njulf.Rendering.Data
             RequestedThickTransmissionMode = ThickTransmissionMode.Off;
             EffectiveThickTransmissionMode = ThickTransmissionMode.Off;
             ThickTransmissionFallbackReason =
-                ThickTransmissionFallbackReason.Disabled;
+                ThickTransmissionFallbackReason.None;
             ThickTransmissionFallbackDetail = string.Empty;
             ThickTransmissionDispersionEnabled = false;
             DecalDebugView = DecalDebugView.None;
@@ -2363,6 +2458,10 @@ namespace Njulf.Rendering.Data
             SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize = 0;
             SceneSubmissionCounterBufferSize = 0;
             SceneSubmissionOpaqueIndirectDispatchBufferSize = 0;
+            SceneSubmissionCompactionFullPayloadClear = false;
+            SceneSubmissionCompactionClearedBytes = 0;
+            SceneSubmissionCompactionResetBarrierCount = 0;
+            SceneSubmissionCompactionOutputBarrierCount = 0;
             MeshletCountTotal = 0;
             MeshletCountSubmittedCpu = 0;
             AvgTrianglesPerSubmittedMeshlet = 0;
@@ -3079,6 +3178,35 @@ namespace Njulf.Rendering.Data
             FarFieldPageTableBytes = 0;
             SimpleDdgiRecentered = 0;
             SimpleDdgiAtlasPreservedOnRecenter = 0;
+            SimpleDdgiScrollCommittedCascadeCount = 0;
+            SimpleDdgiScrollDeferredCascadeCount = 0;
+            SimpleDdgiScrollExposedProbeCount = 0;
+            SimpleDdgiScrollRepairExpectedProbeCount = 0;
+            SimpleDdgiScrollReservedPrimaryRayCount = 0UL;
+            SimpleDdgiScrollEmergencyRebaseCount = 0UL;
+            SimpleDdgiFrameRayBucket0 = 0u;
+            SimpleDdgiFrameRayBucket1 = 0u;
+            SimpleDdgiFrameRayBucket2 = 0u;
+            SimpleDdgiFrameRayBucket3 = 0u;
+            SimpleDdgiFrameRayBucket4 = 0u;
+            SimpleDdgiFrameRayBucket5 = 0u;
+            SimpleDdgiNearScrollCardinality = 0;
+            SimpleDdgiMidScrollCardinality = 0;
+            SimpleDdgiFarScrollCardinality = 0;
+            SimpleDdgiScrollGpuExpectedCount = 0u;
+            SimpleDdgiScrollGpuAcceptedCount = 0u;
+            SimpleDdgiScrollGpuTracedCount = 0u;
+            SimpleDdgiScrollGpuCommittedCount = 0u;
+            SimpleDdgiScrollUnbucketedCount = 0u;
+            SimpleDdgiScrollCohortFailure =
+                SimpleDdgiScrollCohortFailureReason.None;
+            SimpleDdgiRebuildingRingMask = 0u;
+            SimpleDdgiNearRebaseState = SimpleDdgiRebaseState.Stable;
+            SimpleDdgiMidRebaseState = SimpleDdgiRebaseState.Stable;
+            SimpleDdgiFarRebaseState = SimpleDdgiRebaseState.Stable;
+            SimpleDdgiNearRebaseFadeFrame = 0;
+            SimpleDdgiMidRebaseFadeFrame = 0;
+            SimpleDdgiFarRebaseFadeFrame = 0;
             SimpleDdgiAtlasCleared = 0;
             SimpleDdgiAtlasFresh = 0;
             SimpleDdgiRecenterCount = 0;

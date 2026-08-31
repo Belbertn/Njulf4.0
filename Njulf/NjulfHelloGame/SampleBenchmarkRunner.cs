@@ -1033,6 +1033,10 @@ public sealed class SampleBenchmarkAnalyzer
         new("QueueSubmit", d => d.CpuQueueSubmitMicroseconds),
         new("Present", d => d.CpuPresentMicroseconds),
         new("WaitForFrameFence", d => d.CpuWaitForFrameFenceMicroseconds),
+        new("SwapchainImageOwnerWait",
+            d => d.CpuSwapchainImageOwnerWaitMicroseconds),
+        new("FrameResourceRecycleWait",
+            d => d.CpuFrameResourceRecycleWaitMicroseconds),
         new("RuntimeStall", d => d.RuntimeStallMicrosecondsThisFrame)
     ];
 
@@ -3324,7 +3328,15 @@ public sealed class SampleBenchmarkAnalyzer
             BuildStats(
                 $"{prefix} frame-fence wait",
                 samples.Select(static sample => MicrosecondsToMilliseconds(
-                    sample.CpuWaitForFrameFenceMicroseconds))));
+                    sample.CpuWaitForFrameFenceMicroseconds))),
+            BuildStats(
+                $"{prefix} swapchain-image owner wait",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuSwapchainImageOwnerWaitMicroseconds))),
+            BuildStats(
+                $"{prefix} frame-resource recycle wait",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuFrameResourceRecycleWaitMicroseconds))));
     }
 
     private static SampleBenchmarkCpuSlowFrame CreateCpuSlowFrame(
@@ -3355,6 +3367,10 @@ public sealed class SampleBenchmarkAnalyzer
         CpuSecondaryCommandRecordMicroseconds =
             sample.CpuSecondaryCommandRecordMicroseconds,
         CpuWaitForFrameFenceMicroseconds = sample.CpuWaitForFrameFenceMicroseconds,
+        CpuSwapchainImageOwnerWaitMicroseconds =
+            sample.CpuSwapchainImageOwnerWaitMicroseconds,
+        CpuFrameResourceRecycleWaitMicroseconds =
+            sample.CpuFrameResourceRecycleWaitMicroseconds,
         RuntimeStallMicrosecondsThisFrame = sample.RuntimeStallMicrosecondsThisFrame,
         CpuReflectionProbeCaptureRecordMicroseconds =
             sample.CpuReflectionProbeCaptureRecordMicroseconds,

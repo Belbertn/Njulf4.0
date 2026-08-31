@@ -50,7 +50,8 @@ const uint SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_RING = 26u;
 const uint SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_RING = 29u;
 const uint SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_CONTENT = 32u;
 const uint SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_CONTENT = 36u;
-const uint SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 40u;
+const uint SIMPLE_DDGI_FEEDBACK_REBASE_PENDING_RING = 40u;
+const uint SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 43u;
 
 shared uint feedbackReduction[SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS];
 
@@ -93,10 +94,12 @@ void main()
     uint adaptiveMaximumErrorRing[3];
     uint adaptiveSavedRayContent[4];
     uint adaptiveMaximumErrorContent[4];
+    uint rebasePendingRing[3];
     for (uint ring = 0u; ring < 3u; ring++)
     {
         adaptiveSavedRayRing[ring] = 0u;
         adaptiveMaximumErrorRing[ring] = 0u;
+        rebasePendingRing[ring] = 0u;
     }
     for (uint content = 0u; content < 4u; content++)
     {
@@ -156,6 +159,11 @@ void main()
         bool sourceVolumeValid = SchedulerFindVolume(
             probeIndex,
             sourceVolumeIndex);
+        bool rebuildingRing = sourceVolumeValid &&
+            SchedulerVolumeIsRebuilding(sourceVolumeIndex);
+        uint rebuildingRingIndex = rebuildingRing
+            ? min(SchedulerVolumeRing(sourceVolumeIndex), 2u)
+            : 0u;
         uint physicalProbeIndex;
         uint pageMappingGeneration;
         bool addressPublished;
@@ -171,6 +179,8 @@ void main()
                 pageMappingGeneration,
                 addressPublished))
         {
+            if (rebuildingRing)
+                rebasePendingRing[rebuildingRingIndex]++;
             continue;
         }
         uint publicBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
@@ -260,6 +270,19 @@ void main()
         bool hasFresh = (flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
         bool hasExposed = (flags & SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED) != 0u;
         bool hasRelocation = (flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u;
+        if (rebuildingRing)
+        {
+            const uint rebaseTransientFlags =
+                SIMPLE_DDGI_PROBE_FLAG_FRESH |
+                SIMPLE_DDGI_PROBE_FLAG_SCROLL_EXPOSED |
+                SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING |
+                SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID;
+            bool rebaseProbeReady = addressPublished &&
+                (!SchedulerTransportV2() || sourceReady) &&
+                (flags & rebaseTransientFlags) == 0u;
+            rebasePendingRing[rebuildingRingIndex] +=
+                rebaseProbeReady ? 0u : 1u;
+        }
         // The certificate covers the complete active transport field. Camera
         // visibility remains a priority/telemetry signal and never changes the
         // participant denominator.
@@ -455,6 +478,11 @@ void main()
                 SchedulerArenaRead(
                     partialBase + SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_CONTENT + content));
         }
+        for (uint ring = 0u; ring < 3u; ring++)
+        {
+            rebasePendingRing[ring] += SchedulerArenaRead(
+                partialBase + SIMPLE_DDGI_FEEDBACK_REBASE_PENDING_RING + ring);
+        }
     }
 #endif
 
@@ -523,6 +551,13 @@ void main()
             feedbackReduction[
                 SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_CONTENT + content],
             adaptiveMaximumErrorContent[content]);
+    }
+    for (uint ring = 0u; ring < 3u; ring++)
+    {
+        atomicAdd(
+            feedbackReduction[
+                SIMPLE_DDGI_FEEDBACK_REBASE_PENDING_RING + ring],
+            rebasePendingRing[ring]);
     }
     barrier();
 
@@ -593,6 +628,11 @@ void main()
         adaptiveMaximumErrorContent[content] = feedbackReduction[
             SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_CONTENT + content];
     }
+    for (uint ring = 0u; ring < 3u; ring++)
+    {
+        rebasePendingRing[ring] = feedbackReduction[
+            SIMPLE_DDGI_FEEDBACK_REBASE_PENDING_RING + ring];
+    }
 
     uint considered = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_CONSIDERED);
     uint eligible = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE);
@@ -641,6 +681,10 @@ void main()
         status |= 1u;
     if (SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION) != 0u)
         status |= 2u;
+    if (SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_EMISSION_FAILURE) != 0u)
+        status |= 4u;
     SchedulerArenaWrite(base + 7u, status);
     SchedulerArenaWrite(base + 8u, considered);
     SchedulerArenaWrite(base + 9u, eligible);
@@ -737,6 +781,58 @@ void main()
     SchedulerArenaWrite(base + 61u, SchedulerSolveEpoch());
     SchedulerArenaWrite(base + 62u, sourceProbeUsed);
     SchedulerArenaWrite(base + 63u, published);
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_UNBUCKETED_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_UNBUCKETED));
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_SCROLL_COHORT_FAILURE_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_FAILURE));
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_SCROLL_EXPECTED_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_EXPECTED));
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_SCROLL_ACCEPTED_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_ACCEPTED));
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_SCROLL_TRACED_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_TRACED));
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_SCROLL_COMMITTED_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COMMITTED));
+    for (uint ring = 0u; ring < 3u; ring++)
+    {
+        uint rebaseSerial = 0u;
+        for (uint volume = 0u;
+             volume < min(
+                SchedulerActiveVolumeCount(),
+                SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES);
+             volume++)
+        {
+            if (SchedulerVolumeIsRebuilding(volume) &&
+                min(SchedulerVolumeRing(volume), 2u) == ring)
+            {
+                rebaseSerial =
+                    SchedulerVolumeScrollTransactionSerial(volume);
+                break;
+            }
+        }
+        SchedulerArenaWrite(
+            base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_REBASE_RING_OFFSET + ring,
+            min(rebasePendingRing[ring], 0xffffu) |
+                ((rebaseSerial & 0xffffu) << 16u));
+    }
     for (uint workClass = 0u;
          workClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES;
          workClass++)

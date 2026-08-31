@@ -458,6 +458,56 @@ public sealed class SimpleDdgiRefinementEmissiveDemandBuilderTests
         });
     }
 
+    [Test]
+    public void PublicationState_RebootstrapsOneChangedBrickWithoutDroppingStableSibling()
+    {
+        var stablePublication = new SimpleDdgiRefinementPublicationState();
+        var changedPublication = new SimpleDdgiRefinementPublicationState();
+        var stableBlend = new SimpleDdgiRefinementPublicationBlendState();
+        var changedBlend = new SimpleDdgiRefinementPublicationBlendState();
+        SimpleDdgiRefinementPublicationIdentity identity =
+            Identity(Generations());
+
+        Assert.That(stablePublication.Resolve(
+            false, false, true, true, false, identity), Is.True);
+        Assert.That(changedPublication.Resolve(
+            false, false, true, true, false, identity), Is.True);
+        for (int frame = 0;
+             frame < SimpleDdgiRefinementPublicationBlendState
+                 .TransitionFrameCount;
+             frame++)
+        {
+            stableBlend.Update(true, 1);
+            changedBlend.Update(true, 1);
+        }
+
+        bool stableAuthority = stablePublication.Resolve(
+            transactionHasInvalidation: false,
+            topologyChangedThisFrame: false,
+            tailCertificationEnabled: true,
+            currentTailCertificate: false,
+            recoveryActive: false,
+            identity);
+        bool changedAuthority = changedPublication.Resolve(
+            transactionHasInvalidation: false,
+            topologyChangedThisFrame: true,
+            tailCertificationEnabled: true,
+            currentTailCertificate: false,
+            recoveryActive: false,
+            identity);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stableBlend.Update(stableAuthority, 1),
+                Is.EqualTo(1.0f));
+            Assert.That(stablePublication.IsRetainingCertifiedAuthority,
+                Is.True);
+            Assert.That(changedBlend.Update(changedAuthority, 1), Is.Zero);
+            Assert.That(changedPublication.IsRetainingCertifiedAuthority,
+                Is.False);
+        });
+    }
+
     private static SimpleDdgiRefinementPublicationIdentity Identity(
         SimpleDdgiTransportGenerations generations,
         ulong lightingSignature = 10u,

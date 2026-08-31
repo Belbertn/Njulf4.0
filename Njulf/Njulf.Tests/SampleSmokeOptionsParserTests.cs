@@ -24,6 +24,88 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void FramePacing_DefaultsToVSyncAndSixtyFramesPerSecond()
+    {
+        SampleSmokeOptions options =
+            SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        (bool vSync, double maximumFramesPerSecond) =
+            HelloGame.ResolveFramePacing(options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vSync, Is.True);
+            Assert.That(maximumFramesPerSecond, Is.EqualTo(60.0));
+        });
+    }
+
+    [Test]
+    public void FramePacing_ParsesExplicitCommandLineOverrides()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+            ["--max-fps", "120", "--vsync", "off"]);
+
+        (bool vSync, double maximumFramesPerSecond) =
+            HelloGame.ResolveFramePacing(options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.MaximumFramesPerSecondOverride,
+                Is.EqualTo(120.0));
+            Assert.That(options.VSyncOverride, Is.False);
+            Assert.That(vSync, Is.False);
+            Assert.That(maximumFramesPerSecond, Is.EqualTo(120.0));
+        });
+    }
+
+    [Test]
+    public void FramePacing_CommandLineOverridesEnvironment()
+    {
+        Environment.SetEnvironmentVariable("NJULF_MAX_FPS", "30");
+        Environment.SetEnvironmentVariable("NJULF_VSYNC", "true");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+            ["--max-fps", "0", "--vsync", "false"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.MaximumFramesPerSecondOverride,
+                Is.EqualTo(0.0));
+            Assert.That(options.VSyncOverride, Is.False);
+        });
+    }
+
+    [Test]
+    public void FramePacing_ExistingVSyncOffModesRemainUncapped()
+    {
+        SampleSmokeOptions options =
+            SampleSmokeOptionsParser.Parse(Array.Empty<string>()) with
+            {
+                TailDdgiLongSoak = true
+            };
+
+        (bool vSync, double maximumFramesPerSecond) =
+            HelloGame.ResolveFramePacing(options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vSync, Is.False);
+            Assert.That(maximumFramesPerSecond, Is.Zero);
+        });
+    }
+
+    [TestCase("-1")]
+    [TestCase("0.5")]
+    [TestCase("1000.1")]
+    [TestCase("NaN")]
+    [TestCase("Infinity")]
+    public void FramePacing_RejectsInvalidMaximum(string value)
+    {
+        Assert.Throws<ArgumentException>(() =>
+            SampleSmokeOptionsParser.Parse(["--max-fps", value]));
+    }
+
+    [Test]
     public void ParsesVolumetricFogDebugCaptureOverrides()
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
@@ -53,6 +135,8 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO", null);
+        Environment.SetEnvironmentVariable("NJULF_MAX_FPS", null);
+        Environment.SetEnvironmentVariable("NJULF_VSYNC", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_FORCE_MISSING_ASSETS", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING", null);

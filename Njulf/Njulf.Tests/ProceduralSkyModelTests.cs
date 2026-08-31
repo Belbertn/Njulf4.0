@@ -402,11 +402,12 @@ public sealed class ProceduralSkyModelTests
                 Is.EqualTo(BindlessIndex.SimpleDdgiStorageValidationBufferBase + 1));
             // Fixed slots are append-only so existing environment/DDGI
             // bindings keep their historical indices while the heap grows at
-            // the tail. Impostor view metadata is the current tail slot.
+            // the tail. Per-frame resolved meshlet mappings are the current
+            // tail slots.
             Assert.That(
                 BindlessIndex.StaticBufferCount,
                 Is.EqualTo(
-                    BindlessIndex.FoliageImpostorViewBuffer + 1));
+                    BindlessIndex.MeshletResolvedMappingBufferFrame1 + 1));
         });
     }
 

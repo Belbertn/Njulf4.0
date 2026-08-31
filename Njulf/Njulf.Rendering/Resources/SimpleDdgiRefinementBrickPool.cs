@@ -175,7 +175,14 @@ public readonly record struct SimpleDdgiRefinementBrickPoolDiagnostics(
     int RetainedUndemandedBrickCount,
     int RejectedDemandCount,
     bool TopologyChanged,
-    int ProbeCount);
+    int ProbeCount)
+{
+    /// <summary>Slots whose world-key ownership changed this update.</summary>
+    public uint ChangedSlotMask { get; init; }
+
+    /// <summary>Slots that contain an active brick after this update.</summary>
+    public uint ActiveSlotMask { get; init; }
+}
 
 /// <summary>
 /// Tiny world-keyed, hysteretic allocation pool for additive fine-probe
@@ -216,6 +223,7 @@ public sealed class SimpleDdgiRefinementBrickPool
             ? Math.Clamp(configuration.Capacity, 0, MaximumCapacity)
             : 0;
         bool topologyChanged = false;
+        uint changedSlotMask = 0u;
         int admitted = 0;
         int evicted = 0;
         int rejected = 0;
@@ -228,6 +236,7 @@ public sealed class SimpleDdgiRefinementBrickPool
             {
                 state = default;
                 topologyChanged = true;
+                changedSlotMask |= 1u << slot;
                 evicted++;
             }
             _slots[slot] = state;
@@ -245,7 +254,11 @@ public sealed class SimpleDdgiRefinementBrickPool
                 0,
                 demands.Count,
                 topologyChanged,
-                0);
+                0)
+            {
+                ChangedSlotMask = changedSlotMask,
+                ActiveSlotMask = 0u
+            };
             return _activeScratch;
         }
 
@@ -306,6 +319,7 @@ public sealed class SimpleDdgiRefinementBrickPool
                 continue;
             _slots[slot] = default;
             topologyChanged = true;
+            changedSlotMask |= 1u << slot;
             evicted++;
         }
 
@@ -348,11 +362,13 @@ public sealed class SimpleDdgiRefinementBrickPool
                 configuration,
                 frameIndex);
             topologyChanged = true;
+            changedSlotMask |= 1u << slot;
             admitted++;
         }
 
         int retainedUndemanded = 0;
         int probeCount = 0;
+        uint activeSlotMask = 0u;
         for (int slot = 0; slot < capacity; slot++)
         {
             SlotState state = _slots[slot];
@@ -372,6 +388,7 @@ public sealed class SimpleDdgiRefinementBrickPool
                 state.Reasons,
                 state.LastDemandFrame);
             _activeScratch.Add(brick);
+            activeSlotMask |= 1u << slot;
             probeCount = checked(probeCount + brick.ProbeCount);
         }
 
@@ -385,7 +402,11 @@ public sealed class SimpleDdgiRefinementBrickPool
             retainedUndemanded,
             rejected,
             topologyChanged,
-            probeCount);
+            probeCount)
+        {
+            ChangedSlotMask = changedSlotMask,
+            ActiveSlotMask = activeSlotMask
+        };
         return _activeScratch;
     }
 

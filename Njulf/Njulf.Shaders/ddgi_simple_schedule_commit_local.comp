@@ -249,6 +249,36 @@ void main()
     uint failureReason = SchedulerArenaRead(outcomeBase + 9u);
     uint updateFlags = SchedulerArenaRead(outcomeBase + 10u);
 
+    // Mandatory scroll publication is one all-or-defer transaction. The
+    // preceding bounded validation scan publishes a per-volume gate only
+    // after the exact exposed cohort and every producer outcome are complete.
+    // Test this before any cache, lifecycle, atlas, or receiver mutation.
+    uint volumeIndex;
+    if (!SchedulerFindVolume(probeIndex, volumeIndex))
+    {
+        RejectOutcome(
+            probeIndex,
+            outcomeIndex,
+            SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_PAYLOAD_IDENTITY);
+        return;
+    }
+    bool mandatoryScrollOutcome =
+        (updateFlags & SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL) != 0u &&
+        SchedulerVolumeHasMandatoryScrollRepair(volumeIndex) &&
+        SchedulerProbeIsCurrentScrollExposed(probeIndex, volumeIndex);
+    if (mandatoryScrollOutcome &&
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_STATE_BASE +
+                volumeIndex) != SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_VALID)
+    {
+        RejectOutcome(
+            probeIndex,
+            outcomeIndex,
+            SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_TRANSACTION);
+        return;
+    }
+
     uint transactionPredicateMask = 0u;
     if (queueGeneration != SchedulerQueueGeneration())
         transactionPredicateMask |=
@@ -345,15 +375,6 @@ void main()
     // header by commit time. Sparse physical identity remains immutable in
     // words 7..9. Recover the owning volume from the accepted probe rather than
     // interpreting relocation.y as a volume index.
-    uint volumeIndex;
-    if (!SchedulerFindVolume(probeIndex, volumeIndex))
-    {
-        RejectOutcome(
-            probeIndex,
-            outcomeIndex,
-            SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_PAYLOAD_IDENTITY);
-        return;
-    }
     uint physicalProbeIndex = SchedulerArenaRead(proposalBase + 7u);
     uint pageMappingGeneration = SchedulerArenaRead(proposalBase + 8u);
     uint cacheProbeBaseWordPlusOne = SchedulerArenaRead(proposalBase + 9u);
@@ -425,7 +446,10 @@ void main()
     uint sourceRayCount = sourceRefresh
         ? (countAndQuadratureWitness & 0xffffu)
         : 0u;
-    uint quadratureCode = countAndQuadratureWitness >> 16u;
+    uint quadratureCode = (updateFlags &
+            SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL) != 0u
+        ? 0u
+        : countAndQuadratureWitness >> 16u;
     float quadratureError = quadratureCode != 0u
         ? float(quadratureCode - 1u) / 65534.0
         : 1.0;
@@ -751,6 +775,13 @@ void main()
     SchedulerArenaAtomicAdd(
         pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMMITTED,
         1u);
+    if (mandatoryScrollOutcome)
+    {
+        SchedulerArenaAtomicAdd(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COMMITTED,
+            1u);
+    }
     if (SchedulerGpuResident())
     {
         // This counts committed publication payloads. A radiometric cohort may

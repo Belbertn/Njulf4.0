@@ -56,6 +56,10 @@ void main()
          i < SIMPLE_DDGI_SCHEDULER_TRANSIENT_COUNTER_WORDS;
          i += 64u)
         SchedulerArenaWrite(pc.CountersOffsetWords + i, 0u);
+    for (uint i = 96u + localIndex;
+         i < SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS;
+         i += 64u)
+        SchedulerArenaWrite(pc.CountersOffsetWords + i, 0u);
     uint feedbackClearEnd = certifiedQuiesced
         ? 64u
         : SIMPLE_DDGI_SCHEDULER_FEEDBACK_WORDS;

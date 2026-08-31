@@ -1295,7 +1295,10 @@ struct SimpleDdgiVolume
     uint kind;
     uint probesToUpdate;
     uint requiredSourceRayCount;
-    float refinementReceiverWeight;
+    // Presentation authority for every receiver volume. Authored/legacy
+    // volumes use one, refinement uses its publication blend, and a true ring
+    // rebase holds zero until the complete replacement field is coherent.
+    float receiverWeight;
     float maximumTraceDistance;
     uint sourceOrdinal;
     uvec3 physicalOffset;
@@ -1796,7 +1799,7 @@ SimpleDdgiVolume ReadSimpleDdgiVolume(uint bufferIndex, uint volumeIndex)
     volume.kind = uint(max(worldMaxAndKind.w, 0.0));
     volume.probesToUpdate = uint(max(updateRange.y, 0.0));
     volume.requiredSourceRayCount = uint(max(updateRange.z, 0.0));
-    volume.refinementReceiverWeight = clamp(updateRange.w, 0.0, 1.0);
+    volume.receiverWeight = clamp(updateRange.w, 0.0, 1.0);
     float nativeTraceDistance = max(
         volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)),
         volume.spacing);
@@ -5169,6 +5172,7 @@ bool SelectSimpleDdgiVolume(
 {
     bool foundBase = false;
     bool foundContainingRefinement = false;
+    bool foundSuppressedBase = false;
     uint baseVolumeIndex = 0u;
     SimpleDdgiVolume baseVolume;
     float baseEdgeWeight = 0.0;
@@ -5195,24 +5199,33 @@ bool SelectSimpleDdgiVolume(
             // An incomplete/evicted brick is invisible to receivers, so the
             // complete base field remains the exact fallback without blending
             // partially published fine probes.
-            if (volume.refinementReceiverWeight <= 0.0)
+            if (volume.receiverWeight <= 0.0)
                 continue;
 
             selectedVolumeIndex = volumeIndex;
             selectedVolume = volume;
             selectedEdgeWeight =
                 SimpleDdgiEdgeWeight(volume, worldPosition) *
-                volume.refinementReceiverWeight;
+                volume.receiverWeight;
             refinementOrBaseFallback = true;
             return true;
         }
 
+        if (volume.kind == SIMPLE_DDGI_VOLUME_KIND_RING &&
+            volume.receiverWeight <= 0.0)
+        {
+            foundSuppressedBase = true;
+            continue;
+        }
         if (foundBase)
             continue;
         foundBase = true;
         baseVolumeIndex = volumeIndex;
         baseVolume = volume;
-        baseEdgeWeight = SimpleDdgiEdgeWeight(volume, worldPosition);
+        baseEdgeWeight = SimpleDdgiEdgeWeight(volume, worldPosition) *
+            (volume.kind == SIMPLE_DDGI_VOLUME_KIND_RING
+                ? volume.receiverWeight
+                : 1.0);
     }
 
     if (foundBase)
@@ -5220,7 +5233,8 @@ bool SelectSimpleDdgiVolume(
         selectedVolumeIndex = baseVolumeIndex;
         selectedVolume = baseVolume;
         selectedEdgeWeight = baseEdgeWeight;
-        refinementOrBaseFallback = foundContainingRefinement;
+        refinementOrBaseFallback =
+            foundContainingRefinement || foundSuppressedBase;
         return true;
     }
 
@@ -5284,6 +5298,11 @@ bool FindSimpleDdgiFallbackVolume(
         // publication gate guarantees an immediate, complete base owner.
         if (candidate.kind == SIMPLE_DDGI_VOLUME_KIND_REFINEMENT)
             continue;
+        if (candidate.kind == SIMPLE_DDGI_VOLUME_KIND_RING &&
+            candidate.receiverWeight <= 0.0)
+        {
+            continue;
+        }
         // Candidate identity is always evaluated from the unbiased receiver
         // position. View/normal bias is an interpolation detail only.
         if (!SimpleDdgiContains(candidate, worldPosition))

@@ -82,6 +82,7 @@ public readonly record struct SimpleDdgiReceiverCacheDiagnostics(
     ulong AdaptiveResourceBytes = 0UL,
     int AdaptiveCounterReadbackValid = 0,
     uint AdaptiveGatherWorkCount = 0u,
+    uint AdaptiveMissingFeedbackWorkCount = 0u,
     uint AdaptiveResolveTileCount = 0u,
     uint AdaptiveOverflowFlags = 0u,
     uint AdaptiveAcceptedEntryCount = 0u,
@@ -89,7 +90,16 @@ public readonly record struct SimpleDdgiReceiverCacheDiagnostics(
     uint AdaptiveFullTileCount = 0u,
     uint AdaptiveHalfTileCount = 0u,
     uint AdaptiveQuarterTileCount = 0u,
-    uint AdaptiveReuseTileCount = 0u)
+    uint AdaptiveReuseTileCount = 0u,
+    ulong DirectionalCacheEvaluationCount = 0UL,
+    ulong LifetimeObservedFrameCount = 0UL,
+    ulong LifetimeResolveCandidateCount = 0UL,
+    ulong LifetimeResolveValidCount = 0UL,
+    ulong LifetimeForwardCandidateCount = 0UL,
+    ulong LifetimeForwardAcceptedCount = 0UL,
+    ulong LifetimeExactFallbackFragmentCount = 0UL,
+    ulong LifetimeDirectionalCacheEvaluationCount = 0UL,
+    ulong LifetimeLegacyFragmentCount = 0UL)
 {
     public static SimpleDdgiReceiverCacheDiagnostics Exact(
         SimpleDdgiReceiverCacheMode requestedMode,
@@ -210,7 +220,59 @@ public readonly record struct SimpleDdgiReceiverCacheGpuCounters(
     ulong ForwardNormalRejectCount,
     ulong ForwardInsufficientSupportRejectCount,
     ulong ExactFallbackFragmentCount,
-    ulong LegacyFragmentCount)
+    ulong LegacyFragmentCount,
+    ulong DirectionalCacheEvaluationCount = 0UL)
 {
     public static SimpleDdgiReceiverCacheGpuCounters Unavailable => default;
+}
+
+internal readonly record struct SimpleDdgiReceiverCacheLifetimeCounters(
+    ulong ObservedFrameCount,
+    ulong ResolveCandidateCount,
+    ulong ResolveValidCount,
+    ulong ForwardCandidateCount,
+    ulong ForwardAcceptedCount,
+    ulong ExactFallbackFragmentCount,
+    ulong DirectionalCacheEvaluationCount,
+    ulong LegacyFragmentCount);
+
+internal sealed class SimpleDdgiReceiverCacheLifetimeAccumulator
+{
+    internal SimpleDdgiReceiverCacheLifetimeCounters Snapshot { get; private set; }
+
+    internal void Observe(in SimpleDdgiReceiverCacheGpuCounters counters)
+    {
+        if (counters.ReadbackValid == 0)
+            return;
+
+        SimpleDdgiReceiverCacheLifetimeCounters current = Snapshot;
+        Snapshot = new SimpleDdgiReceiverCacheLifetimeCounters(
+            SaturatingAdd(current.ObservedFrameCount, 1UL),
+            SaturatingAdd(
+                current.ResolveCandidateCount,
+                counters.ResolveCandidateCount),
+            SaturatingAdd(
+                current.ResolveValidCount,
+                counters.ResolveValidCount),
+            SaturatingAdd(
+                current.ForwardCandidateCount,
+                counters.ForwardCandidateCount),
+            SaturatingAdd(
+                current.ForwardAcceptedCount,
+                counters.ForwardAcceptedCount),
+            SaturatingAdd(
+                current.ExactFallbackFragmentCount,
+                counters.ExactFallbackFragmentCount),
+            SaturatingAdd(
+                current.DirectionalCacheEvaluationCount,
+                counters.DirectionalCacheEvaluationCount),
+            SaturatingAdd(
+                current.LegacyFragmentCount,
+                counters.LegacyFragmentCount));
+    }
+
+    private static ulong SaturatingAdd(ulong current, ulong value) =>
+        ulong.MaxValue - current < value
+            ? ulong.MaxValue
+            : current + value;
 }

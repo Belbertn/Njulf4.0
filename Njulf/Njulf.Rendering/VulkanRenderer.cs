@@ -41,6 +41,8 @@ namespace Njulf.Rendering
     /// - Passes ONLY RECORD COMMANDS: VulkanRenderer calls methods on passes which record into command buffers
     /// </summary>
     public unsafe class VulkanRenderer : IRenderer, IRendererFrameState,
+        IRendererFramePacingDiagnostics,
+        IRendererFrameBoundaryTimingSource,
         IProgressiveScenePipelinePreparer,
         IStartupLatencyReporter, IStartupMilestoneLatencyReporter,
         IRendererDebugTools, IDisposable
@@ -57,8 +59,9 @@ namespace Njulf.Rendering
                 lock (_startupGate)
                 {
                     long now = Stopwatch.GetTimestamp();
-                    ulong pipelines = _giPipelineCacheService?.Telemetry
-                        .PipelineCreationCount ?? 0UL;
+                    GiPipelineCacheTelemetry telemetry =
+                        _giPipelineCacheService?.Telemetry ??
+                        GiPipelineCacheTelemetry.Empty;
                     return new RendererStartupSnapshot(
                         _startupPhase,
                         ElapsedMicroseconds(_startupStartedTimestamp, now),
@@ -68,8 +71,16 @@ namespace Njulf.Rendering
                         _bootstrapPresented,
                         _startupScenePresented,
                         _fullQualityPresented,
-                        pipelines,
-                        _startupDetail);
+                        telemetry.PipelineCreationCount,
+                        _startupDetail)
+                    {
+                        ActivePipelineCount =
+                            telemetry.ActivePipelineCount,
+                        OldestActivePipelineMicroseconds =
+                            telemetry.OldestActivePipelineMicroseconds,
+                        ActivePipelineSummary =
+                            telemetry.ActivePipelineSummary
+                    };
                 }
             }
         }
@@ -81,6 +92,8 @@ namespace Njulf.Rendering
         private readonly VulkanContext _context;
         private readonly SwapchainManager _swapchain;
         private readonly SynchronizationManager _sync;
+        private readonly FrameSubmissionOwnershipTracker
+            _submissionOwnership;
         private readonly CommandBufferManager _cmd;
         private readonly BufferManager _bufferManager;
         private readonly TextureManager _textureManager;
@@ -283,6 +296,7 @@ namespace Njulf.Rendering
         private Task? _productionInitializationTask;
         private Task? _scenePreparationTask;
         private int _renderThreadManagedId;
+        private int _pipelineCacheRenderCriticalFramesStarted;
         private bool _productionPreparationStarted;
         private bool _productionResourcesReady;
         private Exception? _startupFailure;
@@ -308,11 +322,15 @@ namespace Njulf.Rendering
 
         private ulong _completedGraphicsFrameFenceValue;
         private uint _imageIndex;
+        private int _currentAcquireSemaphoreIndex;
         private CommandBuffer _currentCommandBuffer;
 
         private RendererDiagnostics _lastDiagnostics = RendererDiagnostics.Empty;
         private RenderBudgetSnapshot _lastBudgetSnapshot = RenderBudgetSnapshot.Empty;
         private SceneRenderingData? _lastSceneData;
+        private Scene? _volumetricDensityCacheScene;
+        private uint _volumetricDensityCacheRevision = uint.MaxValue;
+        private VolumetricDensityVolume[] _sortedVolumetricDensityVolumes = [];
         private readonly DebugOverlayBuilder _debugOverlayBuilder;
         private readonly ScreenshotCaptureService _screenshotCaptureService = new();
         private readonly ScreenshotReadbackManager _screenshotReadbackManager;
@@ -369,8 +387,15 @@ namespace Njulf.Rendering
         private long _lastParticleTimestamp;
         private float _particleTimeSeconds;
         private long _lastAcquireImageMicroseconds;
+        private long _lastSwapchainImageOwnerWaitMicroseconds;
+        private long _lastFrameResourceRecycleWaitMicroseconds;
+        private ulong _lastAcquiredImageOwnerSubmissionSerial;
+        private int _lastAcquiredImageOwnerFrameContext = -1;
+        private ulong _lastRecycledFrameResourceOwnerSubmissionSerial;
         private long _lastQueueSubmitMicroseconds;
         private long _lastPresentMicroseconds;
+        private double _hostMaximumFramesPerSecond;
+        private long _hostFramePacingWaitMicroseconds;
         private AsyncComputeResourcePlanGeneration? _asyncComputeResourcePlanGeneration;
 
         private RenderGraphResourcePlan? _asyncComputeResourcePlan;
@@ -402,6 +427,12 @@ namespace Njulf.Rendering
         // Scene state
         private Color _clearColor = Color.Black;
         public RendererDiagnostics LastDiagnostics => _lastDiagnostics;
+        RendererFrameBoundaryTiming
+            IRendererFrameBoundaryTimingSource.LastFrameBoundaryTiming =>
+            new(
+                _lastSwapchainImageOwnerWaitMicroseconds +
+                _lastFrameResourceRecycleWaitMicroseconds,
+                _lastAcquireImageMicroseconds);
         public RenderBudgetSnapshot LastBudgetSnapshot => _lastBudgetSnapshot;
         public DeviceRequirementReport? SelectedDeviceRequirementReport => _context.SelectedDeviceRequirementReport;
         public MemoryHeapBudgetSnapshot CurrentMemoryHeapBudget => _context.GetMemoryHeapBudgetSnapshot();
@@ -1022,6 +1053,18 @@ namespace Njulf.Rendering
                    ReflectionProbeRecaptureRequestSummary.Empty;
         }
 
+        /// <summary>
+        /// Predicts the next frame's near-ring motion from the live DDGI anchor.
+        /// This is intentionally read-only and exists so deterministic tooling
+        /// can queue a present-delimited capture before the recenter begins.
+        /// </summary>
+        public bool WouldSimpleDdgiNearRingRecenter(
+            Vector3 cameraPosition,
+            Vector3 cameraForward) =>
+            _simpleDdgiVolumeManager?.WouldRecenterNearRing(
+                cameraPosition,
+                cameraForward) ?? false;
+
         public void RequestRenderDocCapture()
         {
             _lifetime.ThrowIfDisposalStarted();
@@ -1184,6 +1227,10 @@ namespace Njulf.Rendering
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _swapchain = swapchainManager ?? throw new ArgumentNullException(nameof(swapchainManager));
             _sync = syncManager ?? throw new ArgumentNullException(nameof(syncManager));
+            _submissionOwnership = new FrameSubmissionOwnershipTracker(
+                FramesInFlight,
+                SynchronizationManager.ImageAvailableSemaphoreCount,
+                checked((int)_swapchain.ImageCount));
             _cmd = cmdManager ?? throw new ArgumentNullException(nameof(cmdManager));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _textureManager = textureManager ?? throw new ArgumentNullException(nameof(textureManager));
@@ -3090,6 +3137,104 @@ namespace Njulf.Rendering
             System.Diagnostics.Debug.WriteLine("Scene buffers registered.");
         }
 
+        private void ObserveFrameContextFenceCompletion(int frameContext)
+        {
+            ulong trackedSubmission =
+                _submissionOwnership.ObserveContextCompleted(frameContext);
+            ulong submittedSubmission =
+                _submittedGraphicsFrameFenceValues[frameContext];
+            if (trackedSubmission != submittedSubmission)
+            {
+                throw new InvalidOperationException(
+                    "Frame submission ownership diverged from the fence publication ledger.");
+            }
+
+            _completedGraphicsFrameFenceValue = Math.Max(
+                _completedGraphicsFrameFenceValue,
+                submittedSubmission);
+        }
+
+        private void WaitForAcquiredSwapchainImageOwner()
+        {
+            SwapchainImageSubmissionOwner owner =
+                _submissionOwnership.GetSwapchainImageOwner(_imageIndex);
+            _lastAcquiredImageOwnerSubmissionSerial =
+                owner.SubmissionSerial;
+            _lastAcquiredImageOwnerFrameContext = owner.FrameContext;
+            _lastSwapchainImageOwnerWaitMicroseconds = 0L;
+            if (owner.Completed || owner.SubmissionSerial == 0UL)
+                return;
+            if ((uint)owner.FrameContext >= FramesInFlight ||
+                _submittedGraphicsFrameFenceValues[owner.FrameContext] !=
+                owner.SubmissionSerial)
+            {
+                throw new InvalidOperationException(
+                    "The acquired swapchain image references an invalid frame submission owner.");
+            }
+
+            try
+            {
+                _sync.WaitForFence(owner.FrameContext);
+            }
+            catch (VulkanException exception)
+            {
+                MarkFrameSubmissionFault(
+                    "Failed while waiting for the acquired swapchain image's prior submission owner.",
+                    exception.Result);
+                throw;
+            }
+
+            _lastSwapchainImageOwnerWaitMicroseconds =
+                _sync.LastFenceWaitMicroseconds;
+            _stallTracker.Record(
+                RuntimeStallReason.SwapchainImageOwnerWait,
+                _lastSwapchainImageOwnerWaitMicroseconds,
+                "Acquired image submission owner");
+            ObserveFrameContextFenceCompletion(owner.FrameContext);
+        }
+
+        private void SelectAndRecycleFrameResourceContext()
+        {
+            FrameResourceContextSelection selection;
+            try
+            {
+                selection = _submissionOwnership
+                    .SelectFrameResourceContext(_sync.IsFenceSignaled);
+                if (selection.RequiresWait)
+                    _sync.WaitForFence(selection.FrameContext);
+            }
+            catch (VulkanException exception)
+            {
+                MarkFrameSubmissionFault(
+                    "Failed while selecting a reusable frame-resource context.",
+                    exception.Result);
+                throw;
+            }
+
+            _currentFrame = selection.FrameContext;
+            _sync.SetCurrentFrame(_currentFrame);
+            _lastRecycledFrameResourceOwnerSubmissionSerial =
+                selection.PreviousSubmissionSerial;
+            _lastFrameResourceRecycleWaitMicroseconds =
+                selection.RequiresWait
+                    ? _sync.LastFenceWaitMicroseconds
+                    : 0L;
+            if (selection.RequiresWait)
+            {
+                _stallTracker.Record(
+                    RuntimeStallReason.FrameResourceRecycleWait,
+                    _lastFrameResourceRecycleWaitMicroseconds,
+                    "Frame-resource context recycle");
+                ObserveFrameContextFenceCompletion(_currentFrame);
+            }
+            else if (selection.PreviousSubmissionSerial != 0UL)
+            {
+                // SelectFrameResourceContext has already established the
+                // signaled state without blocking.
+                ObserveFrameContextFenceCompletion(_currentFrame);
+            }
+        }
+
         public bool BeginFrame()
         {
             _lifetime.ThrowIfDisposalStarted();
@@ -3103,6 +3248,10 @@ namespace Njulf.Rendering
 
             _lifetime.ThrowIfSubmissionFaulted();
             _lifetime.EnsureCanBeginFrame();
+            MarkPipelineCacheRenderCriticalFramesStarted();
+            _lastAcquireImageMicroseconds = 0L;
+            _lastSwapchainImageOwnerWaitMicroseconds = 0L;
+            _lastFrameResourceRecycleWaitMicroseconds = 0L;
 
             if (RendererBuildConfiguration.ProgressivePipelineStartup &&
                 StartupSnapshot.Phase != RendererStartupPhase.FullQuality)
@@ -3122,24 +3271,50 @@ namespace Njulf.Rendering
 
             _stallTracker.BeginFrame();
 
-            // Wait for previous frame to complete
-            try
+            // Acquire first with a semaphore that is independent of frame
+            // resources. Reacquiring an image identifies the only image owner
+            // that can require a wait; frame-resource recycling is selected
+            // separately afterwards.
+            _currentAcquireSemaphoreIndex =
+                _submissionOwnership.SelectAcquireSemaphore();
+            long acquireStart = Stopwatch.GetTimestamp();
+            Result acquireResult = _swapchain.TryAcquireNextImage(
+                _sync.GetImageAvailableSemaphore(
+                    _currentAcquireSemaphoreIndex),
+                out _imageIndex);
+            _lastAcquireImageMicroseconds = ElapsedMicroseconds(acquireStart);
+            _stallTracker.Record(
+                RuntimeStallReason.SwapchainAcquire,
+                _lastAcquireImageMicroseconds,
+                "Acquire next swapchain image");
+
+            if (acquireResult == Result.ErrorOutOfDateKhr)
             {
-                _sync.WaitForFence(_currentFrame);
-            }
-            catch (VulkanException exception)
-            {
-                MarkFrameSubmissionFault("Failed while waiting for the in-flight frame fence.", exception.Result);
-                throw;
+                _lifetime.RequestSwapchainRecreation();
+                _lifetime.ObserveSwapchainRecreationAttempt(
+                    RecreateSwapchain());
+                return false;
             }
 
-            _stallTracker.Record(RuntimeStallReason.FrameFenceWait, _sync.LastFenceWaitMicroseconds, "Frame fence");
-            ulong completedGraphicsFenceValue =
-                _submittedGraphicsFrameFenceValues[_currentFrame];
-            if (completedGraphicsFenceValue > _completedGraphicsFrameFenceValue)
+            if (acquireResult != Result.Success &&
+                acquireResult != Result.SuboptimalKhr)
             {
-                _completedGraphicsFrameFenceValue = completedGraphicsFenceValue;
+                if (acquireResult == Result.ErrorDeviceLost)
+                {
+                    MarkFrameSubmissionFault(
+                        "The Vulkan device was lost while acquiring a swapchain image.",
+                        acquireResult);
+                }
+                throw new VulkanException(
+                    "Failed to acquire swapchain image",
+                    acquireResult);
             }
+
+            if (acquireResult == Result.SuboptimalKhr)
+                _lifetime.RequestSwapchainRecreation();
+
+            WaitForAcquiredSwapchainImageOwner();
+            SelectAndRecycleFrameResourceContext();
             _meshletPhysicalResidencyResources?.BeginFenceSafeFrame(
                 _currentFrame,
                 _ddgiFrameSerial,
@@ -3347,34 +3522,6 @@ namespace Njulf.Rendering
             _uploadBudgetTracker.BeginFrame();
             _context.SetAllocatorCurrentFrameIndex(_allocatorFrameIndex++);
 
-            // Acquire next swapchain image
-            long acquireStart = Stopwatch.GetTimestamp();
-            Result acquireResult = _swapchain.TryAcquireNextImage(
-                _sync.GetImageAvailableSemaphore(_currentFrame),
-                out _imageIndex);
-            _lastAcquireImageMicroseconds = ElapsedMicroseconds(acquireStart);
-            _stallTracker.Record(RuntimeStallReason.SwapchainAcquire, _lastAcquireImageMicroseconds,
-                "Acquire next swapchain image");
-
-            if (acquireResult == Result.ErrorOutOfDateKhr)
-            {
-                _lifetime.RequestSwapchainRecreation();
-                _lifetime.ObserveSwapchainRecreationAttempt(
-                    RecreateSwapchain());
-                return false;
-            }
-
-            if (acquireResult != Result.Success && acquireResult != Result.SuboptimalKhr)
-            {
-                if (acquireResult == Result.ErrorDeviceLost)
-                    MarkFrameSubmissionFault("The Vulkan device was lost while acquiring a swapchain image.",
-                        acquireResult);
-                throw new VulkanException("Failed to acquire swapchain image", acquireResult);
-            }
-
-            if (acquireResult == Result.SuboptimalKhr)
-                _lifetime.RequestSwapchainRecreation();
-
             EnsureMeshPipelineDiagnosticVariant();
 
             // Reset and begin recording the primary command buffer owned by this frame.
@@ -3418,6 +3565,14 @@ namespace Njulf.Rendering
                 gpuTimingRequested);
 
             return true;
+        }
+
+        void IRendererFramePacingDiagnostics.ReportFramePacing(
+            double maximumFramesPerSecond,
+            long waitMicroseconds)
+        {
+            _hostMaximumFramesPerSecond = maximumFramesPerSecond;
+            _hostFramePacingWaitMicroseconds = Math.Max(0L, waitMicroseconds);
         }
 
         public void EndFrame()
@@ -3488,7 +3643,8 @@ namespace Njulf.Rendering
             // including the binary render-finished signal, whose required value is zero.
             ulong* signalValues = stackalloc ulong[1];
             signalValues[0] = 0;
-            waitSemaphores[0] = _sync.GetImageAvailableSemaphore(_currentFrame);
+            waitSemaphores[0] = _sync.GetImageAvailableSemaphore(
+                _currentAcquireSemaphoreIndex);
             // This is the first submission allowed to access the acquired image. A no-op frame
             // still consumes the binary semaphore here so it can be safely reused on acquire;
             // use AllCommands in that case because no color-attachment stage is guaranteed to
@@ -3568,6 +3724,11 @@ namespace Njulf.Rendering
                 _ddgiFrameSerial == ulong.MaxValue
                     ? ulong.MaxValue
                     : _ddgiFrameSerial + 1UL;
+            _submissionOwnership.MarkSubmitted(
+                _currentFrame,
+                _imageIndex,
+                _currentAcquireSemaphoreIndex,
+                _submittedGraphicsFrameFenceValues[_currentFrame]);
             _nearFieldResidual.ObserveSuccessfulSubmission(
                 _submittedGraphicsFrameFenceValues[_currentFrame]);
             _simpleDdgiFrameEvidence.CommitSuccessfulSubmission(
@@ -3641,11 +3802,12 @@ namespace Njulf.Rendering
             // the renderer-facing request only after that frame presented.
             _renderDocCaptureService.EndFrame(IntPtr.Zero, IntPtr.Zero);
 
-            // Advance to next frame
-            _currentFrame = (_currentFrame + 1) % FramesInFlight;
+            // Keep external frame-index consumers on the preferred context;
+            // BeginFrame may choose a different already-completed context.
+            _currentFrame = _submissionOwnership.PreferredFrameContext;
+            _sync.SetCurrentFrame(_currentFrame);
             _temporalSampleIndex++;
             _ddgiFrameSerial++;
-            _sync.AdvanceFrame();
             _lifetime.CompleteFrame();
 
             if (presentResult == Result.ErrorOutOfDateKhr ||
@@ -3695,7 +3857,8 @@ namespace Njulf.Rendering
             }
 
             Semaphore imageAvailable =
-                _sync.GetImageAvailableSemaphore(_currentFrame);
+                _sync.GetImageAvailableSemaphore(
+                    _currentAcquireSemaphoreIndex);
             Semaphore renderFinished =
                 _sync.GetRenderFinishedSemaphoreForImage(_imageIndex);
             PipelineStageFlags waitStage =
@@ -3768,21 +3931,21 @@ namespace Njulf.Rendering
                     _fullQualityPresented = true;
                 }
             }
-            if (!_initialScenePipelinesPrepared)
-            {
-                _giPipelineCacheService?.MarkRenderCriticalFramesStarted(
-                    _renderThreadManagedId);
-            }
             SchedulePostFullQualityPersistence();
 
             _submittedGraphicsFrameFenceValues[_currentFrame] =
                 _ddgiFrameSerial == ulong.MaxValue
                     ? ulong.MaxValue
                     : _ddgiFrameSerial + 1UL;
-            _currentFrame = (_currentFrame + 1) % FramesInFlight;
+            _submissionOwnership.MarkSubmitted(
+                _currentFrame,
+                _imageIndex,
+                _currentAcquireSemaphoreIndex,
+                _submittedGraphicsFrameFenceValues[_currentFrame]);
+            _currentFrame = _submissionOwnership.PreferredFrameContext;
+            _sync.SetCurrentFrame(_currentFrame);
             _temporalSampleIndex++;
             _ddgiFrameSerial++;
-            _sync.AdvanceFrame();
             _progressiveFrame = false;
             _lifetime.CompleteFrame();
 
@@ -4045,28 +4208,19 @@ namespace Njulf.Rendering
             }
 
             _stallTracker.BeginFrame();
-            try
-            {
-                _sync.WaitForFence(_currentFrame);
-            }
-            catch (VulkanException exception)
-            {
-                MarkFrameSubmissionFault(
-                    "Failed while waiting for a progressive-startup frame fence.",
-                    exception.Result);
-                throw;
-            }
-            _stallTracker.Record(
-                RuntimeStallReason.FrameFenceWait,
-                _sync.LastFenceWaitMicroseconds,
-                "Progressive startup frame fence");
-            _deleter.ProcessCompletedFrame(
-                _sync.GetInFlightFence(_currentFrame));
-            _context.SetAllocatorCurrentFrameIndex(_allocatorFrameIndex++);
-
+            _currentAcquireSemaphoreIndex =
+                _submissionOwnership.SelectAcquireSemaphore();
+            long acquireStart = Stopwatch.GetTimestamp();
             Result acquireResult = _swapchain.TryAcquireNextImage(
-                _sync.GetImageAvailableSemaphore(_currentFrame),
+                _sync.GetImageAvailableSemaphore(
+                    _currentAcquireSemaphoreIndex),
                 out _imageIndex);
+            _lastAcquireImageMicroseconds =
+                ElapsedMicroseconds(acquireStart);
+            _stallTracker.Record(
+                RuntimeStallReason.SwapchainAcquire,
+                _lastAcquireImageMicroseconds,
+                "Acquire progressive-startup swapchain image");
             if (acquireResult == Result.ErrorOutOfDateKhr)
             {
                 _lifetime.RequestSwapchainRecreation();
@@ -4089,6 +4243,12 @@ namespace Njulf.Rendering
             }
             if (acquireResult == Result.SuboptimalKhr)
                 _lifetime.RequestSwapchainRecreation();
+
+            WaitForAcquiredSwapchainImageOwner();
+            SelectAndRecycleFrameResourceContext();
+            _deleter.ProcessCompletedFrame(
+                _sync.GetInFlightFence(_currentFrame));
+            _context.SetAllocatorCurrentFrameIndex(_allocatorFrameIndex++);
 
             _cmd.ResetGraphicsCommandBuffer(_currentFrame);
             _currentCommandBuffer =
@@ -4115,6 +4275,8 @@ namespace Njulf.Rendering
                     _context.WaitIdle));
             if (recreated)
             {
+                _submissionOwnership.ResetAfterDeviceIdle(
+                    checked((int)_swapchain.ImageCount));
                 _sync.EnsureRenderFinishedSemaphoreCapacity(
                     _swapchain.ImageCount);
             }
@@ -4364,9 +4526,39 @@ namespace Njulf.Rendering
 
             if (!_initialScenePipelinesPrepared)
             {
-                _giPipelineCacheService!.MarkRenderCriticalFramesStarted(
-                    _renderThreadManagedId);
                 _initialScenePipelinesPrepared = true;
+            }
+        }
+
+        private void MarkPipelineCacheRenderCriticalFramesStarted()
+        {
+            GiPipelineCacheService? pipelineCache = _giPipelineCacheService;
+            int renderThreadId = Volatile.Read(ref _renderThreadManagedId);
+            if (pipelineCache == null || renderThreadId <= 0 ||
+                Volatile.Read(
+                    ref _pipelineCacheRenderCriticalFramesStarted) != 0)
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(
+                    ref _pipelineCacheRenderCriticalFramesStarted,
+                    1,
+                    0) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                pipelineCache.MarkRenderCriticalFramesStarted(renderThreadId);
+            }
+            catch
+            {
+                Volatile.Write(
+                    ref _pipelineCacheRenderCriticalFramesStarted,
+                    0);
+                throw;
             }
         }
 
@@ -4857,11 +5049,8 @@ namespace Njulf.Rendering
             long sceneBuildCallMicroseconds =
                 ElapsedMicroseconds(sceneBuildCallStart);
             drawStageStart = Stopwatch.GetTimestamp();
-            sceneData.VolumetricDensityVolumes = scene.VolumetricDensityVolumes
-                .Where(volume => volume.Enabled)
-                .OrderByDescending(volume => volume.Priority)
-                .ThenBy(volume => volume.Id)
-                .ToArray();
+            sceneData.VolumetricDensityVolumes =
+                GetSortedVolumetricDensityVolumes(scene);
             if (MaterialDebugViewPolicy.IsLinearDirectCapture(Settings.Materials.DebugView))
             {
                 // A direct-light signal has no environment/background term.
@@ -5697,6 +5886,64 @@ namespace Njulf.Rendering
             _lastDiagnostics = diagnosticsResult.Diagnostics;
             _lastBudgetSnapshot = diagnosticsResult.Budget;
             _debugOverlayBuilder.ClearFrame();
+        }
+
+        private VolumetricDensityVolume[] GetSortedVolumetricDensityVolumes(
+            Scene scene)
+        {
+            if (ReferenceEquals(_volumetricDensityCacheScene, scene) &&
+                _volumetricDensityCacheRevision ==
+                scene.VolumetricDensityRevision)
+            {
+                return _sortedVolumetricDensityVolumes;
+            }
+
+            VolumetricDensityVolume[] sorted =
+                CreateSortedVolumetricDensityVolumeSnapshot(
+                    scene.VolumetricDensityVolumes);
+
+            _sortedVolumetricDensityVolumes = sorted;
+            _volumetricDensityCacheScene = scene;
+            _volumetricDensityCacheRevision =
+                scene.VolumetricDensityRevision;
+            return sorted;
+        }
+
+        internal static VolumetricDensityVolume[]
+            CreateSortedVolumetricDensityVolumeSnapshot(
+                IReadOnlyList<VolumetricDensityVolume> source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            int enabledCount = 0;
+            for (int index = 0; index < source.Count; index++)
+            {
+                if (source[index].Enabled)
+                    enabledCount++;
+            }
+
+            VolumetricDensityVolume[] sorted = enabledCount == 0
+                ? Array.Empty<VolumetricDensityVolume>()
+                : new VolumetricDensityVolume[enabledCount];
+            int destinationIndex = 0;
+            for (int index = 0; index < source.Count; index++)
+            {
+                VolumetricDensityVolume volume = source[index];
+                if (volume.Enabled)
+                    sorted[destinationIndex++] = volume;
+            }
+            if (sorted.Length > 1)
+                Array.Sort(sorted, CompareVolumetricDensityVolumes);
+            return sorted;
+        }
+
+        private static int CompareVolumetricDensityVolumes(
+            VolumetricDensityVolume left,
+            VolumetricDensityVolume right)
+        {
+            int priorityOrder = right.Priority.CompareTo(left.Priority);
+            return priorityOrder != 0
+                ? priorityOrder
+                : left.Id.CompareTo(right.Id);
         }
 
         // GI diagnostics inspect the same receiver set as the beauty frame.
@@ -7300,8 +7547,21 @@ namespace Njulf.Rendering
                     _performanceCaptureMetadataProvider),
                 new RendererDiagnosticsFrameInput(
                     _lastAcquireImageMicroseconds,
+                    _lastSwapchainImageOwnerWaitMicroseconds,
+                    _lastFrameResourceRecycleWaitMicroseconds,
                     _lastQueueSubmitMicroseconds,
                     _lastPresentMicroseconds,
+                    _hostMaximumFramesPerSecond,
+                    _hostFramePacingWaitMicroseconds,
+                    _currentFrame,
+                    _lastRecycledFrameResourceOwnerSubmissionSerial,
+                    _imageIndex,
+                    _lastAcquiredImageOwnerSubmissionSerial,
+                    _lastAcquiredImageOwnerFrameContext,
+                    _currentAcquireSemaphoreIndex,
+                    _ddgiFrameSerial == ulong.MaxValue
+                        ? ulong.MaxValue
+                        : _ddgiFrameSerial + 1UL,
                     _lastRenderTargetRecreateReason));
         }
 
@@ -12033,6 +12293,7 @@ namespace Njulf.Rendering
 
         private ulong ObserveAllGraphicsSubmissionsCompletedAfterDeviceIdle()
         {
+            _submissionOwnership.ObserveAllSubmittedCompleted();
             ulong completedFenceValue = _completedGraphicsFrameFenceValue;
             for (int frameIndex = 0;
                  frameIndex < RenderingConstants.FramesInFlight;
@@ -12556,6 +12817,8 @@ namespace Njulf.Rendering
                 return false;
             }
 
+            _submissionOwnership.ResetAfterDeviceIdle(
+                checked((int)_swapchain.ImageCount));
             _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
             float sceneResolutionScale = ResolveSceneResolutionScale();
             bool hybridReflectionTargetEnabled =
@@ -12674,6 +12937,7 @@ namespace Njulf.Rendering
                      frameIndex++)
                 {
                     _sync.WaitForFence(frameIndex);
+                    _submissionOwnership.ObserveContextCompleted(frameIndex);
                     completedFenceValue = Math.Max(
                         completedFenceValue,
                         _submittedGraphicsFrameFenceValues[frameIndex]);

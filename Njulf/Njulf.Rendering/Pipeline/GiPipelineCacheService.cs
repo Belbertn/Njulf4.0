@@ -56,6 +56,12 @@ public readonly record struct GiPipelineCacheTelemetry(
 
     public string PipelineBinaryStorePath { get; init; } = string.Empty;
 
+    public int ActivePipelineCount { get; init; }
+
+    public long OldestActivePipelineMicroseconds { get; init; }
+
+    public string ActivePipelineSummary { get; init; } = string.Empty;
+
     public bool WarmEligible =>
         (RuntimeCacheLoaded ||
          PipelineCreationCount > 0 &&
@@ -88,6 +94,10 @@ internal sealed record GiPipelineCacheIdentity(
     byte[] ShaderBundleHash,
     byte[] EngineAbiHash,
     byte[] BuildConfigurationHash);
+
+internal readonly record struct ActivePipelineCreation(
+    PipelineArtifactId ArtifactId,
+    long StartedTimestamp);
 
 /// <summary>
 /// Fixed, checksummed envelope around the opaque Vulkan cache blob. Vulkan's
@@ -571,6 +581,8 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
     private ulong _cacheMutationGeneration;
     private int _activePipelineCreationCount;
     private int _peakConcurrentPipelineCreationCount;
+    private readonly Dictionary<int, ActivePipelineCreation>
+        _activePipelineCreations = new();
     private int _renderCriticalThreadId;
     private string _loadStatus = "Empty cache created.";
     private string _lastCreatedPipeline = string.Empty;
@@ -682,6 +694,24 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         {
             lock (_gate)
             {
+                long now = Stopwatch.GetTimestamp();
+                long oldestActivePipelineMicroseconds = 0L;
+                string activePipelineSummary = string.Empty;
+                if (_activePipelineCreations.Count != 0)
+                {
+                    ActivePipelineCreation[] active =
+                        _activePipelineCreations.Values
+                            .OrderBy(creation => creation.StartedTimestamp)
+                            .ToArray();
+                    oldestActivePipelineMicroseconds = ElapsedMicroseconds(
+                        active[0].StartedTimestamp,
+                        now);
+                    activePipelineSummary = string.Join(
+                        ", ",
+                        active.Take(4).Select(creation =>
+                            creation.ArtifactId.Value));
+                }
+
                 return new GiPipelineCacheTelemetry(
                     _cacheLoaded,
                     _runtimeCacheLoaded,
@@ -718,10 +748,25 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                     CapturedPipelineBinaryCount =
                         _capturedPipelineBinaryCount,
                     PipelineBinaryStorePath =
-                        _pipelineBinaryStore?.WritableRoot ?? string.Empty
+                        _pipelineBinaryStore?.WritableRoot ?? string.Empty,
+                    ActivePipelineCount = _activePipelineCreationCount,
+                    OldestActivePipelineMicroseconds =
+                        oldestActivePipelineMicroseconds,
+                    ActivePipelineSummary = activePipelineSummary
                 };
             }
         }
+    }
+
+    private static long ElapsedMicroseconds(
+        long startedTimestamp,
+        long completedTimestamp)
+    {
+        long elapsedTicks = Math.Max(
+            0L,
+            completedTimestamp - startedTimestamp);
+        return checked((long)Math.Round(
+            elapsedTicks * 1_000_000.0 / Stopwatch.Frequency));
     }
 
     public long BeginPipelineCreation()
@@ -744,6 +789,19 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             _cacheAccess.ExitReadLock();
             throw;
         }
+    }
+
+    private long BeginPipelineCreation(PipelineArtifactId artifactId)
+    {
+        long startedTimestamp = BeginPipelineCreation();
+        lock (_gate)
+        {
+            _activePipelineCreations[Environment.CurrentManagedThreadId] =
+                new ActivePipelineCreation(
+                    artifactId,
+                    startedTimestamp);
+        }
+        return startedTimestamp;
     }
 
     public void EndPipelineCreation(string pipelineName, long startedTimestamp)
@@ -779,6 +837,8 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 elapsedTicks * 1_000_000.0 / Stopwatch.Frequency));
             lock (_gate)
             {
+                _activePipelineCreations.Remove(
+                    Environment.CurrentManagedThreadId);
                 _activePipelineCreationCount = Math.Max(
                     0,
                     _activePipelineCreationCount - 1);
@@ -864,7 +924,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             throw new ArgumentNullException(nameof(createInfo));
         if (!Enum.IsDefined(cacheUsage))
             throw new ArgumentOutOfRangeException(nameof(cacheUsage));
-        long started = BeginPipelineCreation();
+        long started = BeginPipelineCreation(artifactId);
         PipelineCreationFeedback feedback = default;
         int stageCount = checked((int)createInfo->StageCount);
         PipelineCreationFeedback* stageFeedback = stackalloc
@@ -1000,7 +1060,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             throw new ArgumentNullException(nameof(createInfo));
         if (!Enum.IsDefined(cacheUsage))
             throw new ArgumentOutOfRangeException(nameof(cacheUsage));
-        long started = BeginPipelineCreation();
+        long started = BeginPipelineCreation(artifactId);
         PipelineCreationFeedback feedback = default;
         PipelineCreationFeedback stageFeedback = default;
         void* originalNext = createInfo->PNext;

@@ -283,4 +283,42 @@ public sealed class SimpleDdgiRefinementBrickPoolTests
             Assert.That(pool.Diagnostics.TopologyChanged, Is.True);
         });
     }
+
+    [Test]
+    public void Diagnostics_IdentifyOnlyTheRefinementSlotWhoseWorldKeyChanged()
+    {
+        var pool = new SimpleDdgiRefinementBrickPool();
+        SimpleDdgiRefinementBrickConfiguration configuration =
+            Configuration with { Capacity = 2 };
+        var stable = new SimpleDdgiRefinementDemand(
+            new Vector3(0f),
+            1_000f,
+            SimpleDdgiRefinementDemandReason.VisibleReceiver);
+        var replaceable = new SimpleDdgiRefinementDemand(
+            new Vector3(20f, 0f, 0f),
+            100f,
+            SimpleDdgiRefinementDemandReason.DynamicGeometry);
+
+        pool.Update(1, configuration, [stable, replaceable]);
+        Assert.That(pool.Diagnostics.ChangedSlotMask, Is.EqualTo(0b11u));
+        pool.Update(2, configuration, [stable, replaceable]);
+        Assert.That(pool.Diagnostics.ChangedSlotMask, Is.Zero);
+        pool.Update(
+            3,
+            configuration,
+            [
+                stable,
+                new SimpleDdgiRefinementDemand(
+                    new Vector3(40f, 0f, 0f),
+                    200f,
+                    SimpleDdgiRefinementDemandReason.DynamicGeometry)
+            ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.Diagnostics.ActiveSlotMask, Is.EqualTo(0b11u));
+            Assert.That(pool.Diagnostics.ChangedSlotMask, Is.EqualTo(0b10u));
+            Assert.That(pool.Diagnostics.TopologyChanged, Is.True);
+        });
+    }
 }

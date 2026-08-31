@@ -37,6 +37,17 @@ const uint GTAO_REJECTION_NORMAL = 5u;
 const uint GTAO_REJECTION_NONFINITE = 6u;
 const uint GTAO_REJECTION_AGE = 7u;
 
+const int GTAO_TEMPORAL_GROUP_SIZE = 8;
+const int GTAO_TEMPORAL_HALO = 2;
+const int GTAO_TEMPORAL_SHARED_STRIDE =
+    GTAO_TEMPORAL_GROUP_SIZE + GTAO_TEMPORAL_HALO * 2;
+const int GTAO_TEMPORAL_SHARED_COUNT =
+    GTAO_TEMPORAL_SHARED_STRIDE * GTAO_TEMPORAL_SHARED_STRIDE;
+
+shared float SharedDepth[GTAO_TEMPORAL_SHARED_COUNT];
+shared vec4 SharedViewPosition[GTAO_TEMPORAL_SHARED_COUNT];
+shared vec4 SharedGeometricNormal[GTAO_TEMPORAL_SHARED_COUNT];
+
 bool Finite(float value)
 {
     return !isnan(value) && !isinf(value);
@@ -100,6 +111,34 @@ vec3 ReconstructGeometricNormal(vec2 uv, float centerDepth, vec3 center)
     return dot(normal, -center) < 0.0 ? -normal : normal;
 }
 
+void LoadSharedGeometry(int sharedIndex, ivec2 outputPixel)
+{
+    ivec2 outputExtent = textureSize(GtaoRawInput, 0);
+    ivec2 clampedPixel = clamp(
+        outputPixel,
+        ivec2(0),
+        outputExtent - ivec2(1));
+    vec2 uv = (vec2(clampedPixel) + vec2(0.5)) /
+        max(pc.Dimensions, vec2(1.0));
+    float depth = FetchDepth(uv);
+    SharedDepth[sharedIndex] = depth;
+    if (depth <= 1.0e-6)
+    {
+        SharedViewPosition[sharedIndex] = vec4(0.0);
+        SharedGeometricNormal[sharedIndex] =
+            vec4(0.0, 0.0, 1.0, 0.0);
+        return;
+    }
+
+    vec3 position = ReconstructViewPosition(uv, depth);
+    vec3 normal = ReconstructGeometricNormal(
+        uv,
+        depth,
+        position);
+    SharedViewPosition[sharedIndex] = vec4(position, 1.0);
+    SharedGeometricNormal[sharedIndex] = vec4(normal, 1.0);
+}
+
 vec2 EncodeOctahedral(vec3 normal)
 {
     normal /= max(abs(normal.x) + abs(normal.y) + abs(normal.z), 1.0e-6);
@@ -153,6 +192,7 @@ bool UnpackGeometry(
 
 void NeighborhoodEnvelope(
     ivec2 centerPixel,
+    ivec2 localPixel,
     float centerDepth,
     vec3 centerNormal,
     out float minimumVisibility,
@@ -168,12 +208,15 @@ void NeighborhoodEnvelope(
         {
             ivec2 pixel = clamp(centerPixel + ivec2(x, y),
                 ivec2(0), extent - ivec2(1));
-            vec2 uv = (vec2(pixel) + vec2(0.5)) / pc.Dimensions;
-            float depth = FetchDepth(uv);
+            int sharedIndex =
+                (localPixel.y + GTAO_TEMPORAL_HALO + y) *
+                    GTAO_TEMPORAL_SHARED_STRIDE +
+                localPixel.x + GTAO_TEMPORAL_HALO + x;
+            float depth = SharedDepth[sharedIndex];
             if (depth <= 1.0e-6)
                 continue;
-            vec3 position = ReconstructViewPosition(uv, depth);
-            vec3 normal = ReconstructGeometricNormal(uv, depth, position);
+            vec3 position = SharedViewPosition[sharedIndex].xyz;
+            vec3 normal = SharedGeometricNormal[sharedIndex].xyz;
             if (abs(abs(position.z) - centerDepth) >
                     max(0.02, centerDepth * pc.DepthThresholdScale) ||
                 dot(normal, centerNormal) < pc.NormalThreshold)
@@ -198,12 +241,31 @@ void NeighborhoodEnvelope(
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 localPixel = ivec2(gl_LocalInvocationID.xy);
+    ivec2 groupBase = pixel - localPixel;
+    for (uint sharedIndex = gl_LocalInvocationIndex;
+         sharedIndex < uint(GTAO_TEMPORAL_SHARED_COUNT);
+         sharedIndex += 64u)
+    {
+        ivec2 sharedPixel = ivec2(
+            int(sharedIndex) % GTAO_TEMPORAL_SHARED_STRIDE,
+            int(sharedIndex) / GTAO_TEMPORAL_SHARED_STRIDE);
+        LoadSharedGeometry(
+            int(sharedIndex),
+            groupBase + sharedPixel - ivec2(GTAO_TEMPORAL_HALO));
+    }
+    barrier();
+
     ivec2 extent = imageSize(CurrentHistory);
     if (any(greaterThanEqual(pixel, extent)))
         return;
     vec2 uv = (vec2(pixel) + vec2(0.5)) /
         max(pc.Dimensions, vec2(1.0));
-    float depth = FetchDepth(uv);
+    int centerSharedIndex =
+        (localPixel.y + GTAO_TEMPORAL_HALO) *
+            GTAO_TEMPORAL_SHARED_STRIDE +
+        localPixel.x + GTAO_TEMPORAL_HALO;
+    float depth = SharedDepth[centerSharedIndex];
     vec4 current = texelFetch(GtaoRawInput, pixel, 0);
     if (depth <= 1.0e-6)
     {
@@ -211,9 +273,9 @@ void main()
         imageStore(CurrentGeometryHistory, pixel, uvec4(0u));
         return;
     }
-    vec3 position = ReconstructViewPosition(uv, depth);
+    vec3 position = SharedViewPosition[centerSharedIndex].xyz;
     float viewDepth = abs(position.z);
-    vec3 normal = ReconstructGeometricNormal(uv, depth, position);
+    vec3 normal = SharedGeometricNormal[centerSharedIndex].xyz;
     uint rejection = GTAO_REJECTION_NONE;
     bool acceptHistory = pc.HistoryValid != 0u;
     if (!acceptHistory)
@@ -274,7 +336,7 @@ void main()
 
     float minimumVisibility;
     float maximumVisibility;
-    NeighborhoodEnvelope(pixel, viewDepth, normal,
+    NeighborhoodEnvelope(pixel, localPixel, viewDepth, normal,
         minimumVisibility, maximumVisibility);
     previous.z = clamp(previous.z, minimumVisibility, maximumVisibility);
     vec3 currentBent = DecodeOctahedral(current.xy);

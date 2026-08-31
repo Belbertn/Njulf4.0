@@ -1,0 +1,65 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+const uint EmitBucketCount = 6u;
+shared uint WorkgroupBuckets[64];
+
+uint EmitBucketScratchWord(uint groupIndex, uint bucket)
+{
+    return pc.CandidateGroupLaneCountsOffsetWords +
+        groupIndex * EmitBucketCount + bucket;
+}
+
+void main()
+{
+    if (SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW) != 0u ||
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_EMISSION_FAILURE) != 0u)
+    {
+        return;
+    }
+
+    uint updateIndex = gl_GlobalInvocationID.x;
+    uint localIndex = gl_LocalInvocationID.x;
+    uint accepted = min(
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
+        SchedulerRequestCapacity());
+    uint bucket = updateIndex < accepted
+        ? SchedulerArenaRead(
+            pc.CandidateOutputOffsetWords + updateIndex)
+        : EmitBucketCount;
+    WorkgroupBuckets[localIndex] = bucket;
+    barrier();
+
+    if (updateIndex >= accepted || bucket >= EmitBucketCount)
+        return;
+
+    // Count only preceding invocations in this workgroup. Combined with the
+    // stable workgroup prefix, this is the same admission-order rank produced
+    // by the old six complete rescans, without atomic append ordering.
+    uint localRank = 0u;
+    for (uint prior = 0u; prior < localIndex; prior++)
+        localRank += WorkgroupBuckets[prior] == bucket ? 1u : 0u;
+
+    uint groupRank = SchedulerArenaRead(
+        EmitBucketScratchWord(gl_WorkGroupID.x, bucket));
+    uint metadataBase = pc.RayBucketMetadataOffsetWords +
+        bucket * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS;
+    uint bucketBase = SchedulerArenaRead(metadataBase + 0u);
+    if (SchedulerGpuResident())
+    {
+        SchedulerCopyUpdateToQueue(
+            updateIndex,
+            bucketBase + groupRank + localRank);
+    }
+}

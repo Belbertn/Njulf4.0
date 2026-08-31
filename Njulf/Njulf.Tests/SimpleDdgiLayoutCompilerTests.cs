@@ -53,9 +53,11 @@ public sealed class SimpleDdgiLayoutCompilerTests
             // liveness evidence, residual generation/deadline state, and B1's
             // fixed 16-byte double-banked receiver-contribution record for
             // every virtual probe (15,368 * 16 = 245,888 bytes), the 256-byte
-            // params-header ABI, and the current transport-audit summary.
-            Assert.That(dense.LiveBytes, Is.EqualTo(135_144_296UL));
-            Assert.That(sparse.LiveBytes, Is.EqualTo(108_235_384UL));
+            // params-header ABI, the 192-byte per-volume scroll-transaction
+            // scheduler policy, the 512-byte fail-closed counter/control arena,
+            // and the current transport-audit summary.
+            Assert.That(dense.LiveBytes, Is.EqualTo(135_144_936UL));
+            Assert.That(sparse.LiveBytes, Is.EqualTo(108_236_024UL));
             Assert.That(dense.LiveBytes - sparse.LiveBytes,
                 Is.EqualTo(26_908_912UL));
             Assert.That(sparse.VirtualProbeCount, Is.EqualTo(15_368));

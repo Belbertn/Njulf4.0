@@ -84,6 +84,12 @@ namespace Njulf.Tests
                 Assert.That(
                     (int)RuntimeStallReason.ResourceGenerationFenceWait,
                     Is.EqualTo(8));
+                Assert.That(
+                    (int)RuntimeStallReason.SwapchainImageOwnerWait,
+                    Is.EqualTo(9));
+                Assert.That(
+                    (int)RuntimeStallReason.FrameResourceRecycleWait,
+                    Is.EqualTo(10));
                 Assert.That(snapshot.DeviceWaitIdleCount, Is.Zero);
                 Assert.That(
                     snapshot.WorstReasonThisFrame,

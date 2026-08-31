@@ -253,6 +253,12 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             "ddgi_simple_scheduler_metadata_abi.glsl");
         string consumerShared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
         string emit = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_emit.comp");
+        string emitClassify = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_emit_classify.comp");
+        string emitScatter = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_emit_scatter.comp");
         string classify = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_classify.comp");
         string trace = ReadRepoText("Njulf.Shaders", "ddgi_simple_trace.comp");
         string transport = ReadRepoText("Njulf.Shaders", "ddgi_simple_transport.comp");
@@ -307,9 +313,17 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(classify, Does.Contain("routineDue ||"));
             Assert.That(classify, Does.Contain("cardinalityPromotionDue);"));
 
-            Assert.That(emit, Does.Contain("SchedulerWriteOutcome("));
-            Assert.That(emit, Does.Contain("SchedulerMarkOutcomeComplete("));
-            Assert.That(emit, Does.Contain("SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED"));
+            Assert.That(emitClassify, Does.Contain("SchedulerWriteOutcome("));
+            Assert.That(emitClassify, Does.Contain("SchedulerMarkOutcomeComplete("));
+            Assert.That(emitClassify, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED"));
+            Assert.That(emit, Does.Contain(
+                "SchedulerArenaWrite(scratchWord, bucketCount);"));
+            Assert.That(emit, Does.Not.Contain(
+                "for (uint updateIndex = 0u; updateIndex < accepted; updateIndex++)"));
+            Assert.That(emitScatter, Does.Contain(
+                "bucketBase + groupRank + localRank"));
+            Assert.That(emitScatter, Does.Not.Contain("atomicAdd("));
             Assert.That(trace, Does.Contain("SimpleDdgiSchedulerRayComplete("));
             Assert.That(transport, Does.Contain("SimpleDdgiSchedulerRayComplete("));
 
@@ -497,7 +511,7 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(SimpleDdgiGpuSchedulerLayout.GroupsFor(64), Is.EqualTo(1));
             Assert.That(SimpleDdgiGpuSchedulerLayout.GroupsFor(65), Is.EqualTo(2));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulerFrame>(), Is.EqualTo(224));
-            Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulerVolumePolicy>(), Is.EqualTo(176));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulerVolumePolicy>(), Is.EqualTo(192));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulerCandidate>(), Is.EqualTo(32));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiUpdateOutcome>(), Is.EqualTo(60));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulerProbeState>(), Is.EqualTo(48));
@@ -631,6 +645,12 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(Marshal.OffsetOf<GPUSimpleDdgiSchedulerVolumePolicy>(
                 nameof(GPUSimpleDdgiSchedulerVolumePolicy.ProximityRadiusPadding)).ToInt32(),
                 Is.EqualTo(160));
+            Assert.That(Marshal.OffsetOf<GPUSimpleDdgiSchedulerVolumePolicy>(
+                nameof(GPUSimpleDdgiSchedulerVolumePolicy.ScrollTransactionSerial)).ToInt32(),
+                Is.EqualTo(176));
+            Assert.That(Marshal.OffsetOf<GPUSimpleDdgiSchedulerVolumePolicy>(
+                nameof(GPUSimpleDdgiSchedulerVolumePolicy.ScrollFlags)).ToInt32(),
+                Is.EqualTo(188));
         });
 
         string scheduleShared = ReadRepoText(
@@ -880,6 +900,127 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
     }
 
     [Test]
+    public void ScrollEmissionAndCommit_AreFailClosedTransactions()
+    {
+        string emit = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_emit.comp");
+        string classify = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_emit_classify.comp");
+        string scatter = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_emit_scatter.comp");
+        string validator = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_validate_scroll_cohorts.comp");
+        string commit = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_commit_local.comp");
+        string commitPass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "SimpleDdgiSchedulerCommitPass.cs");
+        string schedulePass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "SimpleDdgiSchedulePass.cs");
+
+        int mismatchGate = emit.IndexOf(
+            "unbucketed != 0u || bucketOffset != accepted",
+            StringComparison.Ordinal);
+        int firstPublishedRayCommand = emit.IndexOf(
+            "for (uint bucket = 0u; bucket < EmitBucketCount; bucket++)",
+            mismatchGate + 1,
+            StringComparison.Ordinal);
+        Assert.Multiple(() =>
+        {
+            Assert.That(classify, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_UNBUCKETED"));
+            Assert.That(mismatchGate, Is.GreaterThanOrEqualTo(0));
+            Assert.That(firstPublishedRayCommand, Is.GreaterThan(mismatchGate));
+            Assert.That(emit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_EMISSION_FAILURE"));
+            Assert.That(emit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_DISPATCH_FEEDBACK"));
+            Assert.That(scatter, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_EMISSION_FAILURE"));
+            Assert.That(schedulePass, Does.Contain(
+                "layout.CandidateOutput"));
+            Assert.That(schedulePass, Does.Contain("layout.Counters"));
+            Assert.That(schedulePass, Does.Contain("layout.Outcomes"));
+
+            Assert.That(validator, Does.Contain(
+                "volumeAccepted[volume] !="));
+            Assert.That(validator, Does.Contain(
+                "ScrollExposedProbeCount(volume)"));
+            Assert.That(validator, Does.Contain(
+                "SchedulerVolumeScrollTransactionSerial(volumeIndex)"));
+            Assert.That(validator, Does.Contain(
+                "traceInvocationCount == expectedRays"));
+            Assert.That(validator, Does.Contain(
+                "transportInvocationCount == expectedRays"));
+            Assert.That(validator, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_PRODUCER_FAILURE"));
+            Assert.That(commit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_STATE_BASE"));
+            Assert.That(commit, Does.Contain(
+                "Test this before any cache, lifecycle, atlas, or receiver mutation"));
+            Assert.That(commitPass, Does.Contain(
+                "DispatchScrollCohortValidation(cmd, pushConstants);"));
+            Assert.That(commitPass.IndexOf(
+                    "DispatchScrollCohortValidation(cmd, pushConstants);",
+                    StringComparison.Ordinal),
+                Is.LessThan(commitPass.IndexOf(
+                    "DispatchResidentLocal(cmd, pushConstants);",
+                    StringComparison.Ordinal)));
+        });
+    }
+
+    [Test]
+    public void TrueRebase_IsHiddenUntilGpuCompletionThenFades()
+    {
+        string feedback = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_feedback.comp");
+        string receiver = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_shared.glsl");
+        string manager = ReadRepoText(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs");
+
+        var evidence = new SimpleDdgiRingRebaseEvidence(
+            NearPacked: 7u | (23u << 16),
+            MidPacked: 0u,
+            FarPacked: 0u);
+        Assert.Multiple(() =>
+        {
+            Assert.That(evidence.PendingProbeCount(0), Is.EqualTo(7u));
+            Assert.That(evidence.TransactionSerialLow(0), Is.EqualTo(23u));
+            Assert.That(feedback, Does.Contain(
+                "SIMPLE_DDGI_FEEDBACK_REBASE_PENDING_RING"));
+            Assert.That(feedback, Does.Contain(
+                "SchedulerVolumeScrollTransactionSerial(volume)"));
+            Assert.That(feedback, Does.Contain(
+                "rebaseProbeReady ? 0u : 1u"));
+            Assert.That(receiver, Does.Contain(
+                "volume.kind == SIMPLE_DDGI_VOLUME_KIND_RING &&"));
+            Assert.That(receiver, Does.Contain(
+                "volume.receiverWeight <= 0.0"));
+            Assert.That(receiver, Does.Contain(
+                "SimpleDdgiEdgeWeight(volume, worldPosition) *"));
+            Assert.That(manager, Does.Contain(
+                "private const int RingRebaseFadeFrameCount = 8;"));
+            Assert.That(manager, Does.Contain(
+                "SimpleDdgiRebaseState.Rebuilding => 0.0f"));
+            Assert.That(manager, Does.Not.Contain(
+                "bool emergencyRebase = _cameraCutThisFrame ||"));
+        });
+    }
+
+    [Test]
     public void AdaptiveRayEvidence_ReusesBoundedFeedbackTailByRingAndContentKind()
     {
         string shared = ReadRepoText(
@@ -902,7 +1043,7 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(shared, Does.Contain(
                 "SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_SAVED_RING_OFFSET = 999u"));
             Assert.That(feedback, Does.Contain(
-                "SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 40u"));
+                "SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 43u"));
             Assert.That(feedback, Does.Contain(
                 "lastCommittedSourceRefreshFrame =="));
             Assert.That(feedback, Does.Contain(

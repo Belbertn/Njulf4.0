@@ -262,6 +262,13 @@ public sealed class GtaoImplementationTests
             Assert.That(temporal, Does.Contain("vec2 previousUv = uv - motion;"));
             Assert.That(temporal, Does.Contain("NeighborhoodEnvelope("));
             Assert.That(temporal, Does.Contain(
+                "GTAO_TEMPORAL_SHARED_STRIDE"));
+            Assert.That(temporal, Does.Contain(
+                "shared vec4 SharedViewPosition"));
+            Assert.That(temporal, Does.Contain(
+                "SharedGeometricNormal[sharedIndex]"));
+            Assert.That(temporal, Does.Contain("barrier();"));
+            Assert.That(temporal, Does.Contain(
                 "previousAge >= pc.MaximumHistoryAge"));
             Assert.That(temporal, Does.Contain(
                 "dot(previousNormal, normal) < pc.NormalThreshold"));

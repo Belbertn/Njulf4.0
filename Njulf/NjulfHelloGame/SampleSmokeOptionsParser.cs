@@ -18,6 +18,8 @@ public static class SampleSmokeOptionsParser
         "--scene-reloads",
         "--scene",
         "--performance-scenario",
+        "--max-fps",
+        "--vsync",
         "--transparency-mode",
         "--health-report",
         "--baseline-snapshot-dir",
@@ -147,6 +149,19 @@ public static class SampleSmokeOptionsParser
         int sceneReloadCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT"), 1, "NJULF_RENDERER_SCENE_RELOAD_COUNT");
         SampleSceneKind sceneKind = ParseSceneKind(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE"));
         SamplePerformanceScenario performanceScenario = ParsePerformanceScenario(Environment.GetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO"));
+        string? maximumFramesPerSecondEnvironment =
+            Environment.GetEnvironmentVariable("NJULF_MAX_FPS");
+        double? maximumFramesPerSecondOverride =
+            string.IsNullOrWhiteSpace(maximumFramesPerSecondEnvironment)
+                ? null
+                : ParseMaximumFramesPerSecond(
+                    maximumFramesPerSecondEnvironment,
+                    "NJULF_MAX_FPS");
+        string? vSyncEnvironment =
+            Environment.GetEnvironmentVariable("NJULF_VSYNC");
+        bool? vSyncOverride = string.IsNullOrWhiteSpace(vSyncEnvironment)
+            ? null
+            : ParseBool(vSyncEnvironment, "NJULF_VSYNC");
         TransparencyMode transparencyMode = ParseTransparencyMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE"));
         string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
         string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
@@ -591,6 +606,13 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--performance-scenario":
                     performanceScenario = ParsePerformanceScenario(value);
+                    break;
+                case "--max-fps":
+                    maximumFramesPerSecondOverride =
+                        ParseMaximumFramesPerSecond(value, optionName);
+                    break;
+                case "--vsync":
+                    vSyncOverride = ParseBool(value, optionName);
                     break;
                 case "--transparency-mode":
                     transparencyMode = ParseTransparencyMode(value);
@@ -2395,7 +2417,9 @@ public static class SampleSmokeOptionsParser
             receiverCacheModeOverride,
             transportAccelerationEnabledOverride,
             transportAcceleratedSweepCountOverride,
-            giAllOnQualificationReportPath);
+            giAllOnQualificationReportPath,
+            maximumFramesPerSecondOverride,
+            vSyncOverride);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -2895,6 +2919,27 @@ public static class SampleSmokeOptionsParser
             parsed < 0.0)
         {
             throw new ArgumentException($"{name} requires a non-negative finite numeric value.");
+        }
+
+        return parsed;
+    }
+
+    private static double ParseMaximumFramesPerSecond(
+        string? value,
+        string name)
+    {
+        if (!double.TryParse(
+                value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out double parsed) ||
+            !double.IsFinite(parsed) ||
+            parsed < 0.0 ||
+            parsed > 1000.0 ||
+            parsed is > 0.0 and < 1.0)
+        {
+            throw new ArgumentException(
+                $"{name} requires zero (unlimited) or a finite value from 1 through 1000 FPS.");
         }
 
         return parsed;

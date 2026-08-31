@@ -121,8 +121,14 @@ namespace Njulf.Rendering.Data
         private readonly List<TransparentMeshletDraw> _transparentSortScratch = new List<TransparentMeshletDraw>();
         private readonly Dictionary<RenderObject, Matrix4x4> _previousRenderObjectMatrices = new();
         private readonly Dictionary<StaticInstanceKey, Matrix4x4> _previousStaticInstanceMatrices = new();
+        private bool _previousWorldMatricesNeedAdvance;
         private readonly Dictionary<RenderObject, int> _previousRenderObjectLods = new();
         private readonly Dictionary<StaticInstanceKey, int> _previousStaticInstanceLods = new();
+        private readonly HashSet<object> _animationModelScratch = [];
+        private readonly List<Animator> _animationStatsAnimators = [];
+        private Scene? _animationStatsScene;
+        private ulong _animationStatsRenderPayloadRevision;
+        private AnimationTopologyStats _animationTopologyStats;
         private readonly Dictionary<MeshHandle, MeshInfo> _meshInfoCache = new Dictionary<MeshHandle, MeshInfo>();
         private readonly Dictionary<(uint RangeBase, int RequestedLod),
             MeshletFrameRangeResolution> _meshletResidencyResolutionCache = [];
@@ -130,6 +136,10 @@ namespace Njulf.Rendering.Data
         private readonly HashSet<uint> _transparentResidencyDemandRanges = [];
         private readonly HashSet<uint> _combinedResidencyDemandRanges = [];
         private readonly List<uint> _residencyDemandScratch = [];
+        private readonly SceneRenderingData[] _frameRenderingData =
+            CreateFrameRenderingDataPool();
+        private readonly List<PendingTransferBarrier> _pendingTransferBarriers =
+            new(27);
         private readonly bool[] _instanceUploadDirtyFrames = new bool[FramesInFlight];
         private readonly UploadState[] _instanceUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _instanceCandidateUploadStates =
@@ -243,6 +253,14 @@ namespace Njulf.Rendering.Data
         private int _instanceCandidateDoubleSidedMeshletCount;
         private bool _meshletNormalConeCullingEnabled;
         private bool _disposed;
+
+        private static SceneRenderingData[] CreateFrameRenderingDataPool()
+        {
+            var pool = new SceneRenderingData[FramesInFlight];
+            for (int frame = 0; frame < pool.Length; frame++)
+                pool[frame] = new SceneRenderingData();
+            return pool;
+        }
 
         public bool CaptureCpuSnapshots { get; set; }
 
@@ -532,6 +550,7 @@ namespace Njulf.Rendering.Data
                 _lastUploadedBytes = 0;
                 _lastSceneUploadCount = 0;
                 _lastSceneUploadSkipped = 0;
+                _pendingTransferBarriers.Clear();
                 _lastPayloadSignatureMicroseconds = 0;
                 _lastObjectCullMicroseconds = 0;
                 _lastMeshletCullMicroseconds = 0;
@@ -616,6 +635,7 @@ namespace Njulf.Rendering.Data
                 bool payloadRebuilt = false;
                 if (cullingPayloadChanged)
                 {
+                    _previousWorldMatricesNeedAdvance = false;
                     if (staticPayloadChanged)
                         _objectData.Clear();
                     _instanceCandidates.Clear();
@@ -854,7 +874,7 @@ namespace Njulf.Rendering.Data
                 if (useTiledLightCulling)
                     ClearTiledLightBuffers(uploadCommandBuffer, totalClusters);
 
-                RecordUploadReadBarriers(uploadCommandBuffer, frameIndex, useTiledLightCulling);
+                RecordUploadReadBarriers(uploadCommandBuffer);
                 UpdateRegisteredBindlessBuffers();
                 _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
                 _lastBuildMicroseconds = ElapsedMicroseconds(buildStart);
@@ -871,7 +891,7 @@ namespace Njulf.Rendering.Data
                 ulong materialExtensionUploadBytes = _materialManager.LastExtensionUploadBytes;
                 ulong uploadedBytes = _lastUploadedBytes + materialUploadBytes +
                     forwardMaterialUploadBytes + materialExtensionUploadBytes;
-                AnimationSceneStats animationStats = CountAnimationSceneStats(scene);
+                AnimationSceneStats animationStats = GetAnimationSceneStats(scene);
                 bool instanceDrivenSubmission = buildGpuInstanceCandidates &&
                     _instanceCandidates.Count > 0;
                 int simpleOpaqueMeshletCount = instanceDrivenSubmission
@@ -903,192 +923,181 @@ namespace Njulf.Rendering.Data
                     directionalStaticShadowMeshletCount +
                     directionalDynamicShadowMeshletCount);
 
-                var sceneData = new SceneRenderingData
-                {
-                    ObjectCount = _objectData.Count,
-                    MeshletCount = checked(
+                SceneRenderingData sceneData =
+                    _frameRenderingData[frameIndex];
+                int[] pointShadowFaceMaskStorage =
+                    sceneData.PointShadowFaceMasks;
+                sceneData.Clear();
+                sceneData.ObjectCount = _objectData.Count;
+                sceneData.MeshletCount = checked(
                         opaqueMeshletCount +
-                        _transparentMeshletDrawCommands.Count),
-                    SceneInstanceCandidateCount = _instanceCandidates.Count,
-                    SceneSubmissionGpuInstanceExpansionEnabled =
-                        buildGpuInstanceCandidates &&
-                        _instanceCandidates.Count > 0,
-                    StaticInstanceBatchCount = _staticInstanceBatchCount,
-                    StaticInstanceCount = _staticInstanceCount,
-                    VisibleStaticInstanceCount = _visibleStaticInstanceCount,
-                    CulledStaticInstanceCount = _culledStaticInstanceCount,
-                    StaticBatchMeshletDrawCommandCount = _staticBatchMeshletDrawCommandCount,
-                    CpuStaticBatchBuildMicroseconds = _cpuStaticBatchBuildMicroseconds,
-                    FoliagePatchCount = scene.FoliagePatches.Count,
-                    FoliagePrototypeCount = CountFoliagePrototypes(scene),
-                    OpaqueObjectCount = _opaqueObjectCount,
-                    MaskedObjectCount = _maskedObjectCount,
-                    TransparentObjectCount = _transparentObjectCount,
-                    TransparentReflectionReceiverObjectCount =
-                        _transparentReflectionReceiverObjectCount,
-                    ThinGlassObjectCount = _thinGlassObjectCount,
-                    SolidObjectCount = _opaqueObjectCount,
-                    GeometryDecalObjectCount = _geometryDecalObjectCount,
-                    OpaqueMeshletCount = opaqueMeshletCount,
-                    SimpleOpaqueMeshletCount = simpleOpaqueMeshletCount,
-                    SimpleNormalOpaqueMeshletCount =
-                        simpleNormalOpaqueMeshletCount,
-                    FullOpaqueMeshletCount = fullOpaqueMeshletCount,
-                    SolidMeshletCount = solidDepthMeshletCount,
-                    MaskedMeshletCount = maskedDepthMeshletCount,
-                    TransparentMeshletCount = _transparentMeshletDrawCommands.Count,
-                    TransparentReflectionReceiverMeshletCount =
-                        _transparentReflectionReceiverMeshletCount,
-                    ThinGlassMeshletCount = _thinGlassMeshletCount,
-                    GeometryDecalMeshletCount = _geometryDecalMeshletCount,
-                    BlendMaterialCount = _blendMaterialCount,
-                    MaskMaterialCount = _maskMaterialCount,
-                    GeometryDecalMaterialCount = _geometryDecalMaterialCount,
-                    TransparentSortCandidateCount = _transparentSortScratch.Count,
-                    TransparentSortMicroseconds = _transparentSortMicroseconds,
-                    TransparentOverflowCount = _transparentOverflowCount,
-                    MaterialCount = _materialManager.RegisteredMaterialCount,
-                    GiTransportMaterialRevision = _materialManager.GiTransportInputRevision,
-                    LightCount = 0,
-                    TextureCount = _textureManager?.TextureCount ?? 0,
-                    AnimationEnabled = animationStats.SkinnedObjectCount > 0,
-                    AnimationSkinningMode = animationStats.SkinnedObjectCount > 0 ? AnimationSkinningMode.GpuCompute : AnimationSkinningMode.Disabled,
-                    AnimatedModelCount = animationStats.AnimatedModelCount,
-                    SkinnedObjectCount = animationStats.SkinnedObjectCount,
-                    SkeletonCount = animationStats.SkeletonCount,
-                    SkinCount = animationStats.SkinCount,
-                    AnimationClipCount = animationStats.AnimationClipCount,
-                    ActiveAnimatorCount = animationStats.ActiveAnimatorCount,
-                    PlayingAnimatorCount = animationStats.PlayingAnimatorCount,
-                    PausedAnimatorCount = animationStats.PausedAnimatorCount,
-                    JointMatrixCount = animationStats.JointMatrixCount,
-                    AnimatedBoundsMode = animationStats.SkinnedObjectCount > 0 ? "Conservative" : string.Empty,
-                    CurrentFrameIndex = (uint)frameIndex,
-                    SceneContentRevision = _sceneContentRevision,
-                    ViewMatrix = viewMatrix,
-                    ProjectionMatrix = projectionMatrix,
-                    ViewProjectionMatrix = viewProjectionMatrix,
-                    InverseViewMatrix = inverseViewMatrix,
-                    InverseProjectionMatrix = inverseProjectionMatrix,
-                    InverseViewProjectionMatrix = inverseViewProjectionMatrix,
-                    CameraPosition = camera.Position,
-                    ScreenWidth = screenWidth,
-                    ScreenHeight = screenHeight,
-                    TileCountX = tileCountX,
-                    TileCountY = tileCountY,
-                    ClusterCountZ = clusterCountZ,
-                    MaxLightsPerTile = MaxLightsPerTile,
-                    UploadedBytes = uploadedBytes,
-                    CpuSceneBuildMicroseconds = _lastBuildMicroseconds,
-                    CpuPayloadSignatureMicroseconds = _lastPayloadSignatureMicroseconds,
-                    CpuObjectCullMicroseconds = _lastObjectCullMicroseconds,
-                    CpuMeshletCullMicroseconds = _lastMeshletCullMicroseconds,
-                    CpuUploadMicroseconds = _lastUploadMicroseconds,
-                    CpuMaterialUploadMicroseconds = materialUploadMicroseconds,
-                    SceneUploadCount = _lastSceneUploadCount,
-                    SceneUploadSkipped = _lastSceneUploadSkipped,
-                    ObjectCandidatesCpu = _objectCandidatesCpu,
-                    ObjectFrustumCulledCpu = _objectFrustumCulledCpu,
-                    MeshletCandidatesCpu = _meshletCandidatesCpu,
-                    MeshletFrustumCulledCpu = _meshletFrustumCulledCpu,
-                    MeshletLodSkippedCpu = _meshletLodSkippedCpu,
-                    MeshletLod0SubmittedCpu = _meshletLod0SubmittedCpu,
-                    MeshletLod1SubmittedCpu = _meshletLod1SubmittedCpu,
-                    MeshletLod2SubmittedCpu = _meshletLod2SubmittedCpu,
-                    NormalConeEligibleOpaqueMeshletCount =
-                        instanceDrivenSubmission
+                        _transparentMeshletDrawCommands.Count);
+                sceneData.SceneInstanceCandidateCount = _instanceCandidates.Count;
+                sceneData.SceneSubmissionGpuInstanceExpansionEnabled = buildGpuInstanceCandidates &&
+                        _instanceCandidates.Count > 0;
+                sceneData.StaticInstanceBatchCount = _staticInstanceBatchCount;
+                sceneData.StaticInstanceCount = _staticInstanceCount;
+                sceneData.VisibleStaticInstanceCount = _visibleStaticInstanceCount;
+                sceneData.CulledStaticInstanceCount = _culledStaticInstanceCount;
+                sceneData.StaticBatchMeshletDrawCommandCount = _staticBatchMeshletDrawCommandCount;
+                sceneData.CpuStaticBatchBuildMicroseconds = _cpuStaticBatchBuildMicroseconds;
+                sceneData.FoliagePatchCount = scene.FoliagePatches.Count;
+                sceneData.FoliagePrototypeCount = CountFoliagePrototypes(scene);
+                sceneData.OpaqueObjectCount = _opaqueObjectCount;
+                sceneData.MaskedObjectCount = _maskedObjectCount;
+                sceneData.TransparentObjectCount = _transparentObjectCount;
+                sceneData.TransparentReflectionReceiverObjectCount = _transparentReflectionReceiverObjectCount;
+                sceneData.ThinGlassObjectCount = _thinGlassObjectCount;
+                sceneData.SolidObjectCount = _opaqueObjectCount;
+                sceneData.GeometryDecalObjectCount = _geometryDecalObjectCount;
+                sceneData.OpaqueMeshletCount = opaqueMeshletCount;
+                sceneData.SimpleOpaqueMeshletCount = simpleOpaqueMeshletCount;
+                sceneData.SimpleNormalOpaqueMeshletCount = simpleNormalOpaqueMeshletCount;
+                sceneData.FullOpaqueMeshletCount = fullOpaqueMeshletCount;
+                sceneData.SolidMeshletCount = solidDepthMeshletCount;
+                sceneData.MaskedMeshletCount = maskedDepthMeshletCount;
+                sceneData.TransparentMeshletCount = _transparentMeshletDrawCommands.Count;
+                sceneData.TransparentReflectionReceiverMeshletCount = _transparentReflectionReceiverMeshletCount;
+                sceneData.ThinGlassMeshletCount = _thinGlassMeshletCount;
+                sceneData.GeometryDecalMeshletCount = _geometryDecalMeshletCount;
+                sceneData.BlendMaterialCount = _blendMaterialCount;
+                sceneData.MaskMaterialCount = _maskMaterialCount;
+                sceneData.GeometryDecalMaterialCount = _geometryDecalMaterialCount;
+                sceneData.TransparentSortCandidateCount = _transparentSortScratch.Count;
+                sceneData.TransparentSortMicroseconds = _transparentSortMicroseconds;
+                sceneData.TransparentOverflowCount = _transparentOverflowCount;
+                sceneData.MaterialCount = _materialManager.RegisteredMaterialCount;
+                sceneData.GiTransportMaterialRevision = _materialManager.GiTransportInputRevision;
+                sceneData.LightCount = 0;
+                sceneData.TextureCount = _textureManager?.TextureCount ?? 0;
+                sceneData.AnimationEnabled = animationStats.SkinnedObjectCount > 0;
+                sceneData.AnimationSkinningMode = animationStats.SkinnedObjectCount > 0 ? AnimationSkinningMode.GpuCompute : AnimationSkinningMode.Disabled;
+                sceneData.AnimatedModelCount = animationStats.AnimatedModelCount;
+                sceneData.SkinnedObjectCount = animationStats.SkinnedObjectCount;
+                sceneData.SkeletonCount = animationStats.SkeletonCount;
+                sceneData.SkinCount = animationStats.SkinCount;
+                sceneData.AnimationClipCount = animationStats.AnimationClipCount;
+                sceneData.ActiveAnimatorCount = animationStats.ActiveAnimatorCount;
+                sceneData.PlayingAnimatorCount = animationStats.PlayingAnimatorCount;
+                sceneData.PausedAnimatorCount = animationStats.PausedAnimatorCount;
+                sceneData.JointMatrixCount = animationStats.JointMatrixCount;
+                sceneData.AnimatedBoundsMode = animationStats.SkinnedObjectCount > 0 ? "Conservative" : string.Empty;
+                sceneData.CurrentFrameIndex = (uint)frameIndex;
+                sceneData.SceneContentRevision = _sceneContentRevision;
+                sceneData.ViewMatrix = viewMatrix;
+                sceneData.ProjectionMatrix = projectionMatrix;
+                sceneData.ViewProjectionMatrix = viewProjectionMatrix;
+                sceneData.InverseViewMatrix = inverseViewMatrix;
+                sceneData.InverseProjectionMatrix = inverseProjectionMatrix;
+                sceneData.InverseViewProjectionMatrix = inverseViewProjectionMatrix;
+                sceneData.CameraPosition = camera.Position;
+                sceneData.ScreenWidth = screenWidth;
+                sceneData.ScreenHeight = screenHeight;
+                sceneData.TileCountX = tileCountX;
+                sceneData.TileCountY = tileCountY;
+                sceneData.ClusterCountZ = clusterCountZ;
+                sceneData.MaxLightsPerTile = MaxLightsPerTile;
+                sceneData.UploadedBytes = uploadedBytes;
+                sceneData.CpuSceneBuildMicroseconds = _lastBuildMicroseconds;
+                sceneData.CpuPayloadSignatureMicroseconds = _lastPayloadSignatureMicroseconds;
+                sceneData.CpuObjectCullMicroseconds = _lastObjectCullMicroseconds;
+                sceneData.CpuMeshletCullMicroseconds = _lastMeshletCullMicroseconds;
+                sceneData.CpuUploadMicroseconds = _lastUploadMicroseconds;
+                sceneData.CpuMaterialUploadMicroseconds = materialUploadMicroseconds;
+                sceneData.SceneUploadCount = _lastSceneUploadCount;
+                sceneData.SceneUploadSkipped = _lastSceneUploadSkipped;
+                sceneData.ObjectCandidatesCpu = _objectCandidatesCpu;
+                sceneData.ObjectFrustumCulledCpu = _objectFrustumCulledCpu;
+                sceneData.MeshletCandidatesCpu = _meshletCandidatesCpu;
+                sceneData.MeshletFrustumCulledCpu = _meshletFrustumCulledCpu;
+                sceneData.MeshletLodSkippedCpu = _meshletLodSkippedCpu;
+                sceneData.MeshletLod0SubmittedCpu = _meshletLod0SubmittedCpu;
+                sceneData.MeshletLod1SubmittedCpu = _meshletLod1SubmittedCpu;
+                sceneData.MeshletLod2SubmittedCpu = _meshletLod2SubmittedCpu;
+                sceneData.NormalConeEligibleOpaqueMeshletCount = instanceDrivenSubmission
                             ? _instanceCandidateNormalConeMeshletCount
-                            : _normalConeEligibleOpaqueMeshletCount,
-                    DoubleSidedOpaqueMeshletCount =
-                        instanceDrivenSubmission
+                            : _normalConeEligibleOpaqueMeshletCount;
+                sceneData.DoubleSidedOpaqueMeshletCount = instanceDrivenSubmission
                             ? _instanceCandidateDoubleSidedMeshletCount
-                            : _doubleSidedOpaqueMeshletCount,
-                    MeshletNormalConeCullingEnabled =
-                        meshletNormalConeCullingEnabled,
-                    StableSceneInputUploadBytes = _lastObjectUploadBytes +
+                            : _doubleSidedOpaqueMeshletCount;
+                sceneData.MeshletNormalConeCullingEnabled = meshletNormalConeCullingEnabled;
+                sceneData.StableSceneInputUploadBytes = _lastObjectUploadBytes +
                         _lastInstanceUploadBytes +
                         _lastInstanceCandidateUploadBytes +
                         materialUploadBytes +
-                        forwardMaterialUploadBytes + materialExtensionUploadBytes,
-                    CpuCandidateListUploadBytes = _lastMeshletDrawUploadBytes +
+                        forwardMaterialUploadBytes + materialExtensionUploadBytes;
+                sceneData.CpuCandidateListUploadBytes = _lastMeshletDrawUploadBytes +
                         _lastSolidDepthMeshletDrawUploadBytes +
                         _lastMaskedDepthMeshletDrawUploadBytes +
                         _lastPackedMeshletDrawUploadBytes +
                         _lastPackedSolidDepthMeshletDrawUploadBytes +
                         _lastPackedMaskedDepthMeshletDrawUploadBytes +
-                        _lastTransparentMeshletDrawUploadBytes,
-                    CameraDrivenCpuDrawListRebuilt = _lastCameraDrivenCpuDrawListRebuilt,
-                    MeshletCountTotal = globalMeshletStats.MeshletCount,
-                    MeshletCountSubmittedCpu = _submittedMeshletCountCpu,
-                    AvgTrianglesPerSubmittedMeshlet = avgSubmittedTriangles,
-                    AvgVerticesPerSubmittedMeshlet = avgSubmittedVertices,
-                    SmallMeshletsUnder16Triangles = _submittedSmallMeshletsUnder16Triangles,
-                    SmallMeshletsUnder32Triangles = _submittedSmallMeshletsUnder32Triangles,
-                    ScenePayloadRebuilt = _lastScenePayloadRebuilt,
-                    ObjectUploadBytes = _lastObjectUploadBytes,
-                    InstanceUploadBytes = _lastInstanceUploadBytes,
-                    SceneInstanceCandidateUploadBytes =
-                        _lastInstanceCandidateUploadBytes,
-                    MeshletDrawUploadBytes = _lastMeshletDrawUploadBytes,
-                    SolidDepthMeshletDrawUploadBytes = _lastSolidDepthMeshletDrawUploadBytes,
-                    MaskedDepthMeshletDrawUploadBytes = _lastMaskedDepthMeshletDrawUploadBytes,
-                    PackedMeshletDrawUploadBytes = _lastPackedMeshletDrawUploadBytes,
-                    PackedSolidDepthMeshletDrawUploadBytes = _lastPackedSolidDepthMeshletDrawUploadBytes,
-                    PackedMaskedDepthMeshletDrawUploadBytes = _lastPackedMaskedDepthMeshletDrawUploadBytes,
-                    TransparentMeshletDrawUploadBytes = _lastTransparentMeshletDrawUploadBytes,
-                    MaterialUploadBytes = materialUploadBytes,
-                    ForwardMaterialUploadBytes = forwardMaterialUploadBytes,
-                    MaterialExtensionUploadBytes = materialExtensionUploadBytes,
-                    ObjectBufferSize = _objectDataBuffer.ByteSize,
-                    MaterialBufferSize = _materialManager.MaterialBufferSize,
-                    ForwardMaterialBufferSize =
-                        _materialManager.ForwardMaterialBufferSize,
-                    MaterialExtensionBufferSize = _materialManager.MaterialExtensionBufferSize,
-                    InstanceBufferSize = _instanceBuffers[frameIndex].ByteSize,
-                    SceneInstanceCandidateBufferSize =
-                        _instanceCandidateBuffers[frameIndex].ByteSize,
-                    MeshletDrawBufferSize = _meshletDrawBuffers[frameIndex].ByteSize,
-                    SimpleNormalOpaqueMeshletDrawBufferSize = _simpleNormalOpaqueMeshletDrawBuffers[frameIndex].ByteSize,
-                    FullOpaqueMeshletDrawBufferSize = _fullOpaqueMeshletDrawBuffers[frameIndex].ByteSize,
-                    SolidDepthMeshletDrawBufferSize = _solidDepthMeshletDrawBuffers[frameIndex].ByteSize,
-                    MaskedDepthMeshletDrawBufferSize = _maskedDepthMeshletDrawBuffers[frameIndex].ByteSize,
-                    PackedMeshletDrawBufferSize = _packedMeshletDrawBuffers[frameIndex].ByteSize,
-                    PackedSimpleNormalOpaqueMeshletDrawBufferSize = _packedSimpleNormalOpaqueMeshletDrawBuffers[frameIndex].ByteSize,
-                    PackedFullOpaqueMeshletDrawBufferSize = _packedFullOpaqueMeshletDrawBuffers[frameIndex].ByteSize,
-                    PackedSolidDepthMeshletDrawBufferSize = _packedSolidDepthMeshletDrawBuffers[frameIndex].ByteSize,
-                    PackedMaskedDepthMeshletDrawBufferSize = _packedMaskedDepthMeshletDrawBuffers[frameIndex].ByteSize,
-                    MeshletTaskFrameDataBufferSize = _meshletTaskFrameDataBuffers[frameIndex].ByteSize,
-                    TransparentMeshletDrawBufferSize = _transparentMeshletDrawBuffers[frameIndex].ByteSize,
-                    DirectionalShadowMeshletDrawBufferSize = _directionalShadowMeshletDrawBuffers[frameIndex].ByteSize,
-                    LocalShadowMeshletDrawBufferSize = _localShadowMeshletDrawBuffers[frameIndex].ByteSize,
-                    TiledLightHeaderBufferSize = _tiledLightHeaderBuffer.ByteSize,
-                    TiledLightIndexBufferSize = _tiledLightIndexBuffer.ByteSize,
-                    TiledLightHeaderBufferClearBytes = _lastTiledLightHeaderBufferClearBytes,
-                    TiledLightIndexBufferClearBytes = _lastTiledLightIndexBufferClearBytes,
-                    ObjectDataBuffer = _objectDataBuffer.Handle,
-                    MaterialDataBuffer = _materialManager.MaterialBuffer,
-                    ForwardMaterialDataBuffer =
-                        _materialManager.ForwardMaterialBuffer,
-                    MaterialExtensionDataBuffer = _materialManager.MaterialExtensionBuffer,
-                    InstanceBuffer = _instanceBuffers[frameIndex].Handle,
-                    SceneInstanceCandidateBuffer =
-                        _instanceCandidateBuffers[frameIndex].Handle,
-                    MeshletDrawBuffer = _meshletDrawBuffers[frameIndex].Handle,
-                    SimpleNormalOpaqueMeshletDrawBuffer = _simpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle,
-                    FullOpaqueMeshletDrawBuffer = _fullOpaqueMeshletDrawBuffers[frameIndex].Handle,
-                    SolidDepthMeshletDrawBuffer = _solidDepthMeshletDrawBuffers[frameIndex].Handle,
-                    MaskedDepthMeshletDrawBuffer = _maskedDepthMeshletDrawBuffers[frameIndex].Handle,
-                    PackedMeshletDrawBuffer = _packedMeshletDrawBuffers[frameIndex].Handle,
-                    PackedSimpleNormalOpaqueMeshletDrawBuffer = _packedSimpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle,
-                    PackedFullOpaqueMeshletDrawBuffer = _packedFullOpaqueMeshletDrawBuffers[frameIndex].Handle,
-                    PackedSolidDepthMeshletDrawBuffer = _packedSolidDepthMeshletDrawBuffers[frameIndex].Handle,
-                    PackedMaskedDepthMeshletDrawBuffer = _packedMaskedDepthMeshletDrawBuffers[frameIndex].Handle,
-                    MeshletTaskFrameDataBuffer = _meshletTaskFrameDataBuffers[frameIndex].Handle,
-                    TransparentMeshletDrawBuffer = _transparentMeshletDrawBuffers[frameIndex].Handle,
-                    TiledLightHeaderBuffer = _tiledLightHeaderBuffer.Handle,
-                    TiledLightIndexBuffer = _tiledLightIndexBuffer.Handle
-                };
-
+                        _lastTransparentMeshletDrawUploadBytes;
+                sceneData.CameraDrivenCpuDrawListRebuilt = _lastCameraDrivenCpuDrawListRebuilt;
+                sceneData.MeshletCountTotal = globalMeshletStats.MeshletCount;
+                sceneData.MeshletCountSubmittedCpu = _submittedMeshletCountCpu;
+                sceneData.AvgTrianglesPerSubmittedMeshlet = avgSubmittedTriangles;
+                sceneData.AvgVerticesPerSubmittedMeshlet = avgSubmittedVertices;
+                sceneData.SmallMeshletsUnder16Triangles = _submittedSmallMeshletsUnder16Triangles;
+                sceneData.SmallMeshletsUnder32Triangles = _submittedSmallMeshletsUnder32Triangles;
+                sceneData.ScenePayloadRebuilt = _lastScenePayloadRebuilt;
+                sceneData.ObjectUploadBytes = _lastObjectUploadBytes;
+                sceneData.InstanceUploadBytes = _lastInstanceUploadBytes;
+                sceneData.SceneInstanceCandidateUploadBytes = _lastInstanceCandidateUploadBytes;
+                sceneData.MeshletDrawUploadBytes = _lastMeshletDrawUploadBytes;
+                sceneData.SolidDepthMeshletDrawUploadBytes = _lastSolidDepthMeshletDrawUploadBytes;
+                sceneData.MaskedDepthMeshletDrawUploadBytes = _lastMaskedDepthMeshletDrawUploadBytes;
+                sceneData.PackedMeshletDrawUploadBytes = _lastPackedMeshletDrawUploadBytes;
+                sceneData.PackedSolidDepthMeshletDrawUploadBytes = _lastPackedSolidDepthMeshletDrawUploadBytes;
+                sceneData.PackedMaskedDepthMeshletDrawUploadBytes = _lastPackedMaskedDepthMeshletDrawUploadBytes;
+                sceneData.TransparentMeshletDrawUploadBytes = _lastTransparentMeshletDrawUploadBytes;
+                sceneData.MaterialUploadBytes = materialUploadBytes;
+                sceneData.ForwardMaterialUploadBytes = forwardMaterialUploadBytes;
+                sceneData.MaterialExtensionUploadBytes = materialExtensionUploadBytes;
+                sceneData.ObjectBufferSize = _objectDataBuffer.ByteSize;
+                sceneData.MaterialBufferSize = _materialManager.MaterialBufferSize;
+                sceneData.ForwardMaterialBufferSize = _materialManager.ForwardMaterialBufferSize;
+                sceneData.MaterialExtensionBufferSize = _materialManager.MaterialExtensionBufferSize;
+                sceneData.InstanceBufferSize = _instanceBuffers[frameIndex].ByteSize;
+                sceneData.SceneInstanceCandidateBufferSize = _instanceCandidateBuffers[frameIndex].ByteSize;
+                sceneData.MeshletDrawBufferSize = _meshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.SimpleNormalOpaqueMeshletDrawBufferSize = _simpleNormalOpaqueMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.FullOpaqueMeshletDrawBufferSize = _fullOpaqueMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.SolidDepthMeshletDrawBufferSize = _solidDepthMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.MaskedDepthMeshletDrawBufferSize = _maskedDepthMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.PackedMeshletDrawBufferSize = _packedMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.PackedSimpleNormalOpaqueMeshletDrawBufferSize = _packedSimpleNormalOpaqueMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.PackedFullOpaqueMeshletDrawBufferSize = _packedFullOpaqueMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.PackedSolidDepthMeshletDrawBufferSize = _packedSolidDepthMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.PackedMaskedDepthMeshletDrawBufferSize = _packedMaskedDepthMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.MeshletTaskFrameDataBufferSize = _meshletTaskFrameDataBuffers[frameIndex].ByteSize;
+                sceneData.TransparentMeshletDrawBufferSize = _transparentMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.DirectionalShadowMeshletDrawBufferSize = _directionalShadowMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.LocalShadowMeshletDrawBufferSize = _localShadowMeshletDrawBuffers[frameIndex].ByteSize;
+                sceneData.TiledLightHeaderBufferSize = _tiledLightHeaderBuffer.ByteSize;
+                sceneData.TiledLightIndexBufferSize = _tiledLightIndexBuffer.ByteSize;
+                sceneData.TiledLightHeaderBufferClearBytes = _lastTiledLightHeaderBufferClearBytes;
+                sceneData.TiledLightIndexBufferClearBytes = _lastTiledLightIndexBufferClearBytes;
+                sceneData.ObjectDataBuffer = _objectDataBuffer.Handle;
+                sceneData.MaterialDataBuffer = _materialManager.MaterialBuffer;
+                sceneData.ForwardMaterialDataBuffer = _materialManager.ForwardMaterialBuffer;
+                sceneData.MaterialExtensionDataBuffer = _materialManager.MaterialExtensionBuffer;
+                sceneData.InstanceBuffer = _instanceBuffers[frameIndex].Handle;
+                sceneData.SceneInstanceCandidateBuffer = _instanceCandidateBuffers[frameIndex].Handle;
+                sceneData.MeshletDrawBuffer = _meshletDrawBuffers[frameIndex].Handle;
+                sceneData.SimpleNormalOpaqueMeshletDrawBuffer = _simpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle;
+                sceneData.FullOpaqueMeshletDrawBuffer = _fullOpaqueMeshletDrawBuffers[frameIndex].Handle;
+                sceneData.SolidDepthMeshletDrawBuffer = _solidDepthMeshletDrawBuffers[frameIndex].Handle;
+                sceneData.MaskedDepthMeshletDrawBuffer = _maskedDepthMeshletDrawBuffers[frameIndex].Handle;
+                sceneData.PackedMeshletDrawBuffer = _packedMeshletDrawBuffers[frameIndex].Handle;
+                sceneData.PackedSimpleNormalOpaqueMeshletDrawBuffer = _packedSimpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle;
+                sceneData.PackedFullOpaqueMeshletDrawBuffer = _packedFullOpaqueMeshletDrawBuffers[frameIndex].Handle;
+                sceneData.PackedSolidDepthMeshletDrawBuffer = _packedSolidDepthMeshletDrawBuffers[frameIndex].Handle;
+                sceneData.PackedMaskedDepthMeshletDrawBuffer = _packedMaskedDepthMeshletDrawBuffers[frameIndex].Handle;
+                sceneData.MeshletTaskFrameDataBuffer = _meshletTaskFrameDataBuffers[frameIndex].Handle;
+                sceneData.TransparentMeshletDrawBuffer = _transparentMeshletDrawBuffers[frameIndex].Handle;
+                sceneData.TiledLightHeaderBuffer = _tiledLightHeaderBuffer.Handle;
+                sceneData.TiledLightIndexBuffer = _tiledLightIndexBuffer.Handle;
                 sceneData.TransparentMaterialRuns.AddRange(
                     _transparentMaterialRuns);
 
@@ -1138,7 +1147,9 @@ namespace Njulf.Rendering.Data
                 sceneData.DirectionalDynamicShadowMeshletDrawSignature = _drawPacketSet.DirectionalDynamicShadowSignature;
                 sceneData.LocalStaticShadowMeshletDrawSignature = _drawPacketSet.LocalStaticShadowSignature;
                 sceneData.LocalDynamicShadowMeshletDrawSignature = _drawPacketSet.LocalDynamicShadowSignature;
-                sceneData.PointShadowFaceMasks = CopyPointShadowFaceMasks(selectedPointShadows.Length);
+                sceneData.PointShadowFaceMasks = CopyPointShadowFaceMasks(
+                    selectedPointShadows.Length,
+                    pointShadowFaceMaskStorage);
 
                 if (AdvancePreviousWorldMatrices())
                     MarkInstanceUploadFramesDirty();
@@ -1160,20 +1171,35 @@ namespace Njulf.Rendering.Data
 
         private Matrix4x4 GetPreviousWorldMatrix(RenderObject renderObject, Matrix4x4 currentWorldMatrix)
         {
-            return _previousRenderObjectMatrices.TryGetValue(renderObject, out Matrix4x4 previousWorldMatrix)
-                ? previousWorldMatrix
+            Matrix4x4 previousWorldMatrix =
+                _previousRenderObjectMatrices.TryGetValue(
+                    renderObject,
+                    out Matrix4x4 cachedPreviousWorldMatrix)
+                ? cachedPreviousWorldMatrix
                 : currentWorldMatrix;
+            _previousWorldMatricesNeedAdvance |=
+                !previousWorldMatrix.Equals(currentWorldMatrix);
+            return previousWorldMatrix;
         }
 
         private Matrix4x4 GetPreviousWorldMatrix(StaticInstanceBatch batch, int instanceIndex, Matrix4x4 currentWorldMatrix)
         {
-            return _previousStaticInstanceMatrices.TryGetValue(new StaticInstanceKey(batch, instanceIndex), out Matrix4x4 previousWorldMatrix)
-                ? previousWorldMatrix
+            Matrix4x4 previousWorldMatrix =
+                _previousStaticInstanceMatrices.TryGetValue(
+                    new StaticInstanceKey(batch, instanceIndex),
+                    out Matrix4x4 cachedPreviousWorldMatrix)
+                ? cachedPreviousWorldMatrix
                 : currentWorldMatrix;
+            _previousWorldMatricesNeedAdvance |=
+                !previousWorldMatrix.Equals(currentWorldMatrix);
+            return previousWorldMatrix;
         }
 
         private bool AdvancePreviousWorldMatrices()
         {
+            if (!_previousWorldMatricesNeedAdvance)
+                return false;
+
             bool changed = false;
             for (int i = 0; i < _objectData.Count; i++)
             {
@@ -1186,6 +1212,7 @@ namespace Njulf.Rendering.Data
                 }
             }
 
+            _previousWorldMatricesNeedAdvance = false;
             return changed;
         }
 
@@ -3373,6 +3400,16 @@ namespace Njulf.Rendering.Data
                 commandBuffer,
                 destination.Handle,
                 data);
+            TrackTransferWrite(
+                destination.Handle,
+                0UL,
+                dataSize,
+                PipelineStageFlags2.TaskShaderBitExt |
+                    PipelineStageFlags2.MeshShaderBitExt |
+                    PipelineStageFlags2.VertexShaderBit |
+                    PipelineStageFlags2.FragmentShaderBit |
+                    PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit);
 
             _lastUploadedBytes += dataSize;
             _lastSceneUploadCount++;
@@ -3464,88 +3501,96 @@ namespace Njulf.Rendering.Data
             _lastTiledLightIndexBufferClearBytes = 0;
 
             if (headerBytes > 0)
+            {
                 _context.Api.CmdFillBuffer(commandBuffer, _bufferManager.GetBuffer(_tiledLightHeaderBuffer.Handle), 0, headerBytes, 0);
+                TrackTransferWrite(
+                    _tiledLightHeaderBuffer.Handle,
+                    0UL,
+                    headerBytes,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageReadBit |
+                        AccessFlags2.ShaderStorageWriteBit);
+            }
         }
 
-        private void RecordUploadReadBarriers(CommandBuffer commandBuffer, int frameIndex, bool includeTiledLightBuffers)
+        private void RecordUploadReadBarriers(CommandBuffer commandBuffer)
         {
-            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[27];
-            barriers[0] = CreateShaderReadBarrier(_objectDataBuffer.Handle);
-            barriers[1] = CreateShaderReadBarrier(_instanceBuffers[frameIndex].Handle);
-            barriers[2] = CreateShaderReadBarrier(_meshletDrawBuffers[frameIndex].Handle);
-            barriers[3] = CreateShaderReadBarrier(_transparentMeshletDrawBuffers[frameIndex].Handle);
+            if (_pendingTransferBarriers.Count == 0)
+                return;
 
-            uint barrierCount = 4;
-            barriers[barrierCount++] = CreateShaderReadBarrier(_simpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_fullOpaqueMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_solidDepthMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_maskedDepthMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_packedMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_packedSimpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_packedFullOpaqueMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_packedSolidDepthMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_packedMaskedDepthMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_meshletTaskFrameDataBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_directionalShadowMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_localShadowMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_directionalStaticShadowMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_directionalDynamicShadowMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_localStaticShadowMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(_localDynamicShadowMeshletDrawBuffers[frameIndex].Handle);
-            barriers[barrierCount++] = CreateShaderReadBarrier(
-                _instanceCandidateBuffers[frameIndex].Handle);
-
-            if (includeTiledLightBuffers)
-            {
-                barriers[barrierCount++] = CreateComputeWriteBarrier(_tiledLightHeaderBuffer.Handle);
-                barriers[barrierCount++] = CreateComputeWriteBarrier(_tiledLightIndexBuffer.Handle);
-            }
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[
+                _pendingTransferBarriers.Count];
+            for (int i = 0; i < _pendingTransferBarriers.Count; i++)
+                barriers[i] = CreateTransferReadBarrier(
+                    _pendingTransferBarriers[i]);
 
             var dependencyInfo = new DependencyInfo
             {
                 SType = StructureType.DependencyInfo,
-                BufferMemoryBarrierCount = barrierCount,
+                BufferMemoryBarrierCount =
+                    checked((uint)_pendingTransferBarriers.Count),
                 PBufferMemoryBarriers = barriers
             };
 
             _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+            _pendingTransferBarriers.Clear();
         }
 
-        private BufferMemoryBarrier2 CreateShaderReadBarrier(BufferHandle handle)
+        private void TrackTransferWrite(
+            BufferHandle handle,
+            ulong offset,
+            ulong size,
+            PipelineStageFlags2 destinationStages,
+            AccessFlags2 destinationAccess)
+        {
+            if (!handle.IsValid || size == 0UL)
+                return;
+
+            ulong end = checked(offset + size);
+            for (int i = 0; i < _pendingTransferBarriers.Count; i++)
+            {
+                PendingTransferBarrier current =
+                    _pendingTransferBarriers[i];
+                if (!current.Handle.Equals(handle) ||
+                    current.DestinationStages != destinationStages ||
+                    current.DestinationAccess != destinationAccess)
+                {
+                    continue;
+                }
+
+                ulong mergedStart = Math.Min(current.Offset, offset);
+                ulong mergedEnd = Math.Max(current.End, end);
+                _pendingTransferBarriers[i] = current with
+                {
+                    Offset = mergedStart,
+                    Size = checked(mergedEnd - mergedStart)
+                };
+                return;
+            }
+
+            _pendingTransferBarriers.Add(new PendingTransferBarrier(
+                handle,
+                offset,
+                size,
+                destinationStages,
+                destinationAccess));
+        }
+
+        private BufferMemoryBarrier2 CreateTransferReadBarrier(
+            PendingTransferBarrier pending)
         {
             return new BufferMemoryBarrier2
             {
                 SType = StructureType.BufferMemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.TransferBit,
                 SrcAccessMask = AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.TaskShaderBitExt |
-                               PipelineStageFlags2.MeshShaderBitExt |
-                               PipelineStageFlags2.VertexShaderBit |
-                               PipelineStageFlags2.FragmentShaderBit |
-                               PipelineStageFlags2.ComputeShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit,
+                DstStageMask = pending.DestinationStages,
+                DstAccessMask = pending.DestinationAccess,
                 SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
                 DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                Buffer = _bufferManager.GetBuffer(handle),
-                Offset = 0,
-                Size = Vk.WholeSize
-            };
-        }
-
-        private BufferMemoryBarrier2 CreateComputeWriteBarrier(BufferHandle handle)
-        {
-            return new BufferMemoryBarrier2
-            {
-                SType = StructureType.BufferMemoryBarrier2,
-                SrcStageMask = PipelineStageFlags2.TransferBit,
-                SrcAccessMask = AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.ComputeShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
-                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                Buffer = _bufferManager.GetBuffer(handle),
-                Offset = 0,
-                Size = Vk.WholeSize
+                Buffer = _bufferManager.GetBuffer(pending.Handle),
+                Offset = pending.Offset,
+                Size = pending.Size
             };
         }
 
@@ -3630,15 +3675,19 @@ namespace Njulf.Rendering.Data
             return (uint)count;
         }
 
-        private int[] CopyPointShadowFaceMasks(int pointShadowCount)
+        private int[] CopyPointShadowFaceMasks(
+            int pointShadowCount,
+            int[] reusableStorage)
         {
             int count = Math.Min(Math.Max(0, pointShadowCount), _pointShadowFaceMasks.Length);
             if (count == 0)
-                return [];
+                return Array.Empty<int>();
 
-            var masks = new int[count];
-            Array.Copy(_pointShadowFaceMasks, masks, count);
-            return masks;
+            int[] destination = reusableStorage.Length == count
+                ? reusableStorage
+                : new int[count];
+            Array.Copy(_pointShadowFaceMasks, destination, count);
+            return destination;
         }
 
         private static long ElapsedMicroseconds(long startTimestamp)
@@ -3646,16 +3695,45 @@ namespace Njulf.Rendering.Data
             return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }
 
-        private static AnimationSceneStats CountAnimationSceneStats(Scene scene)
+        private AnimationSceneStats GetAnimationSceneStats(Scene scene)
         {
-            var animatedModels = new HashSet<object>();
+            if (!ReferenceEquals(_animationStatsScene, scene) ||
+                _animationStatsRenderPayloadRevision !=
+                scene.RenderPayloadRevision)
+            {
+                RebuildAnimationTopologyStats(scene);
+            }
+
+            int playingAnimatorCount = 0;
+            int pausedAnimatorCount = 0;
+            foreach (Animator animator in _animationStatsAnimators)
+            {
+                if (animator.IsPlaying)
+                    playingAnimatorCount++;
+                if (animator.IsPaused)
+                    pausedAnimatorCount++;
+            }
+
+            return new AnimationSceneStats(
+                _animationTopologyStats.AnimatedModelCount,
+                _animationTopologyStats.SkinnedObjectCount,
+                _animationTopologyStats.SkeletonCount,
+                _animationTopologyStats.SkinCount,
+                _animationTopologyStats.AnimationClipCount,
+                _animationTopologyStats.ActiveAnimatorCount,
+                playingAnimatorCount,
+                pausedAnimatorCount,
+                _animationTopologyStats.JointMatrixCount);
+        }
+
+        private void RebuildAnimationTopologyStats(Scene scene)
+        {
+            _animationModelScratch.Clear();
+            _animationStatsAnimators.Clear();
             int skinnedObjectCount = 0;
             int skeletonCount = 0;
             int skinCount = 0;
             int clipCount = 0;
-            int activeAnimatorCount = 0;
-            int playingAnimatorCount = 0;
-            int pausedAnimatorCount = 0;
             int jointMatrixCount = 0;
 
             foreach (RenderObject renderObject in scene.RenderObjects)
@@ -3664,33 +3742,30 @@ namespace Njulf.Rendering.Data
                     continue;
 
                 skinnedObjectCount++;
-                animatedModels.Add(skinned.Mesh ?? skinned);
+                _animationModelScratch.Add(skinned.Mesh ?? skinned);
 
                 Animator? animator = skinned.Animator;
                 if (animator == null)
                     continue;
 
-                activeAnimatorCount++;
+                _animationStatsAnimators.Add(animator);
                 skeletonCount += animator.Skeleton.Joints.Count > 0 ? 1 : 0;
                 skinCount += animator.Skins.Count;
                 clipCount += animator.Clips.Count;
                 jointMatrixCount += animator.Skeleton.Joints.Count;
-                if (animator.IsPlaying)
-                    playingAnimatorCount++;
-                if (animator.IsPaused)
-                    pausedAnimatorCount++;
             }
 
-            return new AnimationSceneStats(
-                animatedModels.Count,
+            _animationTopologyStats = new AnimationTopologyStats(
+                _animationModelScratch.Count,
                 skinnedObjectCount,
                 skeletonCount,
                 skinCount,
                 clipCount,
-                activeAnimatorCount,
-                playingAnimatorCount,
-                pausedAnimatorCount,
+                _animationStatsAnimators.Count,
                 jointMatrixCount);
+            _animationStatsScene = scene;
+            _animationStatsRenderPayloadRevision =
+                scene.RenderPayloadRevision;
         }
 
         private static int CountFoliagePrototypes(Scene scene)
@@ -3931,8 +4006,15 @@ namespace Njulf.Rendering.Data
                 _transparentMeshletDrawCommands.Clear();
                 _transparentMaterialRuns.Clear();
                 _transparentSortScratch.Clear();
+                _previousRenderObjectMatrices.Clear();
+                _previousStaticInstanceMatrices.Clear();
                 _previousRenderObjectLods.Clear();
                 _previousStaticInstanceLods.Clear();
+                _animationModelScratch.Clear();
+                _animationStatsAnimators.Clear();
+                _animationStatsScene = null;
+                foreach (SceneRenderingData sceneData in _frameRenderingData)
+                    sceneData.Dispose();
                 _hasCachedPayload = false;
             }
 
@@ -3943,6 +4025,16 @@ namespace Njulf.Rendering.Data
         {
             if (handle.IsValid)
                 _bufferManager.DestroyBuffer(handle);
+        }
+
+        private readonly record struct PendingTransferBarrier(
+            BufferHandle Handle,
+            ulong Offset,
+            ulong Size,
+            PipelineStageFlags2 DestinationStages,
+            AccessFlags2 DestinationAccess)
+        {
+            public ulong End => checked(Offset + Size);
         }
 
         private readonly struct SceneBuffer
@@ -4117,6 +4209,15 @@ namespace Njulf.Rendering.Data
             int ActiveAnimatorCount,
             int PlayingAnimatorCount,
             int PausedAnimatorCount,
+            int JointMatrixCount);
+
+        private readonly record struct AnimationTopologyStats(
+            int AnimatedModelCount,
+            int SkinnedObjectCount,
+            int SkeletonCount,
+            int SkinCount,
+            int AnimationClipCount,
+            int ActiveAnimatorCount,
             int JointMatrixCount);
 
         private readonly struct StaticScenePayloadSignature : IEquatable<StaticScenePayloadSignature>
