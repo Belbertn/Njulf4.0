@@ -279,7 +279,8 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
     {
         var settings = new RenderSettings();
         settings.PerformanceOptimizations.EnabledFeatures =
-            PerformanceOptimizationFeature.RowMajorSpatialDdgiGather;
+            PerformanceOptimizationFeature.RowMajorSpatialDdgiGather |
+            PerformanceOptimizationFeature.SharedDdgiResolveStaging;
         uint optimized = Njulf.Rendering.Pipeline.ForwardPlusPass
             .ResolveAdaptiveReceiverPerformanceSpecializationMask(settings);
         settings.PerformanceOptimizations.Enabled = false;
@@ -288,8 +289,9 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(optimized, Is.EqualTo((uint)
-                PerformanceOptimizationFeature.RowMajorSpatialDdgiGather));
+            Assert.That(optimized, Is.EqualTo((uint)(
+                PerformanceOptimizationFeature.RowMajorSpatialDdgiGather |
+                PerformanceOptimizationFeature.SharedDdgiResolveStaging)));
             Assert.That(rollback, Is.Zero);
             Assert.That(Njulf.Rendering.Pipeline.ForwardPlusPass
                     .UsesAdaptiveReceiverPerformanceSpecialization(
@@ -298,7 +300,7 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
             Assert.That(Njulf.Rendering.Pipeline.ForwardPlusPass
                     .UsesAdaptiveReceiverPerformanceSpecialization(
                         "ddgi_simple_receiver_cache_resolve_adaptive.comp.spv"),
-                Is.False);
+                Is.True);
         });
     }
 
@@ -345,6 +347,16 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
                 "? pc.CacheWidth * pc.CacheHeight"));
             Assert.That(resolve, Does.Contain(
                 "ReceiverResolveTiles.Entries[resolveWorkIndex]"));
+            Assert.That(resolve, Does.Contain(
+                "shared ReceiverCacheGatherCandidate ReceiverSharedGatherCandidates["));
+            Assert.That(resolve, Does.Contain(
+                "TryLoadGatherCandidateGlobal("));
+            Assert.That(resolve, Does.Contain(
+                "NjulfSharedDdgiResolveStagingEnabled()"));
+            Assert.That(resolve, Does.Contain(
+                "StageReceiverGatherCandidates("));
+            Assert.That(resolve, Does.Contain(
+                "candidate = ReceiverSharedGatherCandidates[sharedIndex]"));
             Assert.That(runtime, Does.Contain("CmdDispatchIndirect("));
             Assert.That(pass, Does.Contain(
                 "ddgi_simple_receiver_cache_adaptive_b1.comp.spv"));

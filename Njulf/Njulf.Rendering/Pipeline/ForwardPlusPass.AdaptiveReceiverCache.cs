@@ -386,7 +386,8 @@ public sealed unsafe partial class ForwardPlusPass
     {
         ArgumentNullException.ThrowIfNull(settings);
         return (uint)(settings.EffectivePerformanceOptimizationFeatures &
-            PerformanceOptimizationFeature.RowMajorSpatialDdgiGather);
+            (PerformanceOptimizationFeature.RowMajorSpatialDdgiGather |
+             PerformanceOptimizationFeature.SharedDdgiResolveStaging));
     }
 
     internal static bool UsesAdaptiveReceiverPerformanceSpecialization(
@@ -396,6 +397,9 @@ public sealed unsafe partial class ForwardPlusPass
             StringComparison.Ordinal) == true ||
         artifact?.StartsWith(
             "ddgi_simple_receiver_cache_adaptive",
+            StringComparison.Ordinal) == true ||
+        artifact?.Equals(
+            "ddgi_simple_receiver_cache_resolve_adaptive.comp.spv",
             StringComparison.Ordinal) == true;
 
     private void RecreateSimpleDdgiReceiverCacheAdaptiveResources()

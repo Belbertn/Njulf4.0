@@ -9,6 +9,16 @@
 #define NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE 0
 #endif
 
+const uint NJULF_PERFORMANCE_SHARED_DDGI_RESOLVE_STAGING = 1u << 7u;
+layout(constant_id = 31) const uint
+    NjulfPerformanceOptimizationMask = 0x7fffffffu;
+
+bool NjulfSharedDdgiResolveStagingEnabled()
+{
+    return (NjulfPerformanceOptimizationMask &
+        NJULF_PERFORMANCE_SHARED_DDGI_RESOLVE_STAGING) != 0u;
+}
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 #if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
@@ -112,6 +122,20 @@ struct ReceiverCacheResolvedSurface
     float PixelFootprint;
     bool Valid;
 };
+
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+// One adaptive resolve workgroup owns an 8x8 half-resolution tile. At the
+// fixed 2x cache / 12x gather scales, every requested bilinear corner and its
+// 3x3 compatibility fallback lies in at most a 6x6 gather neighborhood. Keep
+// a fail-open global lookup for future scale ratios outside this window.
+const uint RECEIVER_CACHE_SHARED_GATHER_EXTENT = 6u;
+const uint RECEIVER_CACHE_SHARED_GATHER_COUNT =
+    RECEIVER_CACHE_SHARED_GATHER_EXTENT *
+    RECEIVER_CACHE_SHARED_GATHER_EXTENT;
+shared ReceiverCacheGatherCandidate ReceiverSharedGatherCandidates[
+    RECEIVER_CACHE_SHARED_GATHER_COUNT];
+ivec2 ReceiverInvocationSharedGatherBase;
+#endif
 
 ReceiverCacheGatherSample EmptyReceiverCacheGatherSample()
 {
@@ -449,7 +473,7 @@ uvec2 LoadGatherSurface(uint entryIndex)
         ReadStorageWordUniform(pc.GatherSurfaceBufferIndex, word + 1u));
 }
 
-bool TryLoadGatherCandidate(
+bool TryLoadGatherCandidateGlobal(
     ivec2 coordinate,
     out ReceiverCacheGatherCandidate candidate)
 {
@@ -498,6 +522,72 @@ bool TryLoadGatherCandidate(
                 uvec2(pc.ScreenWidth, pc.ScreenHeight));
     }
     return candidate.Valid;
+}
+
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+ivec2 ResolveSharedGatherBase(uvec2 resolvedTileBase)
+{
+    uvec2 outputExtent = uvec2(pc.CacheWidth, pc.CacheHeight);
+    uvec2 firstResolvedCoordinate = min(
+        resolvedTileBase,
+        outputExtent - uvec2(1u));
+    uint cacheScale = CacheScale();
+    uvec2 firstBlockExtent = uvec2(cacheScale);
+    uvec2 lastBlockExtent = LastCacheBlockExtent();
+    if (firstResolvedCoordinate.x + 1u == outputExtent.x)
+        firstBlockExtent.x = lastBlockExtent.x;
+    if (firstResolvedCoordinate.y + 1u == outputExtent.y)
+        firstBlockExtent.y = lastBlockExtent.y;
+    vec2 screenCoordinate =
+        vec2(firstResolvedCoordinate * cacheScale) +
+        vec2(firstBlockExtent) * 0.5;
+    vec2 latticePosition =
+        (screenCoordinate - vec2(0.5)) /
+            float(GatherScale()) - vec2(0.5);
+    return ivec2(floor(latticePosition)) - ivec2(1);
+}
+
+void StageReceiverGatherCandidates(ivec2 sharedGatherBase)
+{
+    uint sharedIndex = gl_LocalInvocationIndex;
+    if (sharedIndex < RECEIVER_CACHE_SHARED_GATHER_COUNT)
+    {
+        ivec2 sharedOffset = ivec2(
+            int(sharedIndex % RECEIVER_CACHE_SHARED_GATHER_EXTENT),
+            int(sharedIndex / RECEIVER_CACHE_SHARED_GATHER_EXTENT));
+        ReceiverCacheGatherCandidate candidate;
+        TryLoadGatherCandidateGlobal(
+            sharedGatherBase + sharedOffset,
+            candidate);
+        ReceiverSharedGatherCandidates[sharedIndex] = candidate;
+    }
+    barrier();
+}
+#endif
+
+bool TryLoadGatherCandidate(
+    ivec2 coordinate,
+    out ReceiverCacheGatherCandidate candidate)
+{
+#if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE
+    if (NjulfSharedDdgiResolveStagingEnabled())
+    {
+        ivec2 sharedOffset = coordinate -
+            ReceiverInvocationSharedGatherBase;
+        if (all(greaterThanEqual(sharedOffset, ivec2(0))) &&
+            all(lessThan(
+                sharedOffset,
+                ivec2(RECEIVER_CACHE_SHARED_GATHER_EXTENT))))
+        {
+            uint sharedIndex = uint(sharedOffset.y) *
+                    RECEIVER_CACHE_SHARED_GATHER_EXTENT +
+                uint(sharedOffset.x);
+            candidate = ReceiverSharedGatherCandidates[sharedIndex];
+            return candidate.Valid;
+        }
+    }
+#endif
+    return TryLoadGatherCandidateGlobal(coordinate, candidate);
 }
 
 bool CandidateMatchesRepresentative(
@@ -900,9 +990,17 @@ void main()
     uint resolveWorkIndex = gl_WorkGroupID.x;
     if (resolveWorkIndex >= ReceiverAdaptiveControl.Words[1])
         return;
-    uvec2 resolvedCoordinate =
-        ReceiverResolveTiles.Entries[resolveWorkIndex] * 8u +
+    uvec2 resolvedTileBase =
+        ReceiverResolveTiles.Entries[resolveWorkIndex] * 8u;
+    uvec2 resolvedCoordinate = resolvedTileBase +
         gl_LocalInvocationID.xy;
+    if (NjulfSharedDdgiResolveStagingEnabled())
+    {
+        ReceiverInvocationSharedGatherBase =
+            ResolveSharedGatherBase(resolvedTileBase);
+        StageReceiverGatherCandidates(
+            ReceiverInvocationSharedGatherBase);
+    }
 #else
     uvec2 resolvedCoordinate = gl_GlobalInvocationID.xy;
 #endif
