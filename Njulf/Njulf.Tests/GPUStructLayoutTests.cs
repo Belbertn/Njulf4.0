@@ -1261,6 +1261,18 @@ namespace Njulf.Tests
                 Assert.That(shader, Does.Contain(
                     "ProcessHierarchicalInstance("));
                 Assert.That(shader, Does.Contain(
+                    "nodeWorldCenter = TransformRowMajorPoint("));
+                Assert.That(shader, Does.Contain(
+                    "nodeSurfaceDistance = max("));
+                Assert.That(shader, Does.Contain(
+                    "nodeErrorPixels >"));
+                Assert.That(shader, Does.Contain(
+                    "float temporalProjectionScale,"));
+                Assert.That(shader, Does.Contain(
+                    "HierarchyTraversalSelectedMeshletCount"));
+                Assert.That(shader, Does.Contain(
+                    "SCENE_SUBMISSION_COUNTER_OPAQUE_LOD_DECIMATED"));
+                Assert.That(shader, Does.Contain(
                     "ReadMeshletHierarchyNode("));
                 Assert.That(shader, Does.Contain(
                     "SCENE_SUBMISSION_COUNTER_HIERARCHY_TRAVERSAL_FALLBACK"));

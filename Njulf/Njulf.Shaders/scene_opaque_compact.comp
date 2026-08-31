@@ -146,6 +146,7 @@ shared uint HierarchyTraversalVisitedCount;
 shared uint HierarchyTraversalSelectedFirst;
 shared uint HierarchyTraversalSelectedCount;
 shared uint HierarchyTraversalSelectedDepth;
+shared uint HierarchyTraversalSelectedMeshletCount;
 shared uint HierarchyTraversalDone;
 shared uint HierarchyTraversalFailure;
 shared uint HierarchyTraversalEmittedAny;
@@ -1740,7 +1741,7 @@ void ProcessExpandedMeshletRange(
 
 void ProcessHierarchicalInstance(
     GPUMeshInfo meshInfo,
-    float projectionFactor,
+    float temporalProjectionScale,
     bool transitionActive,
     bool transitionTarget,
     uint ditherThreshold,
@@ -1748,6 +1749,18 @@ void ProcessHierarchicalInstance(
     bool masked,
     vec4 frustumPlanes[6])
 {
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = InstanceCandidateInstanceId *
+        uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    float worldScale = ReadInstanceMaxScale(
+        instanceBufferIndex,
+        objectWordOffset);
+    temporalProjectionScale =
+        (isnan(temporalProjectionScale) ||
+         isinf(temporalProjectionScale))
+            ? 1.0
+            : clamp(temporalProjectionScale, 0.0, 1e6);
     if (gl_LocalInvocationID.x == 0u)
     {
         HierarchyTraversalStackCount = 0u;
@@ -1755,6 +1768,7 @@ void ProcessHierarchicalInstance(
         HierarchyTraversalSelectedFirst = 0u;
         HierarchyTraversalSelectedCount = 0u;
         HierarchyTraversalSelectedDepth = 0u;
+        HierarchyTraversalSelectedMeshletCount = 0u;
         HierarchyTraversalDone = 0u;
         HierarchyTraversalFailure = 0u;
         HierarchyTraversalEmittedAny = 0u;
@@ -1843,10 +1857,23 @@ void ProcessHierarchicalInstance(
                     break;
                 }
 
+                vec4 nodeWorldCenter = TransformRowMajorPoint(
+                    node.BoundingSphereCenter,
+                    instanceBufferIndex,
+                    objectWordOffset);
+                float nodeWorldRadius = node.BoundingSphereRadius *
+                    max(worldScale, 0.0);
+                float nodeSurfaceDistance = max(
+                    length(pc.Push.CameraPosition.xyz -
+                           nodeWorldCenter.xyz) - nodeWorldRadius,
+                    1e-4);
+                float nodeErrorPixels = node.GeometricError *
+                    max(worldScale, 0.0) *
+                    max(pc.Push.GpuLodProjectionScale, 1.0) /
+                    nodeSurfaceDistance * temporalProjectionScale;
                 bool refine = node.ChildCount != 0u &&
                     (forceRefine ||
-                     node.GeometricError *
-                        max(projectionFactor, 0.0) >
+                     nodeErrorPixels >
                         max(pc.Push.GpuLodTargetPixelError, 0.125));
                 if (refine)
                 {
@@ -1874,6 +1901,8 @@ void ProcessHierarchicalInstance(
                 HierarchyTraversalSelectedCount =
                     node.MeshletCount;
                 HierarchyTraversalSelectedDepth = node.Depth;
+                HierarchyTraversalSelectedMeshletCount +=
+                    node.MeshletCount;
             }
 
             if (HierarchyTraversalFailure != 0u ||
@@ -1939,6 +1968,19 @@ void ProcessHierarchicalInstance(
             transitionTarget,
             ditherThreshold,
             frustumPlanes);
+    }
+    else if (gl_LocalInvocationID.x == 0u &&
+             HierarchyTraversalFailure == 0u &&
+             transitionTarget &&
+             HierarchyTraversalSelectedMeshletCount <
+                 meshInfo.MeshletCount)
+    {
+        atomicAdd(
+            BindlessStorageBuffers[
+                nonuniformEXT(CounterBufferIndex())].Words[
+                SCENE_SUBMISSION_COUNTER_OPAQUE_LOD_DECIMATED],
+            meshInfo.MeshletCount -
+                HierarchyTraversalSelectedMeshletCount);
     }
 }
 
@@ -2100,13 +2142,17 @@ void ProcessInstanceCandidate(
                     nonuniformEXT(CounterBufferIndex())].Words[
                     SCENE_SUBMISSION_COUNTER_HIERARCHICAL_INSTANCE],
                 1u);
-            float surfaceDistance = max(
+            // The history scalar detects broad camera/object motion only.
+            // Actual admission below uses each hierarchy node's world-space
+            // sphere, so a camera inside one large interior object no longer
+            // forces every distant cluster to its leaf representation.
+            float centerDistance = max(
                 length(pc.Push.CameraPosition.xyz -
-                       worldCenter.xyz) - worldRadius,
+                       worldCenter.xyz),
                 1e-4);
             float currentProjectionFactor =
                 max(pc.Push.GpuLodProjectionScale, 1.0) *
-                max(worldScale, 0.0) / surfaceDistance;
+                max(worldScale, 0.0) / centerDistance;
             ResolveHierarchyProjectionTransition(
                 candidate.InstanceId,
                 currentProjectionFactor,
@@ -2128,12 +2174,23 @@ void ProcessInstanceCandidate(
                 float targetError = max(
                     pc.Push.GpuLodTargetPixelError,
                     0.125);
+                float shadowSurfaceDistance = max(
+                    length(pc.Push.CameraPosition.xyz -
+                           worldCenter.xyz) - worldRadius,
+                    1e-4);
+                float shadowProjectionFactor =
+                    max(pc.Push.GpuLodProjectionScale, 1.0) *
+                    max(worldScale, 0.0) /
+                    shadowSurfaceDistance;
+                float sourceProjectionScale =
+                    hierarchySourceFactor /
+                    max(hierarchyTargetFactor, 1e-20);
                 uint shadowLodBias = pc.Push.GpuShadowLodBias;
                 uint hierarchyTargetLod = min(
                     SelectLodForPixelThreshold(
                         meshInfo,
-                        lod1Error * hierarchyTargetFactor,
-                        lod2Error * hierarchyTargetFactor,
+                        lod1Error * shadowProjectionFactor,
+                        lod2Error * shadowProjectionFactor,
                         targetError) + shadowLodBias,
                     2u);
                 SelectMeshletRange(
@@ -2146,8 +2203,10 @@ void ProcessInstanceCandidate(
                 uint hierarchySourceLod = min(
                     SelectLodForPixelThreshold(
                         meshInfo,
-                        lod1Error * hierarchySourceFactor,
-                        lod2Error * hierarchySourceFactor,
+                        lod1Error * shadowProjectionFactor *
+                            sourceProjectionScale,
+                        lod2Error * shadowProjectionFactor *
+                            sourceProjectionScale,
                         targetError) + shadowLodBias,
                     2u);
                 SelectMeshletRange(
@@ -2298,7 +2357,11 @@ void ProcessInstanceCandidate(
             ProcessHierarchicalInstance(
                 hierarchyMeshInfo,
                 uintBitsToFloat(
-                    InstanceCandidateHierarchySourceFactorBits),
+                    InstanceCandidateHierarchySourceFactorBits) /
+                    max(
+                        uintBitsToFloat(
+                            InstanceCandidateHierarchyTargetFactorBits),
+                        1e-20),
                 true,
                 false,
                 InstanceCandidateDitherThreshold,
@@ -2308,8 +2371,7 @@ void ProcessInstanceCandidate(
         }
         ProcessHierarchicalInstance(
             hierarchyMeshInfo,
-            uintBitsToFloat(
-                InstanceCandidateHierarchyTargetFactorBits),
+            1.0,
             hierarchyTransition,
             true,
             InstanceCandidateDitherThreshold,
