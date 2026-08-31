@@ -70,7 +70,7 @@ namespace Njulf.Rendering.Pipeline
                     sceneData);
             bool rayVariant = rayVariantRequired &&
                 _raySceneDescriptors?.IsAvailable == true &&
-                _meshPipeline.TryEnsureRayWeightedOitTransparentPipeline();
+                _meshPipeline.RayWeightedOitTransparentPipelineAvailable;
             if (sceneData.TransparentReceiveGlobalIllumination ||
                 rayVariant ||
                 sceneData.DecalReceiveGlobalIllumination)
@@ -547,8 +547,8 @@ namespace Njulf.Rendering.Pipeline
             }
 
             bool exactPipelineAvailable = rayVariant
-                ? _meshPipeline.TryEnsureRayWeightedOitReceiverFeedbackPipeline()
-                : _meshPipeline.TryEnsureWeightedOitReceiverFeedbackPipeline();
+                ? _meshPipeline.RayWeightedOitReceiverFeedbackPipeline.Handle != 0
+                : _meshPipeline.WeightedOitReceiverFeedbackPipeline.Handle != 0;
             if (sceneData.CurrentFrameIndex != checked((uint)frameIndex) ||
                 !exactPipelineAvailable)
             {

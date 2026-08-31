@@ -774,6 +774,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         _cacheAccess.EnterReadLock();
         try
         {
+            long startedTimestamp = Stopwatch.GetTimestamp();
             lock (_gate)
             {
                 ObjectDisposedException.ThrowIf(_disposed || _disposeStarted, this);
@@ -781,8 +782,12 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 _peakConcurrentPipelineCreationCount = Math.Max(
                     _peakConcurrentPipelineCreationCount,
                     _activePipelineCreationCount);
+                _activePipelineCreations[Environment.CurrentManagedThreadId] =
+                    new ActivePipelineCreation(
+                        new PipelineArtifactId("unattributed-pipeline"),
+                        startedTimestamp);
             }
-            return Stopwatch.GetTimestamp();
+            return startedTimestamp;
         }
         catch
         {

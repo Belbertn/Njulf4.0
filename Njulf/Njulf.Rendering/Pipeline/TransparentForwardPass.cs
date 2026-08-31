@@ -75,7 +75,7 @@ namespace Njulf.Rendering.Pipeline
             bool rayVariant =
                 (existingRayVariantRequired || reflectionRayVariantRequired) &&
                 _raySceneDescriptors?.IsAvailable == true &&
-                _meshPipeline.TryEnsureRayTransparentPipelines();
+                _meshPipeline.RayTransparentPipelinesAvailable;
             if (sceneData.TransparentReceiveGlobalIllumination ||
                 rayVariant ||
                 sceneData.DecalReceiveGlobalIllumination)
@@ -749,9 +749,10 @@ namespace Njulf.Rendering.Pipeline
                 rayVariant,
                 pipelineAvailable: true);
             bool exactPipelineAvailable = rayVariant
-                ? _meshPipeline.TryEnsureRayTransparentReceiverFeedbackPipeline()
-                : _meshPipeline.TryEnsureTransparentReceiverFeedbackPipeline(
-                    thinGlassVariant);
+                ? _meshPipeline.RayTransparentReceiverFeedbackPipeline.Handle != 0
+                : thinGlassVariant
+                    ? _meshPipeline.ThinGlassReceiverFeedbackPipeline.Handle != 0
+                    : _meshPipeline.TransparentReceiverFeedbackPipeline.Handle != 0;
             Silk.NET.Vulkan.Pipeline exactPipeline = rayVariant
                 ? _meshPipeline.RayTransparentReceiverFeedbackPipeline
                 : thinGlassVariant

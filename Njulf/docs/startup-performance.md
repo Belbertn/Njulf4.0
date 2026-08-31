@@ -3,8 +3,8 @@
 Njulf defaults to progressive `active-scene` startup in every build tier. It
 publishes three active phases:
 
-1. `Bootstrap` presents a neutral black, pipeline-free clear.
-2. `ProductionPreparing` keeps that neutral clear visible while production
+1. `Bootstrap` presents a subtle animated dark, pipeline-free clear.
+2. `ProductionPreparing` keeps that dark clear visible while production
    graphics and compute pipelines are created through the shared cache service.
 3. `FullQuality` is published after the production graph and every active-scene
    pipeline that can change the presented pixels is ready. The milestone
@@ -18,10 +18,13 @@ present. Fast startup admits one full-material opaque beauty pipeline in the
 selected task/taskless submission form. Performance-equivalent simple,
 full-input, and alternate-submission variants are deferred.
 
-Exact receiver-feedback producers and output-equivalent transparent partition
-pipelines do not gate the first production present. They are compiled on the
-bounded worker after that present; rendering continues on the canonical
-production color pipelines until the complete specialization bank is published.
+Exact receiver-feedback producers, the receiver-cache/adaptive compute family,
+and output-equivalent transparent partition pipelines do not gate the first
+production present. They are compiled on the bounded worker after that present;
+rendering continues on the canonical exact DDGI and production color pipelines
+until the complete immutable bank is published atomically. A failed or partial
+bank is never visible and permanently retains the exact path for that renderer
+generation.
 Thick-transmission ray-query draws always retain the full canonical ray color
 program: the compact feedback shader is never substituted for that path.
 
@@ -131,6 +134,11 @@ transmission, decal, receiver-feedback, and ray variants used by that scene.
 First-present publication waits for the complete pixel-affecting manifest.
 Feedback and partition specializations publish only after their post-present
 manifest has completed, so command recording never sees a partially built bank.
+Pipeline creation and resource `Ensure` operations are forbidden in the
+receiver-feedback command-recording path. Shutdown drains the bounded compiler
+before render-graph resources are destroyed. These rules keep render-critical
+pipeline creation at zero; bank readiness may change performance, never final
+image quality.
 
 Set `NJULF_PIPELINE_CACHE_VERIFY=1` or pass `--pipeline-cache-verify` to add
 `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT` where supported. A
@@ -171,7 +179,11 @@ is pipeline-cache/ownership work only; no content or shader recook was required.
 Machine-readable seed and capture evidence is recorded in
 `NjulfHelloGame/pipeline-seed-qualification.json`.
 
-Startup JSONL can be requested with `--startup-log <path>`. Smoke automation can
+Startup JSONL can be requested with `--startup-log <path>`. Its throttled
+snapshots include active pipeline count, oldest-active duration, and the active
+pipeline basename. After two seconds the same progress is shown in the window
+title and emitted as a heartbeat every ten seconds; the normal title returns at
+`FullQuality`. Smoke automation can
 choose which milestone keeps the process alive:
 
 ```text

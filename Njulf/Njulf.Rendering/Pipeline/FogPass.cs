@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Rendering.Core;
@@ -102,6 +103,10 @@ namespace Njulf.Rendering.Pipeline
         }
 
         internal bool IsPrepared => _pipelinesPrepared;
+        internal bool ReceiverFeedbackPipelineAvailable =>
+            _settings.GlobalIllumination.SimpleDdgiReceiverFeedbackMode !=
+                SimpleDdgiReceiverFeedbackMode.ExactCompacted ||
+            _receiverFeedbackPipeline.Handle != 0;
 
         internal void PreparePipelines()
         {
@@ -111,20 +116,46 @@ namespace Njulf.Rendering.Pipeline
             try
             {
                 _pipeline = CreatePipeline("fog.comp.spv");
-                if (_settings.GlobalIllumination.SimpleDdgiReceiverFeedbackMode ==
-                    SimpleDdgiReceiverFeedbackMode.ExactCompacted)
-                {
-                    _receiverFeedbackPipeline = CreatePipeline("fog_b1.comp.spv");
-                }
-
                 _froxelRenderer.Initialize();
                 _pipelinesPrepared = true;
+                if (!RendererBuildConfiguration.ProgressivePipelineStartup)
+                    PrepareReceiverFeedbackPipeline();
             }
             catch
             {
                 DestroyPipeline(ref _receiverFeedbackPipeline);
                 DestroyPipeline(ref _pipeline);
                 throw;
+            }
+        }
+
+        internal bool PrepareReceiverFeedbackPipeline()
+        {
+            if (_settings.GlobalIllumination.SimpleDdgiReceiverFeedbackMode !=
+                SimpleDdgiReceiverFeedbackMode.ExactCompacted)
+            {
+                return true;
+            }
+            if (_receiverFeedbackPipeline.Handle != 0)
+                return true;
+            if (!_pipelinesPrepared)
+                return false;
+
+            try
+            {
+                VkPipeline pipeline = CreatePipeline("fog_b1.comp.spv");
+                _receiverFeedbackPipeline = pipeline;
+                return pipeline.Handle != 0;
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                    ArgumentException or InvalidOperationException)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    "Exact fog receiver-feedback pipeline unavailable; " +
+                    $"canonical fog retained: {exception.GetType().Name}: " +
+                    exception.Message);
+                return false;
             }
         }
 
@@ -179,7 +210,14 @@ namespace Njulf.Rendering.Pipeline
                 return;
             }
 
-            PreparePipelines();
+            if (!_pipelinesPrepared || _pipeline.Handle == 0)
+            {
+                sceneData.FogEnabled = false;
+                sceneData.FogEffectiveTechnique = FogTechnique.Analytic;
+                sceneData.VolumetricFogStatus =
+                    "fog-pipelines-not-prepared";
+                return;
+            }
 
             bool exactFeedback = TrySelectExactFeedbackPipeline(
                 frameIndex,

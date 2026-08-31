@@ -56,13 +56,14 @@ namespace Njulf.Rendering
         {
             get
             {
+                RendererStartupSnapshot snapshot;
                 lock (_startupGate)
                 {
                     long now = Stopwatch.GetTimestamp();
                     GiPipelineCacheTelemetry telemetry =
                         _giPipelineCacheService?.Telemetry ??
                         GiPipelineCacheTelemetry.Empty;
-                    return new RendererStartupSnapshot(
+                    snapshot = new RendererStartupSnapshot(
                         _startupPhase,
                         ElapsedMicroseconds(_startupStartedTimestamp, now),
                         ElapsedMicroseconds(
@@ -82,6 +83,8 @@ namespace Njulf.Rendering
                             telemetry.ActivePipelineSummary
                     };
                 }
+                _startupLog?.WriteSnapshot(snapshot);
+                return snapshot;
             }
         }
 
@@ -90,6 +93,7 @@ namespace Njulf.Rendering
 
         private readonly IWindow _window;
         private readonly VulkanContext _context;
+        private readonly RendererStartupLog? _startupLog;
         private readonly SwapchainManager _swapchain;
         private readonly SynchronizationManager _sync;
         private readonly FrameSubmissionOwnershipTracker
@@ -1224,6 +1228,7 @@ namespace Njulf.Rendering
                 meshletPhysicalResidencyResources = null)
         {
             _window = window ?? throw new ArgumentNullException(nameof(window));
+            _startupLog = startupLog;
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _swapchain = swapchainManager ?? throw new ArgumentNullException(nameof(swapchainManager));
             _sync = syncManager ?? throw new ArgumentNullException(nameof(syncManager));
@@ -4261,8 +4266,26 @@ namespace Njulf.Rendering
 
             // Guarantee that even a host which has not issued Draw yet owns a
             // valid, visibly responsive present.
-            RecordProgressiveClear(_clearColor);
+            RecordProgressiveClear(CreateAnimatedStartupClear());
             return true;
+        }
+
+        private Color CreateAnimatedStartupClear()
+        {
+            long started;
+            lock (_startupGate)
+                started = _startupStartedTimestamp;
+            double seconds = started == 0
+                ? 0.0
+                : Stopwatch.GetElapsedTime(started).TotalSeconds;
+            float pulse = 0.5f +
+                0.5f * (float)Math.Sin(seconds * 1.35);
+            float value = 0.008f + 0.012f * pulse;
+            return new Color(
+                value * 0.72f,
+                value * 0.86f,
+                value,
+                1.0f);
         }
 
         private bool RecreateProgressiveSwapchain()
@@ -4397,7 +4420,8 @@ namespace Njulf.Rendering
                 Volatile.Read(
                     ref _postFirstPresentPipelineSpecializationsReady) == 0;
 
-            if (receiverFeedbackRequired)
+            if (receiverFeedbackRequired &&
+                !deferPostFirstPresentSpecializations)
             {
                 _lifetime.RunStartupStep(
                     "Pipeline.Prepare.DdgiReceiverFeedback",
@@ -4438,23 +4462,6 @@ namespace Njulf.Rendering
                     rayVariantsRequired,
                     decalReceiverCacheRequired,
                     preparationScope));
-
-            if (initialScenePreparation && firstPresentCriticalOnly)
-            {
-                Action preparation = () =>
-                    _lifetime.RunStartupStep(
-                        "Pipeline.Prepare.PostFirstPresentSpecializations",
-                        () => _meshPipeline.PrepareScenePipelineManifest(
-                        pipelineManifest,
-                        transparencyMode,
-                        partitioningEnabled,
-                        receiverFeedbackRequired,
-                        rayVariantsRequired,
-                        decalReceiverCacheRequired,
-                            ScenePipelinePreparationScope.Complete));
-                lock (_startupGate)
-                    _postFirstPresentPipelinePreparation = preparation;
-            }
 
             bool foliageRequired = exhaustive ||
                                    Settings.Foliage.Enabled &&
@@ -4524,10 +4531,190 @@ namespace Njulf.Rendering
                     PrepareHybridReflectionsForFullQuality);
             }
 
+            if (initialScenePreparation && firstPresentCriticalOnly)
+            {
+                Action preparation = () =>
+                    PreparePostFirstPresentPipelineBank(
+                        pipelineManifest,
+                        transparencyMode,
+                        partitioningEnabled,
+                        receiverFeedbackRequired,
+                        rayVariantsRequired,
+                        decalReceiverCacheRequired,
+                        foliageRequired,
+                        particlePreparationRequired,
+                        fogRequired);
+                lock (_startupGate)
+                    _postFirstPresentPipelinePreparation = preparation;
+            }
+            else if (receiverFeedbackRequired)
+            {
+                bool complete =
+                    (_forwardPlusPass?.SimpleDdgiReceiverPipelineBankReady ??
+                     false) &&
+                    AreSceneReceiverFeedbackPipelinesReady(
+                        pipelineManifest,
+                        transparencyMode,
+                        rayVariantsRequired,
+                        foliageRequired,
+                        particlePreparationRequired,
+                        fogRequired);
+                _simpleDdgiReceiverFeedback!.PublishPipelineBank(
+                    complete,
+                    complete
+                        ? "receiver-feedback-pipeline-bank-ready"
+                        : "receiver-feedback-pipeline-bank-incomplete");
+            }
+
             if (!_initialScenePipelinesPrepared)
             {
                 _initialScenePipelinesPrepared = true;
             }
+        }
+
+        private void PreparePostFirstPresentPipelineBank(
+            ScenePipelineManifest pipelineManifest,
+            TransparencyMode transparencyMode,
+            bool partitioningEnabled,
+            bool receiverFeedbackRequired,
+            bool rayVariantsRequired,
+            bool decalReceiverCacheRequired,
+            bool foliageRequired,
+            bool particlePreparationRequired,
+            bool fogRequired)
+        {
+            bool meshReady = TryPreparePostFirstPresentFamily(
+                "Pipeline.Prepare.PostFirstPresentSpecializations",
+                () =>
+                {
+                    _meshPipeline.PrepareScenePipelineManifest(
+                        pipelineManifest,
+                        transparencyMode,
+                        partitioningEnabled,
+                        receiverFeedbackRequired,
+                        rayVariantsRequired,
+                        decalReceiverCacheRequired,
+                        ScenePipelinePreparationScope.Complete);
+                    return true;
+                });
+            if (meshReady)
+            {
+                // Scene-specialized variants are independent of receiver-cache
+                // publication. Make them available immediately so a slow B1
+                // native compile cannot hold transparent partitioning and the
+                // other post-present paths behind it.
+                Volatile.Write(
+                    ref _postFirstPresentPipelineSpecializationsReady,
+                    1);
+            }
+            bool foliageReady = !receiverFeedbackRequired ||
+                !foliageRequired ||
+                TryPreparePostFirstPresentFamily(
+                    "Pipeline.Prepare.PostFirstPresentFoliageFeedback",
+                    _foliagePipeline.PrepareReceiverFeedbackPipelines);
+            bool particleReady = !receiverFeedbackRequired ||
+                !particlePreparationRequired ||
+                TryPreparePostFirstPresentFamily(
+                    "Pipeline.Prepare.PostFirstPresentParticleFeedback",
+                    _particlePipeline.PrepareReceiverFeedbackPipelines);
+            bool fogReady = !receiverFeedbackRequired ||
+                !fogRequired ||
+                TryPreparePostFirstPresentFamily(
+                    "Pipeline.Prepare.PostFirstPresentFogFeedback",
+                    _fogPass.PrepareReceiverFeedbackPipeline);
+            bool runtimeReady = !receiverFeedbackRequired ||
+                TryPreparePostFirstPresentFamily(
+                    "Pipeline.Prepare.PostFirstPresentReceiverRuntime",
+                    () =>
+                    {
+                        _simpleDdgiReceiverFeedback!.PreparePipelines();
+                        return true;
+                    });
+
+            // Build the historically pathological B1/adaptive compute family
+            // last. Unrelated scene specializations are therefore usable even
+            // when a native driver spends minutes compiling this bank.
+            bool forwardReady = !receiverFeedbackRequired ||
+                TryPreparePostFirstPresentFamily(
+                    "Pipeline.Prepare.PostFirstPresentReceiverComputeBank",
+                    () => _forwardPlusPass?
+                        .PrepareSimpleDdgiReceiverPipelineBank() == true);
+
+            bool complete = receiverFeedbackRequired &&
+                meshReady && foliageReady && particleReady && fogReady &&
+                runtimeReady && forwardReady &&
+                AreSceneReceiverFeedbackPipelinesReady(
+                    pipelineManifest,
+                    transparencyMode,
+                    rayVariantsRequired,
+                    foliageRequired,
+                    particlePreparationRequired,
+                    fogRequired);
+            if (receiverFeedbackRequired)
+            {
+                _simpleDdgiReceiverFeedback!.PublishPipelineBank(
+                    complete,
+                    complete
+                        ? "receiver-feedback-pipeline-bank-ready"
+                        : "receiver-feedback-pipeline-bank-incomplete");
+            }
+        }
+
+        private bool TryPreparePostFirstPresentFamily(
+            string stepName,
+            Func<bool> prepare)
+        {
+            try
+            {
+                bool prepared = false;
+                _lifetime.RunStartupStep(
+                    stepName,
+                    () => prepared = prepare());
+                return prepared;
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                    InvalidOperationException or ArgumentException or
+                    OverflowException)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"{stepName} failed; exact canonical rendering retained: " +
+                    $"{exception.GetType().Name}: {exception.Message}");
+                return false;
+            }
+        }
+
+        private bool AreSceneReceiverFeedbackPipelinesReady(
+            ScenePipelineManifest manifest,
+            TransparencyMode transparencyMode,
+            bool rayVariantsRequired,
+            bool foliageRequired,
+            bool particlePreparationRequired,
+            bool fogRequired)
+        {
+            bool maskedReady =
+                !manifest.Requires(SceneMaterialPipelineKinds.Masked) ||
+                _meshPipeline.AlphaMaskReceiverFeedbackPipelinesAvailable;
+            bool transparentReady = !manifest.HasTransparentSurface ||
+                (transparencyMode == TransparencyMode.WeightedBlendedOit
+                    ? _meshPipeline.WeightedOitReceiverFeedbackPipeline.Handle != 0
+                    : _meshPipeline.TransparentReceiverFeedbackPipeline.Handle != 0 &&
+                      (!manifest.Requires(SceneMaterialPipelineKinds.ThinGlass) ||
+                       _meshPipeline.ThinGlassReceiverFeedbackPipeline.Handle != 0));
+            bool rayFeedbackRequired = rayVariantsRequired &&
+                !manifest.Requires(
+                    SceneMaterialPipelineKinds.ThickTransmission);
+            bool rayReady = !rayFeedbackRequired ||
+                (transparencyMode == TransparencyMode.WeightedBlendedOit
+                    ? _meshPipeline.RayWeightedOitReceiverFeedbackPipeline.Handle != 0
+                    : _meshPipeline.RayTransparentReceiverFeedbackPipeline.Handle != 0);
+            return maskedReady && transparentReady && rayReady &&
+                (!foliageRequired ||
+                 _foliagePipeline.ReceiverFeedbackPipelinesAvailable) &&
+                (!particlePreparationRequired ||
+                 _particlePipeline.ReceiverFeedbackPipelinesAvailable) &&
+                (!fogRequired ||
+                 _fogPass.ReceiverFeedbackPipelineAvailable);
         }
 
         private void MarkPipelineCacheRenderCriticalFramesStarted()
@@ -13384,6 +13571,22 @@ namespace Njulf.Rendering
                             // by the host. The important shutdown invariant is
                             // that no preparation callback is still touching
                             // resources when the device-idle stage begins.
+                        }
+                        try
+                        {
+                            // Post-first-present pipeline jobs are intentionally
+                            // not part of scene preparation. They still own pass
+                            // and VkDevice state, so drain them before either
+                            // DeviceWaitIdle or render-graph teardown can race
+                            // publication/destruction.
+                            _giPipelineCacheService?.CompilationScheduler
+                                .WaitForAll();
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // Pending jobs may be cancelled by an already-started
+                            // cache shutdown; native calls that entered the driver
+                            // have completed before WaitForAll returns.
                         }
                     }));
             steps.Add(

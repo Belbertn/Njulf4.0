@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using Njulf.Core.Interfaces;
 
 namespace Njulf.Rendering.Diagnostics;
 
@@ -12,6 +13,10 @@ public sealed class RendererStartupLog : IDisposable
     private readonly Dictionary<string, Stopwatch> _activeSteps = new(StringComparer.Ordinal);
     private StreamWriter? _writer;
     private bool _disposed;
+    private RendererStartupPhase? _lastSnapshotPhase;
+    private long _lastSnapshotElapsedMicroseconds = long.MinValue;
+
+    private const long SnapshotHeartbeatMicroseconds = 10_000_000L;
 
     public RendererStartupLog(string? path, IEnumerable<string>? commandLineArgs = null)
     {
@@ -132,6 +137,45 @@ public sealed class RendererStartupLog : IDisposable
                 report
             });
             _writer?.Flush();
+        }
+    }
+
+    /// <summary>
+    /// Records phase transitions and a bounded ten-second heartbeat while a
+    /// progressive startup phase is active. The immutable snapshot is written
+    /// as one JSON object so pipeline progress and the active native creation
+    /// identities cannot be sampled from different instants.
+    /// </summary>
+    public void WriteSnapshot(in RendererStartupSnapshot snapshot)
+    {
+        lock (_sync)
+        {
+            bool phaseChanged = _lastSnapshotPhase != snapshot.Phase;
+            bool heartbeatDue = _lastSnapshotElapsedMicroseconds == long.MinValue ||
+                snapshot.ElapsedMicroseconds - _lastSnapshotElapsedMicroseconds >=
+                SnapshotHeartbeatMicroseconds;
+            if (!phaseChanged && !heartbeatDue)
+                return;
+
+            _lastSnapshotPhase = snapshot.Phase;
+            _lastSnapshotElapsedMicroseconds = snapshot.ElapsedMicroseconds;
+            WriteObject(new
+            {
+                kind = "snapshot",
+                timestampUtc = DateTimeOffset.UtcNow,
+                phase = snapshot.Phase,
+                elapsedMicroseconds = snapshot.ElapsedMicroseconds,
+                phaseElapsedMicroseconds = snapshot.PhaseElapsedMicroseconds,
+                bootstrapPresented = snapshot.BootstrapPresented,
+                scenePresented = snapshot.ScenePresented,
+                fullQualityPresented = snapshot.FullQualityPresented,
+                pipelinesCompleted = snapshot.PipelinesCompleted,
+                activePipelineCount = snapshot.ActivePipelineCount,
+                oldestActivePipelineMicroseconds =
+                    snapshot.OldestActivePipelineMicroseconds,
+                activePipelineSummary = snapshot.ActivePipelineSummary,
+                detail = snapshot.Detail
+            });
         }
     }
 

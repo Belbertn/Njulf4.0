@@ -35,6 +35,8 @@ namespace Njulf.Core
         private bool _progressiveScenePreparationPending;
         private bool _contentLoaded;
         private long _runStartedTimestamp;
+        private long _nextStartupHeartbeatMicroseconds = 2_000_000L;
+        private bool _startupTitleActive;
         private readonly FramePacer _framePacer = new();
         private double _maximumFramesPerSecond =
             FramePacer.DefaultMaximumFramesPerSecond;
@@ -86,6 +88,8 @@ namespace Njulf.Core
             _isRunning = true;
             _isShuttingDown = false;
             _runStartedTimestamp = Stopwatch.GetTimestamp();
+            _nextStartupHeartbeatMicroseconds = 2_000_000L;
+            _startupTitleActive = false;
             _framePacer.Reset();
             LastFramePacingWaitMicroseconds = 0L;
 
@@ -498,6 +502,7 @@ namespace Njulf.Core
 
             RendererStartupSnapshot snapshot = progressive.StartupSnapshot;
             long elapsed = GetElapsedMicroseconds(_runStartedTimestamp);
+            UpdateProgressiveStartupObservability(snapshot, elapsed);
             if (snapshot.ScenePresented &&
                 !_scenePresentLatencyReported)
             {
@@ -514,6 +519,68 @@ namespace Njulf.Core
                     RendererStartupMilestone.FullQualityPresent,
                     elapsed);
             }
+        }
+
+        private void UpdateProgressiveStartupObservability(
+            in RendererStartupSnapshot snapshot,
+            long elapsedMicroseconds)
+        {
+            if (_window == null)
+                return;
+
+            if (snapshot.FullQualityPresented)
+            {
+                if (_startupTitleActive)
+                {
+                    _window.Title = WindowTitle;
+                    _startupTitleActive = false;
+                }
+                return;
+            }
+
+            string active = snapshot.ActivePipelineCount == 0
+                ? "no native pipeline active"
+                : snapshot.ActivePipelineCount == 1
+                    ? "1 native pipeline active"
+                    : $"{snapshot.ActivePipelineCount} native pipelines active";
+            string oldest = ResolveOldestActivePipelineBasename(
+                snapshot.ActivePipelineSummary);
+            _window.Title =
+                $"{WindowTitle} - loading {elapsedMicroseconds / 1_000_000.0:F1}s; " +
+                $"{snapshot.PipelinesCompleted} pipelines complete; {active}" +
+                (string.IsNullOrEmpty(oldest) ? string.Empty : $"; {oldest}");
+            _startupTitleActive = true;
+
+            if (elapsedMicroseconds < _nextStartupHeartbeatMicroseconds)
+                return;
+
+            Console.WriteLine(
+                $"Renderer startup heartbeat: elapsed=" +
+                $"{elapsedMicroseconds / 1_000_000.0:F3}s, " +
+                $"phase={snapshot.Phase}, completed=" +
+                $"{snapshot.PipelinesCompleted}, active=" +
+                $"{snapshot.ActivePipelineCount}, oldest=" +
+                $"{snapshot.OldestActivePipelineMicroseconds / 1_000_000.0:F3}s" +
+                (string.IsNullOrEmpty(oldest)
+                    ? string.Empty
+                    : $", pipeline={oldest}"));
+            _nextStartupHeartbeatMicroseconds = checked(
+                elapsedMicroseconds + 10_000_000L);
+        }
+
+        private static string ResolveOldestActivePipelineBasename(
+            string activePipelineSummary)
+        {
+            if (string.IsNullOrWhiteSpace(activePipelineSummary))
+                return string.Empty;
+
+            string identity = activePipelineSummary.Split(',', 2)[0].Trim();
+            int separator = System.Math.Max(
+                identity.LastIndexOf('/'),
+                identity.LastIndexOf('\\'));
+            return separator >= 0 && separator + 1 < identity.Length
+                ? identity[(separator + 1)..]
+                : identity;
         }
 
         private void OnWindowFramebufferResize(Vector2D<int> size)

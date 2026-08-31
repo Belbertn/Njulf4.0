@@ -82,7 +82,7 @@ public sealed unsafe partial class ForwardPlusPass
          _adaptiveReceiverGatherStampBytes +
          _adaptiveReceiverMissingPrefixBytes) * FramesInFlight);
 
-    private bool TryEnsureSimpleDdgiReceiverCacheAdaptiveResources()
+    private void InitializeSimpleDdgiReceiverCacheAdaptiveInfrastructure()
     {
         if (_bufferManager is null ||
             _simpleDdgiReceiverCacheEntryPointName == 0 ||
@@ -92,43 +92,21 @@ public sealed unsafe partial class ForwardPlusPass
             _simpleDdgiReceiverGatherWidth == 0u ||
             _simpleDdgiReceiverGatherHeight == 0u)
         {
-            return false;
+            return;
         }
 
-        if (_adaptiveReceiverInitializationFailed)
-            return false;
+        if (_adaptiveReceiverInitializationAttempted ||
+            _adaptiveReceiverInitializationFailed)
+        {
+            return;
+        }
 
         try
         {
-            if (!_adaptiveReceiverInitializationAttempted)
-            {
-                _adaptiveReceiverInitializationAttempted = true;
-                CreateSimpleDdgiReceiverCacheAdaptiveDescriptors();
-                CreateSimpleDdgiReceiverCacheAdaptivePipelineLayout();
-                _adaptiveReceiverClassifyPipeline =
-                    CreateSimpleDdgiReceiverCacheAdaptivePipeline(
-                        "ddgi_simple_receiver_cache_classify.comp.spv",
-                        "Simple DDGI Receiver Cache Adaptive Classify Pipeline");
-                _adaptiveReceiverGatherPipeline =
-                    CreateSimpleDdgiReceiverCacheAdaptivePipeline(
-                        "ddgi_simple_receiver_cache_adaptive.comp.spv",
-                        "Simple DDGI Receiver Cache Adaptive Gather Pipeline");
-                _adaptiveReceiverFeedbackGatherPipeline =
-                    CreateSimpleDdgiReceiverCacheAdaptivePipeline(
-                        "ddgi_simple_receiver_cache_adaptive_b1.comp.spv",
-                        "Simple DDGI Receiver Cache Adaptive Exact Feedback Gather Pipeline");
-                _adaptiveReceiverMissingFeedbackGatherPipeline =
-                    CreateSimpleDdgiReceiverCacheAdaptivePipeline(
-                        "ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv",
-                        "Simple DDGI Receiver Cache Adaptive Missing Feedback Gather Pipeline");
-                _adaptiveReceiverResolvePipeline =
-                    CreateSimpleDdgiReceiverCacheAdaptivePipeline(
-                        "ddgi_simple_receiver_cache_resolve_adaptive.comp.spv",
-                        "Simple DDGI Receiver Cache Adaptive Resolve Pipeline");
-            }
-
+            _adaptiveReceiverInitializationAttempted = true;
+            CreateSimpleDdgiReceiverCacheAdaptiveDescriptors();
+            CreateSimpleDdgiReceiverCacheAdaptivePipelineLayout();
             RecreateSimpleDdgiReceiverCacheAdaptiveResources();
-            return AdaptiveReceiverInfrastructureValid();
         }
         catch (Exception exception) when (
             exception is VulkanException or InvalidOperationException or
@@ -141,9 +119,13 @@ public sealed unsafe partial class ForwardPlusPass
             CleanupSimpleDdgiReceiverCacheAdaptive(destroyInfrastructure: true);
             _adaptiveReceiverInitializationAttempted = true;
             _adaptiveReceiverInitializationFailed = true;
-            return false;
         }
     }
+
+    private bool IsSimpleDdgiReceiverCacheAdaptiveReady(
+        SimpleDdgiReceiverPipelineBank? pipelineBank) =>
+        pipelineBank is not null &&
+        AdaptiveReceiverInfrastructureValid();
 
     private bool AdaptiveReceiverInfrastructureValid()
     {
@@ -153,6 +135,17 @@ public sealed unsafe partial class ForwardPlusPass
             _adaptiveReceiverMissingFeedbackGatherPipeline.Handle == 0 ||
             _adaptiveReceiverResolvePipeline.Handle == 0 ||
             _adaptiveReceiverPipelineLayout.Handle == 0 ||
+            _adaptiveReceiverResourceGeneration == 0u)
+        {
+            return false;
+        }
+
+        return AdaptiveReceiverResourcesValid();
+    }
+
+    private bool AdaptiveReceiverResourcesValid()
+    {
+        if (_adaptiveReceiverPipelineLayout.Handle == 0 ||
             _adaptiveReceiverResourceGeneration == 0u)
         {
             return false;
@@ -869,11 +862,12 @@ public sealed unsafe partial class ForwardPlusPass
         SceneRenderingData sceneData,
         Extent2D renderExtent,
         in SimpleDdgiReceiverFeedbackCaptureProducerContract
-            feedbackProducer)
+            feedbackProducer,
+        SimpleDdgiReceiverPipelineBank? pipelineBank)
     {
         _adaptiveReceiverExecutedForCurrentView = false;
         ObserveCompletedAdaptiveReceiverReadback(frameIndex);
-        if (!TryEnsureSimpleDdgiReceiverCacheAdaptiveResources() ||
+        if (!IsSimpleDdgiReceiverCacheAdaptiveReady(pipelineBank) ||
             frameIndex < 0 || frameIndex >= FramesInFlight)
         {
             return false;
@@ -1330,9 +1324,10 @@ public sealed unsafe partial class ForwardPlusPass
         CommandBuffer commandBuffer,
         int frameIndex,
         SceneRenderingData sceneData,
-        Extent2D renderExtent)
+        Extent2D renderExtent,
+        SimpleDdgiReceiverPipelineBank? pipelineBank)
     {
-        if (!TryEnsureSimpleDdgiReceiverCacheAdaptiveResources() ||
+        if (!IsSimpleDdgiReceiverCacheAdaptiveReady(pipelineBank) ||
             frameIndex < 0 || frameIndex >= FramesInFlight)
         {
             return false;

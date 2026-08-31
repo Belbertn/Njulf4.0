@@ -212,11 +212,179 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _motionVectorFormat,
                     _depthFormat);
                 _pipelinesPrepared = true;
+                if (!RendererBuildConfiguration.ProgressivePipelineStartup)
+                    PrepareReceiverFeedbackPipelines();
             }
             catch
             {
                 DestroyPipelines();
                 throw;
+            }
+        }
+
+        internal bool PrepareReceiverFeedbackPipelines()
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_receiverFeedbackPipelinesEnabled)
+                return true;
+            if (ReceiverFeedbackPipelinesAvailable &&
+                (!NearFieldDirectSourcePipelinesRequested ||
+                 NearFieldDirectSourcePipelinesAvailable) &&
+                (!CombinedAdvancedGiPipelinesRequested ||
+                 CombinedAdvancedGiPipelinesAvailable))
+            {
+                return true;
+            }
+            if (!_pipelinesPrepared)
+                return false;
+
+            VkPipeline grass = default;
+            VkPipeline authored = default;
+            VkPipeline grassNearField = default;
+            VkPipeline authoredNearField = default;
+            VkPipeline grassCombined = default;
+            VkPipeline authoredCombined = default;
+            try
+            {
+                string provenanceSuffix =
+                    MaterialTransportProvenanceAttachmentEnabled
+                        ? "_provenance"
+                        : string.Empty;
+                Format? provenanceFormat =
+                    MaterialTransportProvenanceAttachmentEnabled
+                        ? RenderTargetManager.MaterialTransportProvenanceFormat
+                        : null;
+                string fragmentShader =
+                    $"foliage_forward_ddgi_b1{provenanceSuffix}.frag.spv";
+                grass = CreateGraphicsPipeline(
+                    null,
+                    "foliage_grass_b1_compacted.mesh.spv",
+                    fragmentShader,
+                    _colorFormat,
+                    _depthFormat,
+                    hasColorAttachment: true,
+                    depthWriteEnable: false,
+                    secondaryColorFormat: null,
+                    materialTransportProvenanceFormat: provenanceFormat);
+                authored = CreateGraphicsPipeline(
+                    null,
+                    "foliage_mesh_b1_compacted.mesh.spv",
+                    fragmentShader,
+                    _colorFormat,
+                    _depthFormat,
+                    hasColorAttachment: true,
+                    depthWriteEnable: false,
+                    secondaryColorFormat: null,
+                    materialTransportProvenanceFormat: provenanceFormat);
+
+                if (NearFieldDirectSourcePipelinesRequested &&
+                    _nearFieldDirectSourceConfiguration.SourceProducerMode ==
+                    SimpleDdgiNearFieldSourceProducerMode.ForwardMrt)
+                {
+                    grassNearField = CreateGraphicsPipeline(
+                        null,
+                        "foliage_grass_b1_compacted.mesh.spv",
+                        "foliage_forward_ddgi_b1_near_field_direct_source.frag.spv",
+                        _colorFormat,
+                        _depthFormat,
+                        hasColorAttachment: true,
+                        depthWriteEnable: false,
+                        secondaryColorFormat:
+                            ForwardNearFieldDirectSourceContract
+                                .RequiredAttachmentFormat,
+                        tertiaryColorFormat:
+                            ForwardNearFieldDirectSourceContract
+                                .ReceiverPayloadFormat);
+                    authoredNearField = CreateGraphicsPipeline(
+                        null,
+                        "foliage_mesh_b1_compacted.mesh.spv",
+                        "foliage_forward_ddgi_b1_near_field_direct_source.frag.spv",
+                        _colorFormat,
+                        _depthFormat,
+                        hasColorAttachment: true,
+                        depthWriteEnable: false,
+                        secondaryColorFormat:
+                            ForwardNearFieldDirectSourceContract
+                                .RequiredAttachmentFormat,
+                        tertiaryColorFormat:
+                            ForwardNearFieldDirectSourceContract
+                                .ReceiverPayloadFormat);
+                }
+
+                if (CombinedAdvancedGiPipelinesRequested)
+                {
+                    grassCombined = CreateGraphicsPipeline(
+                        null,
+                        "foliage_grass_b1_compacted.mesh.spv",
+                        "foliage_forward_ddgi_b1_c4_c5.frag.spv",
+                        _colorFormat,
+                        _depthFormat,
+                        hasColorAttachment: true,
+                        depthWriteEnable: false,
+                        secondaryColorFormat:
+                            ForwardGiCausticReceiverContract
+                                .ReceiverPayloadFormat,
+                        tertiaryColorFormat:
+                            ForwardNearFieldDirectSourceContract
+                                .RequiredAttachmentFormat,
+                        quaternaryColorFormat:
+                            ForwardNearFieldDirectSourceContract
+                                .ReceiverPayloadFormat);
+                    authoredCombined = CreateGraphicsPipeline(
+                        null,
+                        "foliage_mesh_b1_compacted.mesh.spv",
+                        "foliage_forward_ddgi_b1_c4_c5.frag.spv",
+                        _colorFormat,
+                        _depthFormat,
+                        hasColorAttachment: true,
+                        depthWriteEnable: false,
+                        secondaryColorFormat:
+                            ForwardGiCausticReceiverContract
+                                .ReceiverPayloadFormat,
+                        tertiaryColorFormat:
+                            ForwardNearFieldDirectSourceContract
+                                .RequiredAttachmentFormat,
+                        quaternaryColorFormat:
+                            ForwardNearFieldDirectSourceContract
+                                .ReceiverPayloadFormat);
+                }
+
+                _forwardReceiverFeedbackPipeline = grass;
+                _authoredForwardReceiverFeedbackPipeline = authored;
+                _forwardReceiverFeedbackNearFieldDirectSourcePipeline =
+                    grassNearField;
+                _authoredForwardReceiverFeedbackNearFieldDirectSourcePipeline =
+                    authoredNearField;
+                _forwardReceiverFeedbackCombinedAdvancedGiPipeline =
+                    grassCombined;
+                _authoredForwardReceiverFeedbackCombinedAdvancedGiPipeline =
+                    authoredCombined;
+                ReceiverFeedbackPipelineFailureReason =
+                    "receiver-feedback-pipelines-ready";
+                return ReceiverFeedbackPipelinesAvailable &&
+                    (!NearFieldDirectSourcePipelinesRequested ||
+                     NearFieldDirectSourcePipelinesAvailable) &&
+                    (!CombinedAdvancedGiPipelinesRequested ||
+                     CombinedAdvancedGiPipelinesAvailable);
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                    ArgumentException or InvalidOperationException)
+            {
+                DestroyPipeline(ref grass);
+                DestroyPipeline(ref authored);
+                DestroyPipeline(ref grassNearField);
+                DestroyPipeline(ref authoredNearField);
+                DestroyPipeline(ref grassCombined);
+                DestroyPipeline(ref authoredCombined);
+                ReceiverFeedbackPipelineFailureReason =
+                    "receiver-feedback-foliage-pipeline-creation-failed:" +
+                    exception.GetType().Name + ":" + exception.Message;
+                System.Diagnostics.Debug.WriteLine(
+                    "B1 foliage pipelines unavailable; ordinary foliage " +
+                    "rendering retained. " +
+                    ReceiverFeedbackPipelineFailureReason);
+                return false;
             }
         }
 
@@ -511,64 +679,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_authoredForwardPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Forward Pipeline");
 
-            if (_receiverFeedbackPipelinesEnabled)
-            {
-                try
-                {
-                    string receiverFeedbackFragmentShader =
-                        $"foliage_forward_ddgi_b1{provenanceSuffix}.frag.spv";
-                    _forwardReceiverFeedbackPipeline = CreateGraphicsPipeline(
-                        null,
-                        "foliage_grass_b1_compacted.mesh.spv",
-                        receiverFeedbackFragmentShader,
-                        colorFormat,
-                        depthFormat,
-                        hasColorAttachment: true,
-                        depthWriteEnable: false,
-                        secondaryColorFormat: null,
-                        materialTransportProvenanceFormat:
-                            materialTransportProvenanceFormat);
-                    _context.SetDebugName(
-                        _forwardReceiverFeedbackPipeline.Handle,
-                        ObjectType.Pipeline,
-                        "Foliage Grass B1 Exact Receiver Feedback Pipeline");
-
-                    _authoredForwardReceiverFeedbackPipeline =
-                        CreateGraphicsPipeline(
-                            null,
-                            "foliage_mesh_b1_compacted.mesh.spv",
-                            receiverFeedbackFragmentShader,
-                            colorFormat,
-                            depthFormat,
-                            hasColorAttachment: true,
-                            depthWriteEnable: false,
-                            secondaryColorFormat: null,
-                            materialTransportProvenanceFormat:
-                                materialTransportProvenanceFormat);
-                    _context.SetDebugName(
-                        _authoredForwardReceiverFeedbackPipeline.Handle,
-                        ObjectType.Pipeline,
-                        "Foliage Authored B1 Exact Receiver Feedback Pipeline");
-                    ReceiverFeedbackPipelineFailureReason =
-                        "receiver-feedback-pipelines-ready";
-                }
-                catch (Exception exception) when (
-                    exception is VulkanException or IOException or
-                    ArgumentException or InvalidOperationException)
-                {
-                    DestroyPipeline(ref _forwardReceiverFeedbackPipeline);
-                    DestroyPipeline(
-                        ref _authoredForwardReceiverFeedbackPipeline);
-                    ReceiverFeedbackPipelineFailureReason =
-                        "receiver-feedback-foliage-pipeline-creation-failed:" +
-                        exception.GetType().Name + ":" + exception.Message;
-                    System.Diagnostics.Debug.WriteLine(
-                        "B1 foliage pipelines unavailable; ordinary foliage " +
-                        "rendering retained. " +
-                        ReceiverFeedbackPipelineFailureReason);
-                }
-            }
-
             CreateNearFieldDirectSourcePipelines(colorFormat, depthFormat);
 
             _authoredCompactedMotionVectorPipeline = CreateGraphicsPipeline(
@@ -667,35 +777,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         tertiaryColorFormat:
                             ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
 
-                if (_receiverFeedbackPipelinesEnabled)
-                {
-                    _forwardReceiverFeedbackNearFieldDirectSourcePipeline =
-                        CreateGraphicsPipeline(
-                            null,
-                            "foliage_grass_b1_compacted.mesh.spv",
-                            "foliage_forward_ddgi_b1_near_field_direct_source.frag.spv",
-                            colorFormat,
-                            depthFormat,
-                            hasColorAttachment: true,
-                            depthWriteEnable: false,
-                            secondaryColorFormat:
-                                ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
-                            tertiaryColorFormat:
-                                ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
-                    _authoredForwardReceiverFeedbackNearFieldDirectSourcePipeline =
-                        CreateGraphicsPipeline(
-                            null,
-                            "foliage_mesh_b1_compacted.mesh.spv",
-                            "foliage_forward_ddgi_b1_near_field_direct_source.frag.spv",
-                            colorFormat,
-                            depthFormat,
-                            hasColorAttachment: true,
-                            depthWriteEnable: false,
-                            secondaryColorFormat:
-                                ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
-                            tertiaryColorFormat:
-                                ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
-                }
                 NearFieldDirectSourcePipelineFailureReason =
                     "near-field-foliage-pipelines-ready";
             }
@@ -746,39 +827,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                             ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
                         quaternaryColorFormat:
                             ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
-                if (_receiverFeedbackPipelinesEnabled)
-                {
-                    _forwardReceiverFeedbackCombinedAdvancedGiPipeline =
-                        CreateGraphicsPipeline(
-                            null,
-                            "foliage_grass_b1_compacted.mesh.spv",
-                            "foliage_forward_ddgi_b1_c4_c5.frag.spv",
-                            colorFormat,
-                            depthFormat,
-                            hasColorAttachment: true,
-                            depthWriteEnable: false,
-                            secondaryColorFormat:
-                                ForwardGiCausticReceiverContract.ReceiverPayloadFormat,
-                            tertiaryColorFormat:
-                                ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
-                            quaternaryColorFormat:
-                                ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
-                    _authoredForwardReceiverFeedbackCombinedAdvancedGiPipeline =
-                        CreateGraphicsPipeline(
-                            null,
-                            "foliage_mesh_b1_compacted.mesh.spv",
-                            "foliage_forward_ddgi_b1_c4_c5.frag.spv",
-                            colorFormat,
-                            depthFormat,
-                            hasColorAttachment: true,
-                            depthWriteEnable: false,
-                            secondaryColorFormat:
-                                ForwardGiCausticReceiverContract.ReceiverPayloadFormat,
-                            tertiaryColorFormat:
-                                ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
-                            quaternaryColorFormat:
-                                ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
-                }
             }
             catch (Exception exception) when (
                 exception is VulkanException or IOException or

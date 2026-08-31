@@ -51,6 +51,9 @@ internal sealed class SimpleDdgiReceiverFeedbackCoordinator :
 
     private readonly SimpleDdgiReceiverFeedbackVulkanRuntime _runtime;
     private SimpleDdgiReceiverFeedbackConfigurationKey? _configurationKey;
+    private int _publishedPipelineBankReady;
+    private string _pipelineBankStatus =
+        "receiver-feedback-pipeline-bank-not-published";
     private bool _disposed;
 
     public SimpleDdgiReceiverFeedbackPlan Plan { get; private set; } =
@@ -59,7 +62,11 @@ internal sealed class SimpleDdgiReceiverFeedbackCoordinator :
     public bool GraphicsPipelinesRequested { get; }
 
     public bool IsOwnedCaptureReady =>
-        !_disposed && _runtime.IsOwnedCaptureReady;
+        !_disposed &&
+        Volatile.Read(ref _publishedPipelineBankReady) != 0 &&
+        _runtime.IsOwnedCaptureReady;
+
+    internal string PipelineBankStatus => _pipelineBankStatus;
 
     public SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics Diagnostics =>
         _disposed
@@ -74,6 +81,25 @@ internal sealed class SimpleDdgiReceiverFeedbackCoordinator :
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _runtime.PreparePipelines();
+    }
+
+    internal void PublishPipelineBank(bool complete, string status)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!complete)
+        {
+            Volatile.Write(ref _publishedPipelineBankReady, 0);
+            _pipelineBankStatus = string.IsNullOrWhiteSpace(status)
+                ? "receiver-feedback-pipeline-bank-incomplete"
+                : status;
+            _runtime.AbortCapture(_pipelineBankStatus);
+            return;
+        }
+
+        _pipelineBankStatus = string.IsNullOrWhiteSpace(status)
+            ? "receiver-feedback-pipeline-bank-ready"
+            : status;
+        Volatile.Write(ref _publishedPipelineBankReady, 1);
     }
 
     public SimpleDdgiReceiverFeedbackCoordinator(
@@ -412,6 +438,7 @@ internal sealed class SimpleDdgiReceiverFeedbackCoordinator :
         if (_disposed)
             return;
         _disposed = true;
+        Volatile.Write(ref _publishedPipelineBankReady, 0);
         _runtime.Dispose();
     }
 

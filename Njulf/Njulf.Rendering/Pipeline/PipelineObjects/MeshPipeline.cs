@@ -377,30 +377,21 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         }
         public VkPipeline RayTransparentForwardPipeline =>
             _rayTransparentForwardPipeline;
-        public VkPipeline RayWeightedOitTransparentPipeline
-        {
-            get
-            {
-                TryEnsureRayWeightedOitTransparentPipeline();
-                return _rayWeightedOitTransparentPipeline;
-            }
-        }
+        public VkPipeline RayWeightedOitTransparentPipeline =>
+            _rayWeightedOitTransparentPipeline;
         public VkPipeline RayTransparentReceiverFeedbackPipeline =>
             _rayTransparentReceiverFeedbackPipeline;
         public VkPipeline RayWeightedOitReceiverFeedbackPipeline
-        {
-            get
-            {
-                TryEnsureRayWeightedOitReceiverFeedbackPipeline();
-                return _rayWeightedOitReceiverFeedbackPipeline;
-            }
-        }
+            => _rayWeightedOitReceiverFeedbackPipeline;
         internal bool RayTransparentPipelinesAdmitted =>
             _rayTransparentPipelineState is
                 DeferredPipelineState.Deferred or DeferredPipelineState.Ready;
         public bool RayTransparentPipelinesAvailable =>
             _rayTransparentLayout.Handle != 0 &&
             _rayTransparentForwardPipeline.Handle != 0;
+        public bool RayWeightedOitTransparentPipelineAvailable =>
+            RayTransparentPipelinesAvailable &&
+            _rayWeightedOitTransparentPipeline.Handle != 0;
         public string RayTransparentPipelineFailureReason { get; private set; } =
             "ray-query transparent pipelines are unavailable";
         public VkPipeline TransparentReceiverFeedbackPipeline =>
@@ -408,13 +399,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ThinGlassReceiverFeedbackPipeline =>
             _thinGlassReceiverFeedbackPipeline;
         public VkPipeline WeightedOitReceiverFeedbackPipeline
-        {
-            get
-            {
-                TryEnsureWeightedOitReceiverFeedbackPipeline();
-                return _weightedOitReceiverFeedbackPipeline;
-            }
-        }
+            => _weightedOitReceiverFeedbackPipeline;
         public bool TransparentReceiverFeedbackPipelinesAvailable =>
             _transparentReceiverFeedbackPipeline.Handle != 0;
         public bool AlphaMaskReceiverFeedbackPipelinesAvailable =>
@@ -486,7 +471,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (prepareSpecializations)
                 PreparePostFirstPresentForwardOpaquePipelines();
 
-            if (manifest.Requires(SceneMaterialPipelineKinds.Masked) &&
+            if (prepareSpecializations &&
+                manifest.Requires(SceneMaterialPipelineKinds.Masked) &&
                 receiverFeedbackRequired)
             {
                 TryEnsureAlphaMaskReceiverFeedbackPipelines();
@@ -526,7 +512,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 EnsureGeometryDecalOverlayPipeline();
             }
 
-            if (receiverFeedbackRequired)
+            if (prepareSpecializations && receiverFeedbackRequired)
             {
                 if (compositionMode == TransparencyMode.WeightedBlendedOit)
                 {
@@ -545,7 +531,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 }
             }
 
-            if (rayPipelinesReady && receiverFeedbackRequired &&
+            if (prepareSpecializations && rayPipelinesReady &&
+                receiverFeedbackRequired &&
                 !manifest.Requires(
                     SceneMaterialPipelineKinds.ThickTransmission))
             {
@@ -1010,8 +997,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (weighted)
             {
                 available = key.RaySceneRequired
-                    ? TryEnsureRayWeightedOitReceiverFeedbackPipeline()
-                    : TryEnsureWeightedOitReceiverFeedbackPipeline();
+                    ? _rayWeightedOitReceiverFeedbackPipeline.Handle != 0
+                    : _weightedOitReceiverFeedbackPipeline.Handle != 0;
                 pipeline = key.RaySceneRequired
                     ? _rayWeightedOitReceiverFeedbackPipeline
                     : _weightedOitReceiverFeedbackPipeline;
@@ -1019,9 +1006,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             else
             {
                 available = key.RaySceneRequired
-                    ? TryEnsureRayTransparentReceiverFeedbackPipeline()
-                    : TryEnsureTransparentReceiverFeedbackPipeline(
-                        thinGlass: false);
+                    ? _rayTransparentReceiverFeedbackPipeline.Handle != 0
+                    : _transparentReceiverFeedbackPipeline.Handle != 0;
                 pipeline = key.RaySceneRequired
                     ? _rayTransparentReceiverFeedbackPipeline
                     : _transparentReceiverFeedbackPipeline;
