@@ -104,6 +104,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             string? fragmentShaderName) =>
             fragmentShaderName?.Contains(
                 "cache_required",
+                StringComparison.Ordinal) == true ||
+            fragmentShaderName?.Contains(
+                "hybrid_reflection",
                 StringComparison.Ordinal) == true;
 
         private enum DeferredPipelineState

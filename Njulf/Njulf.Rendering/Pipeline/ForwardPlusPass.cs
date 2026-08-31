@@ -3749,11 +3749,12 @@ namespace Njulf.Rendering.Pipeline
             Data.SceneRenderingData sceneData,
             in ForwardOpaquePipelineKey pipelineKey)
         {
-            // Alpha-mask attribution and Ultra's bent-DDGI mode can require
-            // an exact gather on a cache-accepted fragment, so they retain the
-            // combined quality path. DdgiHigh's opaque hybrid receiver has
-            // complementary cache/exact ownership and can use two lower-
-            // pressure native programs specialized from one SPIR-V artifact.
+            // Alpha-mask attribution and every bent-normal mode can require
+            // exact normal-dependent work on a cache-accepted fragment, so
+            // they retain the combined quality path. A fully opaque,
+            // bent-normal-off hybrid receiver has complementary cache/exact
+            // ownership and can use two lower-pressure native programs whose
+            // bent-normal mode specializes to zero.
             return _settings.IsPerformanceOptimizationEnabled(
                        PerformanceOptimizationFeature
                            .SplitHybridForwardPrograms) &&
@@ -3762,8 +3763,8 @@ namespace Njulf.Rendering.Pipeline
                    pipelineKey.Has(
                        ForwardOpaquePipelineFeatures.HybridReflectionReceiver) &&
                    sceneData.MaskedMeshletCount <= 0 &&
-                   sceneData.AmbientOcclusionBentNormalMode !=
-                       AmbientOcclusionBentNormalMode.EnvironmentAndDdgi &&
+                   sceneData.AmbientOcclusionBentNormalMode ==
+                       AmbientOcclusionBentNormalMode.Off &&
                    !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                    !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                    _simpleDdgiReceiverCacheEffectiveMode !=

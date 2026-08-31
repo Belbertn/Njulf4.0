@@ -44,6 +44,10 @@ public sealed class HybridReflectionContractsTests
                     "forward_opaque_ddgi.frag.spv"),
                 Is.False);
             Assert.That(
+                MeshPipeline.UsesForwardPerformanceSpecialization(
+                    "forward_opaque_ddgi_hybrid_reflection.frag.spv"),
+                Is.True);
+            Assert.That(
                 MeshPipeline.ForwardPerformanceSpecializationConstantId,
                 Is.EqualTo(31u));
             Assert.That(
@@ -832,6 +836,86 @@ public sealed class HybridReflectionContractsTests
             Assert.That(reset, Does.Contain("TaskHeaderBytes"));
             Assert.That(reset, Does.Contain("IndirectBytes"));
             Assert.That(reset, Does.Contain("ExecuteBufferBarriers"));
+        });
+    }
+
+    [Test]
+    public void HybridReceiverShader_SpecializesOnlyRejectedForwardDebugViews()
+    {
+        string forward = ReadRepoText("Njulf.Shaders", "forward.frag")
+            .ReplaceLineEndings("\n");
+        string pass = ReadRepoText("Njulf.Rendering", "Pipeline",
+            "ForwardPlusPass.cs").ReplaceLineEndings("\n");
+        int admissionStart = pass.IndexOf(
+            "private bool TryGetHybridReflectionReceiverBinding(",
+            StringComparison.Ordinal);
+        int admissionEnd = pass.IndexOf(
+            "internal static bool ShouldApplyDdgi(",
+            admissionStart,
+            StringComparison.Ordinal);
+        Assert.That(admissionStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(admissionEnd, Is.GreaterThan(admissionStart));
+        string admission = pass[admissionStart..admissionEnd];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(forward, Does.Contain(
+                "NJULF_PERFORMANCE_STATIC_SHADER_SPECIALIZATION"));
+            Assert.That(forward, Does.Contain(
+                "bool NjulfHybridDebugViewsStaticNone()"));
+            Assert.That(forward, Does.Contain(
+                "if (NjulfHybridDebugViewsStaticNone())\n" +
+                "        return DEBUG_VIEW_NONE;"));
+            Assert.That(forward, Does.Contain(
+                "if (!NjulfHybridDebugViewsStaticNone() &&\n" +
+                "        environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)"));
+            Assert.That(admission, Does.Contain(
+                "sceneData.DebugViewMode != 0u"));
+            Assert.That(admission, Does.Contain(
+                "sceneData.AmbientOcclusionDebugView != AmbientOcclusionDebugView.None"));
+            Assert.That(admission, Does.Contain(
+                "sceneData.TransparencyDebugView != TransparencyDebugView.None"));
+            Assert.That(admission, Does.Contain(
+                "sceneData.AnimationDebugView != AnimationDebugView.None"));
+            Assert.That(admission, Does.Contain(
+                "_settings.GlobalIllumination.DebugView !="));
+            Assert.That(admission, Does.Contain(
+                "_settings.Environment.DebugView != EnvironmentDebugView.None"));
+            Assert.That(admission, Does.Contain(
+                "hybrid-reflection-incompatible-debug-view-active"));
+        });
+    }
+
+    [Test]
+    public void HybridReceiverCacheSplit_StaticBentNormalModeMatchesAdmission()
+    {
+        string forward = ReadRepoText("Njulf.Shaders", "forward.frag")
+            .ReplaceLineEndings("\n");
+        string pass = ReadRepoText("Njulf.Rendering", "Pipeline",
+            "ForwardPlusPass.cs").ReplaceLineEndings("\n");
+        int admissionStart = pass.IndexOf(
+            "private bool ShouldUseHybridReflectionReceiverCacheSplit(",
+            StringComparison.Ordinal);
+        int admissionEnd = pass.IndexOf(
+            "private bool ShouldUseProductionForwardGiDisabledPipeline(",
+            admissionStart,
+            StringComparison.Ordinal);
+        Assert.That(admissionStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(admissionEnd, Is.GreaterThan(admissionStart));
+        string admission = pass[admissionStart..admissionEnd];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(forward, Does.Contain(
+                "bool NjulfReceiverCacheSplitLane()"));
+            Assert.That(forward, Does.Contain(
+                "if (NjulfReceiverCacheSplitLane())\n" +
+                "        return 0u;"));
+            Assert.That(admission, Does.Contain(
+                "sceneData.AmbientOcclusionBentNormalMode ==\n" +
+                "                       AmbientOcclusionBentNormalMode.Off"));
+            Assert.That(admission, Does.Not.Contain(
+                "AmbientOcclusionBentNormalMode.EnvironmentAndDdgi"));
         });
     }
 

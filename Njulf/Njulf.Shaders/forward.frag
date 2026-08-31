@@ -64,6 +64,7 @@
 const uint NJULF_PERFORMANCE_HYBRID_PROJECTION_ELISION = 1u << 3u;
 const uint NJULF_PERFORMANCE_SCREEN_LOCAL_RECEIVER = 1u << 4u;
 const uint NJULF_PERFORMANCE_SPLIT_HYBRID_FORWARD = 1u << 5u;
+const uint NJULF_PERFORMANCE_STATIC_SHADER_SPECIALIZATION = 1u << 8u;
 const uint NJULF_RECEIVER_CACHE_LANE_COMBINED = 0u;
 const uint NJULF_RECEIVER_CACHE_LANE_ACCEPTED = 1u;
 const uint NJULF_RECEIVER_CACHE_LANE_EXACT_FALLBACK = 2u;
@@ -90,6 +91,12 @@ bool NjulfReceiverCacheExactFallbackLane()
             NJULF_PERFORMANCE_SPLIT_HYBRID_FORWARD) &&
         NjulfReceiverCacheLane ==
             NJULF_RECEIVER_CACHE_LANE_EXACT_FALLBACK;
+}
+
+bool NjulfReceiverCacheSplitLane()
+{
+    return NjulfReceiverCacheAcceptedLane() ||
+        NjulfReceiverCacheExactFallbackLane();
 }
 
 // Ordinary forward variants consume the current frame's depth prepass. The
@@ -126,6 +133,20 @@ layout(early_fragment_tests) in;
 #ifndef NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
 #define NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT 0
 #endif
+
+// ForwardPlus admits hybrid receiver MRTs only after rejecting material,
+// shadow, AO, transparency, animation, GI, and environment debug views. Make
+// that established contract visible to native compilation while keeping a
+// specialization-controlled rollback to the diagnostic-capable program.
+bool NjulfHybridDebugViewsStaticNone()
+{
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+    return NjulfPerformanceOptimizationEnabled(
+        NJULF_PERFORMANCE_STATIC_SHADER_SPECIALIZATION);
+#else
+    return false;
+#endif
+}
 
 #ifndef NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION
 #define NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION 0
@@ -626,6 +647,8 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 
 uint ForwardDebugViewMode()
 {
+    if (NjulfHybridDebugViewsStaticNone())
+        return DEBUG_VIEW_NONE;
     return pc.Push.DebugAndAoFlags & 0xffu;
 }
 
@@ -641,11 +664,15 @@ uint ForwardAmbientOcclusionEnabled()
 
 uint ForwardAmbientOcclusionDebugView()
 {
+    if (NjulfHybridDebugViewsStaticNone())
+        return 0u;
     return (pc.Push.DebugAndAoFlags >> 16u) & 0x3fu;
 }
 
 uint ForwardAmbientOcclusionBentNormalMode()
 {
+    if (NjulfReceiverCacheSplitLane())
+        return 0u;
     return (pc.Push.DebugAndAoFlags >> 22u) & 0x03u;
 }
 
@@ -656,6 +683,8 @@ uint ForwardTransparentReceiveShadows()
 
 uint ForwardTransparencyDebugView()
 {
+    if (NjulfHybridDebugViewsStaticNone())
+        return 0u;
     return (pc.Push.DebugAndAoFlags >> 25u) & 0x07u;
 }
 
@@ -6535,7 +6564,8 @@ void main()
     uint lastShadowCascade = 0u;
     vec3 lastShadowEvaluationNormal = shadowNormal;
 
-    if (environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)
+    if (!NjulfHybridDebugViewsStaticNone() &&
+        environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)
     {
         WriteForwardColor(vec4(vec3(indirectAo), 1.0));
         return;
@@ -6880,13 +6910,15 @@ void main()
     }
 #endif
 
-    if (environment.DebugView == ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY)
+    if (!NjulfHybridDebugViewsStaticNone() &&
+        environment.DebugView == ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY)
     {
         WriteForwardColor(vec4(diffuseIbl, 1.0));
         return;
     }
 
-    if (environment.DebugView == ENVIRONMENT_DEBUG_SPECULAR_IBL_ONLY)
+    if (!NjulfHybridDebugViewsStaticNone() &&
+        environment.DebugView == ENVIRONMENT_DEBUG_SPECULAR_IBL_ONLY)
     {
         WriteForwardColor(vec4(specularIbl, 1.0));
         return;
