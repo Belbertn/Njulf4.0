@@ -159,6 +159,13 @@ namespace Njulf.Rendering.Resources
         private ulong _meshletTriangleIndexBytesUsed;
         private ulong _skinningDataBytesUsed;
         private long _runtimeEmissiveTriangleBytes;
+        // Meshlet quality is an inventory diagnostic. Cache its sorted view
+        // until a mesh upload or final release changes the authoritative set.
+        private bool _meshletQualityDiagnosticsDirty = true;
+        private int _cachedMeshletQualityEntryLimit = -1;
+        private IReadOnlyList<MeshletQualityEntry>
+            _cachedMeshletQualityEntries =
+                Array.Empty<MeshletQualityEntry>();
 
         private readonly List<MeshInfo> _meshes = new List<MeshInfo>();
         private readonly List<Meshlet> _meshlets = new List<Meshlet>();
@@ -4191,6 +4198,7 @@ namespace Njulf.Rendering.Resources
                 CommitMeshSlot(pending);
             }
             _runtimeEmissiveTriangleBytes = finalEmissiveBytes;
+            _meshletQualityDiagnosticsDirty = true;
         }
 
         private void CommitMeshSlot(PendingMeshUpload pending)
@@ -5158,6 +5166,12 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 ThrowIfDisposedLocked();
+                if (!_meshletQualityDiagnosticsDirty &&
+                    _cachedMeshletQualityEntryLimit == maxEntries)
+                {
+                    return _cachedMeshletQualityEntries;
+                }
+
                 var entries = new List<MeshletQualityEntry>();
                 for (int i = 0; i < _meshes.Count; i++)
                 {
@@ -5187,7 +5201,10 @@ namespace Njulf.Rendering.Resources
                 if (entries.Count > maxEntries)
                     entries.RemoveRange(maxEntries, entries.Count - maxEntries);
 
-                return entries;
+                _cachedMeshletQualityEntries = entries.AsReadOnly();
+                _cachedMeshletQualityEntryLimit = maxEntries;
+                _meshletQualityDiagnosticsDirty = false;
+                return _cachedMeshletQualityEntries;
             }
         }
 
@@ -5525,6 +5542,7 @@ namespace Njulf.Rendering.Resources
 
             _meshes[meshIndex] = default;
             _transportGeometry[meshIndex] = default;
+            _meshletQualityDiagnosticsDirty = true;
         }
 
         private static void ValidateReleasedRange(

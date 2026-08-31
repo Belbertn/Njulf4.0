@@ -27,6 +27,7 @@ namespace Njulf.Rendering.Resources
             TextureCooker.DefaultMaximumRuntimeTransportEncodedBytes;
         internal const long MaximumRuntimeDecodedTexturePixels =
             WebPTextureDecoder.DefaultMaximumDecodedPixels;
+        private const int DefaultLargestFileTextureDiagnosticsCount = 10;
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -65,6 +66,17 @@ namespace Njulf.Rendering.Resources
         private ulong _estimatedTextureBytes;
         private TextureBudgetProfile _activeTextureBudgetProfile =
             TextureBudgetProfile.Development;
+        // Asset diagnostics are consumed every frame, but this inventory only
+        // changes when a physical image is published, reloaded, or detached.
+        // Keep the scan and sort behind that mutation boundary instead of
+        // allocating two hash sets and a sorted list on every frame.
+        private bool _assetDiagnosticsDirty = true;
+        private int _cachedAssetDiagnosticsEntryLimit = -1;
+        private int _cachedTextureCount;
+        private int _cachedLoadedFileTextureCount;
+        private IReadOnlyList<TextureAssetMemoryEntry>
+            _cachedLargestFileTextures =
+                Array.Empty<TextureAssetMemoryEntry>();
 
         private sealed class SharedTextureImage
         {
@@ -281,19 +293,9 @@ namespace Njulf.Rendering.Resources
                 lock (_lock)
                 {
                     _lifecycle.ThrowIfDisposedUnderGate(_lock);
-                    int count = 0;
-                    var seenImages = new HashSet<SharedTextureImage>();
-                    foreach (TextureInfo textureInfo in _textures)
-                    {
-                        if (IsLiveTexture(textureInfo) &&
-                            textureInfo.SharedImage != null &&
-                            seenImages.Add(textureInfo.SharedImage))
-                        {
-                            count++;
-                        }
-                    }
-
-                    return count;
+                    EnsureAssetDiagnosticsLocked(
+                        DefaultLargestFileTextureDiagnosticsCount);
+                    return _cachedTextureCount;
                 }
             }
         }
@@ -306,20 +308,9 @@ namespace Njulf.Rendering.Resources
                 lock (_lock)
                 {
                     _lifecycle.ThrowIfDisposedUnderGate(_lock);
-                    int count = 0;
-                    var seenImages = new HashSet<SharedTextureImage>();
-                    foreach (TextureInfo textureInfo in _textures)
-                    {
-                        if (IsLiveTexture(textureInfo) &&
-                            textureInfo.SharedImage != null &&
-                            !string.IsNullOrWhiteSpace(textureInfo.SharedImage.SourceIdentity) &&
-                            seenImages.Add(textureInfo.SharedImage))
-                        {
-                            count++;
-                        }
-                    }
-
-                    return count;
+                    EnsureAssetDiagnosticsLocked(
+                        DefaultLargestFileTextureDiagnosticsCount);
+                    return _cachedLoadedFileTextureCount;
                 }
             }
         }
@@ -499,41 +490,73 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 _lifecycle.ThrowIfDisposedUnderGate(_lock);
-                var entries = new List<TextureAssetMemoryEntry>();
-                var seenImages = new HashSet<SharedTextureImage>();
-                foreach (TextureInfo textureInfo in _textures)
-                {
-                    SharedTextureImage? sharedImage = textureInfo.SharedImage;
-                    if (!IsLiveTexture(textureInfo) ||
-                        sharedImage == null ||
-                        string.IsNullOrWhiteSpace(sharedImage.SourceIdentity) ||
-                        !seenImages.Add(sharedImage))
-                    {
-                        continue;
-                    }
+                EnsureAssetDiagnosticsLocked(count);
+                return _cachedLargestFileTextures;
+            }
+        }
 
-                    entries.Add(new TextureAssetMemoryEntry(
-                        sharedImage.SourceIdentity,
-                        sharedImage.Extent.Width,
-                        sharedImage.Extent.Height,
-                        sharedImage.MipLevels,
-                        sharedImage.EstimatedByteSize,
-                        sharedImage.WasDownscaled)
-                    {
-                        SourceKind = sharedImage.SourceKind.ToString(),
-                        OriginalWidth = sharedImage.OriginalWidth == 0 ? sharedImage.Extent.Width : sharedImage.OriginalWidth,
-                        OriginalHeight = sharedImage.OriginalHeight == 0 ? sharedImage.Extent.Height : sharedImage.OriginalHeight,
-                        EncodedByteLength = sharedImage.SourceEncodedByteLength,
-                        Format = sharedImage.Format.ToString(),
-                        IsCompressed = sharedImage.IsCompressed
-                    });
+        private void EnsureAssetDiagnosticsLocked(int largestEntryLimit)
+        {
+            if (!_assetDiagnosticsDirty &&
+                _cachedAssetDiagnosticsEntryLimit == largestEntryLimit)
+            {
+                return;
+            }
+
+            int textureCount = 0;
+            int loadedFileTextureCount = 0;
+            var entries = new List<TextureAssetMemoryEntry>();
+            var seenImages = new HashSet<SharedTextureImage>();
+            foreach (TextureInfo textureInfo in _textures)
+            {
+                SharedTextureImage? sharedImage = textureInfo.SharedImage;
+                if (!IsLiveTexture(textureInfo) ||
+                    sharedImage == null ||
+                    !seenImages.Add(sharedImage))
+                {
+                    continue;
                 }
 
-                entries.Sort((left, right) => right.EstimatedBytes.CompareTo(left.EstimatedBytes));
-                if (entries.Count > count)
-                    entries.RemoveRange(count, entries.Count - count);
-                return entries;
+                textureCount++;
+                if (string.IsNullOrWhiteSpace(sharedImage.SourceIdentity))
+                    continue;
+
+                loadedFileTextureCount++;
+                entries.Add(new TextureAssetMemoryEntry(
+                    sharedImage.SourceIdentity,
+                    sharedImage.Extent.Width,
+                    sharedImage.Extent.Height,
+                    sharedImage.MipLevels,
+                    sharedImage.EstimatedByteSize,
+                    sharedImage.WasDownscaled)
+                {
+                    SourceKind = sharedImage.SourceKind.ToString(),
+                    OriginalWidth = sharedImage.OriginalWidth == 0
+                        ? sharedImage.Extent.Width
+                        : sharedImage.OriginalWidth,
+                    OriginalHeight = sharedImage.OriginalHeight == 0
+                        ? sharedImage.Extent.Height
+                        : sharedImage.OriginalHeight,
+                    EncodedByteLength = sharedImage.SourceEncodedByteLength,
+                    Format = sharedImage.Format.ToString(),
+                    IsCompressed = sharedImage.IsCompressed
+                });
             }
+
+            entries.Sort(static (left, right) =>
+                right.EstimatedBytes.CompareTo(left.EstimatedBytes));
+            if (entries.Count > largestEntryLimit)
+            {
+                entries.RemoveRange(
+                    largestEntryLimit,
+                    entries.Count - largestEntryLimit);
+            }
+
+            _cachedTextureCount = textureCount;
+            _cachedLoadedFileTextureCount = loadedFileTextureCount;
+            _cachedLargestFileTextures = entries.AsReadOnly();
+            _cachedAssetDiagnosticsEntryLimit = largestEntryLimit;
+            _assetDiagnosticsDirty = false;
         }
 
         private void AddTextureBytes(TextureHandle handle, ref ulong bytes, HashSet<SharedTextureImage> seenImages)
@@ -845,6 +868,7 @@ namespace Njulf.Rendering.Resources
                             TexturePublicationCheckpoint.TextureAccountingPublished);
                     }
 
+                    _assetDiagnosticsDirty = true;
                     return new TextureHandle(index, textureInfo.Generation);
                 }
                 catch (Exception creationFailure)
@@ -1105,6 +1129,7 @@ namespace Njulf.Rendering.Resources
                             TexturePublicationCheckpoint.TextureAccountingPublished);
                     }
 
+                    _assetDiagnosticsDirty = true;
                     return new TextureHandle(index, textureInfo.Generation);
                 }
                 catch (Exception creationFailure)
@@ -2100,6 +2125,7 @@ namespace Njulf.Rendering.Resources
                     throw;
                 }
 
+                _assetDiagnosticsDirty = true;
                 return createdHandle;
             }
         }
@@ -3181,6 +3207,7 @@ namespace Njulf.Rendering.Resources
             _resourceGeneration++;
             if (_resourceGeneration == 0)
                 _resourceGeneration = 1;
+            _assetDiagnosticsDirty = true;
 
             return notifications;
         }
@@ -4139,6 +4166,7 @@ namespace Njulf.Rendering.Resources
             if (slotCanBeReused)
                 _freeIndices.Push(handle.Index);
             _pendingTextureRetirements.Add(handle, retirement);
+            _assetDiagnosticsDirty = true;
             return true;
         }
 
