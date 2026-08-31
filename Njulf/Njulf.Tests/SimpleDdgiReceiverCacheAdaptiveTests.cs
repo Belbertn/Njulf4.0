@@ -275,6 +275,34 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
     }
 
     [Test]
+    public void AdaptivePipelineSpecialization_TracksRowMajorFeatureControl()
+    {
+        var settings = new RenderSettings();
+        settings.PerformanceOptimizations.EnabledFeatures =
+            PerformanceOptimizationFeature.RowMajorSpatialDdgiGather;
+        uint optimized = Njulf.Rendering.Pipeline.ForwardPlusPass
+            .ResolveAdaptiveReceiverPerformanceSpecializationMask(settings);
+        settings.PerformanceOptimizations.Enabled = false;
+        uint rollback = Njulf.Rendering.Pipeline.ForwardPlusPass
+            .ResolveAdaptiveReceiverPerformanceSpecializationMask(settings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(optimized, Is.EqualTo((uint)
+                PerformanceOptimizationFeature.RowMajorSpatialDdgiGather));
+            Assert.That(rollback, Is.Zero);
+            Assert.That(Njulf.Rendering.Pipeline.ForwardPlusPass
+                    .UsesAdaptiveReceiverPerformanceSpecialization(
+                        "ddgi_simple_receiver_cache_classify.comp.spv"),
+                Is.True);
+            Assert.That(Njulf.Rendering.Pipeline.ForwardPlusPass
+                    .UsesAdaptiveReceiverPerformanceSpecialization(
+                        "ddgi_simple_receiver_cache_resolve_adaptive.comp.spv"),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void ShaderStages_PreserveCanonicalFallbackAndIndirectOwnership()
     {
         string classify = ReadRepoText(
@@ -294,7 +322,13 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
         Assert.Multiple(() =>
         {
             Assert.That(classify, Does.Contain("ClassifyTile();"));
-            Assert.That(classify, Does.Contain("CompactGatherWork();"));
+            Assert.That(classify, Does.Contain("ScheduleGatherWork();"));
+            Assert.That(classify, Does.Contain(
+                "NjulfRowMajorSpatialGatherEnabled()"));
+            Assert.That(classify, Does.Contain(
+                "uvec2(0xffffffffu)"));
+            Assert.That(classify, Does.Contain(
+                "? gatherCapacity"));
             Assert.That(classify, Does.Contain("FinalizeIndirectArguments();"));
             Assert.That(classify, Does.Contain("SeedCanonicalHistory();"));
             Assert.That(classify, Does.Contain(
@@ -307,13 +341,17 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
                 "ReceiverMissingPrefixes.Entries[gl_WorkGroupID.x]"));
             Assert.That(gather, Does.Contain(
                 "ReceiverGatherWork.Entries[workIndex]"));
+            Assert.That(gather, Does.Contain(
+                "? pc.CacheWidth * pc.CacheHeight"));
             Assert.That(resolve, Does.Contain(
                 "ReceiverResolveTiles.Entries[resolveWorkIndex]"));
             Assert.That(runtime, Does.Contain("CmdDispatchIndirect("));
-            Assert.That(runtime, Does.Contain(
+            Assert.That(pass, Does.Contain(
                 "ddgi_simple_receiver_cache_adaptive_b1.comp.spv"));
-            Assert.That(runtime, Does.Contain(
+            Assert.That(pass, Does.Contain(
                 "ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv"));
+            Assert.That(runtime, Does.Contain(
+                "PSpecializationInfo = &specializationInfo"));
             Assert.That(shaderProject, Does.Contain(
                 "NJULF_DDGI_RECEIVER_CACHE_PRESERVE_ADAPTIVE_CONTRIBUTION=1"));
             Assert.That(shaderProject, Does.Contain(

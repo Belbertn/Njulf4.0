@@ -311,6 +311,25 @@ public sealed unsafe partial class ForwardPlusPass
         string artifact,
         string debugName)
     {
+        bool usesPerformanceSpecialization =
+            UsesAdaptiveReceiverPerformanceSpecialization(artifact);
+        uint performanceSpecializationMask =
+            ResolveAdaptiveReceiverPerformanceSpecializationMask(_settings);
+        uint specializationData = performanceSpecializationMask;
+        var specializationEntry = new SpecializationMapEntry
+        {
+            ConstantID = MeshPipeline
+                .ForwardPerformanceSpecializationConstantId,
+            Offset = 0u,
+            Size = (nuint)sizeof(uint)
+        };
+        var specializationInfo = new SpecializationInfo
+        {
+            MapEntryCount = 1u,
+            PMapEntries = &specializationEntry,
+            DataSize = (nuint)sizeof(uint),
+            PData = &specializationData
+        };
         ShaderModule module = default;
         try
         {
@@ -322,6 +341,8 @@ public sealed unsafe partial class ForwardPlusPass
                 Module = module,
                 PName = (byte*)_simpleDdgiReceiverCacheEntryPointName
             };
+            if (usesPerformanceSpecialization)
+                stage.PSpecializationInfo = &specializationInfo;
             var info = new ComputePipelineCreateInfo
             {
                 SType = StructureType.ComputePipelineCreateInfo,
@@ -331,7 +352,10 @@ public sealed unsafe partial class ForwardPlusPass
             };
             Result result = _giPipelineCacheService != null
                 ? _giPipelineCacheService.CreateComputePipeline(
-                    new PipelineArtifactId($"{Name}:{artifact}"),
+                    new PipelineArtifactId(
+                        usesPerformanceSpecialization
+                            ? $"{Name}:{artifact}:performance-{performanceSpecializationMask:x8}"
+                            : $"{Name}:{artifact}"),
                     &info,
                     out VkPipeline pipeline)
                 : _context.Api.CreateComputePipelines(
@@ -355,6 +379,24 @@ public sealed unsafe partial class ForwardPlusPass
                 _context.Api.DestroyShaderModule(_context.Device, module, null);
         }
     }
+
+    internal static uint
+        ResolveAdaptiveReceiverPerformanceSpecializationMask(
+            RenderSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return (uint)(settings.EffectivePerformanceOptimizationFeatures &
+            PerformanceOptimizationFeature.RowMajorSpatialDdgiGather);
+    }
+
+    internal static bool UsesAdaptiveReceiverPerformanceSpecialization(
+        string? artifact) =>
+        artifact?.Equals(
+            "ddgi_simple_receiver_cache_classify.comp.spv",
+            StringComparison.Ordinal) == true ||
+        artifact?.StartsWith(
+            "ddgi_simple_receiver_cache_adaptive",
+            StringComparison.Ordinal) == true;
 
     private void RecreateSimpleDdgiReceiverCacheAdaptiveResources()
     {

@@ -5,6 +5,16 @@
 #include "common.glsl"
 #include "ddgi_receiver_surface.glsl"
 
+const uint NJULF_PERFORMANCE_ROW_MAJOR_SPATIAL_GATHER = 1u << 6u;
+layout(constant_id = 31) const uint
+    NjulfPerformanceOptimizationMask = 0x7fffffffu;
+
+bool NjulfRowMajorSpatialGatherEnabled()
+{
+    return (NjulfPerformanceOptimizationMask &
+        NJULF_PERFORMANCE_ROW_MAJOR_SPATIAL_GATHER) != 0u;
+}
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(std430, set = 2, binding = 0) buffer CurrentReceiverCacheBlock
@@ -719,7 +729,7 @@ uint RateForGatherCoordinate(uvec2 gatherCoordinate)
     return rate;
 }
 
-void CompactGatherWork()
+void ScheduleGatherWork()
 {
     uvec2 coordinate = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(
@@ -740,19 +750,40 @@ void CompactGatherWork()
         uint phase = (coordinate.x & 1u) | ((coordinate.y & 1u) << 1u);
         selected = phase == (pc.SamplingPhase & 3u);
     }
-    if (!selected)
-        return;
-
-    uint workIndex = atomicAdd(
-        ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_COUNT],
-        1u);
     uint capacity = pc.GatherWidth * pc.GatherHeight;
-    if (workIndex < capacity)
-        ReceiverGatherWork.Entries[workIndex] = coordinate;
+    if (NjulfRowMajorSpatialGatherEnabled())
+    {
+        // The adaptive schedule is normally dense. Preserve its exact set,
+        // but publish canonical row-major slots so adjacent compute lanes
+        // visit adjacent receiver and atlas regions. Unselected sentinels
+        // exit before any gather or stamp write.
+        uint workIndex = coordinate.y * pc.GatherWidth + coordinate.x;
+        ReceiverGatherWork.Entries[workIndex] = selected
+            ? coordinate
+            : uvec2(0xffffffffu);
+        if (selected)
+        {
+            atomicAdd(
+                ReceiverAdaptiveControl.Words[
+                    RECEIVER_ADAPTIVE_GATHER_COUNT],
+                1u);
+        }
+    }
     else
-        atomicOr(
-            ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_OVERFLOW_FLAGS],
+    {
+        if (!selected)
+            return;
+        uint workIndex = atomicAdd(
+            ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_COUNT],
             1u);
+        if (workIndex < capacity)
+            ReceiverGatherWork.Entries[workIndex] = coordinate;
+        else
+            atomicOr(
+                ReceiverAdaptiveControl.Words[
+                    RECEIVER_ADAPTIVE_OVERFLOW_FLAGS],
+                1u);
+    }
 }
 
 void FinalizeIndirectArguments()
@@ -789,7 +820,11 @@ void FinalizeIndirectArguments()
     ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_TILE_COUNT] =
         resolveCapacity;
     ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_INDIRECT + 0u] =
-        DivideRoundUp(gatherCount, 64u);
+        DivideRoundUp(
+            NjulfRowMajorSpatialGatherEnabled()
+                ? gatherCapacity
+                : gatherCount,
+            64u);
     ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_INDIRECT + 1u] = 1u;
     ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_INDIRECT + 2u] = 1u;
     ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_RESOLVE_INDIRECT + 0u] =
@@ -906,7 +941,7 @@ void main()
     if (pc.ClassifyPhase == 0u)
         ClassifyTile();
     else if (pc.ClassifyPhase == 1u)
-        CompactGatherWork();
+        ScheduleGatherWork();
     else if (pc.ClassifyPhase == 2u)
         FinalizeIndirectArguments();
     else if (pc.ClassifyPhase == 3u)

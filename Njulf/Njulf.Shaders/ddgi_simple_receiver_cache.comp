@@ -22,6 +22,16 @@
 #define NJULF_DDGI_RECEIVER_CACHE_MISSING_FEEDBACK 0
 #endif
 
+const uint NJULF_PERFORMANCE_ROW_MAJOR_SPATIAL_GATHER = 1u << 6u;
+layout(constant_id = 31) const uint
+    NjulfPerformanceOptimizationMask = 0x7fffffffu;
+
+bool NjulfRowMajorSpatialGatherEnabled()
+{
+    return (NjulfPerformanceOptimizationMask &
+        NJULF_PERFORMANCE_ROW_MAJOR_SPATIAL_GATHER) != 0u;
+}
+
 #if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
 #define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
 #define SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER 1
@@ -605,8 +615,9 @@ void main()
     uint workCount = ReceiverAdaptiveControl.Words[
         RECEIVER_ADAPTIVE_MISSING_FEEDBACK_COUNT];
 #else
-    uint workCount = ReceiverAdaptiveControl.Words[
-        RECEIVER_ADAPTIVE_GATHER_COUNT];
+    uint workCount = NjulfRowMajorSpatialGatherEnabled()
+        ? pc.CacheWidth * pc.CacheHeight
+        : ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_GATHER_COUNT];
 #endif
     if (workIndex >= workCount)
         return;
