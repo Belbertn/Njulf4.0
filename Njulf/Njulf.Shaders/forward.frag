@@ -542,6 +542,10 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 #define FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED 0
 #endif
 
+#ifndef FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_BASELINE
+#define FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_BASELINE 0
+#endif
+
 #ifndef NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW
 #define NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW 0
 #endif
@@ -6357,7 +6361,8 @@ void main()
             directionalParams.probeCount > 0u;
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
         bool receiverCompactDirectionalResolved = !directionalConfigured;
-#if FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED
+#if FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED && \
+    !FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_BASELINE
         // Accepted opaque receivers have no forward directional-specular
         // owner in this artifact.  Mark the directional requirement resolved
         // without touching the compact L2 record; rejected/exception paths

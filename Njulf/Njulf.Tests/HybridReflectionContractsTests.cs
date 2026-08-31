@@ -10,6 +10,39 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class HybridReflectionContractsTests
 {
+    [Test]
+    public void ReceiverShaderResolver_SelectsStaticProjectionRollback()
+    {
+        string optimized = ForwardHybridReflectionReceiverContract
+            .ResolveFragmentShader(
+                simple: true,
+                simpleFullInput: false,
+                giCaustic: true,
+                nearField: true,
+                receiverCacheRequired: true,
+                hybridOwnershipProjectionElision: true);
+        string baseline = ForwardHybridReflectionReceiverContract
+            .ResolveFragmentShader(
+                simple: true,
+                simpleFullInput: false,
+                giCaustic: true,
+                nearField: true,
+                receiverCacheRequired: true,
+                hybridOwnershipProjectionElision: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                optimized,
+                Is.EqualTo(
+                    "forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv"));
+            Assert.That(
+                baseline,
+                Is.EqualTo(
+                    "forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection_projection.frag.spv"));
+        });
+    }
+
     [TestCase(Format.R32G32B32A32Uint, 16)]
     [TestCase(Format.R16G16B16A16Sfloat, 8)]
     [TestCase(Format.R16G16Sfloat, 4)]

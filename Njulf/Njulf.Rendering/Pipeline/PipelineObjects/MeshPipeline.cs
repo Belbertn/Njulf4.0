@@ -3617,7 +3617,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     simpleFullInput,
                     giCaustic,
                     nearField,
-                    receiverCacheRequired);
+                    receiverCacheRequired,
+                    Settings.IsPerformanceOptimizationEnabled(
+                        PerformanceOptimizationFeature
+                            .HybridOwnershipProjectionElision));
             string meshShader = simple && !simpleFullInput
                 ? compacted
                     ? _compactedForwardSimpleMeshShaderName
