@@ -189,6 +189,53 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
+    public void RefinementAdmissionLanes_ArePriorityRankedAndPoolSlotIndependent()
+    {
+        SimpleDdgiRefinementBrick[] bricks =
+        [
+            CreateBrick(slot: 0, priority: 128f),
+            CreateBrick(slot: 2, priority: 240f),
+            CreateBrick(slot: 1, priority: 240f)
+        ];
+
+        SimpleDdgiVolumeManager.OrderRefinementBricksForAdmission(bricks);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                bricks.Select(static brick => brick.Slot),
+                Is.EqualTo(new[] { 1, 2, 0 }));
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ResolveRefinementAdmissionSourceOrdinal(0),
+                Is.EqualTo(30_000));
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ResolveRefinementAdmissionSourceOrdinal(1),
+                Is.EqualTo(30_001));
+            Assert.That(
+                () => SimpleDdgiVolumeManager
+                    .ResolveRefinementAdmissionSourceOrdinal(4),
+                Throws.TypeOf<ArgumentOutOfRangeException>());
+        });
+
+        static SimpleDdgiRefinementBrick CreateBrick(
+            int slot,
+            float priority) =>
+            new(
+                slot,
+                new SimpleDdgiRefinementBrickKey(slot, 0, 0),
+                new Vector3(slot, 0f, 0f),
+                6,
+                4,
+                6,
+                0.59375f,
+                priority,
+                SimpleDdgiRefinementDemandReason.VisibleReceiver,
+                0u);
+    }
+
+    [Test]
     public void ReceiverFeedbackProbeFocus_ResolvesToroidalLogicalPositionAndRelocation()
     {
         var volume = new GPUSimpleDdgiVolume

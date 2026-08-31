@@ -14262,12 +14262,49 @@ namespace Njulf.Rendering.Resources
                 }
             }
 
-            foreach (SimpleDdgiRefinementBrick brick in bricks)
-                _volumeCandidates.Add(CreateRefinementVolume(brick));
+            if (_settings.IsPerformanceOptimizationEnabled(
+                    PerformanceOptimizationFeature
+                        .StableDdgiRefinementAdmission))
+            {
+                // Pool slots preserve retention identity, but are not stable
+                // GPU admission lanes. Rank the bounded set first so an
+                // ordinary priority change remaps within the existing source
+                // allocation instead of looking like a source-cache ABI
+                // replacement.
+                Span<SimpleDdgiRefinementBrick> orderedBricks =
+                    stackalloc SimpleDdgiRefinementBrick[
+                        SimpleDdgiRefinementBrickPool.MaximumCapacity];
+                int brickCount = Math.Min(
+                    bricks.Count,
+                    orderedBricks.Length);
+                for (int index = 0; index < brickCount; index++)
+                    orderedBricks[index] = bricks[index];
+                OrderRefinementBricksForAdmission(
+                    orderedBricks[..brickCount]);
+                for (int admissionLane = 0;
+                     admissionLane < brickCount;
+                     admissionLane++)
+                {
+                    _volumeCandidates.Add(CreateRefinementVolume(
+                        orderedBricks[admissionLane],
+                        ResolveRefinementAdmissionSourceOrdinal(
+                            admissionLane)));
+                }
+            }
+            else
+            {
+                foreach (SimpleDdgiRefinementBrick brick in bricks)
+                {
+                    _volumeCandidates.Add(CreateRefinementVolume(
+                        brick,
+                        30_000 + brick.Slot));
+                }
+            }
         }
 
         private static VolumeCandidate CreateRefinementVolume(
-            SimpleDdgiRefinementBrick brick)
+            SimpleDdgiRefinementBrick brick,
+            int sourceOrdinal)
         {
             Vector3 latticeSize = brick.LatticeSize;
             float edgeFadeDistance = Math.Max(brick.Spacing * 1.5f, 0.001f);
@@ -14277,7 +14314,7 @@ namespace Njulf.Rendering.Resources
                 edgeFadeDistance);
             return new VolumeCandidate(
                 VolumeKindRefinement,
-                30_000 + brick.Slot,
+                sourceOrdinal,
                 (int)Math.Clamp(brick.Priority, int.MinValue, int.MaxValue),
                 SimpleDdgiVolumePurpose.ReceiverHero,
                 brick.Origin,
@@ -19991,6 +20028,51 @@ namespace Njulf.Rendering.Resources
             return spacing != 0
                 ? spacing
                 : left.SourceOrdinal.CompareTo(right.SourceOrdinal);
+        }
+
+        internal static void OrderRefinementBricksForAdmission(
+            Span<SimpleDdgiRefinementBrick> bricks)
+        {
+            // Insertion sort is allocation-free and bounded to four elements.
+            for (int index = 1; index < bricks.Length; index++)
+            {
+                SimpleDdgiRefinementBrick candidate = bricks[index];
+                int destination = index;
+                while (destination > 0 &&
+                       CompareRefinementBrickAdmissionOrder(
+                           candidate,
+                           bricks[destination - 1]) < 0)
+                {
+                    bricks[destination] = bricks[destination - 1];
+                    destination--;
+                }
+                bricks[destination] = candidate;
+            }
+        }
+
+        internal static int ResolveRefinementAdmissionSourceOrdinal(
+            int admissionLane)
+        {
+            if ((uint)admissionLane >=
+                SimpleDdgiRefinementBrickPool.MaximumCapacity)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(admissionLane));
+            }
+            return 30_000 + admissionLane;
+        }
+
+        private static int CompareRefinementBrickAdmissionOrder(
+            SimpleDdgiRefinementBrick left,
+            SimpleDdgiRefinementBrick right)
+        {
+            int priority = right.Priority.CompareTo(left.Priority);
+            if (priority != 0)
+                return priority;
+            int spacing = left.Spacing.CompareTo(right.Spacing);
+            return spacing != 0
+                ? spacing
+                : left.Slot.CompareTo(right.Slot);
         }
 
         internal static float ResolveNativeTraceDistance(
