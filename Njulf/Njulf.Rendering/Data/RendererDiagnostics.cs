@@ -1527,6 +1527,7 @@ namespace Njulf.Rendering.Data
         public int ForwardOpaquePipelineCacheEntryCount { get; init; }
         public int NormalConeEligibleOpaqueMeshletCount { get; init; }
         public int DoubleSidedOpaqueMeshletCount { get; init; }
+        public bool AsymmetricSidedDrawStreamsActive { get; init; }
         public bool MeshletNormalConeCullingEnabled { get; init; }
         public int MeshletNormalConeCandidateCount { get; init; }
         public int MeshletNormalConeTestedCount { get; init; }

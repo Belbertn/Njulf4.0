@@ -187,8 +187,14 @@ namespace Njulf.Rendering.Data
         public bool ForwardVisibilitySidedStreamsActive { get; set; }
         public string ForwardVisibilityCompactionSkipReason { get; set; } = string.Empty;
         public int ForwardVisibilitySimpleCapacity { get; set; }
+        public int ForwardVisibilitySimpleDoubleSidedBase { get; set; }
+        public int ForwardVisibilitySimpleDoubleSidedCapacity { get; set; }
         public int ForwardVisibilitySimpleNormalCapacity { get; set; }
+        public int ForwardVisibilitySimpleNormalDoubleSidedBase { get; set; }
+        public int ForwardVisibilitySimpleNormalDoubleSidedCapacity { get; set; }
         public int ForwardVisibilityFullCapacity { get; set; }
+        public int ForwardVisibilityFullDoubleSidedBase { get; set; }
+        public int ForwardVisibilityFullDoubleSidedCapacity { get; set; }
         public int ForwardVisibilityCounterReadbackValid { get; set; }
         public int ForwardVisibilityCandidateCount { get; set; }
         public int ForwardVisibilityEmittedCount { get; set; }
@@ -531,6 +537,14 @@ namespace Njulf.Rendering.Data
         public int MeshletLod2SubmittedCpu { get; set; }
         public int NormalConeEligibleOpaqueMeshletCount { get; set; }
         public int DoubleSidedOpaqueMeshletCount { get; set; }
+        public bool SidedStreamCandidateCountsValid { get; set; }
+        public int DoubleSidedSimpleOpaqueMeshletCount { get; set; }
+        public int DoubleSidedSimpleNormalOpaqueMeshletCount { get; set; }
+        public int DoubleSidedFullOpaqueMeshletCount { get; set; }
+        public int DoubleSidedSolidDepthMeshletCount { get; set; }
+        public int DoubleSidedMaskedDepthMeshletCount { get; set; }
+        public int DoubleSidedDirectionalStaticShadowMeshletCount { get; set; }
+        public int DoubleSidedDirectionalDynamicShadowMeshletCount { get; set; }
         public bool MeshletNormalConeCullingEnabled { get; set; }
         public int MeshletNormalConeCandidateCount { get; set; }
         public int MeshletNormalConeTestedCount { get; set; }
@@ -579,6 +593,7 @@ namespace Njulf.Rendering.Data
         /// plus strict depth equality.
         /// </summary>
         public bool SceneSubmissionSidedRasterSpecializationActive { get; set; }
+        public bool SceneSubmissionAsymmetricSidedStreamsActive { get; set; }
         public string SceneSubmissionForwardPath { get; set; } = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
         public string SceneSubmissionForwardTaskShader { get; set; } = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
         public string SceneSubmissionCompactionSkipReason { get; set; } = string.Empty;
@@ -592,14 +607,24 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuCompactedShadowMeshletCount { get; set; }
         public int SceneSubmissionGpuCompactedOpaqueCapacity { get; set; }
         public int SceneSubmissionGpuCompactedSimpleOpaqueCapacity { get; set; }
+        public int SceneSubmissionGpuCompactedSimpleOpaqueDoubleSidedBase { get; set; }
+        public int SceneSubmissionGpuCompactedSimpleOpaqueDoubleSidedCapacity { get; set; }
         public int SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity { get; set; }
+        public int SceneSubmissionGpuCompactedSimpleNormalOpaqueDoubleSidedBase { get; set; }
+        public int SceneSubmissionGpuCompactedSimpleNormalOpaqueDoubleSidedCapacity { get; set; }
         public int SceneSubmissionGpuCompactedFullOpaqueCapacity { get; set; }
+        public int SceneSubmissionGpuCompactedFullOpaqueDoubleSidedBase { get; set; }
+        public int SceneSubmissionGpuCompactedFullOpaqueDoubleSidedCapacity { get; set; }
         public int SceneSubmissionGpuDepthSolidCandidateCount { get; set; }
         public int SceneSubmissionGpuDepthMaskedCandidateCount { get; set; }
         public int SceneSubmissionGpuCompactedSolidDepthMeshletCount { get; set; }
         public int SceneSubmissionGpuCompactedMaskedDepthMeshletCount { get; set; }
         public int SceneSubmissionGpuCompactedSolidDepthCapacity { get; set; }
+        public int SceneSubmissionGpuCompactedSolidDepthDoubleSidedBase { get; set; }
+        public int SceneSubmissionGpuCompactedSolidDepthDoubleSidedCapacity { get; set; }
         public int SceneSubmissionGpuCompactedMaskedDepthCapacity { get; set; }
+        public int SceneSubmissionGpuCompactedMaskedDepthDoubleSidedBase { get; set; }
+        public int SceneSubmissionGpuCompactedMaskedDepthDoubleSidedCapacity { get; set; }
         public int SceneSubmissionGpuDepthOverflowCount { get; set; }
         public int SceneSubmissionGpuDirectionalShadowCandidateCount { get; set; }
         public int SceneSubmissionGpuCompactedDirectionalShadowMeshletCount { get; set; }
@@ -774,11 +799,15 @@ namespace Njulf.Rendering.Data
         public int[] SceneSubmissionGpuDirectionalStaticShadowRejectedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] SceneSubmissionGpuDirectionalStaticShadowOverflowCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] SceneSubmissionGpuDirectionalStaticShadowCapacities { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalStaticShadowDoubleSidedBases { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalStaticShadowDoubleSidedCapacities { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] SceneSubmissionGpuDirectionalDynamicShadowEmittedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] SceneSubmissionGpuDirectionalDynamicShadowRejectedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] SceneSubmissionGpuDirectionalDynamicShadowOverflowCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] SceneSubmissionGpuDirectionalDynamicShadowCapacities { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedBases { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedCapacities { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public uint BloomMipCount { get; set; }
         public uint BloomBaseWidth { get; set; }
         public uint BloomBaseHeight { get; set; }
@@ -2308,6 +2337,14 @@ namespace Njulf.Rendering.Data
             MeshletLod2SubmittedCpu = 0;
             NormalConeEligibleOpaqueMeshletCount = 0;
             DoubleSidedOpaqueMeshletCount = 0;
+            SidedStreamCandidateCountsValid = false;
+            DoubleSidedSimpleOpaqueMeshletCount = 0;
+            DoubleSidedSimpleNormalOpaqueMeshletCount = 0;
+            DoubleSidedFullOpaqueMeshletCount = 0;
+            DoubleSidedSolidDepthMeshletCount = 0;
+            DoubleSidedMaskedDepthMeshletCount = 0;
+            DoubleSidedDirectionalStaticShadowMeshletCount = 0;
+            DoubleSidedDirectionalDynamicShadowMeshletCount = 0;
             MeshletNormalConeCullingEnabled = false;
             MeshletNormalConeCandidateCount = 0;
             MeshletNormalConeTestedCount = 0;
@@ -2333,8 +2370,14 @@ namespace Njulf.Rendering.Data
             ForwardVisibilitySidedStreamsActive = false;
             ForwardVisibilityCompactionSkipReason = string.Empty;
             ForwardVisibilitySimpleCapacity = 0;
+            ForwardVisibilitySimpleDoubleSidedBase = 0;
+            ForwardVisibilitySimpleDoubleSidedCapacity = 0;
             ForwardVisibilitySimpleNormalCapacity = 0;
+            ForwardVisibilitySimpleNormalDoubleSidedBase = 0;
+            ForwardVisibilitySimpleNormalDoubleSidedCapacity = 0;
             ForwardVisibilityFullCapacity = 0;
+            ForwardVisibilityFullDoubleSidedBase = 0;
+            ForwardVisibilityFullDoubleSidedCapacity = 0;
             ForwardVisibilityCounterReadbackValid = 0;
             ForwardVisibilityCandidateCount = 0;
             ForwardVisibilityEmittedCount = 0;
@@ -2407,6 +2450,7 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuInstanceExpansionEnabled = false;
             SceneSubmissionGpuInstanceExpansionActive = false;
             SceneSubmissionSidedRasterSpecializationActive = false;
+            SceneSubmissionAsymmetricSidedStreamsActive = false;
             SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
             SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
             SceneSubmissionCompactionSkipReason = string.Empty;
@@ -2420,14 +2464,24 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuCompactedShadowMeshletCount = 0;
             SceneSubmissionGpuCompactedOpaqueCapacity = 0;
             SceneSubmissionGpuCompactedSimpleOpaqueCapacity = 0;
+            SceneSubmissionGpuCompactedSimpleOpaqueDoubleSidedBase = 0;
+            SceneSubmissionGpuCompactedSimpleOpaqueDoubleSidedCapacity = 0;
             SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity = 0;
+            SceneSubmissionGpuCompactedSimpleNormalOpaqueDoubleSidedBase = 0;
+            SceneSubmissionGpuCompactedSimpleNormalOpaqueDoubleSidedCapacity = 0;
             SceneSubmissionGpuCompactedFullOpaqueCapacity = 0;
+            SceneSubmissionGpuCompactedFullOpaqueDoubleSidedBase = 0;
+            SceneSubmissionGpuCompactedFullOpaqueDoubleSidedCapacity = 0;
             SceneSubmissionGpuDepthSolidCandidateCount = 0;
             SceneSubmissionGpuDepthMaskedCandidateCount = 0;
             SceneSubmissionGpuCompactedSolidDepthMeshletCount = 0;
             SceneSubmissionGpuCompactedMaskedDepthMeshletCount = 0;
             SceneSubmissionGpuCompactedSolidDepthCapacity = 0;
+            SceneSubmissionGpuCompactedSolidDepthDoubleSidedBase = 0;
+            SceneSubmissionGpuCompactedSolidDepthDoubleSidedCapacity = 0;
             SceneSubmissionGpuCompactedMaskedDepthCapacity = 0;
+            SceneSubmissionGpuCompactedMaskedDepthDoubleSidedBase = 0;
+            SceneSubmissionGpuCompactedMaskedDepthDoubleSidedCapacity = 0;
             SceneSubmissionGpuDepthOverflowCount = 0;
             SceneSubmissionGpuDirectionalShadowCandidateCount = 0;
             SceneSubmissionGpuCompactedDirectionalShadowMeshletCount = 0;
@@ -2624,11 +2678,15 @@ namespace Njulf.Rendering.Data
             Array.Clear(SceneSubmissionGpuDirectionalStaticShadowRejectedCounts, 0, SceneSubmissionGpuDirectionalStaticShadowRejectedCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalStaticShadowOverflowCounts, 0, SceneSubmissionGpuDirectionalStaticShadowOverflowCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalStaticShadowCapacities, 0, SceneSubmissionGpuDirectionalStaticShadowCapacities.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalStaticShadowDoubleSidedBases, 0, SceneSubmissionGpuDirectionalStaticShadowDoubleSidedBases.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalStaticShadowDoubleSidedCapacities, 0, SceneSubmissionGpuDirectionalStaticShadowDoubleSidedCapacities.Length);
             Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts, 0, SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowEmittedCounts, 0, SceneSubmissionGpuDirectionalDynamicShadowEmittedCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowRejectedCounts, 0, SceneSubmissionGpuDirectionalDynamicShadowRejectedCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowOverflowCounts, 0, SceneSubmissionGpuDirectionalDynamicShadowOverflowCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowCapacities, 0, SceneSubmissionGpuDirectionalDynamicShadowCapacities.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedBases, 0, SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedBases.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedCapacities, 0, SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedCapacities.Length);
             BloomMipCount = 0;
             BloomBaseWidth = 0;
             BloomBaseHeight = 0;

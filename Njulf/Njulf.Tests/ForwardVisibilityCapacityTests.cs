@@ -106,4 +106,36 @@ public sealed class ForwardVisibilityCapacityTests
             Assert.That(plan.AggregateCapacity, Is.EqualTo(32));
         });
     }
+
+    [Test]
+    public void AsymmetricInputLayout_IsPreservedWithoutRangeOverlap()
+    {
+        ForwardVisibilityCapacityPlan plan =
+            ForwardVisibilityCompactionPass.ResolveCapacityPlan(
+                simpleCompactedCapacity: 180,
+                simpleDoubleSidedBase: 180,
+                simpleDoubleSidedCapacity: 20,
+                simpleNormalCompactedCapacity: 40,
+                simpleNormalDoubleSidedBase: 40,
+                simpleNormalDoubleSidedCapacity: 8,
+                fullCompactedCapacity: 12,
+                fullDoubleSidedBase: 12,
+                fullDoubleSidedCapacity: 4,
+                sidedStreams: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.DispatchCandidateCount, Is.EqualTo(180));
+            Assert.That(plan.SimpleDoubleSidedBase, Is.EqualTo(180));
+            Assert.That(plan.SimpleDoubleSidedCapacity, Is.EqualTo(20));
+            Assert.That(plan.SimpleBackingElementCount, Is.EqualTo(200u));
+            Assert.That(
+                ForwardVisibilityCompactionPass.CapacityBackingsCoverPlan(
+                    plan,
+                    simpleBackingElementCount: 200u,
+                    simpleNormalBackingElementCount: 48u,
+                    fullBackingElementCount: 16u),
+                Is.True);
+        });
+    }
 }

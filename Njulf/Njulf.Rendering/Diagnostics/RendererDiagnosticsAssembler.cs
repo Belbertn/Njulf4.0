@@ -2953,6 +2953,8 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.NormalConeEligibleOpaqueMeshletCount,
             DoubleSidedOpaqueMeshletCount =
                 sceneData.DoubleSidedOpaqueMeshletCount,
+            AsymmetricSidedDrawStreamsActive =
+                sceneData.SceneSubmissionAsymmetricSidedStreamsActive,
             MeshletNormalConeCullingEnabled =
                 sceneData.MeshletNormalConeCullingEnabled,
             MeshletNormalConeCandidateCount =

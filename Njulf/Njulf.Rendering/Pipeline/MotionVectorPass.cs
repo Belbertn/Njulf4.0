@@ -200,6 +200,10 @@ namespace Njulf.Rendering.Pipeline
                         sceneData.SceneSubmissionGpuDepthSolidCandidateCount,
                         sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity,
                         sceneData.SceneSubmissionSidedRasterSpecializationActive),
+                    sceneData
+                        .SceneSubmissionGpuCompactedSolidDepthDoubleSidedBase,
+                    sceneData
+                        .SceneSubmissionGpuCompactedSolidDepthDoubleSidedCapacity,
                     BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase,
                     SceneOpaqueCompactionPass.GetSolidDepthIndirectDispatchOffset(),
                     SceneOpaqueCompactionPass.GetSolidDepthDoubleSidedIndirectDispatchOffset());
@@ -214,6 +218,10 @@ namespace Njulf.Rendering.Pipeline
                         sceneData.SceneSubmissionGpuDepthMaskedCandidateCount,
                         sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity,
                         sceneData.SceneSubmissionSidedRasterSpecializationActive),
+                    sceneData
+                        .SceneSubmissionGpuCompactedMaskedDepthDoubleSidedBase,
+                    sceneData
+                        .SceneSubmissionGpuCompactedMaskedDepthDoubleSidedCapacity,
                     BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase,
                     SceneOpaqueCompactionPass.GetMaskedDepthIndirectDispatchOffset(),
                     SceneOpaqueCompactionPass.GetMaskedDepthDoubleSidedIndirectDispatchOffset());
@@ -314,10 +322,12 @@ namespace Njulf.Rendering.Pipeline
 
             bool solidReady = !hasSolid ||
                 (sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBuffer.IsValid &&
-                 sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity > 0);
+                 (sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity > 0 ||
+                  sceneData.SceneSubmissionGpuCompactedSolidDepthDoubleSidedCapacity > 0));
             bool maskedReady = !hasMasked ||
                 (sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer.IsValid &&
-                 sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity > 0);
+                 (sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity > 0 ||
+                  sceneData.SceneSubmissionGpuCompactedMaskedDepthDoubleSidedCapacity > 0));
             if (!solidReady || !maskedReady)
                 return false;
 
@@ -351,25 +361,17 @@ namespace Njulf.Rendering.Pipeline
             bool previousFrameValid,
             Silk.NET.Vulkan.Pipeline pipeline,
             int meshletCapacity,
+            int doubleSidedFirstDraw,
+            int doubleSidedMeshletCapacity,
             int meshletDrawBufferBaseIndex,
             ulong indirectDispatchOffset,
             ulong doubleSidedIndirectDispatchOffset)
         {
-            if (meshletCapacity <= 0 || _bufferManager == null)
+            if ((meshletCapacity <= 0 && doubleSidedMeshletCapacity <= 0) ||
+                _bufferManager == null)
                 return;
 
-            DrawCompactedMotionVectorPartition(
-                cmd,
-                sceneData,
-                previousViewProjection,
-                previousTime,
-                previousFrameValid,
-                pipeline,
-                meshletCapacity,
-                meshletDrawBufferBaseIndex,
-                indirectDispatchOffset,
-                firstDraw: 0u);
-            if (sceneData.SceneSubmissionSidedRasterSpecializationActive)
+            if (meshletCapacity > 0)
             {
                 DrawCompactedMotionVectorPartition(
                     cmd,
@@ -380,8 +382,25 @@ namespace Njulf.Rendering.Pipeline
                     pipeline,
                     meshletCapacity,
                     meshletDrawBufferBaseIndex,
-                    doubleSidedIndirectDispatchOffset,
-                    firstDraw: checked((uint)meshletCapacity));
+                    indirectDispatchOffset,
+                    firstDraw: 0u);
+            }
+            if (sceneData.SceneSubmissionSidedRasterSpecializationActive)
+            {
+                if (doubleSidedMeshletCapacity > 0)
+                {
+                    DrawCompactedMotionVectorPartition(
+                        cmd,
+                        sceneData,
+                        previousViewProjection,
+                        previousTime,
+                        previousFrameValid,
+                        pipeline,
+                        doubleSidedMeshletCapacity,
+                        meshletDrawBufferBaseIndex,
+                        doubleSidedIndirectDispatchOffset,
+                        firstDraw: checked((uint)doubleSidedFirstDraw));
+                }
             }
         }
 

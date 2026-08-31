@@ -1899,7 +1899,10 @@ namespace Njulf.Rendering
                     _meshPipeline,
                     _bufferManager,
                     _deleter,
-                    _sync);
+                    _sync,
+                    Settings.IsPerformanceOptimizationEnabled(
+                        PerformanceOptimizationFeature
+                            .AsymmetricSidedDrawStreams));
             _forwardVisibilityCompactionPass = new ForwardVisibilityCompactionPass(_context, _swapchain, _bindlessHeap,
                 _meshPipeline, _bufferManager);
 

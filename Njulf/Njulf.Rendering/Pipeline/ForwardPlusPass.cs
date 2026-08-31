@@ -2325,10 +2325,34 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(
                     0,
                     sceneData
+                        .SceneSubmissionGpuCompactedSimpleOpaqueDoubleSidedBase),
+                Math.Max(
+                    0,
+                    sceneData
+                        .SceneSubmissionGpuCompactedSimpleOpaqueDoubleSidedCapacity),
+                Math.Max(
+                    0,
+                    sceneData
                         .SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity),
                 Math.Max(
                     0,
+                    sceneData
+                        .SceneSubmissionGpuCompactedSimpleNormalOpaqueDoubleSidedBase),
+                Math.Max(
+                    0,
+                    sceneData
+                        .SceneSubmissionGpuCompactedSimpleNormalOpaqueDoubleSidedCapacity),
+                Math.Max(
+                    0,
                     sceneData.SceneSubmissionGpuCompactedFullOpaqueCapacity),
+                Math.Max(
+                    0,
+                    sceneData
+                        .SceneSubmissionGpuCompactedFullOpaqueDoubleSidedBase),
+                Math.Max(
+                    0,
+                    sceneData
+                        .SceneSubmissionGpuCompactedFullOpaqueDoubleSidedCapacity),
                 Math.Max(
                     0,
                     sceneData.SceneSubmissionGpuCompactedOpaqueCapacity));
@@ -2336,8 +2360,14 @@ namespace Njulf.Rendering.Pipeline
 
         internal readonly record struct CompactedForwardCapacityPlan(
             int SimpleCapacity,
+            int SimpleDoubleSidedBase,
+            int SimpleDoubleSidedCapacity,
             int SimpleNormalCapacity,
+            int SimpleNormalDoubleSidedBase,
+            int SimpleNormalDoubleSidedCapacity,
             int FullCapacity,
+            int FullDoubleSidedBase,
+            int FullDoubleSidedCapacity,
             int AggregateCapacity);
 
         private string BuildSceneOpaqueIndirectDispatchSkipReason(Data.SceneRenderingData sceneData)
@@ -2345,9 +2375,15 @@ namespace Njulf.Rendering.Pipeline
             if (_bufferManager == null)
                 return "scene opaque indirect dispatch buffer unavailable";
 
+            ulong finalDispatchOffset = sceneData
+                .SceneSubmissionSidedRasterSpecializationActive
+                ? SceneOpaqueCompactionPass
+                    .GetFullOpaqueDoubleSidedIndirectDispatchOffset()
+                : SceneOpaqueCompactionPass
+                    .GetFullOpaqueIndirectDispatchOffset();
             return SceneSubmissionDiagnosticsPolicy.BuildIndirectDispatchSkipReason(
                 sceneData,
-                SceneOpaqueCompactionPass.GetFullOpaqueIndirectDispatchOffset() +
+                finalDispatchOffset +
                 (ulong)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
         }
 
@@ -2543,6 +2579,8 @@ namespace Njulf.Rendering.Pipeline
                     ? ForwardOpaquePipelineFamily.CompactedSimple
                     : ForwardOpaquePipelineFamily.CompactedFull,
                 capacities.SimpleCapacity,
+                capacities.SimpleDoubleSidedBase,
+                capacities.SimpleDoubleSidedCapacity,
                 BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
                 SceneOpaqueCompactionPass.GetSimpleOpaqueDoubleSidedIndirectDispatchOffset(),
@@ -2556,6 +2594,8 @@ namespace Njulf.Rendering.Pipeline
                     ? ForwardOpaquePipelineFamily.CompactedSimpleFullInput
                     : ForwardOpaquePipelineFamily.CompactedFull,
                 capacities.SimpleNormalCapacity,
+                capacities.SimpleNormalDoubleSidedBase,
+                capacities.SimpleNormalDoubleSidedCapacity,
                 BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
                 SceneOpaqueCompactionPass.GetSimpleNormalOpaqueDoubleSidedIndirectDispatchOffset(),
@@ -2567,6 +2607,8 @@ namespace Njulf.Rendering.Pipeline
                 sceneData,
                 ForwardOpaquePipelineFamily.CompactedFull,
                 capacities.FullCapacity,
+                capacities.FullDoubleSidedBase,
+                capacities.FullDoubleSidedCapacity,
                 BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
                 SceneOpaqueCompactionPass.GetFullOpaqueDoubleSidedIndirectDispatchOffset(),
@@ -2589,6 +2631,12 @@ namespace Njulf.Rendering.Pipeline
                     ? ForwardOpaquePipelineFamily.CompactedSimple
                     : ForwardOpaquePipelineFamily.CompactedFull,
                 Math.Max(0, sceneData.ForwardVisibilitySimpleCapacity),
+                Math.Max(
+                    0,
+                    sceneData.ForwardVisibilitySimpleDoubleSidedBase),
+                Math.Max(
+                    0,
+                    sceneData.ForwardVisibilitySimpleDoubleSidedCapacity),
                 BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
                 ForwardVisibilityCompactionPass.GetSimpleOpaqueDoubleSidedIndirectDispatchOffset(),
@@ -2602,6 +2650,14 @@ namespace Njulf.Rendering.Pipeline
                     ? ForwardOpaquePipelineFamily.CompactedSimpleFullInput
                     : ForwardOpaquePipelineFamily.CompactedFull,
                 Math.Max(0, sceneData.ForwardVisibilitySimpleNormalCapacity),
+                Math.Max(
+                    0,
+                    sceneData
+                        .ForwardVisibilitySimpleNormalDoubleSidedBase),
+                Math.Max(
+                    0,
+                    sceneData
+                        .ForwardVisibilitySimpleNormalDoubleSidedCapacity),
                 BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
                 ForwardVisibilityCompactionPass.GetSimpleNormalOpaqueDoubleSidedIndirectDispatchOffset(),
@@ -2613,6 +2669,12 @@ namespace Njulf.Rendering.Pipeline
                 sceneData,
                 ForwardOpaquePipelineFamily.CompactedFull,
                 Math.Max(0, sceneData.ForwardVisibilityFullCapacity),
+                Math.Max(
+                    0,
+                    sceneData.ForwardVisibilityFullDoubleSidedBase),
+                Math.Max(
+                    0,
+                    sceneData.ForwardVisibilityFullDoubleSidedCapacity),
                 BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
                 ForwardVisibilityCompactionPass.GetFullOpaqueDoubleSidedIndirectDispatchOffset(),
@@ -2665,6 +2727,8 @@ namespace Njulf.Rendering.Pipeline
             Data.SceneRenderingData sceneData,
             ForwardOpaquePipelineFamily pipelineFamily,
             int meshletCapacity,
+            int doubleSidedFirstDraw,
+            int doubleSidedMeshletCapacity,
             int meshletDrawBufferBaseIndex,
             ulong indirectOffset,
             ulong doubleSidedIndirectOffset,
@@ -2672,26 +2736,14 @@ namespace Njulf.Rendering.Pipeline
             bool nearFieldDirectSourceEnabled = false,
             bool giCausticReceiverEnabled = false)
         {
-            if (meshletCapacity <= 0 || _bufferManager == null)
+            if ((meshletCapacity <= 0 && doubleSidedMeshletCapacity <= 0) ||
+                _bufferManager == null)
                 return;
 
             bool sidedStreams = sceneData.ForwardVisibilityCompactionActive
                 ? sceneData.ForwardVisibilitySidedStreamsActive
                 : sceneData.SceneSubmissionSidedRasterSpecializationActive;
-            DrawForwardBucketIndirectCore(
-                cmd,
-                sceneData,
-                pipelineFamily,
-                meshletCapacity,
-                meshletDrawBufferBaseIndex,
-                indirectOffset,
-                indirectBufferHandle,
-                firstDraw: 0u,
-                oneSided: sidedStreams,
-                depthEqual: sidedStreams,
-                nearFieldDirectSourceEnabled,
-                giCausticReceiverEnabled);
-            if (sidedStreams)
+            if (meshletCapacity > 0)
             {
                 DrawForwardBucketIndirectCore(
                     cmd,
@@ -2699,14 +2751,30 @@ namespace Njulf.Rendering.Pipeline
                     pipelineFamily,
                     meshletCapacity,
                     meshletDrawBufferBaseIndex,
-                    doubleSidedIndirectOffset,
+                    indirectOffset,
                     indirectBufferHandle,
-                    firstDraw: checked((uint)meshletCapacity),
-                    oneSided: false,
-                    depthEqual: true,
+                    firstDraw: 0u,
+                    oneSided: sidedStreams,
+                    depthEqual: sidedStreams,
                     nearFieldDirectSourceEnabled,
                     giCausticReceiverEnabled);
             }
+            if (!sidedStreams || doubleSidedMeshletCapacity <= 0)
+                return;
+
+            DrawForwardBucketIndirectCore(
+                cmd,
+                sceneData,
+                pipelineFamily,
+                doubleSidedMeshletCapacity,
+                meshletDrawBufferBaseIndex,
+                doubleSidedIndirectOffset,
+                indirectBufferHandle,
+                firstDraw: checked((uint)doubleSidedFirstDraw),
+                oneSided: false,
+                depthEqual: true,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
         }
 
         private void DrawForwardBucketIndirectCore(

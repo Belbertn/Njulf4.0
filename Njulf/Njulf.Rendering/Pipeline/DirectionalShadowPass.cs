@@ -205,6 +205,8 @@ namespace Njulf.Rendering.Pipeline
                         cascade,
                         _shadowResources.GetStaticCascadeView(cascade),
                         GetStaticShadowMeshletCount(sceneData, cascade),
+                        GetStaticShadowDoubleSidedBase(sceneData, cascade),
+                        GetStaticShadowDoubleSidedCapacity(sceneData, cascade),
                         GetStaticShadowMeshletDrawBufferBaseIndex(sceneData, cascade),
                         AttachmentLoadOp.Clear,
                         GetStaticShadowIndirectDispatchOffset(sceneData, cascade),
@@ -238,6 +240,8 @@ namespace Njulf.Rendering.Pipeline
                         cascade,
                         _shadowResources.GetWorkingCascadeView(cascade),
                         GetDynamicShadowMeshletCount(sceneData, cascade),
+                        GetDynamicShadowDoubleSidedBase(sceneData, cascade),
+                        GetDynamicShadowDoubleSidedCapacity(sceneData, cascade),
                         GetDynamicShadowMeshletDrawBufferBaseIndex(sceneData, cascade),
                         AttachmentLoadOp.Load,
                         GetDynamicShadowIndirectDispatchOffset(sceneData, cascade),
@@ -297,15 +301,20 @@ namespace Njulf.Rendering.Pipeline
             int cascade,
             ImageView imageView,
             int meshletCount,
+            int doubleSidedFirstDraw,
+            int doubleSidedMeshletCount,
             int meshletDrawBufferBaseIndex,
             AttachmentLoadOp loadOp,
             ulong? indirectDispatchOffset = null,
             ulong? doubleSidedIndirectDispatchOffset = null)
         {
-            if (meshletCount <= 0 && loadOp != AttachmentLoadOp.Clear)
+            if (meshletCount <= 0 &&
+                doubleSidedMeshletCount <= 0 &&
+                loadOp != AttachmentLoadOp.Clear)
                 return;
 
-            bool useCompactedIndirect = meshletCount > 0 &&
+            bool useCompactedIndirect =
+                (meshletCount > 0 || doubleSidedMeshletCount > 0) &&
                 indirectDispatchOffset.HasValue &&
                 CanUseSceneIndirectDispatch(
                     sceneData,
@@ -382,42 +391,51 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            if (meshletCount > 0)
+            if (meshletCount > 0 || doubleSidedMeshletCount > 0)
             {
                 if (useCompactedIndirect)
                 {
-                    sceneData.DirectionalShadowMeshOnlyIndirectDrawCount++;
                     VkBuffer indirect = _bufferManager!.GetBuffer(sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
-                    _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
-                        cmd,
-                        indirect,
-                        indirectDispatchOffset.GetValueOrDefault(),
-                        1,
-                        (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
-                    if (useSidedStreams)
+                    if (meshletCount > 0)
                     {
-                        _context.Api.CmdSetCullMode(
-                            cmd,
-                            CullModeFlags.None);
-                        pushConstants.FirstDraw = checked((uint)meshletCount);
-                        _context.Api.CmdPushConstants(
-                            cmd,
-                            _meshPipeline.Layout,
-                            ShaderStageFlags.MeshBitExt |
-                            ShaderStageFlags.FragmentBit |
-                            ShaderStageFlags.TaskBitExt,
-                            0,
-                            size,
-                            &pushConstants);
                         sceneData.DirectionalShadowMeshOnlyIndirectDrawCount++;
                         _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
                             cmd,
                             indirect,
-                            doubleSidedIndirectDispatchOffset
-                                .GetValueOrDefault(),
+                            indirectDispatchOffset.GetValueOrDefault(),
                             1,
-                            (uint)Marshal.SizeOf<
-                                DrawMeshTasksIndirectCommandEXT>());
+                            (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+                    }
+                    if (useSidedStreams)
+                    {
+                        if (doubleSidedMeshletCount > 0)
+                        {
+                            _context.Api.CmdSetCullMode(
+                                cmd,
+                                CullModeFlags.None);
+                            pushConstants.MeshletDrawCount = checked(
+                                (uint)doubleSidedMeshletCount);
+                            pushConstants.FirstDraw = checked(
+                                (uint)doubleSidedFirstDraw);
+                            _context.Api.CmdPushConstants(
+                                cmd,
+                                _meshPipeline.Layout,
+                                ShaderStageFlags.MeshBitExt |
+                                ShaderStageFlags.FragmentBit |
+                                ShaderStageFlags.TaskBitExt,
+                                0,
+                                size,
+                                &pushConstants);
+                            sceneData.DirectionalShadowMeshOnlyIndirectDrawCount++;
+                            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                                cmd,
+                                indirect,
+                                doubleSidedIndirectDispatchOffset
+                                    .GetValueOrDefault(),
+                                1,
+                                (uint)Marshal.SizeOf<
+                                    DrawMeshTasksIndirectCommandEXT>());
+                        }
                     }
                 }
                 else
@@ -461,6 +479,54 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.SceneSubmissionSidedRasterSpecializationActive)
                 : sceneData.DirectionalDynamicShadowMeshletCount;
         }
+
+        private static int GetStaticShadowDoubleSidedBase(
+            SceneRenderingData sceneData,
+            int cascade) =>
+            CanUseSceneCompactedDirectionalShadows(
+                sceneData,
+                staticShadow: true,
+                cascade)
+                ? sceneData
+                    .SceneSubmissionGpuDirectionalStaticShadowDoubleSidedBases[
+                        cascade]
+                : 0;
+
+        private static int GetStaticShadowDoubleSidedCapacity(
+            SceneRenderingData sceneData,
+            int cascade) =>
+            CanUseSceneCompactedDirectionalShadows(
+                sceneData,
+                staticShadow: true,
+                cascade)
+                ? sceneData
+                    .SceneSubmissionGpuDirectionalStaticShadowDoubleSidedCapacities[
+                        cascade]
+                : 0;
+
+        private static int GetDynamicShadowDoubleSidedBase(
+            SceneRenderingData sceneData,
+            int cascade) =>
+            CanUseSceneCompactedDirectionalShadows(
+                sceneData,
+                staticShadow: false,
+                cascade)
+                ? sceneData
+                    .SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedBases[
+                        cascade]
+                : 0;
+
+        private static int GetDynamicShadowDoubleSidedCapacity(
+            SceneRenderingData sceneData,
+            int cascade) =>
+            CanUseSceneCompactedDirectionalShadows(
+                sceneData,
+                staticShadow: false,
+                cascade)
+                ? sceneData
+                    .SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedCapacities[
+                        cascade]
+                : 0;
 
         private static int GetStaticShadowMeshletDrawBufferBaseIndex(SceneRenderingData sceneData, int cascade)
         {
@@ -531,9 +597,11 @@ namespace Njulf.Rendering.Pipeline
 
             bool hasCapacity = staticShadow
                 ? sceneData.SceneSubmissionGpuDirectionalStaticShadowCandidateCounts[cascade] > 0 &&
-                  sceneData.SceneSubmissionGpuDirectionalStaticShadowCapacities[cascade] > 0
+                  (sceneData.SceneSubmissionGpuDirectionalStaticShadowCapacities[cascade] > 0 ||
+                   sceneData.SceneSubmissionGpuDirectionalStaticShadowDoubleSidedCapacities[cascade] > 0)
                 : sceneData.SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts[cascade] > 0 &&
-                  sceneData.SceneSubmissionGpuDirectionalDynamicShadowCapacities[cascade] > 0;
+                  (sceneData.SceneSubmissionGpuDirectionalDynamicShadowCapacities[cascade] > 0 ||
+                   sceneData.SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedCapacities[cascade] > 0);
             if (!hasCapacity ||
                 !sceneData.SceneSubmissionSidedRasterSpecializationActive)
             {
@@ -794,6 +862,8 @@ namespace Njulf.Rendering.Pipeline
                     sceneData,
                     cascade,
                     _shadowResources.GetWorkingCascadeView(cascade),
+                    0,
+                    0,
                     0,
                     BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferBase,
                     AttachmentLoadOp.Clear);

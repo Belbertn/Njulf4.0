@@ -150,6 +150,10 @@ namespace Njulf.Rendering.Pipeline
                         sceneData.SceneSubmissionGpuDepthSolidCandidateCount,
                         sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity,
                         sceneData.SceneSubmissionSidedRasterSpecializationActive),
+                    sceneData
+                        .SceneSubmissionGpuCompactedSolidDepthDoubleSidedBase,
+                    sceneData
+                        .SceneSubmissionGpuCompactedSolidDepthDoubleSidedCapacity,
                     BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase,
                     SceneOpaqueCompactionPass.GetSolidDepthIndirectDispatchOffset(),
                     SceneOpaqueCompactionPass.GetSolidDepthDoubleSidedIndirectDispatchOffset(),
@@ -164,6 +168,10 @@ namespace Njulf.Rendering.Pipeline
                         sceneData.SceneSubmissionGpuDepthMaskedCandidateCount,
                         sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity,
                         sceneData.SceneSubmissionSidedRasterSpecializationActive),
+                    sceneData
+                        .SceneSubmissionGpuCompactedMaskedDepthDoubleSidedBase,
+                    sceneData
+                        .SceneSubmissionGpuCompactedMaskedDepthDoubleSidedCapacity,
                     BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase,
                     SceneOpaqueCompactionPass.GetMaskedDepthIndirectDispatchOffset(),
                     SceneOpaqueCompactionPass.GetMaskedDepthDoubleSidedIndirectDispatchOffset(),
@@ -207,10 +215,12 @@ namespace Njulf.Rendering.Pipeline
 
             bool solidReady = !hasSolidDepthCandidates ||
                               (sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBuffer.IsValid &&
-                               sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity > 0);
+                               (sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity > 0 ||
+                                sceneData.SceneSubmissionGpuCompactedSolidDepthDoubleSidedCapacity > 0));
             bool maskedReady = !hasMaskedDepthCandidates ||
                                (sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer.IsValid &&
-                               sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity > 0);
+                                (sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity > 0 ||
+                                 sceneData.SceneSubmissionGpuCompactedMaskedDepthDoubleSidedCapacity > 0));
             if (!solidReady || !maskedReady)
                 return false;
 
@@ -267,6 +277,8 @@ namespace Njulf.Rendering.Pipeline
             Silk.NET.Vulkan.Pipeline fallbackPipeline,
             Silk.NET.Vulkan.Pipeline compactedPipeline,
             int meshletCapacity,
+            int doubleSidedFirstDraw,
+            int doubleSidedMeshletCapacity,
             int meshletDrawBufferBaseIndex,
             ulong indirectDispatchOffset,
             ulong doubleSidedIndirectDispatchOffset,
@@ -274,18 +286,7 @@ namespace Njulf.Rendering.Pipeline
         {
             if (CanUseSceneIndirectDispatch(sceneData, indirectDispatchOffset))
             {
-                DrawDepthListIndirect(
-                    cmd,
-                    sceneData,
-                    compactedPipeline,
-                    meshletCapacity,
-                    meshletDrawBufferBaseIndex,
-                    indirectDispatchOffset,
-                    completedEmittedCount,
-                    firstDraw: 0u,
-                    oneSided: sceneData
-                        .SceneSubmissionSidedRasterSpecializationActive);
-                if (sceneData.SceneSubmissionSidedRasterSpecializationActive)
+                if (meshletCapacity > 0)
                 {
                     DrawDepthListIndirect(
                         cmd,
@@ -293,10 +294,28 @@ namespace Njulf.Rendering.Pipeline
                         compactedPipeline,
                         meshletCapacity,
                         meshletDrawBufferBaseIndex,
-                        doubleSidedIndirectDispatchOffset,
+                        indirectDispatchOffset,
                         completedEmittedCount,
-                        firstDraw: checked((uint)meshletCapacity),
-                        oneSided: false);
+                        firstDraw: 0u,
+                        oneSided: sceneData
+                            .SceneSubmissionSidedRasterSpecializationActive);
+                }
+                if (sceneData.SceneSubmissionSidedRasterSpecializationActive)
+                {
+                    if (doubleSidedMeshletCapacity > 0)
+                    {
+                        DrawDepthListIndirect(
+                            cmd,
+                            sceneData,
+                            compactedPipeline,
+                            doubleSidedMeshletCapacity,
+                            meshletDrawBufferBaseIndex,
+                            doubleSidedIndirectDispatchOffset,
+                            completedEmittedCount,
+                            firstDraw: checked(
+                                (uint)doubleSidedFirstDraw),
+                            oneSided: false);
+                    }
                 }
                 return;
             }

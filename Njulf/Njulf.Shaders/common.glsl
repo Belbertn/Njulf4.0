@@ -1281,6 +1281,13 @@ struct GPUSceneOpaqueCompactionPushConstants
     uint InstanceCandidateBufferBaseIndex;
     uint TemporalFrameIndex;
     uint LodTransitionFrameCount;
+    uint SimpleDoubleSidedCapacity;
+    uint SimpleNormalDoubleSidedCapacity;
+    uint FullDoubleSidedCapacity;
+    uint SolidDepthDoubleSidedCapacity;
+    uint MaskedDepthDoubleSidedCapacity;
+    uint DirectionalStaticShadowDoubleSidedCapacity;
+    uint DirectionalDynamicShadowDoubleSidedCapacity;
 };
 
 struct GPUFoliageProceduralDrawCommand
@@ -1336,6 +1343,12 @@ struct GPUForwardVisibilityCompactionPushConstants
     uint OcclusionCullingEnabled;
     float OcclusionBias;
     uint Padding0;
+    uint SimpleDoubleSidedBase;
+    uint SimpleDoubleSidedCapacity;
+    uint SimpleNormalDoubleSidedBase;
+    uint SimpleNormalDoubleSidedCapacity;
+    uint FullDoubleSidedBase;
+    uint FullDoubleSidedCapacity;
 };
 
 struct GPUFoliageCullPushConstants
@@ -1848,8 +1861,8 @@ const int SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS = 16;
 const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_PATCH = 80;
 const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_GENERATION_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 360;
-const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 224;
-const int SIZEOF_GPU_FORWARD_VISIBILITY_COMPACTION_PUSH_CONSTANTS = 92;
+const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 252;
+const int SIZEOF_GPU_FORWARD_VISIBILITY_COMPACTION_PUSH_CONSTANTS = 116;
 const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 88;
 const int SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS = 132;
 const int SIZEOF_GPU_TILED_LIGHT_HEADER = 16;

@@ -97,8 +97,20 @@ namespace Njulf.Rendering.Pipeline
                 sceneData.SceneSubmissionSidedRasterSpecializationActive;
             ForwardVisibilityCapacityPlan capacityPlan = ResolveCapacityPlan(
                 sceneData.SceneSubmissionGpuCompactedSimpleOpaqueCapacity,
+                sceneData
+                    .SceneSubmissionGpuCompactedSimpleOpaqueDoubleSidedBase,
+                sceneData
+                    .SceneSubmissionGpuCompactedSimpleOpaqueDoubleSidedCapacity,
                 sceneData.SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity,
+                sceneData
+                    .SceneSubmissionGpuCompactedSimpleNormalOpaqueDoubleSidedBase,
+                sceneData
+                    .SceneSubmissionGpuCompactedSimpleNormalOpaqueDoubleSidedCapacity,
                 sceneData.SceneSubmissionGpuCompactedFullOpaqueCapacity,
+                sceneData
+                    .SceneSubmissionGpuCompactedFullOpaqueDoubleSidedBase,
+                sceneData
+                    .SceneSubmissionGpuCompactedFullOpaqueDoubleSidedCapacity,
                 sidedStreams);
             if (capacityPlan.DispatchCandidateCount <= 0)
             {
@@ -149,10 +161,22 @@ namespace Njulf.Rendering.Pipeline
                 (uint)capacityPlan.FullInputCapacity);
             sceneData.ForwardVisibilitySimpleCapacity =
                 checked((int)simpleOutputCapacity);
+            sceneData.ForwardVisibilitySimpleDoubleSidedBase =
+                capacityPlan.SimpleDoubleSidedBase;
+            sceneData.ForwardVisibilitySimpleDoubleSidedCapacity =
+                capacityPlan.SimpleDoubleSidedCapacity;
             sceneData.ForwardVisibilitySimpleNormalCapacity =
                 checked((int)simpleNormalOutputCapacity);
+            sceneData.ForwardVisibilitySimpleNormalDoubleSidedBase =
+                capacityPlan.SimpleNormalDoubleSidedBase;
+            sceneData.ForwardVisibilitySimpleNormalDoubleSidedCapacity =
+                capacityPlan.SimpleNormalDoubleSidedCapacity;
             sceneData.ForwardVisibilityFullCapacity =
                 checked((int)fullOutputCapacity);
+            sceneData.ForwardVisibilityFullDoubleSidedBase =
+                capacityPlan.FullDoubleSidedBase;
+            sceneData.ForwardVisibilityFullDoubleSidedCapacity =
+                capacityPlan.FullDoubleSidedCapacity;
             sceneData.ForwardVisibilityCounterBuffer = counterBuffer.Handle;
             sceneData.ForwardVisibilityIndirectDispatchBuffer = indirectDispatchBuffer.Handle;
             sceneData.ForwardVisibilityBufferBytes = checked(
@@ -201,7 +225,19 @@ namespace Njulf.Rendering.Pipeline
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
                 OcclusionBias = sceneData.OcclusionBias,
-                Padding0 = sidedStreams ? 1u : 0u
+                Padding0 = sidedStreams ? 1u : 0u,
+                SimpleDoubleSidedBase = checked(
+                    (uint)capacityPlan.SimpleDoubleSidedBase),
+                SimpleDoubleSidedCapacity = checked(
+                    (uint)capacityPlan.SimpleDoubleSidedCapacity),
+                SimpleNormalDoubleSidedBase = checked(
+                    (uint)capacityPlan.SimpleNormalDoubleSidedBase),
+                SimpleNormalDoubleSidedCapacity = checked(
+                    (uint)capacityPlan.SimpleNormalDoubleSidedCapacity),
+                FullDoubleSidedBase = checked(
+                    (uint)capacityPlan.FullDoubleSidedBase),
+                FullDoubleSidedCapacity = checked(
+                    (uint)capacityPlan.FullDoubleSidedCapacity)
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -297,18 +333,87 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 simpleNormalCompactedCapacity);
             int fullInputCapacity = Math.Max(0, fullCompactedCapacity);
+            return ResolveCapacityPlan(
+                simpleInputCapacity,
+                sidedStreams ? Math.Max(1, simpleInputCapacity) : 0,
+                sidedStreams ? Math.Max(1, simpleInputCapacity) : 0,
+                simpleNormalInputCapacity,
+                sidedStreams ? Math.Max(1, simpleNormalInputCapacity) : 0,
+                sidedStreams ? Math.Max(1, simpleNormalInputCapacity) : 0,
+                fullInputCapacity,
+                sidedStreams ? Math.Max(1, fullInputCapacity) : 0,
+                sidedStreams ? Math.Max(1, fullInputCapacity) : 0,
+                sidedStreams);
+        }
+
+        internal static ForwardVisibilityCapacityPlan ResolveCapacityPlan(
+            int simpleCompactedCapacity,
+            int simpleDoubleSidedBase,
+            int simpleDoubleSidedCapacity,
+            int simpleNormalCompactedCapacity,
+            int simpleNormalDoubleSidedBase,
+            int simpleNormalDoubleSidedCapacity,
+            int fullCompactedCapacity,
+            int fullDoubleSidedBase,
+            int fullDoubleSidedCapacity,
+            bool sidedStreams)
+        {
+            int simpleInputCapacity = Math.Max(0, simpleCompactedCapacity);
+            int simpleNormalInputCapacity = Math.Max(
+                0,
+                simpleNormalCompactedCapacity);
+            int fullInputCapacity = Math.Max(0, fullCompactedCapacity);
+            int simpleDoubleBase = sidedStreams
+                ? Math.Max(simpleInputCapacity, simpleDoubleSidedBase)
+                : 0;
+            int simpleDoubleCapacity = sidedStreams
+                ? Math.Max(0, simpleDoubleSidedCapacity)
+                : 0;
+            int simpleNormalDoubleBase = sidedStreams
+                ? Math.Max(
+                    simpleNormalInputCapacity,
+                    simpleNormalDoubleSidedBase)
+                : 0;
+            int simpleNormalDoubleCapacity = sidedStreams
+                ? Math.Max(0, simpleNormalDoubleSidedCapacity)
+                : 0;
+            int fullDoubleBase = sidedStreams
+                ? Math.Max(fullInputCapacity, fullDoubleSidedBase)
+                : 0;
+            int fullDoubleCapacity = sidedStreams
+                ? Math.Max(0, fullDoubleSidedCapacity)
+                : 0;
             return new ForwardVisibilityCapacityPlan(
                 simpleInputCapacity,
+                simpleDoubleBase,
+                simpleDoubleCapacity,
                 simpleNormalInputCapacity,
+                simpleNormalDoubleBase,
+                simpleNormalDoubleCapacity,
                 fullInputCapacity,
+                fullDoubleBase,
+                fullDoubleCapacity,
                 Math.Max(
+                    Math.Max(simpleInputCapacity, simpleDoubleCapacity),
+                    Math.Max(
+                        Math.Max(
+                            simpleNormalInputCapacity,
+                            simpleNormalDoubleCapacity),
+                        Math.Max(
+                            fullInputCapacity,
+                            fullDoubleCapacity))),
+                RequiredStreamElements(
                     simpleInputCapacity,
-                    Math.Max(simpleNormalInputCapacity, fullInputCapacity)),
-                RequiredStreamElements(simpleInputCapacity, sidedStreams),
+                    simpleDoubleBase,
+                    simpleDoubleCapacity),
                 RequiredStreamElements(
                     simpleNormalInputCapacity,
-                    sidedStreams),
-                RequiredStreamElements(fullInputCapacity, sidedStreams));
+                    simpleNormalDoubleBase,
+                    simpleNormalDoubleCapacity),
+                RequiredStreamElements(
+                    fullInputCapacity,
+                    fullDoubleBase,
+                    fullDoubleCapacity));
         }
 
         internal static bool CapacityBackingsCoverPlan(
@@ -322,13 +427,14 @@ namespace Njulf.Rendering.Pipeline
             fullBackingElementCount >= plan.FullBackingElementCount;
 
         private static uint RequiredStreamElements(
-            int candidateCount,
-            bool sidedStreams)
+            int oneSidedCapacity,
+            int doubleSidedBase,
+            int doubleSidedCapacity)
         {
-            uint logicalCapacity = checked((uint)Math.Max(1, candidateCount));
-            return sidedStreams
-                ? checked(logicalCapacity * 2u)
-                : logicalCapacity;
+            int totalCapacity = doubleSidedCapacity > 0
+                ? checked(doubleSidedBase + doubleSidedCapacity)
+                : oneSidedCapacity;
+            return checked((uint)Math.Max(1, totalCapacity));
         }
 
         private void EnsureCapacity(
@@ -585,8 +691,14 @@ namespace Njulf.Rendering.Pipeline
 
     internal readonly record struct ForwardVisibilityCapacityPlan(
         int SimpleInputCapacity,
+        int SimpleDoubleSidedBase,
+        int SimpleDoubleSidedCapacity,
         int SimpleNormalInputCapacity,
+        int SimpleNormalDoubleSidedBase,
+        int SimpleNormalDoubleSidedCapacity,
         int FullInputCapacity,
+        int FullDoubleSidedBase,
+        int FullDoubleSidedCapacity,
         int DispatchCandidateCount,
         uint SimpleBackingElementCount,
         uint SimpleNormalBackingElementCount,

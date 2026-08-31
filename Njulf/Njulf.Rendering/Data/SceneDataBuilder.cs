@@ -242,6 +242,13 @@ namespace Njulf.Rendering.Data
         private int _submittedSmallMeshletsUnder32Triangles;
         private int _normalConeEligibleOpaqueMeshletCount;
         private int _doubleSidedOpaqueMeshletCount;
+        private int _doubleSidedSimpleOpaqueMeshletCount;
+        private int _doubleSidedSimpleNormalOpaqueMeshletCount;
+        private int _doubleSidedFullOpaqueMeshletCount;
+        private int _doubleSidedSolidDepthMeshletCount;
+        private int _doubleSidedMaskedDepthMeshletCount;
+        private int _doubleSidedDirectionalStaticShadowMeshletCount;
+        private int _doubleSidedDirectionalDynamicShadowMeshletCount;
         private int _instanceCandidateSimpleMeshletCapacity;
         private int _instanceCandidateSimpleNormalMeshletCapacity;
         private int _instanceCandidateFullMeshletCapacity;
@@ -251,6 +258,13 @@ namespace Njulf.Rendering.Data
         private int _instanceCandidateDirectionalDynamicShadowMeshletCapacity;
         private int _instanceCandidateNormalConeMeshletCount;
         private int _instanceCandidateDoubleSidedMeshletCount;
+        private int _instanceCandidateDoubleSidedSimpleMeshletCapacity;
+        private int _instanceCandidateDoubleSidedSimpleNormalMeshletCapacity;
+        private int _instanceCandidateDoubleSidedFullMeshletCapacity;
+        private int _instanceCandidateDoubleSidedSolidDepthMeshletCapacity;
+        private int _instanceCandidateDoubleSidedMaskedDepthMeshletCapacity;
+        private int _instanceCandidateDoubleSidedDirectionalStaticShadowMeshletCapacity;
+        private int _instanceCandidateDoubleSidedDirectionalDynamicShadowMeshletCapacity;
         private bool _meshletNormalConeCullingEnabled;
         private bool _disposed;
 
@@ -697,6 +711,13 @@ namespace Njulf.Rendering.Data
                     _submittedSmallMeshletsUnder32Triangles = 0;
                     _normalConeEligibleOpaqueMeshletCount = 0;
                     _doubleSidedOpaqueMeshletCount = 0;
+                    _doubleSidedSimpleOpaqueMeshletCount = 0;
+                    _doubleSidedSimpleNormalOpaqueMeshletCount = 0;
+                    _doubleSidedFullOpaqueMeshletCount = 0;
+                    _doubleSidedSolidDepthMeshletCount = 0;
+                    _doubleSidedMaskedDepthMeshletCount = 0;
+                    _doubleSidedDirectionalStaticShadowMeshletCount = 0;
+                    _doubleSidedDirectionalDynamicShadowMeshletCount = 0;
                     _instanceCandidateSimpleMeshletCapacity = 0;
                     _instanceCandidateSimpleNormalMeshletCapacity = 0;
                     _instanceCandidateFullMeshletCapacity = 0;
@@ -706,6 +727,13 @@ namespace Njulf.Rendering.Data
                     _instanceCandidateDirectionalDynamicShadowMeshletCapacity = 0;
                     _instanceCandidateNormalConeMeshletCount = 0;
                     _instanceCandidateDoubleSidedMeshletCount = 0;
+                    _instanceCandidateDoubleSidedSimpleMeshletCapacity = 0;
+                    _instanceCandidateDoubleSidedSimpleNormalMeshletCapacity = 0;
+                    _instanceCandidateDoubleSidedFullMeshletCapacity = 0;
+                    _instanceCandidateDoubleSidedSolidDepthMeshletCapacity = 0;
+                    _instanceCandidateDoubleSidedMaskedDepthMeshletCapacity = 0;
+                    _instanceCandidateDoubleSidedDirectionalStaticShadowMeshletCapacity = 0;
+                    _instanceCandidateDoubleSidedDirectionalDynamicShadowMeshletCapacity = 0;
                     _cpuSceneResidencyDemandRanges.Clear();
 
                     BuildCpuScenePayload(
@@ -1020,6 +1048,35 @@ namespace Njulf.Rendering.Data
                 sceneData.DoubleSidedOpaqueMeshletCount = instanceDrivenSubmission
                             ? _instanceCandidateDoubleSidedMeshletCount
                             : _doubleSidedOpaqueMeshletCount;
+                sceneData.SidedStreamCandidateCountsValid = true;
+                sceneData.DoubleSidedSimpleOpaqueMeshletCount =
+                    instanceDrivenSubmission
+                        ? _instanceCandidateDoubleSidedSimpleMeshletCapacity
+                        : _doubleSidedSimpleOpaqueMeshletCount;
+                sceneData.DoubleSidedSimpleNormalOpaqueMeshletCount =
+                    instanceDrivenSubmission
+                        ? _instanceCandidateDoubleSidedSimpleNormalMeshletCapacity
+                        : _doubleSidedSimpleNormalOpaqueMeshletCount;
+                sceneData.DoubleSidedFullOpaqueMeshletCount =
+                    instanceDrivenSubmission
+                        ? _instanceCandidateDoubleSidedFullMeshletCapacity
+                        : _doubleSidedFullOpaqueMeshletCount;
+                sceneData.DoubleSidedSolidDepthMeshletCount =
+                    instanceDrivenSubmission
+                        ? _instanceCandidateDoubleSidedSolidDepthMeshletCapacity
+                        : _doubleSidedSolidDepthMeshletCount;
+                sceneData.DoubleSidedMaskedDepthMeshletCount =
+                    instanceDrivenSubmission
+                        ? _instanceCandidateDoubleSidedMaskedDepthMeshletCapacity
+                        : _doubleSidedMaskedDepthMeshletCount;
+                sceneData.DoubleSidedDirectionalStaticShadowMeshletCount =
+                    instanceDrivenSubmission
+                        ? _instanceCandidateDoubleSidedDirectionalStaticShadowMeshletCapacity
+                        : _doubleSidedDirectionalStaticShadowMeshletCount;
+                sceneData.DoubleSidedDirectionalDynamicShadowMeshletCount =
+                    instanceDrivenSubmission
+                        ? _instanceCandidateDoubleSidedDirectionalDynamicShadowMeshletCapacity
+                        : _doubleSidedDirectionalDynamicShadowMeshletCount;
                 sceneData.MeshletNormalConeCullingEnabled = meshletNormalConeCullingEnabled;
                 sceneData.StableSceneInputUploadBytes = _lastObjectUploadBytes +
                         _lastInstanceUploadBytes +
@@ -1548,11 +1605,21 @@ namespace Njulf.Rendering.Data
                                 {
                                     _maskedDepthMeshletDrawCommands.Add(command);
                                     _packedMaskedDepthMeshletDrawCommands.Add(packedCommand);
+                                    if ((meshletCommandFlags &
+                                         (uint)GPUMeshletCommandFlags.MaterialDoubleSided) != 0u)
+                                    {
+                                        _doubleSidedMaskedDepthMeshletCount++;
+                                    }
                                 }
                                 else
                                 {
                                     _solidDepthMeshletDrawCommands.Add(command);
                                     _packedSolidDepthMeshletDrawCommands.Add(packedCommand);
+                                    if ((meshletCommandFlags &
+                                         (uint)GPUMeshletCommandFlags.MaterialDoubleSided) != 0u)
+                                    {
+                                        _doubleSidedSolidDepthMeshletCount++;
+                                    }
                                 }
                             }
                         }
@@ -1564,9 +1631,23 @@ namespace Njulf.Rendering.Data
                     {
                         _directionalShadowMeshletDrawCommands.Add(command);
                         if (isSkinnedObject)
+                        {
                             _directionalDynamicShadowMeshletDrawCommands.Add(command);
+                            if ((meshletCommandFlags &
+                                 (uint)GPUMeshletCommandFlags.MaterialDoubleSided) != 0u)
+                            {
+                                _doubleSidedDirectionalDynamicShadowMeshletCount++;
+                            }
+                        }
                         else
+                        {
                             _directionalStaticShadowMeshletDrawCommands.Add(command);
+                            if ((meshletCommandFlags &
+                                 (uint)GPUMeshletCommandFlags.MaterialDoubleSided) != 0u)
+                            {
+                                _doubleSidedDirectionalStaticShadowMeshletCount++;
+                            }
+                        }
                     }
                     if (castsLocalShadow)
                     {
@@ -1876,11 +1957,21 @@ namespace Njulf.Rendering.Data
                                     {
                                         _maskedDepthMeshletDrawCommands.Add(command);
                                         _packedMaskedDepthMeshletDrawCommands.Add(packedCommand);
+                                        if ((meshletCommandFlags &
+                                             (uint)GPUMeshletCommandFlags.MaterialDoubleSided) != 0u)
+                                        {
+                                            _doubleSidedMaskedDepthMeshletCount++;
+                                        }
                                     }
                                     else
                                     {
                                         _solidDepthMeshletDrawCommands.Add(command);
                                         _packedSolidDepthMeshletDrawCommands.Add(packedCommand);
+                                        if ((meshletCommandFlags &
+                                             (uint)GPUMeshletCommandFlags.MaterialDoubleSided) != 0u)
+                                        {
+                                            _doubleSidedSolidDepthMeshletCount++;
+                                        }
                                     }
                                 }
                             }
@@ -1892,6 +1983,11 @@ namespace Njulf.Rendering.Data
                         {
                             _directionalShadowMeshletDrawCommands.Add(command);
                             _directionalStaticShadowMeshletDrawCommands.Add(command);
+                            if ((meshletCommandFlags &
+                                 (uint)GPUMeshletCommandFlags.MaterialDoubleSided) != 0u)
+                            {
+                                _doubleSidedDirectionalStaticShadowMeshletCount++;
+                            }
                         }
                         if (castsLocalShadow)
                         {
@@ -2354,6 +2450,11 @@ namespace Njulf.Rendering.Data
             if (MaterialForwardClassifier.IsSimpleOpaque(forwardClass) &&
                 !meshInfo.HasVertexColor)
             {
+                if ((commandFlags &
+                     GPUMeshletCommandFlags.MaterialDoubleSided) != 0)
+                {
+                    _doubleSidedSimpleOpaqueMeshletCount++;
+                }
                 _meshletDrawCommands.Add(command);
                 _packedMeshletDrawCommands.Add(packedCommand);
                 return;
@@ -2362,11 +2463,21 @@ namespace Njulf.Rendering.Data
             if (MaterialForwardClassifier.IsSimpleNormalOpaque(forwardClass) ||
                 MaterialForwardClassifier.IsSimpleOpaque(forwardClass))
             {
+                if ((commandFlags &
+                     GPUMeshletCommandFlags.MaterialDoubleSided) != 0)
+                {
+                    _doubleSidedSimpleNormalOpaqueMeshletCount++;
+                }
                 _simpleNormalOpaqueMeshletDrawCommands.Add(command);
                 _packedSimpleNormalOpaqueMeshletDrawCommands.Add(packedCommand);
                 return;
             }
 
+            if ((commandFlags &
+                 GPUMeshletCommandFlags.MaterialDoubleSided) != 0)
+            {
+                _doubleSidedFullOpaqueMeshletCount++;
+            }
             _fullOpaqueMeshletDrawCommands.Add(command);
             _packedFullOpaqueMeshletDrawCommands.Add(packedCommand);
         }
@@ -2395,6 +2506,8 @@ namespace Njulf.Rendering.Data
             int meshletCount = checked((int)meshInfo.MeshletCount);
             GPUSceneInstanceClassification classification =
                 (GPUSceneInstanceClassification)candidate.Classification;
+            bool doubleSided = ((GPUMeshletCommandFlags)commandFlags &
+                GPUMeshletCommandFlags.MaterialDoubleSided) != 0;
             switch (classification &
                     GPUSceneInstanceClassification.ForwardBucketMask)
             {
@@ -2402,16 +2515,37 @@ namespace Njulf.Rendering.Data
                     _instanceCandidateSimpleMeshletCapacity = checked(
                         _instanceCandidateSimpleMeshletCapacity +
                         meshletCount);
+                    if (doubleSided)
+                    {
+                        _instanceCandidateDoubleSidedSimpleMeshletCapacity =
+                            checked(
+                                _instanceCandidateDoubleSidedSimpleMeshletCapacity +
+                                meshletCount);
+                    }
                     break;
                 case GPUSceneInstanceClassification.SimpleNormalOpaque:
                     _instanceCandidateSimpleNormalMeshletCapacity = checked(
                         _instanceCandidateSimpleNormalMeshletCapacity +
                         meshletCount);
+                    if (doubleSided)
+                    {
+                        _instanceCandidateDoubleSidedSimpleNormalMeshletCapacity =
+                            checked(
+                                _instanceCandidateDoubleSidedSimpleNormalMeshletCapacity +
+                                meshletCount);
+                    }
                     break;
                 default:
                     _instanceCandidateFullMeshletCapacity = checked(
                         _instanceCandidateFullMeshletCapacity +
                         meshletCount);
+                    if (doubleSided)
+                    {
+                        _instanceCandidateDoubleSidedFullMeshletCapacity =
+                            checked(
+                                _instanceCandidateDoubleSidedFullMeshletCapacity +
+                                meshletCount);
+                    }
                     break;
             }
 
@@ -2420,12 +2554,26 @@ namespace Njulf.Rendering.Data
                 _instanceCandidateMaskedDepthMeshletCapacity = checked(
                     _instanceCandidateMaskedDepthMeshletCapacity +
                     meshletCount);
+                if (doubleSided)
+                {
+                    _instanceCandidateDoubleSidedMaskedDepthMeshletCapacity =
+                        checked(
+                            _instanceCandidateDoubleSidedMaskedDepthMeshletCapacity +
+                            meshletCount);
+                }
             }
             else
             {
                 _instanceCandidateSolidDepthMeshletCapacity = checked(
                     _instanceCandidateSolidDepthMeshletCapacity +
                     meshletCount);
+                if (doubleSided)
+                {
+                    _instanceCandidateDoubleSidedSolidDepthMeshletCapacity =
+                        checked(
+                            _instanceCandidateDoubleSidedSolidDepthMeshletCapacity +
+                            meshletCount);
+                }
             }
 
             if ((classification &
@@ -2438,6 +2586,13 @@ namespace Njulf.Rendering.Data
                         checked(
                             _instanceCandidateDirectionalDynamicShadowMeshletCapacity +
                             meshletCount);
+                    if (doubleSided)
+                    {
+                        _instanceCandidateDoubleSidedDirectionalDynamicShadowMeshletCapacity =
+                            checked(
+                                _instanceCandidateDoubleSidedDirectionalDynamicShadowMeshletCapacity +
+                                meshletCount);
+                    }
                 }
                 else
                 {
@@ -2445,6 +2600,13 @@ namespace Njulf.Rendering.Data
                         checked(
                             _instanceCandidateDirectionalStaticShadowMeshletCapacity +
                             meshletCount);
+                    if (doubleSided)
+                    {
+                        _instanceCandidateDoubleSidedDirectionalStaticShadowMeshletCapacity =
+                            checked(
+                                _instanceCandidateDoubleSidedDirectionalStaticShadowMeshletCapacity +
+                                meshletCount);
+                    }
                 }
             }
 
@@ -2456,7 +2618,7 @@ namespace Njulf.Rendering.Data
                     _instanceCandidateNormalConeMeshletCount +
                     meshletCount);
             }
-            if ((flags & GPUMeshletCommandFlags.MaterialDoubleSided) != 0)
+            if (doubleSided)
             {
                 _instanceCandidateDoubleSidedMeshletCount = checked(
                     _instanceCandidateDoubleSidedMeshletCount +

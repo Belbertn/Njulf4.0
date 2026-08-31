@@ -1297,6 +1297,13 @@ namespace Njulf.Rendering.Data
         public uint InstanceCandidateBufferBaseIndex;
         public uint TemporalFrameIndex;
         public uint LodTransitionFrameCount;
+        public uint SimpleDoubleSidedCapacity;
+        public uint SimpleNormalDoubleSidedCapacity;
+        public uint FullDoubleSidedCapacity;
+        public uint SolidDepthDoubleSidedCapacity;
+        public uint MaskedDepthDoubleSidedCapacity;
+        public uint DirectionalStaticShadowDoubleSidedCapacity;
+        public uint DirectionalDynamicShadowDoubleSidedCapacity;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1324,6 +1331,12 @@ namespace Njulf.Rendering.Data
         public uint OcclusionCullingEnabled;
         public float OcclusionBias;
         public uint Padding0;
+        public uint SimpleDoubleSidedBase;
+        public uint SimpleDoubleSidedCapacity;
+        public uint SimpleNormalDoubleSidedBase;
+        public uint SimpleNormalDoubleSidedCapacity;
+        public uint FullDoubleSidedBase;
+        public uint FullDoubleSidedCapacity;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

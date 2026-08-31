@@ -51,6 +51,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferManager _bufferManager;
         private readonly FenceBasedDeleter _deleter;
         private readonly SynchronizationManager _synchronization;
+        private readonly bool _asymmetricSidedStreamsEnabled;
         private readonly RuntimeBuffer[] _compactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
         private readonly RuntimeBuffer[] _simpleCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
         private readonly RuntimeBuffer[] _simpleNormalCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
@@ -97,7 +98,8 @@ namespace Njulf.Rendering.Pipeline
             MeshPipeline meshPipeline,
             BufferManager bufferManager,
             FenceBasedDeleter deleter,
-            SynchronizationManager synchronization)
+            SynchronizationManager synchronization,
+            bool asymmetricSidedStreamsEnabled = true)
             : base("SceneOpaqueCompactionPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
@@ -105,6 +107,7 @@ namespace Njulf.Rendering.Pipeline
             _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
             _synchronization = synchronization ??
                 throw new ArgumentNullException(nameof(synchronization));
+            _asymmetricSidedStreamsEnabled = asymmetricSidedStreamsEnabled;
         }
 
         public void SetDirectionalStaticShadowRefreshQuery(Func<SceneRenderingData, uint> refreshMask)
@@ -214,16 +217,6 @@ namespace Njulf.Rendering.Pipeline
             int fullOutputCandidateCapacity = checked(
                 sceneData.FullOpaqueMeshletCount *
                 transitionCapacityMultiplier);
-            int solidDepthOutputCandidateCapacity = checked(
-                solidDepthCandidateCount * transitionCapacityMultiplier);
-            int maskedDepthOutputCandidateCapacity = checked(
-                maskedDepthCandidateCount * transitionCapacityMultiplier);
-            int directionalStaticShadowOutputCandidateCapacity = checked(
-                directionalStaticShadowCandidateCount *
-                transitionCapacityMultiplier);
-            int directionalDynamicShadowOutputCandidateCapacity = checked(
-                directionalDynamicShadowCandidateCount *
-                transitionCapacityMultiplier);
             int perInvocationDispatchCandidateCount = Math.Max(
                 Math.Max(candidateCount, Math.Max(solidDepthCandidateCount, maskedDepthCandidateCount)),
                 Math.Max(directionalStaticShadowCandidateCount, directionalDynamicShadowCandidateCount));
@@ -256,18 +249,87 @@ namespace Njulf.Rendering.Pipeline
             sceneData.SceneSubmissionSidedRasterSpecializationActive =
                 sidedStreams;
 
+            bool asymmetricSidedStreams = sidedStreams &&
+                _asymmetricSidedStreamsEnabled &&
+                SidedStreamCountsAreValid(
+                    sceneData,
+                    solidDepthCandidateCount,
+                    maskedDepthCandidateCount,
+                    directionalStaticShadowCandidateCount,
+                    directionalDynamicShadowCandidateCount);
+            sceneData.SceneSubmissionAsymmetricSidedStreamsActive =
+                asymmetricSidedStreams;
+            SidedStreamCapacityPlan simpleLayout =
+                ResolveSidedStreamCapacityPlan(
+                    sceneData.SimpleOpaqueMeshletCount,
+                    sceneData.DoubleSidedSimpleOpaqueMeshletCount,
+                    transitionCapacityMultiplier,
+                    sidedStreams,
+                    asymmetricSidedStreams);
+            SidedStreamCapacityPlan simpleNormalLayout =
+                ResolveSidedStreamCapacityPlan(
+                    sceneData.SimpleNormalOpaqueMeshletCount,
+                    sceneData.DoubleSidedSimpleNormalOpaqueMeshletCount,
+                    transitionCapacityMultiplier,
+                    sidedStreams,
+                    asymmetricSidedStreams);
+            SidedStreamCapacityPlan fullLayout =
+                ResolveSidedStreamCapacityPlan(
+                    sceneData.FullOpaqueMeshletCount,
+                    sceneData.DoubleSidedFullOpaqueMeshletCount,
+                    transitionCapacityMultiplier,
+                    sidedStreams,
+                    asymmetricSidedStreams);
+            SidedStreamCapacityPlan solidDepthLayout =
+                ResolveSidedStreamCapacityPlan(
+                    solidDepthCandidateCount,
+                    sceneData.DepthPrePassEnabled
+                        ? sceneData.DoubleSidedSolidDepthMeshletCount
+                        : 0,
+                    transitionCapacityMultiplier,
+                    sidedStreams,
+                    asymmetricSidedStreams);
+            SidedStreamCapacityPlan maskedDepthLayout =
+                ResolveSidedStreamCapacityPlan(
+                    maskedDepthCandidateCount,
+                    sceneData.DepthPrePassEnabled
+                        ? sceneData.DoubleSidedMaskedDepthMeshletCount
+                        : 0,
+                    transitionCapacityMultiplier,
+                    sidedStreams,
+                    asymmetricSidedStreams);
+            SidedStreamCapacityPlan directionalStaticLayout =
+                ResolveSidedStreamCapacityPlan(
+                    directionalStaticShadowCandidateCount,
+                    directionalStaticShadowCandidateCount > 0
+                        ? sceneData
+                            .DoubleSidedDirectionalStaticShadowMeshletCount
+                        : 0,
+                    transitionCapacityMultiplier,
+                    sidedStreams,
+                    asymmetricSidedStreams);
+            SidedStreamCapacityPlan directionalDynamicLayout =
+                ResolveSidedStreamCapacityPlan(
+                    directionalDynamicShadowCandidateCount,
+                    directionalDynamicShadowCandidateCount > 0
+                        ? sceneData
+                            .DoubleSidedDirectionalDynamicShadowMeshletCount
+                        : 0,
+                    transitionCapacityMultiplier,
+                    sidedStreams,
+                    asymmetricSidedStreams);
+
             EnsureRuntimeBuffers(
                 frameIndex,
                 sceneData.ObjectCount,
                 opaqueOutputCapacity,
-                simpleOutputCandidateCapacity,
-                simpleNormalOutputCandidateCapacity,
-                fullOutputCandidateCapacity,
-                solidDepthOutputCandidateCapacity,
-                maskedDepthOutputCandidateCapacity,
-                directionalStaticShadowOutputCandidateCapacity,
-                directionalDynamicShadowOutputCandidateCapacity,
-                sidedStreams);
+                simpleLayout,
+                simpleNormalLayout,
+                fullLayout,
+                solidDepthLayout,
+                maskedDepthLayout,
+                directionalStaticLayout,
+                directionalDynamicLayout);
             RuntimeBuffer drawBuffer = _compactedDrawBuffers[frameIndex];
             RuntimeBuffer simpleDrawBuffer = _simpleCompactedDrawBuffers[frameIndex];
             RuntimeBuffer simpleNormalDrawBuffer = _simpleNormalCompactedDrawBuffers[frameIndex];
@@ -293,57 +355,61 @@ namespace Njulf.Rendering.Pipeline
             sceneData.SceneSubmissionGpuCompactionActive = true;
             sceneData.SceneSubmissionCompactionSkipReason = string.Empty;
             sceneData.SceneSubmissionGpuOpaqueCandidateCount = candidateCount;
-            uint simpleOutputCapacity = ResolveStreamCapacity(
-                simpleDrawBuffer,
-                simpleOutputCandidateCapacity,
-                sidedStreams);
-            uint simpleNormalOutputCapacity = ResolveStreamCapacity(
-                simpleNormalDrawBuffer,
-                simpleNormalOutputCandidateCapacity,
-                sidedStreams);
-            uint fullOutputCapacity = ResolveStreamCapacity(
-                fullDrawBuffer,
-                fullOutputCandidateCapacity,
-                sidedStreams);
-            uint solidDepthOutputCapacity = ResolveStreamCapacity(
-                solidDepthDrawBuffer,
-                solidDepthOutputCandidateCapacity,
-                sidedStreams);
-            uint maskedDepthOutputCapacity = ResolveStreamCapacity(
-                maskedDepthDrawBuffer,
-                maskedDepthOutputCandidateCapacity,
-                sidedStreams);
-            uint directionalStaticOutputCapacity = ResolveStreamCapacity(
-                _directionalStaticShadowCompactedDrawBuffers[frameIndex, 0],
-                directionalStaticShadowOutputCandidateCapacity,
-                sidedStreams);
-            uint directionalDynamicOutputCapacity = ResolveStreamCapacity(
-                _directionalDynamicShadowCompactedDrawBuffers[frameIndex, 0],
-                directionalDynamicShadowOutputCandidateCapacity,
-                sidedStreams);
+            uint simpleOutputCapacity = checked(
+                (uint)simpleLayout.OneSidedCapacity);
+            uint simpleNormalOutputCapacity = checked(
+                (uint)simpleNormalLayout.OneSidedCapacity);
+            uint fullOutputCapacity = checked(
+                (uint)fullLayout.OneSidedCapacity);
+            uint solidDepthOutputCapacity = checked(
+                (uint)solidDepthLayout.OneSidedCapacity);
+            uint maskedDepthOutputCapacity = checked(
+                (uint)maskedDepthLayout.OneSidedCapacity);
+            uint directionalStaticOutputCapacity = checked(
+                (uint)directionalStaticLayout.OneSidedCapacity);
+            uint directionalDynamicOutputCapacity = checked(
+                (uint)directionalDynamicLayout.OneSidedCapacity);
 
             sceneData.SceneSubmissionGpuCompactedOpaqueCapacity = (int)Math.Min(drawBuffer.ElementCapacity, int.MaxValue);
             sceneData.SceneSubmissionGpuCompactedSimpleOpaqueCapacity =
                 checked((int)simpleOutputCapacity);
+            sceneData.SceneSubmissionGpuCompactedSimpleOpaqueDoubleSidedBase =
+                simpleLayout.DoubleSidedBase;
+            sceneData.SceneSubmissionGpuCompactedSimpleOpaqueDoubleSidedCapacity =
+                simpleLayout.DoubleSidedCapacity;
             sceneData.SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity =
                 checked((int)simpleNormalOutputCapacity);
+            sceneData.SceneSubmissionGpuCompactedSimpleNormalOpaqueDoubleSidedBase =
+                simpleNormalLayout.DoubleSidedBase;
+            sceneData.SceneSubmissionGpuCompactedSimpleNormalOpaqueDoubleSidedCapacity =
+                simpleNormalLayout.DoubleSidedCapacity;
             sceneData.SceneSubmissionGpuCompactedFullOpaqueCapacity =
                 checked((int)fullOutputCapacity);
+            sceneData.SceneSubmissionGpuCompactedFullOpaqueDoubleSidedBase =
+                fullLayout.DoubleSidedBase;
+            sceneData.SceneSubmissionGpuCompactedFullOpaqueDoubleSidedCapacity =
+                fullLayout.DoubleSidedCapacity;
             sceneData.SceneSubmissionGpuDepthSolidCandidateCount = solidDepthCandidateCount;
             sceneData.SceneSubmissionGpuDepthMaskedCandidateCount = maskedDepthCandidateCount;
             sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity =
                 checked((int)solidDepthOutputCapacity);
+            sceneData.SceneSubmissionGpuCompactedSolidDepthDoubleSidedBase =
+                solidDepthLayout.DoubleSidedBase;
+            sceneData.SceneSubmissionGpuCompactedSolidDepthDoubleSidedCapacity =
+                solidDepthLayout.DoubleSidedCapacity;
             sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity =
                 checked((int)maskedDepthOutputCapacity);
+            sceneData.SceneSubmissionGpuCompactedMaskedDepthDoubleSidedBase =
+                maskedDepthLayout.DoubleSidedBase;
+            sceneData.SceneSubmissionGpuCompactedMaskedDepthDoubleSidedCapacity =
+                maskedDepthLayout.DoubleSidedCapacity;
             InitializeDirectionalShadowRuntimeState(
                 sceneData,
-                frameIndex,
                 directionalStaticShadowCandidateCount,
                 directionalDynamicShadowCandidateCount,
-                directionalStaticShadowOutputCandidateCapacity,
-                directionalDynamicShadowOutputCandidateCapacity,
-                directionalStaticShadowCascadeMask,
-                sidedStreams);
+                directionalStaticLayout,
+                directionalDynamicLayout,
+                directionalStaticShadowCascadeMask);
             sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBuffer = drawBuffer.Handle;
             sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBuffer = solidDepthDrawBuffer.Handle;
             sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer = maskedDepthDrawBuffer.Handle;
@@ -487,7 +553,21 @@ namespace Njulf.Rendering.Pipeline
                         1,
                         SceneSubmissionSettings
                             .MaximumGpuLodTransitionFrameCount))
-                    : 0u
+                    : 0u,
+                SimpleDoubleSidedCapacity = checked(
+                    (uint)simpleLayout.DoubleSidedCapacity),
+                SimpleNormalDoubleSidedCapacity = checked(
+                    (uint)simpleNormalLayout.DoubleSidedCapacity),
+                FullDoubleSidedCapacity = checked(
+                    (uint)fullLayout.DoubleSidedCapacity),
+                SolidDepthDoubleSidedCapacity = checked(
+                    (uint)solidDepthLayout.DoubleSidedCapacity),
+                MaskedDepthDoubleSidedCapacity = checked(
+                    (uint)maskedDepthLayout.DoubleSidedCapacity),
+                DirectionalStaticShadowDoubleSidedCapacity = checked(
+                    (uint)directionalStaticLayout.DoubleSidedCapacity),
+                DirectionalDynamicShadowDoubleSidedCapacity = checked(
+                    (uint)directionalDynamicLayout.DoubleSidedCapacity)
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -512,14 +592,13 @@ namespace Njulf.Rendering.Pipeline
                     counterBuffer,
                     indirectDispatchBuffer,
                     checked((uint)opaqueOutputCapacity),
-                    simpleOutputCapacity,
-                    simpleNormalOutputCapacity,
-                    fullOutputCapacity,
-                    solidDepthOutputCapacity,
-                    maskedDepthOutputCapacity,
-                    directionalStaticOutputCapacity,
-                    directionalDynamicOutputCapacity,
-                    sidedStreams,
+                    checked((uint)simpleLayout.TotalLogicalCapacity),
+                    checked((uint)simpleNormalLayout.TotalLogicalCapacity),
+                    checked((uint)fullLayout.TotalLogicalCapacity),
+                    checked((uint)solidDepthLayout.TotalLogicalCapacity),
+                    checked((uint)maskedDepthLayout.TotalLogicalCapacity),
+                    checked((uint)directionalStaticLayout.TotalLogicalCapacity),
+                    checked((uint)directionalDynamicLayout.TotalLogicalCapacity),
                     sceneData.ForwardVisibilityCompactionEnabled,
                     sceneData.SceneSubmissionValidationCompareCpuGpuLists);
             RecordLodHistoryBarrier(cmd, frameIndex);
@@ -540,24 +619,16 @@ namespace Njulf.Rendering.Pipeline
             int frameIndex,
             int objectCount,
             int candidateCount,
-            int simpleCandidateCount,
-            int simpleNormalCandidateCount,
-            int fullCandidateCount,
-            int solidDepthCandidateCount,
-            int maskedDepthCandidateCount,
-            int directionalStaticShadowCandidateCount,
-            int directionalDynamicShadowCandidateCount,
-            bool sidedStreams)
+            in SidedStreamCapacityPlan simpleLayout,
+            in SidedStreamCapacityPlan simpleNormalLayout,
+            in SidedStreamCapacityPlan fullLayout,
+            in SidedStreamCapacityPlan solidDepthLayout,
+            in SidedStreamCapacityPlan maskedDepthLayout,
+            in SidedStreamCapacityPlan directionalStaticShadowLayout,
+            in SidedStreamCapacityPlan directionalDynamicShadowLayout)
         {
             ValidateFrameIndex(frameIndex);
             uint required = checked((uint)Math.Max(1, candidateCount));
-            uint requiredSimple = checked((uint)Math.Max(1, simpleCandidateCount));
-            uint requiredSimpleNormal = checked((uint)Math.Max(1, simpleNormalCandidateCount));
-            uint requiredFull = checked((uint)Math.Max(1, fullCandidateCount));
-            uint requiredSolidDepth = checked((uint)Math.Max(1, solidDepthCandidateCount));
-            uint requiredMaskedDepth = checked((uint)Math.Max(1, maskedDepthCandidateCount));
-            uint requiredDirectionalStaticShadow = checked((uint)Math.Max(1, directionalStaticShadowCandidateCount));
-            uint requiredDirectionalDynamicShadow = checked((uint)Math.Max(1, directionalDynamicShadowCandidateCount));
             EnsureCapacity(
                 ref _compactedDrawBuffers[frameIndex],
                 required,
@@ -565,43 +636,39 @@ namespace Njulf.Rendering.Pipeline
                 $"SceneSubmission.OpaqueCompactedMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _simpleCompactedDrawBuffers[frameIndex],
-                RequiredStreamElements(requiredSimple, sidedStreams),
+                simpleLayout.RequiredBackingElements,
                 DrawCommandStride,
                 $"SceneSubmission.SimpleOpaqueCompactedMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _simpleNormalCompactedDrawBuffers[frameIndex],
-                RequiredStreamElements(requiredSimpleNormal, sidedStreams),
+                simpleNormalLayout.RequiredBackingElements,
                 DrawCommandStride,
                 $"SceneSubmission.SimpleNormalOpaqueCompactedMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _fullCompactedDrawBuffers[frameIndex],
-                RequiredStreamElements(requiredFull, sidedStreams),
+                fullLayout.RequiredBackingElements,
                 DrawCommandStride,
                 $"SceneSubmission.FullOpaqueCompactedMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _solidDepthCompactedDrawBuffers[frameIndex],
-                RequiredStreamElements(requiredSolidDepth, sidedStreams),
+                solidDepthLayout.RequiredBackingElements,
                 DrawCommandStride,
                 $"SceneSubmission.SolidDepthCompactedMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _maskedDepthCompactedDrawBuffers[frameIndex],
-                RequiredStreamElements(requiredMaskedDepth, sidedStreams),
+                maskedDepthLayout.RequiredBackingElements,
                 DrawCommandStride,
                 $"SceneSubmission.MaskedDepthCompactedMeshletDraw.Frame{frameIndex}");
             for (int cascade = 0; cascade < DirectionalShadowCascadeCapacity; cascade++)
             {
                 EnsureCapacity(
                     ref _directionalStaticShadowCompactedDrawBuffers[frameIndex, cascade],
-                    RequiredStreamElements(
-                        requiredDirectionalStaticShadow,
-                        sidedStreams),
+                    directionalStaticShadowLayout.RequiredBackingElements,
                     DrawCommandStride,
                     $"SceneSubmission.DirectionalStaticShadowCompacted.Frame{frameIndex}.Cascade{cascade}");
                 EnsureCapacity(
                     ref _directionalDynamicShadowCompactedDrawBuffers[frameIndex, cascade],
-                    RequiredStreamElements(
-                        requiredDirectionalDynamicShadow,
-                        sidedStreams),
+                    directionalDynamicShadowLayout.RequiredBackingElements,
                     DrawCommandStride,
                     $"SceneSubmission.DirectionalDynamicShadowCompacted.Frame{frameIndex}.Cascade{cascade}");
             }
@@ -706,20 +773,110 @@ namespace Njulf.Rendering.Pipeline
                 checked((uint)Math.Max(1, candidateCount)),
                 out _);
 
-        private static uint RequiredStreamElements(
-            uint logicalCapacity,
-            bool sidedStreams) =>
-            sidedStreams
-                ? checked(logicalCapacity * 2u)
-                : logicalCapacity;
-
-        private static uint ResolveStreamCapacity(
-            RuntimeBuffer buffer,
+        internal static SidedStreamCapacityPlan ResolveSidedStreamCapacityPlan(
             int candidateCount,
-            bool sidedStreams) =>
-            sidedStreams
-                ? checked((uint)Math.Max(1, candidateCount))
-                : buffer.ElementCapacity;
+            int doubleSidedCandidateCount,
+            int maximumEmissionMultiplier,
+            bool sidedStreams,
+            bool asymmetricRequested)
+        {
+            int candidates = Math.Max(0, candidateCount);
+            int multiplier = Math.Max(1, maximumEmissionMultiplier);
+            int logicalCapacity = checked(candidates * multiplier);
+            if (!sidedStreams)
+            {
+                return new SidedStreamCapacityPlan(
+                    logicalCapacity,
+                    0,
+                    0,
+                    checked((uint)Math.Max(1, logicalCapacity)),
+                    false);
+            }
+
+            bool exactCountsValid = doubleSidedCandidateCount >= 0 &&
+                                    doubleSidedCandidateCount <= candidates;
+            if (!asymmetricRequested || !exactCountsValid)
+            {
+                return new SidedStreamCapacityPlan(
+                    logicalCapacity,
+                    logicalCapacity,
+                    logicalCapacity,
+                    checked((uint)Math.Max(
+                        1,
+                        checked(logicalCapacity * 2))),
+                    false);
+            }
+
+            int doubleSidedCapacity = checked(
+                doubleSidedCandidateCount * multiplier);
+            int oneSidedCapacity = checked(
+                (candidates - doubleSidedCandidateCount) * multiplier);
+            int doubleSidedBase = oneSidedCapacity;
+            int totalCapacity = checked(
+                oneSidedCapacity + doubleSidedCapacity);
+            return new SidedStreamCapacityPlan(
+                oneSidedCapacity,
+                doubleSidedBase,
+                doubleSidedCapacity,
+                checked((uint)Math.Max(1, totalCapacity)),
+                true);
+        }
+
+        internal static bool SidedStreamCountsAreValid(
+            SceneRenderingData sceneData,
+            int solidDepthCandidateCount,
+            int maskedDepthCandidateCount,
+            int directionalStaticShadowCandidateCount,
+            int directionalDynamicShadowCandidateCount)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+            if (!sceneData.SidedStreamCandidateCountsValid)
+                return false;
+
+            return IsSidedCountValid(
+                       sceneData.SimpleOpaqueMeshletCount,
+                       sceneData.DoubleSidedSimpleOpaqueMeshletCount) &&
+                   IsSidedCountValid(
+                       sceneData.SimpleNormalOpaqueMeshletCount,
+                       sceneData.DoubleSidedSimpleNormalOpaqueMeshletCount) &&
+                   IsSidedCountValid(
+                       sceneData.FullOpaqueMeshletCount,
+                       sceneData.DoubleSidedFullOpaqueMeshletCount) &&
+                   IsSidedCountValid(
+                       solidDepthCandidateCount,
+                       sceneData.DepthPrePassEnabled
+                           ? sceneData.DoubleSidedSolidDepthMeshletCount
+                           : 0) &&
+                   IsSidedCountValid(
+                       maskedDepthCandidateCount,
+                       sceneData.DepthPrePassEnabled
+                           ? sceneData.DoubleSidedMaskedDepthMeshletCount
+                           : 0) &&
+                   IsSidedCountValid(
+                       directionalStaticShadowCandidateCount,
+                       directionalStaticShadowCandidateCount > 0
+                           ? sceneData
+                               .DoubleSidedDirectionalStaticShadowMeshletCount
+                           : 0) &&
+                   IsSidedCountValid(
+                       directionalDynamicShadowCandidateCount,
+                       directionalDynamicShadowCandidateCount > 0
+                           ? sceneData
+                               .DoubleSidedDirectionalDynamicShadowMeshletCount
+                           : 0) &&
+                   checked(
+                       sceneData.DoubleSidedSimpleOpaqueMeshletCount +
+                       sceneData.DoubleSidedSimpleNormalOpaqueMeshletCount +
+                       sceneData.DoubleSidedFullOpaqueMeshletCount) ==
+                   sceneData.DoubleSidedOpaqueMeshletCount;
+        }
+
+        private static bool IsSidedCountValid(
+            int candidateCount,
+            int doubleSidedCandidateCount) =>
+            candidateCount >= 0 &&
+            doubleSidedCandidateCount >= 0 &&
+            doubleSidedCandidateCount <= candidateCount;
 
         internal static int ResolveCompactedDrawStreamCapacity(
             int candidateCount,
@@ -886,33 +1043,31 @@ namespace Njulf.Rendering.Pipeline
 
         private void InitializeDirectionalShadowRuntimeState(
             SceneRenderingData sceneData,
-            int frameIndex,
             int staticCandidateCount,
             int dynamicCandidateCount,
-            int staticOutputCandidateCapacity,
-            int dynamicOutputCandidateCapacity,
-            uint staticCascadeMask,
-            bool sidedStreams)
+            in SidedStreamCapacityPlan staticLayout,
+            in SidedStreamCapacityPlan dynamicLayout,
+            uint staticCascadeMask)
         {
             sceneData.SceneSubmissionGpuDirectionalShadowCandidateCount =
                 checked(staticCandidateCount + dynamicCandidateCount);
             for (int cascade = 0; cascade < DirectionalShadowCascadeCapacity; cascade++)
             {
-                RuntimeBuffer staticBuffer = _directionalStaticShadowCompactedDrawBuffers[frameIndex, cascade];
-                RuntimeBuffer dynamicBuffer = _directionalDynamicShadowCompactedDrawBuffers[frameIndex, cascade];
                 sceneData.SceneSubmissionGpuDirectionalStaticShadowCandidateCounts[cascade] =
                     (staticCascadeMask & (1u << cascade)) != 0u ? staticCandidateCount : 0;
                 sceneData.SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts[cascade] = dynamicCandidateCount;
                 sceneData.SceneSubmissionGpuDirectionalStaticShadowCapacities[cascade] =
-                    checked((int)ResolveStreamCapacity(
-                        staticBuffer,
-                        staticOutputCandidateCapacity,
-                        sidedStreams));
+                    staticLayout.OneSidedCapacity;
+                sceneData.SceneSubmissionGpuDirectionalStaticShadowDoubleSidedBases[cascade] =
+                    staticLayout.DoubleSidedBase;
+                sceneData.SceneSubmissionGpuDirectionalStaticShadowDoubleSidedCapacities[cascade] =
+                    staticLayout.DoubleSidedCapacity;
                 sceneData.SceneSubmissionGpuDirectionalDynamicShadowCapacities[cascade] =
-                    checked((int)ResolveStreamCapacity(
-                        dynamicBuffer,
-                        dynamicOutputCandidateCapacity,
-                        sidedStreams));
+                    dynamicLayout.OneSidedCapacity;
+                sceneData.SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedBases[cascade] =
+                    dynamicLayout.DoubleSidedBase;
+                sceneData.SceneSubmissionGpuDirectionalDynamicShadowDoubleSidedCapacities[cascade] =
+                    dynamicLayout.DoubleSidedCapacity;
             }
         }
 
@@ -1269,14 +1424,13 @@ namespace Njulf.Rendering.Pipeline
             RuntimeBuffer counterBuffer,
             RuntimeBuffer indirectDispatchBuffer,
             uint aggregateCapacity,
-            uint simpleCapacity,
-            uint simpleNormalCapacity,
-            uint fullCapacity,
-            uint solidDepthCapacity,
-            uint maskedDepthCapacity,
-            uint directionalStaticCapacity,
-            uint directionalDynamicCapacity,
-            bool sidedStreams,
+            uint simpleElementCount,
+            uint simpleNormalElementCount,
+            uint fullElementCount,
+            uint solidDepthElementCount,
+            uint maskedDepthElementCount,
+            uint directionalStaticElementCount,
+            uint directionalDynamicElementCount,
             bool forwardVisibilityCompactionEnabled,
             bool validationReadbackEnabled)
         {
@@ -1315,7 +1469,7 @@ namespace Njulf.Rendering.Pipeline
                     PipelineStageFlags2.TransferBit,
                     AccessFlags2.TransferReadBit,
                     0,
-                    PayloadBytes(drawBuffer, aggregateCapacity, false));
+                    PayloadBytes(drawBuffer, aggregateCapacity));
             }
 
             PipelineStageFlags2 opaqueConsumerStages =
@@ -1329,8 +1483,7 @@ namespace Njulf.Rendering.Pipeline
                 payloadSourceStages,
                 payloadSourceAccess,
                 simpleDrawBuffer,
-                simpleCapacity,
-                sidedStreams,
+                simpleElementCount,
                 opaqueConsumerStages);
             AppendPayloadBarrier(
                 barriers,
@@ -1338,8 +1491,7 @@ namespace Njulf.Rendering.Pipeline
                 payloadSourceStages,
                 payloadSourceAccess,
                 simpleNormalDrawBuffer,
-                simpleNormalCapacity,
-                sidedStreams,
+                simpleNormalElementCount,
                 opaqueConsumerStages);
             AppendPayloadBarrier(
                 barriers,
@@ -1347,8 +1499,7 @@ namespace Njulf.Rendering.Pipeline
                 payloadSourceStages,
                 payloadSourceAccess,
                 fullDrawBuffer,
-                fullCapacity,
-                sidedStreams,
+                fullElementCount,
                 opaqueConsumerStages);
             AppendPayloadBarrier(
                 barriers,
@@ -1356,8 +1507,7 @@ namespace Njulf.Rendering.Pipeline
                 payloadSourceStages,
                 payloadSourceAccess,
                 solidDepthDrawBuffer,
-                solidDepthCapacity,
-                sidedStreams,
+                solidDepthElementCount,
                 PipelineStageFlags2.MeshShaderBitExt);
             AppendPayloadBarrier(
                 barriers,
@@ -1365,8 +1515,7 @@ namespace Njulf.Rendering.Pipeline
                 payloadSourceStages,
                 payloadSourceAccess,
                 maskedDepthDrawBuffer,
-                maskedDepthCapacity,
-                sidedStreams,
+                maskedDepthElementCount,
                 PipelineStageFlags2.MeshShaderBitExt);
 
             for (int cascade = 0;
@@ -1384,8 +1533,7 @@ namespace Njulf.Rendering.Pipeline
                         _directionalStaticShadowCompactedDrawBuffers[
                             frameIndex,
                             cascade],
-                        directionalStaticCapacity,
-                        sidedStreams,
+                        directionalStaticElementCount,
                         PipelineStageFlags2.MeshShaderBitExt);
                 }
                 if (resetPlan.ClearDynamicShadowPayloads)
@@ -1398,8 +1546,7 @@ namespace Njulf.Rendering.Pipeline
                         _directionalDynamicShadowCompactedDrawBuffers[
                             frameIndex,
                             cascade],
-                        directionalDynamicCapacity,
-                        sidedStreams,
+                        directionalDynamicElementCount,
                         PipelineStageFlags2.MeshShaderBitExt);
                 }
             }
@@ -1424,11 +1571,10 @@ namespace Njulf.Rendering.Pipeline
             PipelineStageFlags2 sourceStages,
             AccessFlags2 sourceAccess,
             RuntimeBuffer buffer,
-            uint perSideCapacity,
-            bool sidedStreams,
+            uint elementCount,
             PipelineStageFlags2 destinationStages)
         {
-            if (perSideCapacity == 0u)
+            if (elementCount == 0u)
                 return;
             barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(buffer.Handle),
@@ -1437,17 +1583,15 @@ namespace Njulf.Rendering.Pipeline
                 destinationStages,
                 AccessFlags2.ShaderStorageReadBit,
                 0,
-                PayloadBytes(buffer, perSideCapacity, sidedStreams));
+                PayloadBytes(buffer, elementCount));
         }
 
         private static ulong PayloadBytes(
             RuntimeBuffer buffer,
-            uint perSideCapacity,
-            bool sidedStreams) =>
+            uint elementCount) =>
             Math.Min(
                 buffer.ByteSize,
-                checked((ulong)perSideCapacity * DrawCommandStride *
-                    (sidedStreams ? 2UL : 1UL)));
+                checked((ulong)elementCount * DrawCommandStride));
 
         private void RecordLodHistoryBarrier(
             CommandBuffer cmd,
@@ -2057,5 +2201,25 @@ namespace Njulf.Rendering.Pipeline
         string FirstMismatch)
     {
         public static SceneSubmissionValidationSnapshot Invalid { get; } = new(0, string.Empty, 0, 0, 0, 0, 0, string.Empty);
+    }
+
+    internal readonly record struct SidedStreamCapacityPlan(
+        int OneSidedCapacity,
+        int DoubleSidedBase,
+        int DoubleSidedCapacity,
+        uint RequiredBackingElements,
+        bool Asymmetric)
+    {
+        public int TotalLogicalCapacity => checked(
+            DoubleSidedCapacity > 0
+                ? DoubleSidedBase + DoubleSidedCapacity
+                : OneSidedCapacity);
+
+        public bool HasNonOverlappingRanges =>
+            OneSidedCapacity >= 0 &&
+            DoubleSidedBase >= OneSidedCapacity &&
+            DoubleSidedCapacity >= 0 &&
+            (ulong)DoubleSidedBase + (ulong)DoubleSidedCapacity <=
+            RequiredBackingElements;
     }
 }

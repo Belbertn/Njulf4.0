@@ -294,7 +294,24 @@ void WriteOpaqueBucketMeshletDrawCommand(uint bucket, uint outputIndex, GPUMeshl
     WriteMeshletDrawCommandToBase(outputBufferIndex, outputIndex, command);
 }
 
-uint OpaqueBucketOutputCapacity(uint bucket)
+uint OpaqueBucketOutputCapacity(uint bucket, bool doubleSided)
+{
+    if (doubleSided)
+    {
+        return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
+            ? pc.Push.SimpleDoubleSidedCapacity
+            : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
+                ? pc.Push.SimpleNormalDoubleSidedCapacity
+                : pc.Push.FullDoubleSidedCapacity;
+    }
+    return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
+        ? pc.Push.SimpleOutputCapacity
+        : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
+            ? pc.Push.SimpleNormalOutputCapacity
+            : pc.Push.FullOutputCapacity;
+}
+
+uint OpaqueBucketDoubleSidedBase(uint bucket)
 {
     return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
         ? pc.Push.SimpleOutputCapacity
@@ -1280,7 +1297,7 @@ void EmitExpandedOpaqueCommand(
         bucketIndex,
         bucketCount);
 
-    uint bucketCapacity = OpaqueBucketOutputCapacity(bucket);
+    uint bucketCapacity = OpaqueBucketOutputCapacity(bucket, doubleSided);
     bool aggregateOverflow = visible &&
         aggregateIndex >= pc.Push.OutputCapacity;
     bool bucketOverflow = visible && bucketIndex >= bucketCapacity;
@@ -1291,7 +1308,10 @@ void EmitExpandedOpaqueCommand(
         WriteMeshletDrawCommand(aggregateIndex, command);
         WriteOpaqueBucketMeshletDrawCommand(
             bucket,
-            bucketIndex + (doubleSided ? bucketCapacity : 0u),
+            bucketIndex +
+                (doubleSided
+                    ? OpaqueBucketDoubleSidedBase(bucket)
+                    : 0u),
             command);
     }
 
@@ -1341,6 +1361,13 @@ void EmitExpandedDepthCommand(
             ? SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_DOUBLE_SIDED_APPEND
             : SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_APPEND);
     uint outputCapacity = masked
+        ? (doubleSided
+            ? pc.Push.MaskedDepthDoubleSidedCapacity
+            : pc.Push.MaskedDepthOutputCapacity)
+        : (doubleSided
+            ? pc.Push.SolidDepthDoubleSidedCapacity
+            : pc.Push.SolidDepthOutputCapacity);
+    uint doubleSidedBase = masked
         ? pc.Push.MaskedDepthOutputCapacity
         : pc.Push.SolidDepthOutputCapacity;
     uint outputIndex = 0u;
@@ -1360,7 +1387,7 @@ void EmitExpandedDepthCommand(
             masked
                 ? MaskedDepthOutputBufferIndex()
                 : SolidDepthOutputBufferIndex(),
-            outputIndex + (doubleSided ? outputCapacity : 0u),
+            outputIndex + (doubleSided ? doubleSidedBase : 0u),
             command);
     }
 
@@ -1538,6 +1565,13 @@ void ProcessExpandedDirectionalShadowRange(
                 outputIndex,
                 activeCount);
             uint outputCapacity = dynamicShadow
+                ? (doubleSided
+                    ? pc.Push.DirectionalDynamicShadowDoubleSidedCapacity
+                    : pc.Push.DirectionalDynamicShadowOutputCapacity)
+                : (doubleSided
+                    ? pc.Push.DirectionalStaticShadowDoubleSidedCapacity
+                    : pc.Push.DirectionalStaticShadowOutputCapacity);
+            uint doubleSidedBase = dynamicShadow
                 ? pc.Push.DirectionalDynamicShadowOutputCapacity
                 : pc.Push.DirectionalStaticShadowOutputCapacity;
             bool overflow = visible && outputIndex >= outputCapacity;
@@ -1549,7 +1583,8 @@ void ProcessExpandedDirectionalShadowRange(
                     : DirectionalStaticShadowOutputBufferIndex(cascade);
                 WriteMeshletDrawCommandToBase(
                     outputBufferIndex,
-                    outputIndex + (doubleSided ? outputCapacity : 0u),
+                    outputIndex +
+                        (doubleSided ? doubleSidedBase : 0u),
                     command);
             }
             AddSubgroupCount(
@@ -2400,7 +2435,7 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
     }
 
     bool doubleSided = IsDoubleSided(command);
-    uint bucketCapacity = OpaqueBucketOutputCapacity(bucket);
+    uint bucketCapacity = OpaqueBucketOutputCapacity(bucket, doubleSided);
     uint bucketOutputIndex = atomicAdd(
         BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
             OpaqueBucketAppendCounterWord(bucket, doubleSided)],
@@ -2415,7 +2450,10 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
     WriteMeshletDrawCommand(aggregateOutputIndex, command);
     WriteOpaqueBucketMeshletDrawCommand(
         bucket,
-        bucketOutputIndex + (doubleSided ? bucketCapacity : 0u),
+        bucketOutputIndex +
+            (doubleSided
+                ? OpaqueBucketDoubleSidedBase(bucket)
+                : 0u),
         command);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[OpaqueBucketEmittedCounterWord(bucket)], 1u);
@@ -2433,6 +2471,8 @@ void ProcessDepthCandidate(
     uint inputBufferBaseIndex,
     uint outputBufferIndex,
     uint outputCapacity,
+    uint doubleSidedOutputBase,
+    uint doubleSidedOutputCapacity,
     uint candidateCounterWord,
     uint appendCounterWord,
     uint doubleSidedAppendCounterWord,
@@ -2489,7 +2529,10 @@ void ProcessDepthCandidate(
         BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
             selectedAppendCounterWord],
         1u);
-    if (outputIndex >= outputCapacity)
+    uint selectedOutputCapacity = doubleSided
+        ? doubleSidedOutputCapacity
+        : outputCapacity;
+    if (outputIndex >= selectedOutputCapacity)
     {
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[overflowCounterWord], 1u);
         return;
@@ -2497,7 +2540,8 @@ void ProcessDepthCandidate(
 
     WriteMeshletDrawCommandToBase(
         outputBufferIndex,
-        outputIndex + (doubleSided ? outputCapacity : 0u),
+        outputIndex +
+            (doubleSided ? doubleSidedOutputBase : 0u),
         command);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[emittedCounterWord], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
@@ -2591,7 +2635,15 @@ void ProcessDirectionalShadowCandidate(
             BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
                 appendCounterWord],
             1u);
-        if (outputIndex >= outputCapacity)
+        uint selectedOutputCapacity = doubleSided
+            ? (dynamicShadow
+                ? pc.Push.DirectionalDynamicShadowDoubleSidedCapacity
+                : pc.Push.DirectionalStaticShadowDoubleSidedCapacity)
+            : outputCapacity;
+        uint doubleSidedOutputBase = dynamicShadow
+            ? pc.Push.DirectionalDynamicShadowOutputCapacity
+            : pc.Push.DirectionalStaticShadowOutputCapacity;
+        if (outputIndex >= selectedOutputCapacity)
         {
             atomicAdd(
                 BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
@@ -2605,7 +2657,8 @@ void ProcessDirectionalShadowCandidate(
             : DirectionalStaticShadowOutputBufferIndex(cascade);
         WriteMeshletDrawCommandToBase(
             outputBufferIndex,
-            outputIndex + (doubleSided ? outputCapacity : 0u),
+            outputIndex +
+                (doubleSided ? doubleSidedOutputBase : 0u),
             command);
         atomicAdd(
             BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
@@ -2643,6 +2696,8 @@ void main()
             uint(SOLID_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX),
             SolidDepthOutputBufferIndex(),
             pc.Push.SolidDepthOutputCapacity,
+            pc.Push.SolidDepthOutputCapacity,
+            pc.Push.SolidDepthDoubleSidedCapacity,
             SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_CANDIDATE,
             SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_APPEND,
             SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_DOUBLE_SIDED_APPEND,
@@ -2657,6 +2712,8 @@ void main()
             uint(MASKED_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX),
             MaskedDepthOutputBufferIndex(),
             pc.Push.MaskedDepthOutputCapacity,
+            pc.Push.MaskedDepthOutputCapacity,
+            pc.Push.MaskedDepthDoubleSidedCapacity,
             SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_CANDIDATE,
             SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_APPEND,
             SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_DOUBLE_SIDED_APPEND,
