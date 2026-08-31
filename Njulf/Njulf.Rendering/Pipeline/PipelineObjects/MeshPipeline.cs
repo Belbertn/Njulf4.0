@@ -74,6 +74,32 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
     public sealed unsafe class MeshPipeline : IDisposable
     {
         private const string EntryPoint = "main";
+        internal const uint ForwardPerformanceSpecializationConstantId = 31u;
+        private const PerformanceOptimizationFeature
+            ForwardPerformanceSpecializationFeatures =
+                PerformanceOptimizationFeature
+                    .HybridOwnershipProjectionElision |
+                PerformanceOptimizationFeature
+                    .ScreenLocalReceiverAdmission |
+                PerformanceOptimizationFeature.SplitHybridForwardPrograms |
+                PerformanceOptimizationFeature.StaticShaderSpecialization |
+                PerformanceOptimizationFeature.DirectionalLatticeLoadSharing |
+                PerformanceOptimizationFeature.CompactMaskedFeedback |
+                PerformanceOptimizationFeature.SparseHybridLobePayload;
+
+        internal static uint ResolveForwardPerformanceSpecializationMask(
+            RenderSettings settings)
+        {
+            ArgumentNullException.ThrowIfNull(settings);
+            return (uint)(settings.EffectivePerformanceOptimizationFeatures &
+                ForwardPerformanceSpecializationFeatures);
+        }
+
+        internal static bool UsesForwardPerformanceSpecialization(
+            string? fragmentShaderName) =>
+            fragmentShaderName?.Contains(
+                "cache_required",
+                StringComparison.Ordinal) == true;
 
         private enum DeferredPipelineState
         {
@@ -3617,10 +3643,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     simpleFullInput,
                     giCaustic,
                     nearField,
-                    receiverCacheRequired,
-                    Settings.IsPerformanceOptimizationEnabled(
-                        PerformanceOptimizationFeature
-                            .HybridOwnershipProjectionElision));
+                    receiverCacheRequired);
             string meshShader = simple && !simpleFullInput
                 ? compacted
                     ? _compactedForwardSimpleMeshShaderName
@@ -4304,6 +4327,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
             ShaderModule fragmentModule = new ShaderModule();
+            bool usesPerformanceSpecialization =
+                UsesForwardPerformanceSpecialization(fragmentShaderName);
+            uint performanceSpecializationMask =
+                ResolveForwardPerformanceSpecializationMask(Settings);
+            string performanceIdentity = usesPerformanceSpecialization
+                ? $".performance-{performanceSpecializationMask:x8}"
+                : string.Empty;
 
             try
             {
@@ -4321,7 +4351,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 }
 
                 return CreateTrackedPipeline(
-                    $"MeshPipeline.Graphics.{fragmentShaderName ?? "depth-only"}.{meshShaderName}.{taskShaderName ?? "no-task"}",
+                    $"MeshPipeline.Graphics.{fragmentShaderName ?? "depth-only"}.{meshShaderName}.{taskShaderName ?? "no-task"}{performanceIdentity}",
                     artifactId => CreateGraphicsPipeline(
                         taskModule,
                         meshModule,
@@ -4349,6 +4379,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                             meshShaderName,
                             hasColorAttachment,
                             blendEnable),
+                        fragmentPerformanceSpecialization:
+                            usesPerformanceSpecialization,
+                        fragmentPerformanceOptimizationMask:
+                            performanceSpecializationMask,
                         artifactId));
             }
             catch (Exception exception)
@@ -4443,6 +4477,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
             ShaderModule fragmentModule = new ShaderModule();
+            bool usesPerformanceSpecialization =
+                UsesForwardPerformanceSpecialization(fragmentShaderName);
+            uint performanceSpecializationMask =
+                ResolveForwardPerformanceSpecializationMask(Settings);
+            string performanceIdentity = usesPerformanceSpecialization
+                ? $".performance-{performanceSpecializationMask:x8}"
+                : string.Empty;
 
             try
             {
@@ -4462,7 +4503,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _context.SetDebugName(fragmentModule.Handle, ObjectType.ShaderModule, fragmentShaderName);
 
                 return CreateTrackedPipeline(
-                    $"MeshPipeline.Graphics.{fragmentShaderName}.{meshShaderName}.{taskShaderName ?? "no-task"}",
+                    $"MeshPipeline.Graphics.{fragmentShaderName}.{meshShaderName}.{taskShaderName ?? "no-task"}{performanceIdentity}",
                     artifactId => CreateWeightedOitGraphicsPipeline(
                         taskModule,
                         meshModule,
@@ -4471,6 +4512,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         revealageFormat,
                         depthFormat,
                         pipelineLayout,
+                        usesPerformanceSpecialization,
+                        performanceSpecializationMask,
                         artifactId));
             }
             finally
@@ -4523,6 +4566,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hybridReflectionReceiverEnabled,
                 destinationColorModulationBlend,
                 dynamicRasterState: false,
+                fragmentPerformanceSpecialization: false,
+                fragmentPerformanceOptimizationMask: 0u,
                 artifactId);
 
         private VkPipeline CreateGraphicsPipeline(
@@ -4546,15 +4591,40 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool hybridReflectionReceiverEnabled,
             bool destinationColorModulationBlend,
             bool dynamicRasterState,
+            bool fragmentPerformanceSpecialization,
+            uint fragmentPerformanceOptimizationMask,
             PipelineArtifactId artifactId)
         {
+            uint specializationData =
+                fragmentPerformanceOptimizationMask;
+            var specializationEntry = new SpecializationMapEntry
+            {
+                ConstantID = ForwardPerformanceSpecializationConstantId,
+                Offset = 0u,
+                Size = (nuint)sizeof(uint)
+            };
+            var specializationInfo = new SpecializationInfo
+            {
+                MapEntryCount = 1u,
+                PMapEntries = &specializationEntry,
+                DataSize = (nuint)sizeof(uint),
+                PData = &specializationData
+            };
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             int stageCount = 0;
             if (taskModule.Handle != 0)
                 stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
             stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
             if (fragmentModule.Handle != 0)
-                stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
+            {
+                PipelineShaderStageCreateInfo fragmentStage =
+                    CreateShaderStageInfo(
+                        ShaderStageFlags.FragmentBit,
+                        fragmentModule);
+                if (fragmentPerformanceSpecialization)
+                    fragmentStage.PSpecializationInfo = &specializationInfo;
+                stages[stageCount++] = fragmentStage;
+            }
 
             var vertexInputInfo = new PipelineVertexInputStateCreateInfo
             {
@@ -4796,14 +4866,37 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format revealageFormat,
             Format depthFormat,
             PipelineLayout pipelineLayout,
+            bool fragmentPerformanceSpecialization,
+            uint fragmentPerformanceOptimizationMask,
             PipelineArtifactId artifactId)
         {
+            uint specializationData =
+                fragmentPerformanceOptimizationMask;
+            var specializationEntry = new SpecializationMapEntry
+            {
+                ConstantID = ForwardPerformanceSpecializationConstantId,
+                Offset = 0u,
+                Size = (nuint)sizeof(uint)
+            };
+            var specializationInfo = new SpecializationInfo
+            {
+                MapEntryCount = 1u,
+                PMapEntries = &specializationEntry,
+                DataSize = (nuint)sizeof(uint),
+                PData = &specializationData
+            };
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             int stageCount = 0;
             if (taskModule.Handle != 0)
                 stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
             stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
-            stages[stageCount++] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
+            PipelineShaderStageCreateInfo fragmentStage =
+                CreateShaderStageInfo(
+                    ShaderStageFlags.FragmentBit,
+                    fragmentModule);
+            if (fragmentPerformanceSpecialization)
+                fragmentStage.PSpecializationInfo = &specializationInfo;
+            stages[stageCount++] = fragmentStage;
 
             var vertexInputInfo = new PipelineVertexInputStateCreateInfo
             {

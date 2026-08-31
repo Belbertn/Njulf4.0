@@ -936,6 +936,16 @@ namespace Njulf.Tests
                     "ForwardDdgiReceiverCacheAdmissionDebugColor("));
                 Assert.That(cacheSampling, Does.Contain(
                     "SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_NORMAL"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "SimpleDdgiReceiverSurfaceEvaluateFragmentScreenLocal("));
+                Assert.That(receiverSurface, Does.Contain(
+                    "uint SimpleDdgiReceiverSurfaceEvaluateFragmentScreenLocal("));
+                Assert.That(receiverSurface, Does.Contain(
+                    "relativeDepth > SIMPLE_DDGI_RECEIVER_SURFACE_MAXIMUM_RELATIVE_DEPTH"));
+                Assert.That(forward, Does.Contain(
+                    "layout(constant_id = 31) const uint"));
+                Assert.That(forward, Does.Contain(
+                    "NJULF_PERFORMANCE_SCREEN_LOCAL_RECEIVER"));
                 Assert.That(forward, Does.Contain(
                     "ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *"));
                 Assert.That(forward, Does.Contain(

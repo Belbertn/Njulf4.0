@@ -551,4 +551,66 @@ uint SimpleDdgiReceiverSurfaceEvaluateFragment(
         cameraPosition);
 }
 
+// The half-resolution cache representative is constrained to the fragment's
+// 2x2 block. Resolve already proved world position, plane, and footprint
+// continuity before publication, so consumption needs only screen-local depth
+// and normal discontinuity checks.
+uint SimpleDdgiReceiverSurfaceEvaluateFragmentScreenLocal(
+    uvec2 cachedPacked,
+    uvec2 cacheCoordinate,
+    uint cacheScale,
+    uvec2 fragmentPixel,
+    float fragmentReverseZ,
+    vec3 fragmentWorldPosition,
+    vec3 fragmentGeometricNormal,
+    uvec2 screenExtent)
+{
+    SimpleDdgiReceiverSurface cached;
+    if (!SimpleDdgiReceiverSurfaceDecode(cachedPacked, cached))
+        return SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_INVALID;
+
+    uvec2 cachedPixel;
+    if (!SimpleDdgiReceiverSurfaceResolvePixel(
+            cacheCoordinate,
+            cacheScale,
+            cached,
+            screenExtent,
+            cachedPixel))
+    {
+        return SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_INVALID;
+    }
+
+    float fragmentNormalLengthSquared = dot(
+        fragmentGeometricNormal,
+        fragmentGeometricNormal);
+    if (!SimpleDdgiReceiverSurfaceFinite(fragmentReverseZ) ||
+        !(fragmentReverseZ > 0.0) ||
+        !SimpleDdgiReceiverSurfaceFinite(fragmentWorldPosition) ||
+        !SimpleDdgiReceiverSurfaceFinite(fragmentGeometricNormal) ||
+        !SimpleDdgiReceiverSurfaceFinite(fragmentNormalLengthSquared) ||
+        !(fragmentNormalLengthSquared > 0.0) ||
+        any(greaterThanEqual(fragmentPixel, screenExtent)))
+    {
+        return SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_NON_FINITE;
+    }
+
+    float relativeDepth = abs(cached.ReverseZ - fragmentReverseZ) /
+        max(max(cached.ReverseZ, fragmentReverseZ),
+            SIMPLE_DDGI_RECEIVER_SURFACE_MINIMUM_REVERSE_Z);
+    if (!SimpleDdgiReceiverSurfaceFinite(relativeDepth) ||
+        relativeDepth > SIMPLE_DDGI_RECEIVER_SURFACE_MAXIMUM_RELATIVE_DEPTH)
+    {
+        return SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_DEPTH;
+    }
+
+    vec3 fragmentNormal = fragmentGeometricNormal *
+        inversesqrt(fragmentNormalLengthSquared);
+    if (dot(cached.GeometricNormal, fragmentNormal) <
+        SIMPLE_DDGI_RECEIVER_SURFACE_MINIMUM_NORMAL_DOT)
+    {
+        return SIMPLE_DDGI_RECEIVER_SURFACE_REJECT_NORMAL;
+    }
+    return SIMPLE_DDGI_RECEIVER_SURFACE_ACCEPTED;
+}
+
 #endif

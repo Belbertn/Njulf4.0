@@ -624,15 +624,6 @@
         <Source>foliage_forward.frag</Source>
         <Defines>-DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=5 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=2</Defines>
       </NearFieldDirectSourceShaderVariant>
-      <!-- Preserve the pre-elision receiver-cache programs for runtime A/B.
-           They keep the locked ownership ABI but compile compact directional
-           projection back in as a distinct native program. -->
-      <NearFieldDirectSourceShaderVariant
-          Update="forward_opaque_*cache_required_hybrid_reflection.frag">
-        <HybridProjectionBaseline>true</HybridProjectionBaseline>
-      </NearFieldDirectSourceShaderVariant>
-      <HybridProjectionBaselineShaderVariant
-          Include="@(NearFieldDirectSourceShaderVariant-&gt;WithMetadataValue('HybridProjectionBaseline', 'true'))" />
       <ReceiverFeedbackShaderVariant Include="ddgi_simple_receiver_cache_b1.comp">
         <Source>ddgi_simple_receiver_cache.comp</Source>
         <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
@@ -1040,11 +1031,6 @@
           <Source>$(MSBuildProjectDirectory)\%(NearFieldDirectSourceShaderVariant.Source)</Source>
           <Defines>%(NearFieldDirectSourceShaderVariant.Defines)</Defines>
           <AdditionalCompileOptions>%(NearFieldDirectSourceShaderVariant.AdditionalCompileOptions)</AdditionalCompileOptions>
-        </NjulfShaderArtifact>
-        <NjulfShaderArtifact Include="@(HybridProjectionBaselineShaderVariant -&gt; '%(Filename)_projection%(Extension)')">
-          <Source>$(MSBuildProjectDirectory)\%(HybridProjectionBaselineShaderVariant.Source)</Source>
-          <Defines>%(HybridProjectionBaselineShaderVariant.Defines) -DFORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_BASELINE=1</Defines>
-          <AdditionalCompileOptions>%(HybridProjectionBaselineShaderVariant.AdditionalCompileOptions)</AdditionalCompileOptions>
         </NjulfShaderArtifact>
         <NjulfShaderArtifact Include="@(ReceiverFeedbackShaderVariant)">
           <Source>$(MSBuildProjectDirectory)\%(ReceiverFeedbackShaderVariant.Source)</Source>

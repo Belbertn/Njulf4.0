@@ -58,6 +58,19 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_ballot : require
 
+// Forward cache optimizations are Vulkan specialization constants: each
+// pipeline receives a fixed mask, so native compilation removes inactive
+// paths without multiplying embedded SPIR-V artifacts.
+const uint NJULF_PERFORMANCE_HYBRID_PROJECTION_ELISION = 1u << 3u;
+const uint NJULF_PERFORMANCE_SCREEN_LOCAL_RECEIVER = 1u << 4u;
+layout(constant_id = 31) const uint
+    NjulfPerformanceOptimizationMask = 0x7fffffffu;
+
+bool NjulfPerformanceOptimizationEnabled(uint feature)
+{
+    return (NjulfPerformanceOptimizationMask & feature) == feature;
+}
+
 // Ordinary forward variants consume the current frame's depth prepass. The
 // reduced C5 source owns a fresh depth target and must run coverage before its
 // late depth write so discarded alpha-mask samples cannot occlude later work.
@@ -540,10 +553,6 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 // reconstruction.
 #ifndef FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED
 #define FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED 0
-#endif
-
-#ifndef FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_BASELINE
-#define FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_BASELINE 0
 #endif
 
 #ifndef NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW
@@ -6361,45 +6370,50 @@ void main()
             directionalParams.probeCount > 0u;
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
         bool receiverCompactDirectionalResolved = !directionalConfigured;
-#if FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED && \
-    !FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_BASELINE
+#if FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED
+        if (NjulfPerformanceOptimizationEnabled(
+                NJULF_PERFORMANCE_HYBRID_PROJECTION_ELISION))
+        {
         // Accepted opaque receivers have no forward directional-specular
         // owner in this artifact.  Mark the directional requirement resolved
         // without touching the compact L2 record; rejected/exception paths
         // still fall through to the authoritative exact gather below.
-        receiverCompactDirectionalResolved =
-            receiverCompactDirectionalResolved || receiverCacheAccepted;
-#else
-        if (receiverCacheAccepted && directionalConfigured)
-        {
-            vec3 compactDirectionalRadiance;
-            float compactDirectionalConfidence;
-#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
-            IncrementSimpleDdgiReceiverCacheDiagnostic(
-                pc.Push.CurrentFrameIndex,
-                SIMPLE_DDGI_RECEIVER_CACHE_DIRECTIONAL_EVALUATION_COUNTER);
-#endif
             receiverCompactDirectionalResolved =
-                SampleForwardDdgiCompactDirectionalRadiance(
-                    ForwardScreenPixel(),
-                    gl_FragCoord.z,
-                    fragWorldPosition,
-                    ddgiNormal,
-                    reflect(-viewDirection, normal),
-                    roughness,
-                    directionalMode,
-                    directionalParams.frameIndex,
-                    pc.Push,
-                    compactDirectionalRadiance,
-                    compactDirectionalConfidence);
-            if (receiverCompactDirectionalResolved)
+                receiverCompactDirectionalResolved || receiverCacheAccepted;
+        }
+        else
+#endif
+        {
+            if (receiverCacheAccepted && directionalConfigured)
             {
-                ddgiDirectionalRadiance = compactDirectionalRadiance *
-                    max(directionalParams.indirectIntensity, 0.0);
-                ddgiDirectionalConfidence = compactDirectionalConfidence;
+                vec3 compactDirectionalRadiance;
+                float compactDirectionalConfidence;
+#if NJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS
+                IncrementSimpleDdgiReceiverCacheDiagnostic(
+                    pc.Push.CurrentFrameIndex,
+                    SIMPLE_DDGI_RECEIVER_CACHE_DIRECTIONAL_EVALUATION_COUNTER);
+#endif
+                receiverCompactDirectionalResolved =
+                    SampleForwardDdgiCompactDirectionalRadiance(
+                        ForwardScreenPixel(),
+                        gl_FragCoord.z,
+                        fragWorldPosition,
+                        ddgiNormal,
+                        reflect(-viewDirection, normal),
+                        roughness,
+                        directionalMode,
+                        directionalParams.frameIndex,
+                        pc.Push,
+                        compactDirectionalRadiance,
+                        compactDirectionalConfidence);
+                if (receiverCompactDirectionalResolved)
+                {
+                    ddgiDirectionalRadiance = compactDirectionalRadiance *
+                        max(directionalParams.indirectIntensity, 0.0);
+                    ddgiDirectionalConfidence = compactDirectionalConfidence;
+                }
             }
         }
-#endif
         bool exactGatherRequired =
             !receiverCacheAccepted ||
             !receiverCompactDirectionalResolved ||

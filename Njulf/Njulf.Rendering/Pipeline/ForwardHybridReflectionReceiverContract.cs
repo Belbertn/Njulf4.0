@@ -17,8 +17,7 @@ public static class ForwardHybridReflectionReceiverContract
         bool simpleFullInput,
         bool giCaustic,
         bool nearField,
-        bool receiverCacheRequired = false,
-        bool hybridOwnershipProjectionElision = true)
+        bool receiverCacheRequired = false)
     {
         string material = simple
             ? (simpleFullInput ? "simple_full_input_" : "simple_")
@@ -33,11 +32,7 @@ public static class ForwardHybridReflectionReceiverContract
         string receiver = receiverCacheRequired
             ? "cache_required_"
             : string.Empty;
-        string projection = receiverCacheRequired &&
-            !hybridOwnershipProjectionElision
-                ? "_projection"
-                : string.Empty;
-        return $"forward_opaque_{material}ddgi_{producers}{receiver}hybrid_reflection{projection}.frag.spv";
+        return $"forward_opaque_{material}ddgi_{producers}{receiver}hybrid_reflection.frag.spv";
     }
 
     public static uint ResolveColorAttachmentCount(

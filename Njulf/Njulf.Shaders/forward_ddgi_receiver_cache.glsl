@@ -180,18 +180,35 @@ ForwardDdgiReceiverCacheAdmission EvaluateForwardDdgiReceiverCacheAdmission(
     // This sidecar load is deliberately the first cache payload read. The
     // sixteen-byte radiance record remains untouched on exact fallbacks.
     uvec2 surface = ForwardDdgiReceiverSurface.Entries[result.EntryIndex];
-    result.Reason = SimpleDdgiReceiverSurfaceEvaluateFragment(
-        surface,
-        cacheCoordinate,
-        FORWARD_DDGI_RECEIVER_CACHE_SCALE,
-        fragmentPixel,
-        fragmentReverseZ,
-        fragmentWorldPosition,
-        fragmentGeometricNormal,
-        pushConstants.InverseProjectionMatrix,
-        pushConstants.InverseViewMatrix,
-        screenExtent,
-        pushConstants.CameraPosition);
+    if (NjulfPerformanceOptimizationEnabled(
+            NJULF_PERFORMANCE_SCREEN_LOCAL_RECEIVER))
+    {
+        result.Reason =
+            SimpleDdgiReceiverSurfaceEvaluateFragmentScreenLocal(
+                surface,
+                cacheCoordinate,
+                FORWARD_DDGI_RECEIVER_CACHE_SCALE,
+                fragmentPixel,
+                fragmentReverseZ,
+                fragmentWorldPosition,
+                fragmentGeometricNormal,
+                screenExtent);
+    }
+    else
+    {
+        result.Reason = SimpleDdgiReceiverSurfaceEvaluateFragment(
+            surface,
+            cacheCoordinate,
+            FORWARD_DDGI_RECEIVER_CACHE_SCALE,
+            fragmentPixel,
+            fragmentReverseZ,
+            fragmentWorldPosition,
+            fragmentGeometricNormal,
+            pushConstants.InverseProjectionMatrix,
+            pushConstants.InverseViewMatrix,
+            screenExtent,
+            pushConstants.CameraPosition);
+    }
     return result;
 }
 

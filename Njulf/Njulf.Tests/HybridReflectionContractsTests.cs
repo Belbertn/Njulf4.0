@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Pipeline;
+using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
 using NUnit.Framework;
@@ -11,35 +12,40 @@ namespace Njulf.Tests;
 public sealed class HybridReflectionContractsTests
 {
     [Test]
-    public void ReceiverShaderResolver_SelectsStaticProjectionRollback()
+    public void ReceiverShaderSpecialization_TracksEffectiveFeatureMask()
     {
-        string optimized = ForwardHybridReflectionReceiverContract
-            .ResolveFragmentShader(
-                simple: true,
-                simpleFullInput: false,
-                giCaustic: true,
-                nearField: true,
-                receiverCacheRequired: true,
-                hybridOwnershipProjectionElision: true);
-        string baseline = ForwardHybridReflectionReceiverContract
-            .ResolveFragmentShader(
-                simple: true,
-                simpleFullInput: false,
-                giCaustic: true,
-                nearField: true,
-                receiverCacheRequired: true,
-                hybridOwnershipProjectionElision: false);
+        var settings = new RenderSettings();
+        settings.PerformanceOptimizations.EnabledFeatures =
+            PerformanceOptimizationFeature
+                .HybridOwnershipProjectionElision |
+            PerformanceOptimizationFeature.ScreenLocalReceiverAdmission;
+        uint optimized = MeshPipeline
+            .ResolveForwardPerformanceSpecializationMask(settings);
+        settings.PerformanceOptimizations.Enabled = false;
+        uint baseline = MeshPipeline
+            .ResolveForwardPerformanceSpecializationMask(settings);
 
         Assert.Multiple(() =>
         {
             Assert.That(
                 optimized,
-                Is.EqualTo(
-                    "forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv"));
+                Is.EqualTo((uint)(
+                    PerformanceOptimizationFeature
+                        .HybridOwnershipProjectionElision |
+                    PerformanceOptimizationFeature
+                        .ScreenLocalReceiverAdmission)));
+            Assert.That(baseline, Is.Zero);
             Assert.That(
-                baseline,
-                Is.EqualTo(
-                    "forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection_projection.frag.spv"));
+                MeshPipeline.UsesForwardPerformanceSpecialization(
+                    "forward_opaque_ddgi_cache_required.frag.spv"),
+                Is.True);
+            Assert.That(
+                MeshPipeline.UsesForwardPerformanceSpecialization(
+                    "forward_opaque_ddgi.frag.spv"),
+                Is.False);
+            Assert.That(
+                MeshPipeline.ForwardPerformanceSpecializationConstantId,
+                Is.EqualTo(31u));
         });
     }
 
