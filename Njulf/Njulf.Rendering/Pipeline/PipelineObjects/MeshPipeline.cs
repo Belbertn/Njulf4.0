@@ -385,38 +385,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ForwardSimpleFullInputGlobalIblPipeline => _forwardSimpleFullInputPipeline;
         public VkPipeline ForwardCompactedSimpleGlobalIblPipeline => _forwardCompactedSimplePipeline;
         public VkPipeline ForwardCompactedSimpleFullInputGlobalIblPipeline => _forwardCompactedSimpleFullInputPipeline;
-        public VkPipeline TransparentForwardPipeline
-        {
-            get
-            {
-                EnsureTransparentForwardPipeline();
-                return _transparentForwardPipeline;
-            }
-        }
-        public VkPipeline ThinGlassForwardPipeline
-        {
-            get
-            {
-                EnsureThinGlassForwardPipeline();
-                return _thinGlassForwardPipeline;
-            }
-        }
-        public VkPipeline GeometryDecalOverlayPipeline
-        {
-            get
-            {
-                EnsureGeometryDecalOverlayPipeline();
-                return _geometryDecalOverlayPipeline;
-            }
-        }
-        public VkPipeline WeightedOitTransparentPipeline
-        {
-            get
-            {
-                EnsureWeightedOitTransparentPipeline();
-                return _weightedOitTransparentPipeline;
-            }
-        }
+        // Command recording is lookup-only. Scene-manifest preparation owns
+        // every native pipeline creation, so a missing optional specialization
+        // falls back without entering the driver from a render-critical frame.
+        public VkPipeline TransparentForwardPipeline =>
+            _transparentForwardPipeline;
+        public VkPipeline ThinGlassForwardPipeline =>
+            _thinGlassForwardPipeline;
+        public VkPipeline GeometryDecalOverlayPipeline =>
+            _geometryDecalOverlayPipeline;
+        public VkPipeline WeightedOitTransparentPipeline =>
+            _weightedOitTransparentPipeline;
         public VkPipeline RayTransparentForwardPipeline =>
             _rayTransparentForwardPipeline;
         public VkPipeline RayWeightedOitTransparentPipeline =>
@@ -630,7 +609,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         ExactReceiverFeedbackRequired: false,
                         DecalReceiverCacheRequired: false),
                     out _,
-                    out _);
+                    out _,
+                    allowCreation: true);
 
                 if (rayPipelinesReady)
                 {
@@ -642,7 +622,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                             ExactReceiverFeedbackRequired: false,
                             DecalReceiverCacheRequired: false),
                         out _,
-                        out _);
+                        out _,
+                        allowCreation: true);
                 }
 
                 if (materialClass ==
@@ -657,7 +638,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                             ExactReceiverFeedbackRequired: false,
                             DecalReceiverCacheRequired: true),
                         out _,
-                        out _);
+                        out _,
+                        allowCreation: true);
                 }
             }
         }
@@ -871,7 +853,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         internal bool TryResolveTransparentPipeline(
             in TransparentPipelineKey key,
             out TransparentPipelineSelection selection,
-            out string failureReason)
+            out string failureReason,
+            bool allowCreation = false)
         {
             selection = default;
             failureReason = string.Empty;
@@ -901,7 +884,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 !key.RaySceneRequired &&
                 !key.DecalReceiverCacheRequired)
             {
-                EnsureGeometryDecalOverlayPipeline();
+                if (allowCreation)
+                    EnsureGeometryDecalOverlayPipeline();
                 if (_geometryDecalOverlayPipeline.Handle == 0)
                 {
                     failureReason =
@@ -931,6 +915,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 failureReason =
                     _transparentPartitionPipelineFailures[cacheIndex] ??
                     "transparent-specialized-pipeline-unavailable";
+                return false;
+            }
+
+            if (!allowCreation)
+            {
+                failureReason =
+                    "transparent-specialized-pipeline-not-prepared";
                 return false;
             }
 

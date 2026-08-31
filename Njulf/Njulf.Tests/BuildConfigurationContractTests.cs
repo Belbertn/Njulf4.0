@@ -170,7 +170,10 @@ public sealed class BuildConfigurationContractTests
         Assert.Multiple(() =>
         {
             Assert.That(transparentProperty,
-                Does.Contain("EnsureTransparentForwardPipeline();"));
+                Does.Not.Contain("EnsureTransparentForwardPipeline();"));
+            Assert.That(transparentProperty,
+                Does.Match(
+                    "=>\\s*_transparentForwardPipeline;"));
             Assert.That(pipelineCreation,
                 Does.Match(
                     "if \\(!RendererBuildConfiguration\\.FastPipelineStartup\\)\\s+\\{[\\s\\S]*?EnsureTransparentForwardPipeline\\(\\);[\\s\\S]*?AdmitRayTransparentPipelines\\(\\);"));
@@ -194,6 +197,11 @@ public sealed class BuildConfigurationContractTests
                 Does.Contain("Pipeline.Prepare.PostFirstPresentReceiverComputeBank"));
             Assert.That(meshPipeline,
                 Does.Contain("PrepareScenePipelineManifest("));
+            Assert.That(meshPipeline,
+                Does.Contain("bool allowCreation = false"));
+            Assert.That(meshPipeline,
+                Does.Contain(
+                    "transparent-specialized-pipeline-not-prepared"));
         });
     }
 
