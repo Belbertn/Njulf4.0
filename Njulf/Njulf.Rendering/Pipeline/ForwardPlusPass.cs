@@ -457,6 +457,7 @@ namespace Njulf.Rendering.Pipeline
                 _simpleDdgiReceiverCacheSurfaceBuffers[i] = BufferHandle.Invalid;
                 _simpleDdgiReceiverGatherSurfaceBuffers[i] = BufferHandle.Invalid;
                 _simpleDdgiReceiverPublicationBuffers[i] = BufferHandle.Invalid;
+                _sparseHybridLobePayloadBuffers[i] = BufferHandle.Invalid;
             }
         }
 
@@ -493,6 +494,8 @@ namespace Njulf.Rendering.Pipeline
             if (_bufferManager == null)
                 return;
 
+            RecreateSparseHybridLobePayloadResources(
+                _renderTargets.SceneColor.Extent);
             try
             {
                 _simpleDdgiReceiverCacheEntryPointName =
@@ -1513,6 +1516,21 @@ namespace Njulf.Rendering.Pipeline
                         materialTransportProvenanceEnabled,
                         out ForwardHybridReflectionReceiverAttachmentBinding?
                             hybridReflectionReceiverBinding);
+                bool sparseHybridLobePayloadEnabled =
+                    hybridReflectionReceiverEnabled &&
+                    UsesSparseHybridLobePayload;
+                if (sparseHybridLobePayloadEnabled &&
+                    !PrepareSparseHybridLobePayload(
+                        cmd,
+                        frameIndex,
+                        renderExtent))
+                {
+                    hybridReflectionReceiverEnabled = false;
+                    hybridReflectionReceiverBinding = null;
+                    sparseHybridLobePayloadEnabled = false;
+                    HybridReflectionReceiverFailureReason =
+                        "hybrid-reflection-sparse-lobe-buffer-unavailable";
+                }
                 if (!hybridReflectionReceiverEnabled &&
                     sceneData.EffectiveReflectionMode is
                         (ReflectionMode.StaticProbesAndSsr or
@@ -1565,6 +1583,7 @@ namespace Njulf.Rendering.Pipeline
                     {
                         hybridReflectionReceiverEnabled = false;
                         hybridReflectionReceiverBinding = null;
+                        sparseHybridLobePayloadEnabled = false;
                         _hybridReflectionReceiverEnabledForCurrentView = false;
                         sceneData.EffectiveReflectionMode = ReflectionMode.StaticProbes;
                         sceneData.ReflectionMode = ReflectionMode.StaticProbes;
@@ -1834,8 +1853,11 @@ namespace Njulf.Rendering.Pipeline
                 {
                     hybridReflectionReceiverBinding!.ReceiverPayload
                         .TransitionToColorAttachment(cmd);
-                    hybridReflectionReceiverBinding.LobeExtension
-                        .TransitionToColorAttachment(cmd);
+                    if (!sparseHybridLobePayloadEnabled)
+                    {
+                        hybridReflectionReceiverBinding.LobeExtension
+                            .TransitionToColorAttachment(cmd);
+                    }
                 }
 
                 var colorAttachment = ColorAttachment(
@@ -1932,17 +1954,20 @@ namespace Njulf.Rendering.Pipeline
                         AttachmentLoadOp.Clear,
                         AttachmentStoreOp.Store,
                         new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
-                    colorAttachments[hybridAttachmentIndex + 1] =
-                        ColorAttachment(
-                            hybridReflectionReceiverBinding.LobeExtension.View,
-                            ImageLayout.ColorAttachmentOptimal,
-                            AttachmentLoadOp.Clear,
-                            AttachmentStoreOp.Store,
-                            new ClearValue(new ClearColorValue(
-                                0.0f,
-                                0.0f,
-                                0.0f,
-                                0.0f)));
+                    if (!sparseHybridLobePayloadEnabled)
+                    {
+                        colorAttachments[hybridAttachmentIndex + 1] =
+                            ColorAttachment(
+                                hybridReflectionReceiverBinding.LobeExtension.View,
+                                ImageLayout.ColorAttachmentOptimal,
+                                AttachmentLoadOp.Clear,
+                                AttachmentStoreOp.Store,
+                                new ClearValue(new ClearColorValue(
+                                    0.0f,
+                                    0.0f,
+                                    0.0f,
+                                    0.0f)));
+                    }
                 }
 
                 var depthAttachment = DepthAttachment(
@@ -1963,7 +1988,8 @@ namespace Njulf.Rendering.Pipeline
                             materialTransportProvenanceEnabled,
                             nearFieldDirectSourceEnabled,
                             giCausticReceiverEnabled,
-                            hybridReflectionReceiverEnabled),
+                            hybridReflectionReceiverEnabled,
+                            sparseHybridLobePayloadEnabled),
                     PColorAttachments = colorAttachments,
                     PDepthAttachment = &depthAttachment,
                     PStencilAttachment = null
@@ -2186,8 +2212,15 @@ namespace Njulf.Rendering.Pipeline
                 {
                     hybridReflectionReceiverBinding!.ReceiverPayload
                         .TransitionToShaderRead(cmd);
-                    hybridReflectionReceiverBinding.LobeExtension
-                        .TransitionToStorageReadWrite(cmd);
+                    if (sparseHybridLobePayloadEnabled)
+                    {
+                        PublishSparseHybridLobePayload(cmd, frameIndex);
+                    }
+                    else
+                    {
+                        hybridReflectionReceiverBinding.LobeExtension
+                            .TransitionToStorageReadWrite(cmd);
+                    }
                 }
 
                 if (giCausticReceiverEnabled)
@@ -4321,6 +4354,16 @@ namespace Njulf.Rendering.Pipeline
                 return false;
             }
 
+            if (UsesSparseHybridLobePayload &&
+                (!_sparseHybridLobePayloadAvailable ||
+                 _sparseHybridLobePayloadWidth != renderExtent.Width ||
+                 _sparseHybridLobePayloadHeight != renderExtent.Height))
+            {
+                HybridReflectionReceiverFailureReason =
+                    "hybrid-reflection-sparse-lobe-buffer-unavailable";
+                return false;
+            }
+
             bool supportedReflectionDebug = sceneData.ReflectionDebugView is
                 ReflectionDebugView.None or ReflectionDebugView.SsrMask or
                 ReflectionDebugView.DdgiDirectionalRadianceLobe or
@@ -5681,6 +5724,8 @@ namespace Njulf.Rendering.Pipeline
 
         public override void OnSwapchainRecreated()
         {
+            RecreateSparseHybridLobePayloadResources(
+                _renderTargets.SceneColor.Extent);
             try
             {
                 RecreateSimpleDdgiReceiverCacheResources();
@@ -5700,6 +5745,7 @@ namespace Njulf.Rendering.Pipeline
         public override void Cleanup()
         {
             CleanupSimpleDdgiReceiverCache();
+            CleanupSparseHybridLobePayloadResources();
         }
     }
 }

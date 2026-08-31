@@ -9733,22 +9733,31 @@ namespace Njulf.Rendering
             ReflectionSettings settings = Settings.Reflections;
             RaySceneRequirement reflectionRequirement =
                 RaySceneRequirement.ForReflections(settings);
+            bool sparseLobePayloadRequested =
+                Settings.IsPerformanceOptimizationEnabled(
+                    PerformanceOptimizationFeature.SparseHybridLobePayload);
+            bool sparseLobePayloadAvailable =
+                !sparseLobePayloadRequested ||
+                _forwardPlusPass?.SparseHybridLobePayloadAvailable == true;
             bool receiverPayloadAvailable =
                 _renderTargets?.HybridReflectionReceiverPayload is { } receiver &&
                 receiver.Extent.Width == sceneData.ScreenWidth &&
                 receiver.Extent.Height == sceneData.ScreenHeight &&
                 _meshPipeline?.HybridReflectionAttachmentEnabled == true &&
-                _hybridReflectionRuntime?.ScreenPipelinesAvailable == true;
+                _hybridReflectionRuntime?.ScreenPipelinesAvailable == true &&
+                sparseLobePayloadAvailable;
             bool raySceneReady = !reflectionRequirement.Enabled ||
                                  sceneData.RaySceneReadiness.IsReady(
                                      RaySceneConsumer.Reflection,
                                      reflectionRequirement.RequiredCategories);
-            bool lobeExtensionAvailable =
-                _renderTargets?.HybridReflectionRawMetadata is { } lobeTarget &&
-                lobeTarget.Format ==
-                    ForwardHybridReflectionReceiverContract.LobeExtensionFormat &&
-                lobeTarget.Extent.Width == sceneData.ScreenWidth &&
-                lobeTarget.Extent.Height == sceneData.ScreenHeight;
+            bool lobeExtensionAvailable = sparseLobePayloadRequested
+                ? sparseLobePayloadAvailable
+                : _renderTargets?.HybridReflectionRawMetadata is
+                        { } lobeTarget &&
+                    lobeTarget.Format == ForwardHybridReflectionReceiverContract
+                        .LobeExtensionFormat &&
+                    lobeTarget.Extent.Width == sceneData.ScreenWidth &&
+                    lobeTarget.Extent.Height == sceneData.ScreenHeight;
             bool compactHistoryAvailable =
                 _renderTargets?.HybridReflectionHistoryMetadata0?.Format ==
                     RenderTargetManager.HybridReflectionHistoryMetadataFormat &&
@@ -9820,7 +9829,8 @@ namespace Njulf.Rendering
                 _environmentManager?.PublishedSpecularEnvironmentGeneration ?? 0u;
             sceneData.HybridReflectionEstimatedBytes =
                 (_renderTargets?.HybridReflectionRenderTargetBytes ?? 0UL) +
-                (_hybridReflectionRuntime?.BufferBytes ?? 0UL);
+                (_hybridReflectionRuntime?.BufferBytes ?? 0UL) +
+                (_forwardPlusPass?.SparseHybridLobePayloadTotalBytes ?? 0UL);
             UpdateReflectionProbeTelemetry(sceneData);
             sceneData.CpuReflectionProbeUploadMicroseconds = _reflectionProbeManager.LastUploadMicroseconds;
         }

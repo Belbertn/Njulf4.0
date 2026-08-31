@@ -627,6 +627,13 @@
         <Source>foliage_forward.frag</Source>
         <Defines>-DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=5 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=2</Defines>
       </NearFieldDirectSourceShaderVariant>
+      <!-- The optimized lobe path reuses every frozen hybrid receiver define
+           and changes only the final lobe transport from an MRT export to the
+           screen-linear storage sidecar. Keep rollback artifacts independent. -->
+      <NearFieldDirectSourceShaderVariant Update="*hybrid_reflection.frag">
+        <SparseHybridLobeVariant>true</SparseHybridLobeVariant>
+      </NearFieldDirectSourceShaderVariant>
+      <SparseHybridLobeShaderVariant Include="@(NearFieldDirectSourceShaderVariant-&gt;WithMetadataValue('SparseHybridLobeVariant', 'true'))" />
       <ReceiverFeedbackShaderVariant Include="ddgi_simple_receiver_cache_b1.comp">
         <Source>ddgi_simple_receiver_cache.comp</Source>
         <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
@@ -1034,6 +1041,15 @@
           <Source>$(MSBuildProjectDirectory)\%(NearFieldDirectSourceShaderVariant.Source)</Source>
           <Defines>%(NearFieldDirectSourceShaderVariant.Defines)</Defines>
           <AdditionalCompileOptions>%(NearFieldDirectSourceShaderVariant.AdditionalCompileOptions)</AdditionalCompileOptions>
+        </NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="@(SparseHybridLobeShaderVariant -&gt; '%(Filename)_sparse_lobe%(Extension)')">
+          <Source>$(MSBuildProjectDirectory)\%(SparseHybridLobeShaderVariant.Source)</Source>
+          <Defines>%(SparseHybridLobeShaderVariant.Defines) -DNJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT=1</Defines>
+          <AdditionalCompileOptions>%(SparseHybridLobeShaderVariant.AdditionalCompileOptions)</AdditionalCompileOptions>
+        </NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="hybrid_reflection_ssr_sparse_lobe.comp">
+          <Source>$(MSBuildProjectDirectory)\hybrid_reflection_ssr.comp</Source>
+          <Defines>-DNJULF_HYBRID_REFLECTION_SPARSE_LOBE_INPUT=1</Defines>
         </NjulfShaderArtifact>
         <NjulfShaderArtifact Include="@(ReceiverFeedbackShaderVariant)">
           <Source>$(MSBuildProjectDirectory)\%(ReceiverFeedbackShaderVariant.Source)</Source>

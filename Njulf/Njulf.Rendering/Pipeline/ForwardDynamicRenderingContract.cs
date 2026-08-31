@@ -17,16 +17,24 @@ internal static class ForwardDynamicRenderingContract
     public const uint CombinedAdvancedGiColorAttachmentCount =
         ForwardAdvancedGiCombinedContract.ColorAttachmentCount;
     public const uint HybridReflectionReceiverColorAttachmentCount = 2;
+    public const uint SparseHybridReflectionReceiverColorAttachmentCount = 1;
 
     public static uint ResolveColorAttachmentCount(
         bool hasColorAttachment,
         bool materialTransportProvenanceEnabled = false,
         bool nearFieldDirectSourceEnabled = false,
         bool giCausticReceiverEnabled = false,
-        bool hybridReflectionReceiverEnabled = false)
+        bool hybridReflectionReceiverEnabled = false,
+        bool sparseHybridLobePayloadEnabled = false)
     {
         if (!hasColorAttachment)
             return 0;
+        if (sparseHybridLobePayloadEnabled &&
+            !hybridReflectionReceiverEnabled)
+        {
+            throw new InvalidOperationException(
+                "Sparse hybrid-lobe storage requires a hybrid receiver output.");
+        }
 
         // Provenance owns location one and has no combined semantic ABI. C4
         // and C5 do have an explicitly compiled four-attachment ABI and may be
@@ -50,7 +58,9 @@ internal static class ForwardDynamicRenderingContract
                         ? GiCausticReceiverColorAttachmentCount
                         : SceneColorAttachmentCount;
             return producerCount +
-                HybridReflectionReceiverColorAttachmentCount;
+                (sparseHybridLobePayloadEnabled
+                    ? SparseHybridReflectionReceiverColorAttachmentCount
+                    : HybridReflectionReceiverColorAttachmentCount);
         }
 
         if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)

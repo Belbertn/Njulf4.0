@@ -3711,13 +3711,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool simple = family is 2 or 3 or 4 or 5;
             bool simpleFullInput = family is 3 or 5;
             bool compacted = family is 1 or 4 or 5;
+            bool sparseLobePayload =
+                Settings.IsPerformanceOptimizationEnabled(
+                    PerformanceOptimizationFeature.SparseHybridLobePayload);
             string fragmentShader =
                 ForwardHybridReflectionReceiverContract.ResolveFragmentShader(
                     simple,
                     simpleFullInput,
                     giCaustic,
                     nearField,
-                    receiverCacheRequired);
+                    receiverCacheRequired,
+                    sparseLobePayload);
             string meshShader = simple && !simpleFullInput
                 ? compacted
                     ? _compactedForwardSimpleMeshShaderName
@@ -3737,7 +3741,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             };
             Format? tertiary = combination switch
             {
-                0 => ForwardHybridReflectionReceiverContract.LobeExtensionFormat,
+                0 => sparseLobePayload
+                    ? null
+                    : ForwardHybridReflectionReceiverContract.LobeExtensionFormat,
                 1 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
                 2 => ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat,
                 3 => ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
@@ -3745,18 +3751,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             };
             Format? quaternary = combination switch
             {
-                1 => ForwardHybridReflectionReceiverContract.LobeExtensionFormat,
+                1 => sparseLobePayload
+                    ? null
+                    : ForwardHybridReflectionReceiverContract.LobeExtensionFormat,
                 2 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
                 3 => ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat,
                 _ => null
             };
             Format? quinary = combination switch
             {
-                2 => ForwardHybridReflectionReceiverContract.LobeExtensionFormat,
+                2 => sparseLobePayload
+                    ? null
+                    : ForwardHybridReflectionReceiverContract.LobeExtensionFormat,
                 3 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
                 _ => null
             };
-            Format? senary = combination == 3
+            Format? senary = combination == 3 && !sparseLobePayload
                 ? ForwardHybridReflectionReceiverContract.LobeExtensionFormat
                 : null;
 
@@ -3783,7 +3793,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _context.SetDebugName(
                     pipeline.Handle,
                     ObjectType.Pipeline,
-                    $"Hybrid Reflection Forward Pipeline L{receiverLane} C{combination} F{family}");
+                    $"Hybrid Reflection Forward Pipeline L{receiverLane} C{combination} F{family}" +
+                    (sparseLobePayload ? " Sparse Lobe" : " MRT Lobe"));
                 _hybridReflectionPipelines[
                     receiverLane,
                     combination,

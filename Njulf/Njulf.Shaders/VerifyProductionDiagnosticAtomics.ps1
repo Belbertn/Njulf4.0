@@ -350,6 +350,16 @@ $algorithmicAtomicCounts = @{
     'ddgi_simple_transport_audit_reduce_packed_guided.comp.spv' = 28
     'ddgi_simple_transport_intermediate_publish.comp.spv' = 5
 }
+# Sparse-lobe forward programs change only the exact uvec2 transport. They
+# retain the corresponding baseline program's functional DDGI atomic graph.
+foreach ($baselineName in @($algorithmicAtomicCounts.Keys | Where-Object {
+    $_ -like '*hybrid_reflection.frag.spv'
+})) {
+    $sparseName = $baselineName -replace
+        '\.frag\.spv$', '_sparse_lobe.frag.spv'
+    $algorithmicAtomicCounts[$sparseName] =
+        $algorithmicAtomicCounts[$baselineName]
+}
 $missingAlgorithmicModules = @($algorithmicAtomicCounts.Keys | Where-Object {
     -not $availableNames.Contains($_)
 })

@@ -17,7 +17,8 @@ public static class ForwardHybridReflectionReceiverContract
         bool simpleFullInput,
         bool giCaustic,
         bool nearField,
-        bool receiverCacheRequired = false)
+        bool receiverCacheRequired = false,
+        bool sparseLobePayload = false)
     {
         string material = simple
             ? (simpleFullInput ? "simple_full_input_" : "simple_")
@@ -32,17 +33,20 @@ public static class ForwardHybridReflectionReceiverContract
         string receiver = receiverCacheRequired
             ? "cache_required_"
             : string.Empty;
-        return $"forward_opaque_{material}ddgi_{producers}{receiver}hybrid_reflection.frag.spv";
+        string sparse = sparseLobePayload ? "_sparse_lobe" : string.Empty;
+        return $"forward_opaque_{material}ddgi_{producers}{receiver}hybrid_reflection{sparse}.frag.spv";
     }
 
     public static uint ResolveColorAttachmentCount(
         bool giCaustic,
-        bool nearField) =>
+        bool nearField,
+        bool sparseLobePayload = false) =>
         ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
             hasColorAttachment: true,
             nearFieldDirectSourceEnabled: nearField,
             giCausticReceiverEnabled: giCaustic,
-            hybridReflectionReceiverEnabled: true);
+            hybridReflectionReceiverEnabled: true,
+            sparseHybridLobePayloadEnabled: sparseLobePayload);
 
     public static bool TryValidateAttachmentBinding(
         ForwardHybridReflectionReceiverAttachmentBinding? binding,

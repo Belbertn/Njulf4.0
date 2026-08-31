@@ -401,7 +401,11 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             CreatePipelineCache();
             CreatePipelineLayout();
             CreateColorMipPipelineLayout();
-            _ssrPipeline = CreatePipeline("hybrid_reflection_ssr.comp.spv");
+            _ssrPipeline = CreatePipeline(
+                _settings.IsPerformanceOptimizationEnabled(
+                    PerformanceOptimizationFeature.SparseHybridLobePayload)
+                    ? "hybrid_reflection_ssr_sparse_lobe.comp.spv"
+                    : "hybrid_reflection_ssr.comp.spv");
             _classifyPipeline = CreatePipeline(
                 "hybrid_reflection_classify.comp.spv");
             _ddgiBasePipeline = CreatePipeline(

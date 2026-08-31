@@ -149,6 +149,11 @@ $ownershipLockedReceiverCacheFragmentModuleNames = @(
     'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv',
     'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv'
 )
+$ownershipLockedReceiverCacheFragmentModuleNames += @(
+    $ownershipLockedReceiverCacheFragmentModuleNames | ForEach-Object {
+        $_ -replace '\.frag\.spv$', '_sparse_lobe.frag.spv'
+    }
+)
 
 $giDisabledControlModuleNames = @(
     'forward_opaque_gi_disabled.frag.spv',

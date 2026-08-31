@@ -407,7 +407,7 @@ public sealed class ProceduralSkyModelTests
             Assert.That(
                 BindlessIndex.StaticBufferCount,
                 Is.EqualTo(
-                    BindlessIndex.SimpleDdgiMaskedFeedbackCompactBufferFrame1 + 1));
+                    BindlessIndex.HybridReflectionSparseLobeBufferFrame1 + 1));
         });
     }
 

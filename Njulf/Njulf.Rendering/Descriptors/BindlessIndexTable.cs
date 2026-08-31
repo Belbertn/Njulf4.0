@@ -1050,8 +1050,16 @@ namespace Njulf.Rendering.Descriptors
         public const int SimpleDdgiMaskedFeedbackCompactBufferFrame1 =
             SimpleDdgiMaskedFeedbackCompactBufferBase + 1;
 
-        public const int StaticBufferCount =
+        /// <summary>Screen-linear sparse hybrid-lobe payload for frame 0.</summary>
+        public const int HybridReflectionSparseLobeBufferBase =
             SimpleDdgiMaskedFeedbackCompactBufferFrame1 + 1;
+
+        /// <summary>Screen-linear sparse hybrid-lobe payload for frame 1.</summary>
+        public const int HybridReflectionSparseLobeBufferFrame1 =
+            HybridReflectionSparseLobeBufferBase + 1;
+
+        public const int StaticBufferCount =
+            HybridReflectionSparseLobeBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1244,6 +1252,8 @@ namespace Njulf.Rendering.Descriptors
                     MeshletResolvedMappingBufferFrame1 => nameof(MeshletResolvedMappingBufferFrame1),
                     SimpleDdgiMaskedFeedbackCompactBufferBase => nameof(SimpleDdgiMaskedFeedbackCompactBufferBase),
                     SimpleDdgiMaskedFeedbackCompactBufferFrame1 => nameof(SimpleDdgiMaskedFeedbackCompactBufferFrame1),
+                    HybridReflectionSparseLobeBufferBase => nameof(HybridReflectionSparseLobeBufferBase),
+                    HybridReflectionSparseLobeBufferFrame1 => nameof(HybridReflectionSparseLobeBufferFrame1),
                     SceneOpaqueCompactedMeshletDrawBufferBase => nameof(SceneOpaqueCompactedMeshletDrawBufferBase),
                     SceneOpaqueCompactedMeshletDrawBufferFrame1 => nameof(SceneOpaqueCompactedMeshletDrawBufferFrame1),
                     SceneSimpleOpaqueCompactedMeshletDrawBufferBase => nameof(SceneSimpleOpaqueCompactedMeshletDrawBufferBase),

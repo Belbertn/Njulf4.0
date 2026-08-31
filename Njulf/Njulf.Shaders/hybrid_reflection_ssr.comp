@@ -5,6 +5,14 @@
 #include "common.glsl"
 #include "hybrid_reflection_compute.glsl"
 
+#ifndef NJULF_HYBRID_REFLECTION_SPARSE_LOBE_INPUT
+#define NJULF_HYBRID_REFLECTION_SPARSE_LOBE_INPUT 0
+#endif
+
+#if NJULF_HYBRID_REFLECTION_SPARSE_LOBE_INPUT
+#include "hybrid_reflection_sparse_lobe.glsl"
+#endif
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(push_constant) uniform HybridReflectionSsrPushBlock
@@ -603,7 +611,9 @@ void main()
 
     ivec2 pixel = ivec2(invocation);
     uvec4 payload = texelFetch(HybridReceiverPayload, pixel, 0);
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_INPUT
     uvec2 lobeExtension = imageLoad(HybridRawMetadata, pixel).xy;
+#endif
     imageStore(HybridRawMetadata, pixel, uvec4(0u));
     if (!HybridReflectionPayloadValid(payload))
     {
@@ -611,6 +621,19 @@ void main()
         imageStore(HybridDdgiCohorts, pixel, vec4(0.0));
         return;
     }
+
+#if NJULF_HYBRID_REFLECTION_SPARSE_LOBE_INPUT
+    // Validate the receiver first so background and rejected foliage never
+    // touch the sidecar. A packed, sub-threshold anisotropy value is not
+    // represented in the scheduling flags, so valid receivers still perform
+    // this exact load to preserve the baseline lobe direction bit-for-bit.
+    uint currentFrameIndex =
+        (pc.HistoryValidAndCurrentFrameIndex >> 1u) & 1u;
+    uvec2 lobeExtension = NjulfHybridSparseLobeLoad(
+        currentFrameIndex,
+        uvec2(pc.ScreenWidth, pc.ScreenHeight),
+        invocation);
+#endif
 
     vec3 worldPosition;
     float receiverDepth;

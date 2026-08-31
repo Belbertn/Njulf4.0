@@ -25,6 +25,14 @@
 #define NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT 0
 #endif
 
+#ifndef NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
+#define NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT 0
+#endif
+
+#if NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT && !NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#error Sparse hybrid-lobe output requires hybrid-reflection receiver output.
+#endif
+
 #ifndef NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION
 #define NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION 0
 #endif
@@ -135,16 +143,24 @@ layout(location = 2) out uvec4 outC5ReceiverPayload;
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
 #if NJULF_C4_RECEIVER_OUTPUT && NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 layout(location = 4) out uvec4 outHybridReflectionReceiverPayload;
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
 layout(location = 5) out uvec2 outHybridReflectionLobeExtension;
+#endif
 #elif NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 layout(location = 3) out uvec4 outHybridReflectionReceiverPayload;
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
 layout(location = 4) out uvec2 outHybridReflectionLobeExtension;
+#endif
 #elif NJULF_C4_RECEIVER_OUTPUT
 layout(location = 2) out uvec4 outHybridReflectionReceiverPayload;
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
 layout(location = 3) out uvec2 outHybridReflectionLobeExtension;
+#endif
 #else
 layout(location = 1) out uvec4 outHybridReflectionReceiverPayload;
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
 layout(location = 2) out uvec2 outHybridReflectionLobeExtension;
+#endif
 #endif
 #endif
 
@@ -346,7 +362,9 @@ void main()
 #endif
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
     outHybridReflectionReceiverPayload = uvec4(0u);
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
     outHybridReflectionLobeExtension = uvec2(0u);
+#endif
 #endif
     WriteFoliageMaterialTransportProvenance(255u);
     GPUMaterialData material = ReadForwardMaterial(fragMaterialIndex);

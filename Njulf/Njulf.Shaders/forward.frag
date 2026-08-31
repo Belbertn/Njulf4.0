@@ -137,6 +137,14 @@ layout(early_fragment_tests) in;
 #define NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT 0
 #endif
 
+#ifndef NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
+#define NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT 0
+#endif
+
+#if NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT && !NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#error Sparse hybrid-lobe output requires hybrid-reflection receiver output.
+#endif
+
 // ForwardPlus admits hybrid receiver MRTs only after rejecting material,
 // shadow, AO, transparency, animation, GI, and environment debug views. Make
 // that established contract visible to native compilation while keeping a
@@ -220,6 +228,9 @@ bool NjulfHybridDebugViewsStaticNone()
 #endif
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
 #include "hybrid_reflection_payload.glsl"
+#if NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
+#include "hybrid_reflection_sparse_lobe.glsl"
+#endif
 #endif
 #include "gi_material_transport.glsl"
 #include "dielectric_transport.glsl"
@@ -369,16 +380,24 @@ layout(location = 1) out float outMaterialTransportProvenance;
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
 #if NJULF_C4_RECEIVER_OUTPUT && NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 layout(location = 4) out uvec4 outHybridReflectionReceiverPayload;
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
 layout(location = 5) out uvec2 outHybridReflectionLobeExtension;
+#endif
 #elif NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 layout(location = 3) out uvec4 outHybridReflectionReceiverPayload;
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
 layout(location = 4) out uvec2 outHybridReflectionLobeExtension;
+#endif
 #elif NJULF_C4_RECEIVER_OUTPUT
 layout(location = 2) out uvec4 outHybridReflectionReceiverPayload;
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
 layout(location = 3) out uvec2 outHybridReflectionLobeExtension;
+#endif
 #else
 layout(location = 1) out uvec4 outHybridReflectionReceiverPayload;
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
 layout(location = 2) out uvec2 outHybridReflectionLobeExtension;
+#endif
 #endif
 #endif
 #endif
@@ -5717,7 +5736,9 @@ void main()
 #endif
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
     outHybridReflectionReceiverPayload = uvec4(0u);
+#if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
     outHybridReflectionLobeExtension = uvec2(0u);
+#endif
 #endif
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
@@ -8065,7 +8086,8 @@ void main()
     hybridTangent = normalize(
         hybridTangent * cos(hybridAnisotropyRotation) +
         hybridBitangent * sin(hybridAnisotropyRotation));
-    NjulfHybridReflectionCreatePayload(
+    bool hybridReflectionPayloadValid =
+        NjulfHybridReflectionCreatePayload(
         geometricNormal,
         normal,
         mix(dielectricF0, albedo, metallic),
@@ -8080,7 +8102,7 @@ void main()
             fragMaterialIndex,
             material.MaterialRevision),
         outHybridReflectionReceiverPayload);
-    outHybridReflectionLobeExtension =
+    uvec2 hybridReflectionLobeExtension =
         NjulfHybridReflectionCreateLobeExtension(
             clearcoatNormal,
             clearcoatFactor,
@@ -8088,6 +8110,31 @@ void main()
             anisotropyStrength,
             normal,
             hybridTangent);
+#if NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
+    // Clearcoat and broad anisotropy are explicitly flagged. Preserve exact
+    // sub-threshold anisotropy as well: it still changes the base-lobe sample
+    // even though it intentionally does not change scheduling priority.
+    bool hybridLobeExtensionRequired =
+        (hybridReflectionLobeFlags &
+            (NJULF_HYBRID_REFLECTION_LOBE_ANISOTROPIC |
+             NJULF_HYBRID_REFLECTION_LOBE_CLEARCOAT)) != 0u ||
+        NjulfHybridReflectionPackUnorm8(anisotropyStrength) != 0u;
+    if (hybridReflectionPayloadValid && hybridLobeExtensionRequired)
+    {
+        uvec2 hybridExtent = uvec2(max(
+            floor(pc.Push.ScreenDimensions), vec2(1.0)));
+        uvec2 hybridPixel = min(
+            uvec2(max(floor(gl_FragCoord.xy), vec2(0.0))),
+            hybridExtent - uvec2(1u));
+        NjulfHybridSparseLobeStore(
+            pc.Push.CurrentFrameIndex,
+            hybridExtent,
+            hybridPixel,
+            hybridReflectionLobeExtension);
+    }
+#else
+    outHybridReflectionLobeExtension = hybridReflectionLobeExtension;
+#endif
 #endif
 
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
