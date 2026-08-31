@@ -939,6 +939,10 @@ namespace Njulf.Rendering.Resources
         // the camera so receiver coverage does not visibly stick in place.
         private bool _freezeVolumeTopologyForRadiometricPublicationThisFrame;
         private uint _publishedRadiometricGeneration;
+        // Monotonic witness for every receiver-visible atlas/directional/
+        // recursive publication. The receiver cache folds this into its own
+        // 32-bit epoch instead of treating an ordinary frame as a mutation.
+        private uint _receiverPublicationGeneration = 1u;
         private ulong _coherentRadiometricPublicationCount;
         // Exact scene revision sampled when the current CPU queue was built.
         // C3 folds it with source generation/epoch into the 32-bit training
@@ -2419,6 +2423,8 @@ namespace Njulf.Rendering.Resources
             _deferredRadiometricPublicationGeneration != 0u;
         public uint PublishedRadiometricGeneration =>
             _publishedRadiometricGeneration;
+        public uint ReceiverPublicationGeneration =>
+            _receiverPublicationGeneration;
         public ulong CoherentRadiometricPublicationCount =>
             _coherentRadiometricPublicationCount;
         public uint AdmittedSourceCohortGeneration => _admittedSourceCohortGeneration;
@@ -2609,6 +2615,13 @@ namespace Njulf.Rendering.Resources
                 _transportPublishedProbeTotal = SaturatingAdd(
                     _transportPublishedProbeTotal,
                     feedback.PublishedCount);
+                if (feedback.PublishedCount != 0u &&
+                    _deferredRadiometricPublicationGeneration == 0u)
+                {
+                    _receiverPublicationGeneration =
+                        AdvanceSourceLightingGeneration(
+                            _receiverPublicationGeneration);
+                }
             }
 
             if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
@@ -6403,6 +6416,13 @@ namespace Njulf.Rendering.Resources
             // publisher in both V1 and V2. Keep this receiver-specific counter
             // independent of the V2 transport-generation telemetry below.
             _currentReceiverRecordsPublishedCount = _probesToUpdate;
+            if (_probesToUpdate > 0 &&
+                _deferredRadiometricPublicationGeneration == 0u)
+            {
+                _receiverPublicationGeneration =
+                    AdvanceSourceLightingGeneration(
+                        _receiverPublicationGeneration);
+            }
 
             if (TransportV2Active && _probesToUpdate > 0)
             {
@@ -19220,6 +19240,9 @@ namespace Njulf.Rendering.Resources
 
             _sampledAtlas?.MarkFullSyncRequired();
             _publishedRadiometricGeneration = generation;
+            _receiverPublicationGeneration =
+                AdvanceSourceLightingGeneration(
+                    _receiverPublicationGeneration);
             // Deferred feedback deliberately suppresses the ordinary
             // per-frame canonical mutation witness. Advance exactly once at
             // the command-recorded whole-field publication boundary instead.

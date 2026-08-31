@@ -45,6 +45,10 @@ public sealed unsafe partial class ForwardPlusPass
             new SimpleDdgiReceiverCacheHistoryIdentity[FramesInFlight];
     private readonly bool[] _adaptiveReceiverReadbackRecorded =
         new bool[FramesInFlight];
+    private readonly bool[] _receiverPublicationDependentClearPending =
+        new bool[FramesInFlight];
+    private readonly SimpleDdgiReceiverPublicationTracker
+        _receiverPublicationTracker = new();
 
     private DescriptorSetLayout _adaptiveReceiverDescriptorSetLayout;
     private DescriptorPool _adaptiveReceiverDescriptorPool;
@@ -66,6 +70,9 @@ public sealed unsafe partial class ForwardPlusPass
     private ulong _adaptiveReceiverMissingPrefixBytes;
     private SimpleDdgiReceiverCacheFrameToken _adaptiveReceiverFrameToken;
     private SimpleDdgiReceiverCacheAdaptiveCounters _adaptiveReceiverCounters;
+    private uint _receiverPublicationStamp = 1u;
+    private uint _receiverPublicationChangedRegionMask;
+    private bool _receiverPublicationGenerationEnabled;
 
     internal SimpleDdgiReceiverCacheFrameToken
         SimpleDdgiReceiverCacheFrameToken => _adaptiveReceiverFrameToken;
@@ -387,7 +394,8 @@ public sealed unsafe partial class ForwardPlusPass
         ArgumentNullException.ThrowIfNull(settings);
         return (uint)(settings.EffectivePerformanceOptimizationFeatures &
             (PerformanceOptimizationFeature.RowMajorSpatialDdgiGather |
-             PerformanceOptimizationFeature.SharedDdgiResolveStaging));
+             PerformanceOptimizationFeature.SharedDdgiResolveStaging |
+             PerformanceOptimizationFeature.DdgiPublicationGenerationReuse));
     }
 
     internal static bool UsesAdaptiveReceiverPerformanceSpecialization(
@@ -491,7 +499,8 @@ public sealed unsafe partial class ForwardPlusPass
                     $"Simple DDGI Adaptive Receiver Control Frame {i}");
                 gatherStamps[i] = CreateAdaptiveDeviceBuffer(
                     gatherStampBytes,
-                    BufferUsageFlags.StorageBufferBit,
+                    BufferUsageFlags.StorageBufferBit |
+                    BufferUsageFlags.TransferDstBit,
                     $"Simple DDGI Adaptive Receiver Gather Stamps Frame {i}");
                 missingPrefixes[i] = CreateAdaptiveDeviceBuffer(
                     missingPrefixBytes,
@@ -575,6 +584,8 @@ public sealed unsafe partial class ForwardPlusPass
                 : _adaptiveReceiverResourceGeneration + 1u;
         if (_adaptiveReceiverResourceGeneration == 0u)
             _adaptiveReceiverResourceGeneration = 1u;
+        _receiverPublicationTracker.Reset();
+        Array.Fill(_receiverPublicationDependentClearPending, true);
         InvalidateSimpleDdgiReceiverCacheAdaptiveHistory();
     }
 
@@ -759,10 +770,142 @@ public sealed unsafe partial class ForwardPlusPass
             sceneData.SimpleDdgiTransportTopologyGeneration,
             sceneData.SimpleDdgiSourceLightingGeneration,
             sceneData.SimpleDdgiAdmittedSourceCohortGeneration,
+            sceneData.SimpleDdgiPublishedRadiometricGeneration,
+            sceneData.SimpleDdgiReceiverPublicationGeneration,
+            sceneData.SimpleDdgiTransportGeneration,
+            sceneData.SimpleDdgiPublishedPropagationGeneration,
+            sceneData.SimpleDdgiLivePropagationSourceGeneration,
             sceneData.DdgiEmissiveSourceRevision,
             sceneData.DdgiVfxMacroRevision,
             SimpleDdgiReceiverCacheMode.TemporalAdaptive,
             _adaptiveReceiverResourceGeneration);
+    }
+
+    private SimpleDdgiReceiverPublicationIdentity
+        CaptureSimpleDdgiReceiverPublicationIdentity(
+            SceneRenderingData sceneData)
+    {
+        return new SimpleDdgiReceiverPublicationIdentity(
+            _simpleDdgiReceiverCacheWidth,
+            _simpleDdgiReceiverCacheHeight,
+            _simpleDdgiReceiverGatherWidth,
+            _simpleDdgiReceiverGatherHeight,
+            BitConverter.SingleToInt32Bits(sceneData.ProjectionMatrix.M11),
+            BitConverter.SingleToInt32Bits(sceneData.ProjectionMatrix.M22),
+            BitConverter.SingleToInt32Bits(sceneData.ProjectionMatrix.M33),
+            BitConverter.SingleToInt32Bits(sceneData.ProjectionMatrix.M43),
+            sceneData.CaptureCameraCutSerial,
+            sceneData.SceneContentRevision,
+            sceneData.GiTransportMaterialRevision,
+            sceneData.SimpleDdgiVolumeResourceGeneration,
+            sceneData.SimpleDdgiTransportTopologyGeneration,
+            sceneData.SimpleDdgiSourceLightingGeneration,
+            sceneData.SimpleDdgiAdmittedSourceCohortGeneration,
+            sceneData.SimpleDdgiPublishedRadiometricGeneration,
+            sceneData.SimpleDdgiReceiverPublicationGeneration,
+            sceneData.SimpleDdgiTransportGeneration,
+            sceneData.SimpleDdgiPublishedPropagationGeneration,
+            sceneData.SimpleDdgiLivePropagationSourceGeneration,
+            sceneData.DdgiEmissiveSourceRevision,
+            sceneData.DdgiVfxMacroRevision,
+            _simpleDdgiReceiverCacheRequestedMode,
+            _adaptiveReceiverResourceGeneration);
+    }
+
+    private void UpdateSimpleDdgiReceiverPublication(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        SceneRenderingData sceneData)
+    {
+        bool enabled = _settings.IsPerformanceOptimizationEnabled(
+            PerformanceOptimizationFeature.DdgiPublicationGenerationReuse);
+        SimpleDdgiReceiverPublicationIdentity identity =
+            CaptureSimpleDdgiReceiverPublicationIdentity(sceneData);
+        SimpleDdgiReceiverPublicationUpdate update =
+            _receiverPublicationTracker.Update(
+                identity,
+                enabled,
+                BuildAdaptiveReceiverFrameStamp(sceneData.DdgiFrameSerial),
+                forceDirty:
+                    sceneData.DdgiProbesUpdated > 0 ||
+                    sceneData.SimpleDdgiAtlasCleared != 0 ||
+                    (sceneData.SimpleDdgiSchedulerMode ==
+                        SimpleDdgiSchedulerMode.GpuResident &&
+                     sceneData.SimpleDdgiQuietPeriodComplete == 0));
+        _receiverPublicationStamp = update.Stamp;
+        _receiverPublicationChangedRegionMask = update.ChangedRegionMask;
+        _receiverPublicationGenerationEnabled = update.Enabled;
+        if (update.IdentityChanged)
+            InvalidateSimpleDdgiReceiverCacheAdaptiveHistory();
+        if (update.ResetDependentCache)
+        {
+            Array.Fill(_receiverPublicationDependentClearPending, true);
+        }
+
+        ClearSimpleDdgiReceiverPublicationDependentBank(
+            commandBuffer,
+            frameIndex);
+    }
+
+    private void ClearSimpleDdgiReceiverPublicationDependentBank(
+        CommandBuffer commandBuffer,
+        int frameIndex)
+    {
+        if (_bufferManager is null || frameIndex < 0 ||
+            frameIndex >= FramesInFlight ||
+            !_receiverPublicationDependentClearPending[frameIndex])
+        {
+            return;
+        }
+
+        BufferHandle gather = _simpleDdgiReceiverGatherBuffers[frameIndex];
+        if (!gather.IsValid)
+            return;
+        _context.Api.CmdFillBuffer(
+            commandBuffer,
+            _bufferManager.GetBuffer(gather),
+            0UL,
+            _simpleDdgiReceiverGatherBufferBytes,
+            0u);
+
+        bool hasStamps =
+            _adaptiveReceiverGatherStampBuffers[frameIndex].IsValid &&
+            _adaptiveReceiverGatherStampBytes != 0UL;
+        if (hasStamps)
+        {
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                _bufferManager.GetBuffer(
+                    _adaptiveReceiverGatherStampBuffers[frameIndex]),
+                0UL,
+                _adaptiveReceiverGatherStampBytes,
+                0u);
+        }
+
+        Span<BufferMemoryBarrier2> barriers =
+            stackalloc BufferMemoryBarrier2[hasStamps ? 2 : 1];
+        barriers[0] = CreateAdaptiveReceiverBufferBarrier(
+            gather,
+            _simpleDdgiReceiverGatherBufferBytes,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferWriteBit,
+            PipelineStageFlags2.ComputeShaderBit |
+                PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit);
+        if (hasStamps)
+        {
+            barriers[1] = CreateAdaptiveReceiverBufferBarrier(
+                _adaptiveReceiverGatherStampBuffers[frameIndex],
+                _adaptiveReceiverGatherStampBytes,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.ShaderStorageWriteBit);
+        }
+        ExecuteAdaptiveReceiverBarriers(commandBuffer, barriers);
+        _receiverPublicationDependentClearPending[frameIndex] = false;
     }
 
     private bool HasValidSimpleDdgiReceiverCacheAdaptiveHistory(
@@ -802,7 +945,10 @@ public sealed unsafe partial class ForwardPlusPass
             InverseViewProjectionMatrix =
                 sceneData.InverseViewProjectionMatrix,
             CameraPositionAndPadding =
-                new Vector4(sceneData.CameraPosition, 0.0f),
+                new Vector4(
+                    sceneData.CameraPosition,
+                    BitConverter.UInt32BitsToSingle(
+                        _receiverPublicationStamp)),
             ScreenWidth = renderExtent.Width,
             ScreenHeight = renderExtent.Height,
             CacheWidth = _simpleDdgiReceiverCacheWidth,
@@ -812,8 +958,10 @@ public sealed unsafe partial class ForwardPlusPass
             MotionTextureIndex = BindlessIndex.MotionVectorTexture,
             HistoryAndPresetFlags = (historyValid ? 1u : 0u) |
                 ((uint)_settings.QualityPreset << 8),
-            FrameStamp = BuildAdaptiveReceiverFrameStamp(
-                sceneData.DdgiFrameSerial),
+            FrameStamp = _receiverPublicationGenerationEnabled
+                ? _receiverPublicationStamp
+                : BuildAdaptiveReceiverFrameStamp(
+                    sceneData.DdgiFrameSerial),
             SamplingPhase = unchecked((uint)sceneData.DdgiFrameSerial) & 3u,
             MaximumHistoryAge = thresholds.MaximumHistoryAge,
             ClassifyPhase = phase
@@ -1047,7 +1195,10 @@ public sealed unsafe partial class ForwardPlusPass
             InverseViewProjectionMatrix =
                 sceneData.InverseViewProjectionMatrix,
             CameraPositionAndPadding =
-                new Vector4(sceneData.CameraPosition, 0.0f),
+                new Vector4(
+                    sceneData.CameraPosition,
+                    BitConverter.UInt32BitsToSingle(
+                        _receiverPublicationStamp)),
             ScreenWidth = renderExtent.Width,
             ScreenHeight = renderExtent.Height,
             CacheWidth = _simpleDdgiReceiverGatherWidth,
@@ -1415,8 +1566,22 @@ public sealed unsafe partial class ForwardPlusPass
             SimpleDdgiReceiverCacheAdaptiveAbi.TileHeight(
                 _simpleDdgiReceiverCacheHeight),
             1u);
+        // Canonical gather populated the whole coarse lattice. Seed the
+        // parallel stamp bank with the same publication transaction so the
+        // next use of this frame bank can retain unchanged entries.
+        push.ClassifyPhase = 7u;
+        PushAdaptiveReceiverConstants(commandBuffer, push);
+        _context.Api.CmdDispatch(
+            commandBuffer,
+            DivideRoundUp(
+                _simpleDdgiReceiverGatherWidth,
+                SimpleDdgiReceiverCacheWorkgroupSize),
+            DivideRoundUp(
+                _simpleDdgiReceiverGatherHeight,
+                SimpleDdgiReceiverCacheWorkgroupSize),
+            1u);
         Span<BufferMemoryBarrier2> seedToConsumers =
-            stackalloc BufferMemoryBarrier2[4];
+            stackalloc BufferMemoryBarrier2[5];
         seedToConsumers[0] = CreateAdaptiveReceiverBufferBarrier(
             _simpleDdgiReceiverCacheBuffers[frameIndex],
             _simpleDdgiReceiverCacheBufferBytes,
@@ -1443,6 +1608,13 @@ public sealed unsafe partial class ForwardPlusPass
         seedToConsumers[3] = CreateAdaptiveReceiverBufferBarrier(
             _adaptiveReceiverTileScheduleBuffers[frameIndex],
             _adaptiveReceiverTileScheduleBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        seedToConsumers[4] = CreateAdaptiveReceiverBufferBarrier(
+            _adaptiveReceiverGatherStampBuffers[frameIndex],
+            _adaptiveReceiverGatherStampBytes,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
             PipelineStageFlags2.ComputeShaderBit,
@@ -1544,7 +1716,13 @@ public sealed unsafe partial class ForwardPlusPass
                     words[SimpleDdgiReceiverCacheAdaptiveAbi.HalfTileCountWord],
                     words[SimpleDdgiReceiverCacheAdaptiveAbi
                         .QuarterTileCountWord],
-                    words[SimpleDdgiReceiverCacheAdaptiveAbi.ReuseTileCountWord]);
+                    words[SimpleDdgiReceiverCacheAdaptiveAbi.ReuseTileCountWord],
+                    words[SimpleDdgiReceiverCacheAdaptiveAbi
+                        .PublicationGenerationHitCountWord],
+                    words[SimpleDdgiReceiverCacheAdaptiveAbi
+                        .PublicationDirtyInvalidationCountWord],
+                    words[SimpleDdgiReceiverCacheAdaptiveAbi
+                        .PublicationSkippedTileCountWord]);
         }
         _adaptiveReceiverReadbackRecorded[frameIndex] = false;
     }

@@ -6,6 +6,7 @@
 #include "ddgi_receiver_surface.glsl"
 
 const uint NJULF_PERFORMANCE_ROW_MAJOR_SPATIAL_GATHER = 1u << 6u;
+const uint NJULF_PERFORMANCE_DDGI_PUBLICATION_REUSE = 1u << 10u;
 layout(constant_id = 31) const uint
     NjulfPerformanceOptimizationMask = 0x7fffffffu;
 
@@ -13,6 +14,12 @@ bool NjulfRowMajorSpatialGatherEnabled()
 {
     return (NjulfPerformanceOptimizationMask &
         NJULF_PERFORMANCE_ROW_MAJOR_SPATIAL_GATHER) != 0u;
+}
+
+bool NjulfDdgiPublicationReuseEnabled()
+{
+    return (NjulfPerformanceOptimizationMask &
+        NJULF_PERFORMANCE_DDGI_PUBLICATION_REUSE) != 0u;
 }
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -115,6 +122,9 @@ const uint RECEIVER_ADAPTIVE_QUARTER_COUNT = 15u;
 const uint RECEIVER_ADAPTIVE_REUSE_COUNT = 16u;
 const uint RECEIVER_ADAPTIVE_MISSING_FEEDBACK_COUNT = 17u;
 const uint RECEIVER_ADAPTIVE_MISSING_FEEDBACK_INDIRECT = 18u;
+const uint RECEIVER_ADAPTIVE_PUBLICATION_HIT_COUNT = 21u;
+const uint RECEIVER_ADAPTIVE_PUBLICATION_DIRTY_COUNT = 22u;
+const uint RECEIVER_ADAPTIVE_PUBLICATION_SKIPPED_TILE_COUNT = 23u;
 const uint RECEIVER_ADAPTIVE_METADATA_VALID = 1u;
 const float RECEIVER_NORMAL_RELATIVE_EPSILON = 0.000001;
 
@@ -689,6 +699,14 @@ void ClassifyTile()
     atomicAdd(
         ReceiverAdaptiveControl.Words[RECEIVER_ADAPTIVE_REJECTED_COUNT],
         SharedRejectedCount);
+    if (NjulfDdgiPublicationReuseEnabled() &&
+        rate == RECEIVER_ADAPTIVE_RATE_REUSE)
+    {
+        atomicAdd(
+            ReceiverAdaptiveControl.Words[
+                RECEIVER_ADAPTIVE_PUBLICATION_SKIPPED_TILE_COUNT],
+            1u);
+    }
 
     if (rate != RECEIVER_ADAPTIVE_RATE_REUSE)
     {
@@ -749,6 +767,33 @@ void ScheduleGatherWork()
     {
         uint phase = (coordinate.x & 1u) | ((coordinate.y & 1u) << 1u);
         selected = phase == (pc.SamplingPhase & 3u);
+    }
+    if (NjulfDdgiPublicationReuseEnabled())
+    {
+        uint entryIndex = coordinate.y * pc.GatherWidth + coordinate.x;
+        bool generationMatches =
+            ReceiverGatherStamps.Entries[entryIndex] == pc.FrameStamp;
+        uint hits = subgroupBallotBitCount(subgroupBallot(
+            !selected && generationMatches));
+        uint dirty = subgroupBallotBitCount(subgroupBallot(
+            !generationMatches));
+        if (subgroupElect())
+        {
+            if (hits != 0u)
+            {
+                atomicAdd(
+                    ReceiverAdaptiveControl.Words[
+                        RECEIVER_ADAPTIVE_PUBLICATION_HIT_COUNT],
+                    hits);
+            }
+            if (dirty != 0u)
+            {
+                atomicAdd(
+                    ReceiverAdaptiveControl.Words[
+                        RECEIVER_ADAPTIVE_PUBLICATION_DIRTY_COUNT],
+                    dirty);
+            }
+        }
     }
     uint capacity = pc.GatherWidth * pc.GatherHeight;
     if (NjulfRowMajorSpatialGatherEnabled())
@@ -936,6 +981,19 @@ void SeedCanonicalHistory()
     }
 }
 
+void SeedCanonicalGatherStamps()
+{
+    uvec2 coordinate = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(
+            coordinate,
+            uvec2(pc.GatherWidth, pc.GatherHeight))))
+    {
+        return;
+    }
+    uint index = coordinate.y * pc.GatherWidth + coordinate.x;
+    ReceiverGatherStamps.Entries[index] = pc.FrameStamp;
+}
+
 void main()
 {
     if (pc.ClassifyPhase == 0u)
@@ -952,4 +1010,6 @@ void main()
         PrefixMissingFeedbackWork();
     else if (pc.ClassifyPhase == 6u)
         ScatterMissingFeedbackWork();
+    else if (pc.ClassifyPhase == 7u)
+        SeedCanonicalGatherStamps();
 }

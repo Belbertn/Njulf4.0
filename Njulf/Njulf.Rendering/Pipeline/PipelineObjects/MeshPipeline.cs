@@ -89,6 +89,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PerformanceOptimizationFeature.SplitHybridForwardPrograms |
                 PerformanceOptimizationFeature.StaticShaderSpecialization |
                 PerformanceOptimizationFeature.DirectionalLatticeLoadSharing |
+                PerformanceOptimizationFeature.DdgiPublicationGenerationReuse |
                 PerformanceOptimizationFeature.CompactMaskedFeedback |
                 PerformanceOptimizationFeature.SparseHybridLobePayload;
 
@@ -2442,7 +2443,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private void CreateForwardReceiverCacheBufferSetLayout()
         {
             DescriptorSetLayoutBinding* bindings =
-                stackalloc DescriptorSetLayoutBinding[2];
+                stackalloc DescriptorSetLayoutBinding[3];
             bindings[0] = new DescriptorSetLayoutBinding
             {
                 Binding = 0,
@@ -2452,10 +2453,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             };
             bindings[1] = bindings[0];
             bindings[1].Binding = 1;
+            bindings[2] = bindings[0];
+            bindings[2].Binding = 2;
             var info = new DescriptorSetLayoutCreateInfo
             {
                 SType = StructureType.DescriptorSetLayoutCreateInfo,
-                BindingCount = 2,
+                BindingCount = 3,
                 PBindings = bindings
             };
             Result result = _context.Api.CreateDescriptorSetLayout(

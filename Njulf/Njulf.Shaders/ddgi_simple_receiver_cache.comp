@@ -23,6 +23,7 @@
 #endif
 
 const uint NJULF_PERFORMANCE_ROW_MAJOR_SPATIAL_GATHER = 1u << 6u;
+const uint NJULF_PERFORMANCE_DDGI_PUBLICATION_REUSE = 1u << 10u;
 layout(constant_id = 31) const uint
     NjulfPerformanceOptimizationMask = 0x7fffffffu;
 
@@ -30,6 +31,12 @@ bool NjulfRowMajorSpatialGatherEnabled()
 {
     return (NjulfPerformanceOptimizationMask &
         NJULF_PERFORMANCE_ROW_MAJOR_SPATIAL_GATHER) != 0u;
+}
+
+bool NjulfDdgiPublicationReuseEnabled()
+{
+    return (NjulfPerformanceOptimizationMask &
+        NJULF_PERFORMANCE_DDGI_PUBLICATION_REUSE) != 0u;
 }
 
 #if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
@@ -392,7 +399,9 @@ void StoreReceiverDirectionalCoefficients(
     WriteStorageWordUniform(
         pc.CacheBufferIndex,
         baseWord + RECEIVER_GATHER_DIRECTIONAL_FRAME_WORD,
-        ReceiverSharedParams.frameIndex);
+        NjulfDdgiPublicationReuseEnabled()
+            ? floatBitsToUint(pc.CameraPositionAndPadding.w)
+            : ReceiverSharedParams.frameIndex);
 }
 
 void InvalidateReceiverDirectionalCoefficients(uint entryIndex)
@@ -405,7 +414,9 @@ void InvalidateReceiverDirectionalCoefficients(uint entryIndex)
     WriteStorageWordUniform(
         pc.CacheBufferIndex,
         baseWord + RECEIVER_GATHER_DIRECTIONAL_FRAME_WORD,
-        ReceiverSharedParams.frameIndex);
+        NjulfDdgiPublicationReuseEnabled()
+            ? floatBitsToUint(pc.CameraPositionAndPadding.w)
+            : ReceiverSharedParams.frameIndex);
 }
 #endif
 

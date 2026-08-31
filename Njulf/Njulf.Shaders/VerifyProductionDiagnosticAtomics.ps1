@@ -219,7 +219,9 @@ $algorithmicAtomicCounts = @{
     'ddgi_simple_receiver_cache_adaptive.comp.spv' = 3
     'ddgi_simple_receiver_cache_adaptive_b1.comp.spv' = 5
     'ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv' = 5
-    'ddgi_simple_receiver_cache_classify.comp.spv' = 11
+    # Three subgroup-aggregated publication counters are part of the default
+    # generation-reuse specialization (hit, dirty, and skipped-tile).
+    'ddgi_simple_receiver_cache_classify.comp.spv' = 14
     # The frozen depth-only benchmark uses the identical gather producer but
     # deliberately omits the surface sidecar. Its three functional gather
     # atomics must remain equivalent to the pre-surface-cache implementation.

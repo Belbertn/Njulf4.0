@@ -1021,6 +1021,14 @@ namespace Njulf.Tests
                 Assert.That(cacheSampling, Does.Contain(
                     "ddgiFrameIndex"));
                 Assert.That(forward, Does.Contain(
+                    "NJULF_PERFORMANCE_DDGI_PUBLICATION_REUSE"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "ForwardDdgiReceiverPublication.Words[0]"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "expectedPublication"));
+                Assert.That(cache, Does.Contain(
+                    "floatBitsToUint(pc.CameraPositionAndPadding.w)"));
+                Assert.That(forward, Does.Contain(
                     "NJULF_PERFORMANCE_DIRECTIONAL_LATTICE_SHARING"));
                 Assert.That(cacheSampling, Does.Contain(
                     "ForwardDdgiDirectionalCanShareEntry("));

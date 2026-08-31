@@ -1268,6 +1268,8 @@ namespace Njulf.Rendering.Data
         public ulong SimpleDdgiWholeReadbackDropCount { get; set; }
         public uint SimpleDdgiSourceLightingGeneration { get; set; }
         public uint SimpleDdgiAdmittedSourceCohortGeneration { get; set; }
+        public uint SimpleDdgiPublishedRadiometricGeneration { get; set; }
+        public uint SimpleDdgiReceiverPublicationGeneration { get; set; }
         public uint SimpleDdgiTransportGeneration { get; set; }
         public uint SimpleDdgiPublishedPropagationGeneration { get; set; }
         public uint SimpleDdgiLivePropagationSourceGeneration { get; set; }
@@ -3064,6 +3066,8 @@ namespace Njulf.Rendering.Data
             SimpleDdgiWholeReadbackDropCount = 0;
             SimpleDdgiSourceLightingGeneration = 0;
             SimpleDdgiAdmittedSourceCohortGeneration = 0;
+            SimpleDdgiPublishedRadiometricGeneration = 0;
+            SimpleDdgiReceiverPublicationGeneration = 0;
             SimpleDdgiTransportGeneration = 0;
             SimpleDdgiPublishedPropagationGeneration = 0;
             SimpleDdgiLivePropagationSourceGeneration = 0;

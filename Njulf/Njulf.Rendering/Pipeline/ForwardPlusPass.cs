@@ -117,6 +117,9 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferHandle[] _simpleDdgiReceiverGatherSurfaceBuffers =
             new BufferHandle[FramesInFlight];
 
+        private readonly BufferHandle[] _simpleDdgiReceiverPublicationBuffers =
+            new BufferHandle[FramesInFlight];
+
         private nint _simpleDdgiReceiverCacheEntryPointName;
         private DescriptorSetLayout _simpleDdgiReceiverCacheOutputSetLayout;
         private DescriptorPool _simpleDdgiReceiverCacheDescriptorPool;
@@ -300,6 +303,22 @@ namespace Njulf.Rendering.Pipeline
                     AdaptiveHalfTileCount = adaptive.HalfTileCount,
                     AdaptiveQuarterTileCount = adaptive.QuarterTileCount,
                     AdaptiveReuseTileCount = adaptive.ReuseTileCount,
+                    PublicationGeneration =
+                        _receiverPublicationGenerationEnabled
+                            ? _receiverPublicationStamp
+                            : 0u,
+                    PublicationStableIdentityHitCount =
+                        _receiverPublicationTracker.StableIdentityHitCount,
+                    PublicationDirtyIdentityCount =
+                        _receiverPublicationTracker.DirtyIdentityCount,
+                    PublicationWrapResetCount =
+                        _receiverPublicationTracker.WrapResetCount,
+                    AdaptivePublicationGenerationHitCount =
+                        adaptive.PublicationGenerationHitCount,
+                    AdaptivePublicationDirtyInvalidationCount =
+                        adaptive.PublicationDirtyInvalidationCount,
+                    AdaptivePublicationSkippedTileCount =
+                        adaptive.PublicationSkippedTileCount,
                     LifetimeObservedFrameCount =
                         lifetime.ObservedFrameCount,
                     LifetimeResolveCandidateCount =
@@ -416,6 +435,7 @@ namespace Njulf.Rendering.Pipeline
                 _simpleDdgiReceiverGatherBuffers[i] = BufferHandle.Invalid;
                 _simpleDdgiReceiverCacheSurfaceBuffers[i] = BufferHandle.Invalid;
                 _simpleDdgiReceiverGatherSurfaceBuffers[i] = BufferHandle.Invalid;
+                _simpleDdgiReceiverPublicationBuffers[i] = BufferHandle.Invalid;
             }
         }
 
@@ -3031,6 +3051,7 @@ namespace Njulf.Rendering.Pipeline
                 _simpleDdgiReceiverCacheConsumerSets[frameIndex].Handle == 0 ||
                 !_simpleDdgiReceiverGatherBuffers[frameIndex].IsValid ||
                 !_simpleDdgiReceiverGatherSurfaceBuffers[frameIndex].IsValid ||
+                !_simpleDdgiReceiverPublicationBuffers[frameIndex].IsValid ||
                 renderExtent.Width == 0 || renderExtent.Height == 0)
             {
                 return false;
@@ -3096,16 +3117,23 @@ namespace Njulf.Rendering.Pipeline
             _adaptiveReceiverExecutedForCurrentView = false;
             _adaptiveReceiverFrameToken =
                 SimpleDdgiReceiverCacheFrameToken.Unavailable;
+            UpdateSimpleDdgiReceiverPublication(
+                cmd,
+                frameIndex,
+                sceneData);
             if (_simpleDdgiReceiverCacheRequestedMode !=
                 SimpleDdgiReceiverCacheMode.TemporalAdaptive)
             {
-                return DispatchCanonicalSimpleDdgiReceiverCache(
+                bool recorded = DispatchCanonicalSimpleDdgiReceiverCache(
                     cmd,
                     frameIndex,
                     sceneData,
                     renderExtent,
                     receiverFeedbackProducer,
                     pipelineBank);
+                if (recorded)
+                    PublishSimpleDdgiReceiverPublication(cmd, frameIndex);
+                return recorded;
             }
 
             // The adaptive gather owns both cache shading and any overlapping
@@ -3123,6 +3151,7 @@ namespace Njulf.Rendering.Pipeline
                 _simpleDdgiReceiverCacheFallbackReason =
                     SimpleDdgiReceiverCacheFallbackReason.None;
                 _simpleDdgiReceiverCacheFallbackDetail = string.Empty;
+                PublishSimpleDdgiReceiverPublication(cmd, frameIndex);
                 return true;
             }
 
@@ -3160,7 +3189,47 @@ namespace Njulf.Rendering.Pipeline
                     ? "canonical cache execution seeded discontinuous or invalid temporal history"
                     : "adaptive receiver-cache runtime unavailable; canonical cache retained";
             }
+            PublishSimpleDdgiReceiverPublication(cmd, frameIndex);
             return true;
+        }
+
+        private void PublishSimpleDdgiReceiverPublication(
+            CommandBuffer commandBuffer,
+            int frameIndex)
+        {
+            if (_bufferManager is null || frameIndex < 0 ||
+                frameIndex >= FramesInFlight ||
+                !_simpleDdgiReceiverPublicationBuffers[frameIndex].IsValid)
+            {
+                return;
+            }
+
+            BufferHandle handle =
+                _simpleDdgiReceiverPublicationBuffers[frameIndex];
+            VkBuffer buffer = _bufferManager.GetBuffer(handle);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                buffer,
+                SimpleDdgiReceiverPublicationAbi.GenerationByteOffset,
+                sizeof(uint),
+                _receiverPublicationGenerationEnabled
+                    ? _receiverPublicationStamp
+                    : 0u);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                buffer,
+                SimpleDdgiReceiverPublicationAbi.ChangedRegionsByteOffset,
+                sizeof(uint),
+                _receiverPublicationChangedRegionMask);
+            ExecuteAdaptiveReceiverBarrier(
+                commandBuffer,
+                CreateAdaptiveReceiverBufferBarrier(
+                    handle,
+                    SimpleDdgiReceiverPublicationAbi.ByteCount,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferWriteBit,
+                    PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderStorageReadBit));
         }
 
         private bool DispatchCanonicalSimpleDdgiReceiverCache(
@@ -3421,7 +3490,10 @@ namespace Njulf.Rendering.Pipeline
                 InverseViewProjectionMatrix =
                     sceneData.InverseViewProjectionMatrix,
                 CameraPositionAndPadding =
-                    new Vector4(sceneData.CameraPosition, 0.0f),
+                    new Vector4(
+                        sceneData.CameraPosition,
+                        BitConverter.UInt32BitsToSingle(
+                            _receiverPublicationStamp)),
                 ScreenWidth = renderExtent.Width,
                 ScreenHeight = renderExtent.Height,
                 CacheWidth = _simpleDdgiReceiverGatherWidth,
@@ -4751,7 +4823,7 @@ namespace Njulf.Rendering.Pipeline
             var poolSize = new DescriptorPoolSize
             {
                 Type = DescriptorType.StorageBuffer,
-                DescriptorCount = FramesInFlight * 4
+                DescriptorCount = FramesInFlight * 5
             };
             var poolInfo = new DescriptorPoolCreateInfo
             {
@@ -4993,7 +5065,8 @@ namespace Njulf.Rendering.Pipeline
                     _simpleDdgiReceiverCacheBuffers[i].IsValid &&
                     _simpleDdgiReceiverGatherBuffers[i].IsValid &&
                     _simpleDdgiReceiverCacheSurfaceBuffers[i].IsValid &&
-                    _simpleDdgiReceiverGatherSurfaceBuffers[i].IsValid;
+                    _simpleDdgiReceiverGatherSurfaceBuffers[i].IsValid &&
+                    _simpleDdgiReceiverPublicationBuffers[i].IsValid;
             }
 
             if (currentResourcesMatch)
@@ -5013,16 +5086,19 @@ namespace Njulf.Rendering.Pipeline
             var gatherReplacements = new BufferHandle[FramesInFlight];
             var cacheSurfaceReplacements = new BufferHandle[FramesInFlight];
             var gatherSurfaceReplacements = new BufferHandle[FramesInFlight];
+            var publicationReplacements = new BufferHandle[FramesInFlight];
             var cacheNativeBuffers = new VkBuffer[FramesInFlight];
             var gatherNativeBuffers = new VkBuffer[FramesInFlight];
             var cacheSurfaceNativeBuffers = new VkBuffer[FramesInFlight];
             var gatherSurfaceNativeBuffers = new VkBuffer[FramesInFlight];
+            var publicationNativeBuffers = new VkBuffer[FramesInFlight];
             for (int i = 0; i < FramesInFlight; i++)
             {
                 cacheReplacements[i] = BufferHandle.Invalid;
                 gatherReplacements[i] = BufferHandle.Invalid;
                 cacheSurfaceReplacements[i] = BufferHandle.Invalid;
                 gatherSurfaceReplacements[i] = BufferHandle.Invalid;
+                publicationReplacements[i] = BufferHandle.Invalid;
             }
 
             try
@@ -5038,7 +5114,8 @@ namespace Njulf.Rendering.Pipeline
                         $"({cacheWidth}x{cacheHeight})");
                     gatherReplacements[i] = _bufferManager.CreateDeviceBuffer(
                         gatherByteSize,
-                        BufferUsageFlags.StorageBufferBit,
+                        BufferUsageFlags.StorageBufferBit |
+                        BufferUsageFlags.TransferDstBit,
                         requireDeviceAddress: false,
                         MemoryBudgetCategory.GlobalIllumination,
                         $"Simple DDGI Receiver Gather Lattice Frame {i} " +
@@ -5059,6 +5136,14 @@ namespace Njulf.Rendering.Pipeline
                             MemoryBudgetCategory.GlobalIllumination,
                             $"Simple DDGI Receiver Gather Surface Frame {i} " +
                             $"({gatherWidth}x{gatherHeight})");
+                    publicationReplacements[i] =
+                        _bufferManager.CreateDeviceBuffer(
+                            SimpleDdgiReceiverPublicationAbi.ByteCount,
+                            BufferUsageFlags.StorageBufferBit |
+                            BufferUsageFlags.TransferDstBit,
+                            requireDeviceAddress: false,
+                            MemoryBudgetCategory.GlobalIllumination,
+                            $"Simple DDGI Receiver Publication Frame {i}");
                 }
 
                 for (int i = 0; i < FramesInFlight; i++)
@@ -5067,6 +5152,7 @@ namespace Njulf.Rendering.Pipeline
                         !gatherReplacements[i].IsValid ||
                         !cacheSurfaceReplacements[i].IsValid ||
                         !gatherSurfaceReplacements[i].IsValid ||
+                        !publicationReplacements[i].IsValid ||
                         _simpleDdgiReceiverCacheOutputSets[i].Handle == 0 ||
                         _simpleDdgiReceiverCacheConsumerSets[i].Handle == 0)
                     {
@@ -5082,6 +5168,8 @@ namespace Njulf.Rendering.Pipeline
                         _bufferManager.GetBuffer(cacheSurfaceReplacements[i]);
                     gatherSurfaceNativeBuffers[i] =
                         _bufferManager.GetBuffer(gatherSurfaceReplacements[i]);
+                    publicationNativeBuffers[i] =
+                        _bufferManager.GetBuffer(publicationReplacements[i]);
                 }
             }
             catch
@@ -5096,6 +5184,8 @@ namespace Njulf.Rendering.Pipeline
                         _bufferManager.DestroyBuffer(cacheSurfaceReplacements[i]);
                     if (gatherSurfaceReplacements[i].IsValid)
                         _bufferManager.DestroyBuffer(gatherSurfaceReplacements[i]);
+                    if (publicationReplacements[i].IsValid)
+                        _bufferManager.DestroyBuffer(publicationReplacements[i]);
                 }
 
                 throw;
@@ -5107,8 +5197,8 @@ namespace Njulf.Rendering.Pipeline
             // retiring the old pairs so no frame can observe a descriptor for
             // a destroyed resource. Vulkan descriptor updates have no
             // recoverable result after this preflight boundary.
-            DescriptorBufferInfo* bufferInfos = stackalloc DescriptorBufferInfo[4];
-            WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[4];
+            DescriptorBufferInfo* bufferInfos = stackalloc DescriptorBufferInfo[5];
+            WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[5];
             for (int i = 0; i < FramesInFlight; i++)
             {
                 _bindlessHeap.RegisterStorageBuffer(
@@ -5146,6 +5236,12 @@ namespace Njulf.Rendering.Pipeline
                     Offset = 0,
                     Range = cacheSurfaceByteSize
                 };
+                bufferInfos[4] = new DescriptorBufferInfo
+                {
+                    Buffer = publicationNativeBuffers[i],
+                    Offset = 0,
+                    Range = SimpleDdgiReceiverPublicationAbi.ByteCount
+                };
                 writes[0] = new WriteDescriptorSet
                 {
                     SType = StructureType.WriteDescriptorSet,
@@ -5182,9 +5278,18 @@ namespace Njulf.Rendering.Pipeline
                     DescriptorType = DescriptorType.StorageBuffer,
                     PBufferInfo = &bufferInfos[3]
                 };
+                writes[4] = new WriteDescriptorSet
+                {
+                    SType = StructureType.WriteDescriptorSet,
+                    DstSet = _simpleDdgiReceiverCacheConsumerSets[i],
+                    DstBinding = 2,
+                    DescriptorCount = 1,
+                    DescriptorType = DescriptorType.StorageBuffer,
+                    PBufferInfo = &bufferInfos[4]
+                };
                 _context.Api.UpdateDescriptorSets(
                     _context.Device,
-                    4,
+                    5,
                     writes,
                     0,
                     null);
@@ -5200,12 +5305,16 @@ namespace Njulf.Rendering.Pipeline
                     _simpleDdgiReceiverCacheSurfaceBuffers[i];
                 BufferHandle oldGatherSurface =
                     _simpleDdgiReceiverGatherSurfaceBuffers[i];
+                BufferHandle oldPublication =
+                    _simpleDdgiReceiverPublicationBuffers[i];
                 _simpleDdgiReceiverCacheBuffers[i] = cacheReplacements[i];
                 _simpleDdgiReceiverGatherBuffers[i] = gatherReplacements[i];
                 _simpleDdgiReceiverCacheSurfaceBuffers[i] =
                     cacheSurfaceReplacements[i];
                 _simpleDdgiReceiverGatherSurfaceBuffers[i] =
                     gatherSurfaceReplacements[i];
+                _simpleDdgiReceiverPublicationBuffers[i] =
+                    publicationReplacements[i];
                 if (oldCache.IsValid)
                     _bufferManager.DestroyBuffer(oldCache);
                 if (oldGather.IsValid)
@@ -5214,6 +5323,8 @@ namespace Njulf.Rendering.Pipeline
                     _bufferManager.DestroyBuffer(oldCacheSurface);
                 if (oldGatherSurface.IsValid)
                     _bufferManager.DestroyBuffer(oldGatherSurface);
+                if (oldPublication.IsValid)
+                    _bufferManager.DestroyBuffer(oldPublication);
             }
 
             _simpleDdgiReceiverCacheWidth = cacheWidth;
@@ -5226,6 +5337,8 @@ namespace Njulf.Rendering.Pipeline
             _simpleDdgiReceiverGatherBufferBytes = gatherByteSize;
             _simpleDdgiReceiverGatherSurfaceBufferBytes =
                 gatherSurfaceByteSize;
+            _receiverPublicationTracker.Reset();
+            Array.Fill(_receiverPublicationDependentClearPending, true);
 
             if (_adaptiveReceiverInitializationAttempted &&
                 !_adaptiveReceiverInitializationFailed)
@@ -5303,12 +5416,19 @@ namespace Njulf.Rendering.Pipeline
                         _bufferManager.DestroyBuffer(
                             _simpleDdgiReceiverGatherSurfaceBuffers[i]);
                     }
+
+                    if (_simpleDdgiReceiverPublicationBuffers[i].IsValid)
+                    {
+                        _bufferManager.DestroyBuffer(
+                            _simpleDdgiReceiverPublicationBuffers[i]);
+                    }
                 }
 
                 _simpleDdgiReceiverCacheBuffers[i] = BufferHandle.Invalid;
                 _simpleDdgiReceiverGatherBuffers[i] = BufferHandle.Invalid;
                 _simpleDdgiReceiverCacheSurfaceBuffers[i] = BufferHandle.Invalid;
                 _simpleDdgiReceiverGatherSurfaceBuffers[i] = BufferHandle.Invalid;
+                _simpleDdgiReceiverPublicationBuffers[i] = BufferHandle.Invalid;
                 _simpleDdgiReceiverCacheOutputSets[i] = default;
                 _simpleDdgiReceiverCacheConsumerSets[i] = default;
             }
@@ -5321,6 +5441,11 @@ namespace Njulf.Rendering.Pipeline
             _simpleDdgiReceiverGatherHeight = 0;
             _simpleDdgiReceiverGatherBufferBytes = 0;
             _simpleDdgiReceiverGatherSurfaceBufferBytes = 0;
+            _receiverPublicationTracker.Reset();
+            _receiverPublicationStamp = 1u;
+            _receiverPublicationChangedRegionMask = 0u;
+            _receiverPublicationGenerationEnabled = false;
+            Array.Clear(_receiverPublicationDependentClearPending);
 
             if (_simpleDdgiReceiverCacheResolvePipeline.Handle != 0)
             {

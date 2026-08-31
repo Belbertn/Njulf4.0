@@ -19,6 +19,15 @@ layout(std430, set = 2, binding = 1) readonly buffer ForwardDdgiReceiverSurfaceB
     uvec2 Entries[];
 } ForwardDdgiReceiverSurface;
 
+// Word zero is the monotonic receiver publication generation. Word one is a
+// conservative changed-region bitset (currently region zero = whole view).
+// Both words are published only after the associated lattice writes become
+// visible to fragment shading.
+layout(std430, set = 2, binding = 2) readonly buffer ForwardDdgiReceiverPublicationBlock
+{
+    uint Words[];
+} ForwardDdgiReceiverPublication;
+
 struct ForwardDdgiReceiverCacheSample
 {
     // Keep the packed value live until the consumer actually needs each
@@ -365,6 +374,12 @@ bool SampleForwardDdgiCompactDirectionalRadiance(
     uint gatherSurfaceBufferIndex =
         uint(SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_BASE_INDEX) +
         frameBank;
+    uint expectedPublication = NjulfPerformanceOptimizationEnabled(
+            NJULF_PERFORMANCE_DDGI_PUBLICATION_REUSE)
+        ? ForwardDdgiReceiverPublication.Words[0]
+        : ddgiFrameIndex;
+    if (expectedPublication == 0u)
+        return false;
     float compatibleWeight = 0.0;
     float supportedWeight = 0.0;
     for (uint candidateIndex = 0u; candidateIndex < 4u; candidateIndex++)
@@ -385,12 +400,12 @@ bool SampleForwardDdgiCompactDirectionalRadiance(
             FORWARD_DDGI_DIRECTIONAL_GATHER_ENTRY_WORDS;
         bool shareEntry = ForwardDdgiDirectionalCanShareEntry(
             entryWord,
-            ddgiFrameIndex);
+            expectedPublication);
         if (ReadForwardDdgiDirectionalWord(
                 gatherBufferIndex,
                 entryWord + FORWARD_DDGI_DIRECTIONAL_FRAME_WORD,
                 shareEntry) !=
-            ddgiFrameIndex)
+            expectedPublication)
         {
             continue;
         }

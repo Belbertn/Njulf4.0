@@ -558,6 +558,10 @@ internal static class DdgiFrameDataProjector
             cohort.SourceCohortGeneration;
         sceneData.SimpleDdgiAdmittedSourceCohortGeneration =
             cohort.AdmittedSourceCohortGeneration;
+        sceneData.SimpleDdgiPublishedRadiometricGeneration =
+            manager.PublishedRadiometricGeneration;
+        sceneData.SimpleDdgiReceiverPublicationGeneration =
+            manager.ReceiverPublicationGeneration;
         sceneData.SimpleDdgiTransportGeneration =
             cohort.PropagationGeneration;
         sceneData.SimpleDdgiPublishedPropagationGeneration =

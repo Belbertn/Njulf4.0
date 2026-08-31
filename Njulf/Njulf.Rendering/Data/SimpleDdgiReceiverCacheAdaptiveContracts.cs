@@ -21,7 +21,7 @@ public enum SimpleDdgiReceiverCacheRate : uint
 /// </summary>
 public static class SimpleDdgiReceiverCacheAdaptiveAbi
 {
-    public const uint Version = 2u;
+    public const uint Version = 3u;
     public const uint SchedulingTileScale = 8u;
     public const uint WorkgroupInvocationCount = 64u;
     public const ulong MetadataEntryBytes = 16u;
@@ -45,6 +45,12 @@ public static class SimpleDdgiReceiverCacheAdaptiveAbi
     public const uint ReuseTileCountWord = 16u;
     public const uint MissingFeedbackCountWord = 17u;
     public const uint MissingFeedbackIndirectWord = 18u;
+    // Words 21..23 are deliberately inside the frozen 96-byte control block.
+    // They expose publication-reuse effectiveness without growing any GPU
+    // allocation or changing the indirect argument offsets above.
+    public const uint PublicationGenerationHitCountWord = 21u;
+    public const uint PublicationDirtyInvalidationCountWord = 22u;
+    public const uint PublicationSkippedTileCountWord = 23u;
 
     public const ulong GatherIndirectByteOffset =
         GatherIndirectWord * sizeof(uint);
@@ -112,6 +118,20 @@ public static class SimpleDdgiReceiverCacheAdaptiveAbi
         ulong resolveTileBytes) =>
         gatherWorkBytes >= RequiredGatherWorkBytes(gatherWidth, gatherHeight) &&
         resolveTileBytes >= RequiredResolveTileBytes(cacheWidth, cacheHeight);
+}
+
+/// <summary>
+/// Fragment-visible publication contract. Region zero is intentionally the
+/// whole view until DDGI exposes an authenticated atlas-to-screen dirty map.
+/// This conservative granularity may invalidate too much work, but can never
+/// retain data from a changed region.
+/// </summary>
+public static class SimpleDdgiReceiverPublicationAbi
+{
+    public const ulong ByteCount = 8u;
+    public const ulong GenerationByteOffset = 0u;
+    public const ulong ChangedRegionsByteOffset = 4u;
+    public const uint GlobalRegionBit = 1u;
 }
 
 public readonly record struct SimpleDdgiReceiverCacheRateInput(
@@ -234,6 +254,11 @@ public readonly record struct SimpleDdgiReceiverCacheHistoryIdentity(
     uint TransportTopologyGeneration,
     uint SourceLightingGeneration,
     uint SourceCohortGeneration,
+    uint PublishedRadiometricGeneration,
+    uint ReceiverPublicationGeneration,
+    uint TransportGeneration,
+    uint PublishedPropagationGeneration,
+    uint LivePropagationSourceGeneration,
     uint EmissiveSourceRevision,
     ulong VfxMacroRevision,
     SimpleDdgiReceiverCacheMode Mode,
@@ -249,6 +274,118 @@ public readonly record struct SimpleDdgiReceiverCacheHistoryIdentity(
         {
             VolumeResourceGeneration = other.VolumeResourceGeneration
         } == other;
+}
+
+/// <summary>
+/// Complete receiver-lattice publication identity. Ordinary camera motion is
+/// excluded because motion/depth/normal/disocclusion validation owns it;
+/// projection changes and explicit cuts remain hard discontinuities.
+/// </summary>
+public readonly record struct SimpleDdgiReceiverPublicationIdentity(
+    uint CacheWidth,
+    uint CacheHeight,
+    uint GatherWidth,
+    uint GatherHeight,
+    int ProjectionM11Bits,
+    int ProjectionM22Bits,
+    int ProjectionM33Bits,
+    int ProjectionM43Bits,
+    ulong CameraCutSerial,
+    ulong SceneContentRevision,
+    uint MaterialRevision,
+    uint VolumeResourceGeneration,
+    uint TransportTopologyGeneration,
+    uint SourceLightingGeneration,
+    uint SourceCohortGeneration,
+    uint PublishedRadiometricGeneration,
+    uint ReceiverPublicationGeneration,
+    uint TransportGeneration,
+    uint PublishedPropagationGeneration,
+    uint LivePropagationSourceGeneration,
+    uint EmissiveSourceRevision,
+    ulong VfxMacroRevision,
+    SimpleDdgiReceiverCacheMode Mode,
+    uint ResourceGeneration);
+
+public readonly record struct SimpleDdgiReceiverPublicationUpdate(
+    uint Stamp,
+    uint ChangedRegionMask,
+    bool Enabled,
+    bool IdentityChanged,
+    bool ResetDependentCache,
+    bool Wrapped);
+
+/// <summary>
+/// CPU-owned monotonic epoch. The identity is observed even while the feature
+/// is disabled, and re-enabling always requests a dependent-cache clear, so a
+/// coincidental stamp can never resurrect data written by the baseline path.
+/// </summary>
+public sealed class SimpleDdgiReceiverPublicationTracker
+{
+    private SimpleDdgiReceiverPublicationIdentity _identity;
+    private bool _hasIdentity;
+    private bool _enabledLastUpdate;
+    private uint _generation;
+
+    public ulong StableIdentityHitCount { get; private set; }
+    public ulong DirtyIdentityCount { get; private set; }
+    public ulong WrapResetCount { get; private set; }
+    public uint Generation => _generation;
+
+    public SimpleDdgiReceiverPublicationUpdate Update(
+        in SimpleDdgiReceiverPublicationIdentity identity,
+        bool enabled,
+        uint fallbackStamp,
+        bool forceDirty = false)
+    {
+        if (fallbackStamp == 0u)
+            fallbackStamp = 1u;
+
+        bool firstIdentity = !_hasIdentity;
+        bool identityChanged = firstIdentity || forceDirty ||
+            _identity != identity;
+        bool enabling = enabled && !_enabledLastUpdate;
+        bool wrapped = false;
+        if (identityChanged || enabling)
+        {
+            _generation = NextGeneration(_generation, out wrapped);
+            _identity = identity;
+            _hasIdentity = true;
+            DirtyIdentityCount++;
+            if (wrapped)
+                WrapResetCount++;
+        }
+        else if (enabled)
+        {
+            StableIdentityHitCount++;
+        }
+
+        _enabledLastUpdate = enabled;
+        return new SimpleDdgiReceiverPublicationUpdate(
+            enabled ? _generation : fallbackStamp,
+            enabled && (identityChanged || enabling)
+                ? SimpleDdgiReceiverPublicationAbi.GlobalRegionBit
+                : 0u,
+            enabled,
+            identityChanged,
+            enabled && (firstIdentity || enabling || wrapped),
+            wrapped);
+    }
+
+    public void Reset()
+    {
+        _identity = default;
+        _hasIdentity = false;
+        _enabledLastUpdate = false;
+        _generation = 0u;
+    }
+
+    public static uint NextGeneration(uint current, out bool wrapped)
+    {
+        wrapped = current == uint.MaxValue;
+        uint next = wrapped ? 1u : current + 1u;
+        return next == 0u ? 1u : next;
+    }
 }
 
 /// <summary>
@@ -295,7 +432,10 @@ public readonly record struct SimpleDdgiReceiverCacheAdaptiveCounters(
     uint FullTileCount,
     uint HalfTileCount,
     uint QuarterTileCount,
-    uint ReuseTileCount)
+    uint ReuseTileCount,
+    uint PublicationGenerationHitCount,
+    uint PublicationDirtyInvalidationCount,
+    uint PublicationSkippedTileCount)
 {
     public static SimpleDdgiReceiverCacheAdaptiveCounters Unavailable => default;
 }

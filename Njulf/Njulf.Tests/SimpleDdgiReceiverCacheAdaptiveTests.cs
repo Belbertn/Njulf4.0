@@ -99,6 +99,13 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
             Assert.That(
                 SimpleDdgiReceiverCacheAdaptiveAbi.ControlBytes,
                 Is.EqualTo(96UL));
+            Assert.That(
+                SimpleDdgiReceiverCacheAdaptiveAbi
+                    .PublicationSkippedTileCountWord,
+                Is.EqualTo(23u));
+            Assert.That(
+                SimpleDdgiReceiverPublicationAbi.ByteCount,
+                Is.EqualTo(8UL));
         });
     }
 
@@ -207,6 +214,11 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
             50u,
             60u,
             70u,
+            71u,
+            72u,
+            73u,
+            74u,
+            75u,
             80u,
             90UL,
             SimpleDdgiReceiverCacheMode.TemporalAdaptive,
@@ -228,6 +240,75 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
             Assert.That(
                 previous.IsHistoryCompatibleWith(replaced),
                 Is.False);
+        });
+    }
+
+    [Test]
+    public void PublicationGeneration_ReusesOnlyAnIdenticalPublication()
+    {
+        var tracker = new SimpleDdgiReceiverPublicationTracker();
+        SimpleDdgiReceiverPublicationIdentity identity = default;
+        identity = identity with
+        {
+            CacheWidth = 960u,
+            CacheHeight = 540u,
+            GatherWidth = 160u,
+            GatherHeight = 90u,
+            MaterialRevision = 7u,
+            PublishedRadiometricGeneration = 11u,
+            PublishedPropagationGeneration = 13u,
+            Mode = SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+            ResourceGeneration = 3u
+        };
+
+        SimpleDdgiReceiverPublicationUpdate first =
+            tracker.Update(identity, enabled: true, fallbackStamp: 99u);
+        SimpleDdgiReceiverPublicationUpdate hit =
+            tracker.Update(identity, enabled: true, fallbackStamp: 100u);
+        SimpleDdgiReceiverPublicationUpdate changed = tracker.Update(
+            identity with { MaterialRevision = 8u },
+            enabled: true,
+            fallbackStamp: 101u);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Stamp, Is.EqualTo(1u));
+            Assert.That(first.ResetDependentCache, Is.True);
+            Assert.That(
+                first.ChangedRegionMask,
+                Is.EqualTo(SimpleDdgiReceiverPublicationAbi.GlobalRegionBit));
+            Assert.That(hit.Stamp, Is.EqualTo(first.Stamp));
+            Assert.That(hit.IdentityChanged, Is.False);
+            Assert.That(hit.ChangedRegionMask, Is.Zero);
+            Assert.That(changed.Stamp, Is.EqualTo(2u));
+            Assert.That(changed.IdentityChanged, Is.True);
+            Assert.That(tracker.StableIdentityHitCount, Is.EqualTo(1UL));
+            Assert.That(tracker.DirtyIdentityCount, Is.EqualTo(2UL));
+        });
+    }
+
+    [Test]
+    public void PublicationGeneration_ReenableAndWrapRequireClear()
+    {
+        var tracker = new SimpleDdgiReceiverPublicationTracker();
+        SimpleDdgiReceiverPublicationIdentity identity = default;
+        _ = tracker.Update(identity, enabled: true, fallbackStamp: 5u);
+        SimpleDdgiReceiverPublicationUpdate baseline =
+            tracker.Update(identity, enabled: false, fallbackStamp: 17u);
+        SimpleDdgiReceiverPublicationUpdate reenabled =
+            tracker.Update(identity, enabled: true, fallbackStamp: 18u);
+        uint wrapped = SimpleDdgiReceiverPublicationTracker.NextGeneration(
+            uint.MaxValue,
+            out bool didWrap);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(baseline.Stamp, Is.EqualTo(17u));
+            Assert.That(baseline.Enabled, Is.False);
+            Assert.That(reenabled.Stamp, Is.EqualTo(2u));
+            Assert.That(reenabled.ResetDependentCache, Is.True);
+            Assert.That(wrapped, Is.EqualTo(1u));
+            Assert.That(didWrap, Is.True);
         });
     }
 
@@ -334,6 +415,12 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
             Assert.That(classify, Does.Contain("FinalizeIndirectArguments();"));
             Assert.That(classify, Does.Contain("SeedCanonicalHistory();"));
             Assert.That(classify, Does.Contain(
+                "SeedCanonicalGatherStamps();"));
+            Assert.That(classify, Does.Contain(
+                "RECEIVER_ADAPTIVE_PUBLICATION_HIT_COUNT"));
+            Assert.That(classify, Does.Contain(
+                "ReceiverGatherStamps.Entries[entryIndex] == pc.FrameStamp"));
+            Assert.That(classify, Does.Contain(
                 "CountMissingFeedbackWork();"));
             Assert.That(classify, Does.Contain(
                 "PrefixMissingFeedbackWork();"));
@@ -370,6 +457,10 @@ public sealed class SimpleDdgiReceiverCacheAdaptiveTests
                 "NJULF_DDGI_RECEIVER_CACHE_MISSING_FEEDBACK=1"));
             Assert.That(gather, Does.Contain(
                 "RECEIVER_ADAPTIVE_MISSING_FEEDBACK_COUNT"));
+            Assert.That(gather, Does.Contain(
+                "NJULF_PERFORMANCE_DDGI_PUBLICATION_REUSE"));
+            Assert.That(runtime, Does.Contain(
+                "SimpleDdgiReceiverPublicationTracker"));
             Assert.That(runtime, Does.Contain(
                 "CapacitiesCoverCanonicalWork("));
             Assert.That(pass, Does.Contain(
