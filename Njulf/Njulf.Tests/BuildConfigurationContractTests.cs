@@ -121,7 +121,7 @@ public sealed class BuildConfigurationContractTests
     }
 
     [Test]
-    public void FastStartupDefersRayAndReceiverFeedbackFamiliesBehindFirstUseGates()
+    public void FastStartupDefersReceiverFeedbackBehindPostPresentBankPublication()
     {
         string root = FindRepositoryRoot();
         string meshPipeline = File.ReadAllText(Path.Combine(
@@ -145,6 +145,10 @@ public sealed class BuildConfigurationContractTests
             "Njulf.Rendering",
             "Pipeline",
             "WeightedTransparentPass.cs"));
+        string renderer = File.ReadAllText(Path.Combine(
+            root,
+            "Njulf.Rendering",
+            "VulkanRenderer.cs"));
 
         string rayAdmission = SliceBetween(
             meshPipeline,
@@ -179,15 +183,15 @@ public sealed class BuildConfigurationContractTests
             Assert.That(meshPipeline,
                 Does.Contain("DeferredPipelineState.Failed"));
             Assert.That(forwardPass,
-                Does.Contain("TryEnsureAlphaMaskReceiverFeedbackPipelines()"));
-            Assert.That(transparentPass,
-                Does.Contain("TryEnsureRayTransparentPipelines()"));
-            Assert.That(transparentPass,
-                Does.Contain("TryEnsureTransparentReceiverFeedbackPipeline("));
-            Assert.That(weightedPass,
-                Does.Contain("TryEnsureRayWeightedOitTransparentPipeline()"));
-            Assert.That(weightedPass,
-                Does.Contain("TryEnsureWeightedOitReceiverFeedbackPipeline()"));
+                Does.Contain("PrepareSimpleDdgiReceiverPipelineBank()"));
+            Assert.That(forwardPass,
+                Does.Contain("Volatile.Read(ref _simpleDdgiReceiverPipelineBank)"));
+            Assert.That(transparentPass, Does.Not.Contain("TryEnsure"));
+            Assert.That(weightedPass, Does.Not.Contain("TryEnsure"));
+            Assert.That(renderer,
+                Does.Contain("PreparePostFirstPresentPipelineBank("));
+            Assert.That(renderer,
+                Does.Contain("Pipeline.Prepare.PostFirstPresentReceiverComputeBank"));
             Assert.That(meshPipeline,
                 Does.Contain("PrepareScenePipelineManifest("));
         });
