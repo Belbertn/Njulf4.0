@@ -1,8 +1,6 @@
 using System.Collections.Concurrent;
 using System.Buffers.Binary;
-using System.ComponentModel;
 using System.Diagnostics;
-using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -19,19 +17,11 @@ namespace Njulf.ShaderBuild;
 /// </summary>
 public sealed class CompileNjulfShaderArtifacts : MsBuildTask
 {
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 1;
     private const int MaximumShaderModuleBytes = 16 * 1024 * 1024;
     private const int MaximumStateFileBytes = 4 * 1024 * 1024;
     private const int MaximumDependencyCount = 4096;
     private const int PublicationRetryCount = 8;
-    private const uint SpirvMagic = 0x07230203;
-    private const ushort OpEntryPoint = 15;
-    private const ushort OpFunction = 54;
-    private const ushort OpFunctionEnd = 56;
-    private const uint FunctionControlInline = 0x1;
-    private const uint FunctionControlDontInline = 0x2;
-    private const string FunctionPreservingOptimizerRecipe =
-        "--preserve-bindings --preserve-interface --preserve-spec-constants -Os";
     private readonly ConcurrentDictionary<string, Lazy<string>> _inputHashes =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -48,8 +38,6 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
     public string CacheDirectory { get; set; } = string.Empty;
 
     public string CompilerPath { get; set; } = "glslangValidator";
-
-    public string OptimizerPath { get; set; } = "spirv-opt";
 
     public string GlobalCompileOptions { get; set; } = string.Empty;
 
@@ -143,27 +131,10 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         }
         RemoveObsoleteActiveOutputs(outputDirectory, artifacts);
 
-        Toolchain compiler = ResolveToolchain(
-            CompilerPath,
-            "GLSL compiler",
-            "NjulfGlslangValidator");
-        Toolchain? optimizer = artifacts.Any(artifact =>
-            artifact.FunctionPreservingInstructionThreshold > 0)
-            ? ResolveToolchain(
-                OptimizerPath,
-                "SPIR-V optimizer",
-                "NjulfSpirvOptimizer")
-            : null;
+        Toolchain toolchain = ResolveToolchain(CompilerPath);
         string globalOptions = NormalizeArgumentText(GlobalCompileOptions);
         List<ArtifactWork> work = artifacts
-            .Select(artifact => CreateWork(
-                artifact,
-                compiler,
-                optimizer,
-                globalOptions,
-                localStateDirectory,
-                cacheDirectory,
-                cacheEnabled))
+            .Select(artifact => CreateWork(artifact, toolchain, globalOptions, localStateDirectory, cacheDirectory, cacheEnabled))
             .ToList();
 
         var misses = new List<ArtifactWork>();
@@ -296,9 +267,6 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
                 NormalizeArgumentText(item.GetMetadata("Defines")),
                 NormalizeArgumentText(item.GetMetadata("CompileOptions")),
                 NormalizeArgumentText(item.GetMetadata("AdditionalCompileOptions")),
-                ParseFunctionPreservingInstructionThreshold(
-                    identity,
-                    item.GetMetadata("FunctionPreservingInstructionThreshold")),
                 Path.Combine(outputDirectory, identity + ".spv")));
         }
 
@@ -307,33 +275,9 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         return artifacts.OrderBy(artifact => artifact.OutputName, StringComparer.Ordinal).ToList();
     }
 
-    private static int ParseFunctionPreservingInstructionThreshold(
-        string artifactIdentity,
-        string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return 0;
-        if (!int.TryParse(
-                value.Trim(),
-                NumberStyles.None,
-                CultureInfo.InvariantCulture,
-                out int threshold) ||
-            threshold <= 0 ||
-            threshold > MaximumShaderModuleBytes / sizeof(uint))
-        {
-            throw new InvalidOperationException(
-                $"Shader artifact '{artifactIdentity}' has invalid " +
-                $"FunctionPreservingInstructionThreshold '{value}'. Use an integer from 1 through " +
-                $"{MaximumShaderModuleBytes / sizeof(uint)}.");
-        }
-
-        return threshold;
-    }
-
     private ArtifactWork CreateWork(
         Artifact artifact,
-        Toolchain compiler,
-        Toolchain? optimizer,
+        Toolchain toolchain,
         string globalOptions,
         string localStateDirectory,
         string cacheDirectory,
@@ -343,8 +287,7 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
             ? globalOptions
             : artifact.CompileOptions;
         string relativeSource = NormalizeRelativePath(ShaderRoot, artifact.SourcePath);
-        var recipeLines = new List<string>
-        {
+        string recipe = string.Join("\n", [
             $"schema={SchemaVersion}",
             $"output={artifact.OutputName}",
             $"source={relativeSource}",
@@ -352,26 +295,14 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
             $"additional={artifact.AdditionalCompileOptions}",
             $"defines={artifact.Defines}",
             "target=vulkan1.3",
-            $"compiler={compiler.Fingerprint}"
-        };
-        if (artifact.FunctionPreservingInstructionThreshold > 0)
-        {
-            Toolchain requiredOptimizer = optimizer ??
-                throw new InvalidOperationException(
-                    $"Shader artifact '{artifact.Identity}' requires the SPIR-V optimizer.");
-            recipeLines.Add(
-                $"function-preserving-instruction-threshold={artifact.FunctionPreservingInstructionThreshold}");
-            recipeLines.Add($"optimizer-options={FunctionPreservingOptimizerRecipe}");
-            recipeLines.Add($"optimizer={requiredOptimizer.Fingerprint}");
-        }
-        string recipe = string.Join("\n", recipeLines);
+            $"tool={toolchain.Fingerprint}"
+        ]);
         string recipeKey = HashText(recipe);
         string localStatePath = Path.Combine(localStateDirectory, recipeKey + ".json");
         string cacheIndexPath = Path.Combine(cacheDirectory, "index", recipeKey + ".json");
         return new ArtifactWork(
             artifact,
-            compiler,
-            optimizer,
+            toolchain,
             effectiveCompileOptions,
             recipeKey,
             localStatePath,
@@ -442,38 +373,17 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         // owning artifact identity.
         string temporaryStem = ".njulf-" + token;
         string temporaryOutput = Path.Combine(outputDirectory, temporaryStem + ".spv.tmp");
-        string temporaryRawOutput = Path.Combine(outputDirectory, temporaryStem + ".raw.spv.tmp");
         string temporaryDepfile = Path.Combine(outputDirectory, temporaryStem + ".d.tmp");
         try
         {
-            bool optimize = work.Artifact.FunctionPreservingInstructionThreshold > 0;
-            string compilerOutput = optimize ? temporaryRawOutput : temporaryOutput;
-            ProcessResult result = RunCompiler(work, compilerOutput, temporaryDepfile);
+            ProcessResult result = RunCompiler(work, temporaryOutput, temporaryDepfile);
             if (result.ExitCode != 0)
             {
                 throw new InvalidOperationException(
                     $"glslangValidator exited with code {result.ExitCode}.{Environment.NewLine}{result.Output}");
             }
-            if (!IsValidSpirvFile(compilerOutput))
+            if (!IsValidSpirvFile(temporaryOutput))
                 throw new InvalidOperationException("glslangValidator did not produce a valid bounded SPIR-V word stream.");
-
-            if (optimize)
-            {
-                MarkLargeFunctionsDontInline(
-                    compilerOutput,
-                    work.Artifact.FunctionPreservingInstructionThreshold);
-                ProcessResult optimizerResult = RunOptimizer(
-                    work,
-                    compilerOutput,
-                    temporaryOutput);
-                if (optimizerResult.ExitCode != 0)
-                {
-                    throw new InvalidOperationException(
-                        $"spirv-opt exited with code {optimizerResult.ExitCode}.{Environment.NewLine}{optimizerResult.Output}");
-                }
-                if (!IsValidSpirvFile(temporaryOutput))
-                    throw new InvalidOperationException("spirv-opt did not produce a valid bounded SPIR-V word stream.");
-            }
 
             List<DependencyState> dependencies = ParseDependencies(temporaryDepfile, work.Artifact.SourcePath);
             string outputHash = HashFile(temporaryOutput);
@@ -497,7 +407,6 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         finally
         {
             DeleteIfExists(temporaryOutput);
-            DeleteIfExists(temporaryRawOutput);
             DeleteIfExists(temporaryDepfile);
         }
     }
@@ -506,7 +415,7 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
     {
         var start = new ProcessStartInfo
         {
-            FileName = work.Compiler.ExecutablePath,
+            FileName = work.Toolchain.ExecutablePath,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -527,7 +436,7 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         start.ArgumentList.Add(work.Artifact.SourcePath);
 
         using Process process = Process.Start(start) ??
-            throw new InvalidOperationException($"Could not start '{work.Compiler.ExecutablePath}'.");
+            throw new InvalidOperationException($"Could not start '{work.Toolchain.ExecutablePath}'.");
         Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
         Task<string> stderrTask = process.StandardError.ReadToEndAsync();
         process.WaitForExit();
@@ -535,170 +444,6 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         string stderr = stderrTask.GetAwaiter().GetResult();
         string output = string.Join(Environment.NewLine, new[] { stdout, stderr }.Where(text => !string.IsNullOrWhiteSpace(text)));
         return new ProcessResult(process.ExitCode, output);
-    }
-
-    private ProcessResult RunOptimizer(
-        ArtifactWork work,
-        string inputPath,
-        string outputPath)
-    {
-        Toolchain optimizer = work.Optimizer ??
-            throw new InvalidOperationException(
-                $"Shader artifact '{work.Artifact.Identity}' requires the SPIR-V optimizer.");
-        var start = new ProcessStartInfo
-        {
-            FileName = optimizer.ExecutablePath,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            WorkingDirectory = ShaderRoot
-        };
-        AddArguments(start.ArgumentList, FunctionPreservingOptimizerRecipe);
-        start.ArgumentList.Add(inputPath);
-        start.ArgumentList.Add("-o");
-        start.ArgumentList.Add(outputPath);
-
-        using Process process = Process.Start(start) ??
-            throw new InvalidOperationException($"Could not start '{optimizer.ExecutablePath}'.");
-        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
-        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
-        string stdout = stdoutTask.GetAwaiter().GetResult();
-        string stderr = stderrTask.GetAwaiter().GetResult();
-        string output = string.Join(
-            Environment.NewLine,
-            new[] { stdout, stderr }.Where(text => !string.IsNullOrWhiteSpace(text)));
-        return new ProcessResult(process.ExitCode, output);
-    }
-
-    internal static int MarkLargeFunctionsDontInline(
-        string spirvPath,
-        int instructionThreshold)
-    {
-        if (instructionThreshold <= 0 ||
-            instructionThreshold > MaximumShaderModuleBytes / sizeof(uint))
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(instructionThreshold),
-                instructionThreshold,
-                $"The instruction threshold must be from 1 through " +
-                $"{MaximumShaderModuleBytes / sizeof(uint)}.");
-        }
-
-        byte[] bytes = File.ReadAllBytes(spirvPath);
-        if (bytes.Length < 5 * sizeof(uint) ||
-            bytes.Length > MaximumShaderModuleBytes ||
-            bytes.Length % sizeof(uint) != 0)
-        {
-            throw new InvalidOperationException(
-                $"SPIR-V module '{spirvPath}' is not a valid bounded word stream.");
-        }
-
-        var words = new uint[bytes.Length / sizeof(uint)];
-        for (int index = 0; index < words.Length; index++)
-        {
-            words[index] = BinaryPrimitives.ReadUInt32LittleEndian(
-                bytes.AsSpan(index * sizeof(uint), sizeof(uint)));
-        }
-        if (words[0] != SpirvMagic)
-            throw new InvalidOperationException($"SPIR-V module '{spirvPath}' has an invalid magic word.");
-
-        var entryPoints = new HashSet<uint>();
-        var functions = new List<SpirvFunction>();
-        int activeFunctionStart = -1;
-        uint activeFunctionId = 0;
-        int activeFunctionInstructionCount = 0;
-        for (int offset = 5; offset < words.Length;)
-        {
-            uint instruction = words[offset];
-            int wordCount = (int)(instruction >> 16);
-            ushort opcode = (ushort)(instruction & 0xffff);
-            if (wordCount <= 0 || offset > words.Length - wordCount)
-            {
-                throw new InvalidOperationException(
-                    $"SPIR-V module '{spirvPath}' has an invalid instruction at word {offset}.");
-            }
-
-            if (opcode == OpEntryPoint)
-            {
-                if (wordCount < 4)
-                    throw new InvalidOperationException($"SPIR-V module '{spirvPath}' has a truncated OpEntryPoint.");
-                entryPoints.Add(words[offset + 2]);
-            }
-
-            if (opcode == OpFunction)
-            {
-                if (wordCount != 5 || activeFunctionStart >= 0)
-                {
-                    throw new InvalidOperationException(
-                        $"SPIR-V module '{spirvPath}' has an invalid OpFunction at word {offset}.");
-                }
-                activeFunctionStart = offset;
-                activeFunctionId = words[offset + 2];
-                activeFunctionInstructionCount = 1;
-            }
-            else if (activeFunctionStart >= 0)
-            {
-                activeFunctionInstructionCount++;
-                if (opcode == OpFunctionEnd)
-                {
-                    if (wordCount != 1)
-                        throw new InvalidOperationException($"SPIR-V module '{spirvPath}' has an invalid OpFunctionEnd.");
-                    functions.Add(new SpirvFunction(
-                        activeFunctionStart,
-                        activeFunctionId,
-                        activeFunctionInstructionCount));
-                    activeFunctionStart = -1;
-                    activeFunctionId = 0;
-                    activeFunctionInstructionCount = 0;
-                }
-            }
-            else if (opcode == OpFunctionEnd)
-            {
-                throw new InvalidOperationException($"SPIR-V module '{spirvPath}' has an unmatched OpFunctionEnd.");
-            }
-
-            offset += wordCount;
-        }
-
-        if (activeFunctionStart >= 0)
-            throw new InvalidOperationException($"SPIR-V module '{spirvPath}' has an unterminated OpFunction.");
-
-        int markedCount = 0;
-        foreach (SpirvFunction function in functions)
-        {
-            if (entryPoints.Contains(function.ResultId) ||
-                function.InstructionCount < instructionThreshold)
-            {
-                continue;
-            }
-
-            int controlIndex = function.StartWord + 3;
-            uint control = words[controlIndex];
-            if ((control & FunctionControlInline) != 0)
-            {
-                throw new InvalidOperationException(
-                    $"SPIR-V function %{function.ResultId} is explicitly Inline and cannot also be DontInline.");
-            }
-            if ((control & FunctionControlDontInline) != 0)
-                continue;
-            words[controlIndex] = control | FunctionControlDontInline;
-            markedCount++;
-        }
-
-        if (markedCount != 0)
-        {
-            for (int index = 0; index < words.Length; index++)
-            {
-                BinaryPrimitives.WriteUInt32LittleEndian(
-                    bytes.AsSpan(index * sizeof(uint), sizeof(uint)),
-                    words[index]);
-            }
-            File.WriteAllBytes(spirvPath, bytes);
-        }
-
-        return markedCount;
     }
 
     private List<DependencyState> ParseDependencies(string depfilePath, string sourcePath)
@@ -892,37 +637,12 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         }
     }
 
-    private static Toolchain ResolveToolchain(
-        string configuredPath,
-        string displayName,
-        string msbuildProperty)
+    private static Toolchain ResolveToolchain(string compilerPath)
     {
-        if (string.IsNullOrWhiteSpace(configuredPath))
-        {
-            throw new InvalidOperationException(
-                $"The {displayName} path is empty. Set the {msbuildProperty} MSBuild property.");
-        }
-
-        string executablePath = ResolveExecutablePath(configuredPath);
-        ProcessResult result;
-        try
-        {
-            result = RunProcess(executablePath, ["--version"]);
-        }
-        catch (Exception exception) when (
-            exception is Win32Exception or FileNotFoundException or
-                DirectoryNotFoundException or UnauthorizedAccessException)
-        {
-            throw new InvalidOperationException(
-                $"Could not start the {displayName} '{configuredPath}'. " +
-                $"Install it or set the {msbuildProperty} MSBuild property to an explicit executable path.",
-                exception);
-        }
+        string executablePath = ResolveExecutablePath(compilerPath);
+        ProcessResult result = RunProcess(executablePath, ["--version"]);
         if (result.ExitCode != 0)
-        {
-            throw new InvalidOperationException(
-                $"Could not query the {displayName} '{executablePath} --version': {result.Output}");
-        }
+            throw new InvalidOperationException($"Could not query '{executablePath} --version': {result.Output}");
         string binaryHash = File.Exists(executablePath) ? HashFile(executablePath) : "path:" + executablePath;
         return new Toolchain(executablePath, HashText(binaryHash + "\n" + result.Output.Trim()));
     }
@@ -985,7 +705,7 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         Span<byte> magic = stackalloc byte[sizeof(uint)];
         if (stream.Read(magic) != magic.Length)
             return false;
-        return BinaryPrimitives.ReadUInt32LittleEndian(magic) == SpirvMagic;
+        return BitConverter.ToUInt32(magic) == 0x07230203;
     }
 
     private static ArtifactState? ReadState(string path)
@@ -1232,13 +952,11 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         string Defines,
         string CompileOptions,
         string AdditionalCompileOptions,
-        int FunctionPreservingInstructionThreshold,
         string OutputPath);
 
     private sealed record ArtifactWork(
         Artifact Artifact,
-        Toolchain Compiler,
-        Toolchain? Optimizer,
+        Toolchain Toolchain,
         string GlobalOptions,
         string RecipeKey,
         string LocalStatePath,
@@ -1247,11 +965,6 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         bool CacheEnabled);
 
     private sealed record Toolchain(string ExecutablePath, string Fingerprint);
-
-    private readonly record struct SpirvFunction(
-        int StartWord,
-        uint ResultId,
-        int InstructionCount);
 
     private sealed record ProcessResult(int ExitCode, string Output);
 

@@ -386,8 +386,6 @@
       <NearFieldDirectSourceShaderVariant Include="foliage_forward_ddgi_near_field_trace_source.frag">
         <Source>foliage_forward.frag</Source>
         <Defines>-DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=5 -DNJULF_C5_TRACE_RESOLUTION_SOURCE=1</Defines>
-        <AdditionalCompileOptions>$(NjulfTraceResolutionOptimizationOptions)</AdditionalCompileOptions>
-        <FunctionPreservingInstructionThreshold>$(NjulfTraceResolutionFunctionPreservingInstructionThreshold)</FunctionPreservingInstructionThreshold>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="foliage_forward_ddgi_b1_near_field_direct_source.frag">
         <Source>foliage_forward.frag</Source>
@@ -438,20 +436,14 @@
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_near_field_trace_source.frag">
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_OPAQUE=1 -DFORWARD_GLOBAL_ILLUMINATION_DISABLED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=5 -DNJULF_C5_TRACE_RESOLUTION_SOURCE=1</Defines>
-        <AdditionalCompileOptions>$(NjulfTraceResolutionOptimizationOptions)</AdditionalCompileOptions>
-        <FunctionPreservingInstructionThreshold>$(NjulfTraceResolutionFunctionPreservingInstructionThreshold)</FunctionPreservingInstructionThreshold>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_near_field_trace_source.frag">
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_GLOBAL_ILLUMINATION_DISABLED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=5 -DNJULF_C5_TRACE_RESOLUTION_SOURCE=1</Defines>
-        <AdditionalCompileOptions>$(NjulfTraceResolutionOptimizationOptions)</AdditionalCompileOptions>
-        <FunctionPreservingInstructionThreshold>$(NjulfTraceResolutionFunctionPreservingInstructionThreshold)</FunctionPreservingInstructionThreshold>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_near_field_trace_source.frag">
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_GLOBAL_ILLUMINATION_DISABLED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=5 -DNJULF_C5_TRACE_RESOLUTION_SOURCE=1</Defines>
-        <AdditionalCompileOptions>$(NjulfTraceResolutionOptimizationOptions)</AdditionalCompileOptions>
-        <FunctionPreservingInstructionThreshold>$(NjulfTraceResolutionFunctionPreservingInstructionThreshold)</FunctionPreservingInstructionThreshold>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_near_field_direct_source_cache_required.frag">
         <Source>forward.frag</Source>
@@ -866,19 +858,11 @@
            single-function native programs seen on the NVIDIA driver while
            preserving the shader's arithmetic and public ABI. -->
       <NjulfReceiverAttributionOptimizationOptions>-Od</NjulfReceiverAttributionOptimizationOptions>
-      <!-- C5 trace-resolution source programs need glslang's function graph but
-           still benefit from its size optimizer. Compile a raw multi-function
-           module, mark only non-entry functions with at least 200 instructions
-           DontInline, then run the binding/interface-preserving spirv-opt -Os
-           recipe. Debug remains completely unoptimized for investigation. -->
-      <NjulfTraceResolutionOptimizationOptions Condition="'$(Configuration)' == 'Development' or '$(Configuration)' == 'Release' or '$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation'">-Od</NjulfTraceResolutionOptimizationOptions>
-      <NjulfTraceResolutionFunctionPreservingInstructionThreshold Condition="'$(Configuration)' == 'Development' or '$(Configuration)' == 'Release' or '$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation'">200</NjulfTraceResolutionFunctionPreservingInstructionThreshold>
       <NjulfShaderBuildMode Condition="'$(NjulfShaderBuildMode)' == ''">Compile</NjulfShaderBuildMode>
       <NjulfShaderMaxParallelism Condition="'$(NjulfShaderMaxParallelism)' == ''">0</NjulfShaderMaxParallelism>
       <NjulfShaderCacheMode Condition="'$(NjulfShaderCacheMode)' == ''">ReadWrite</NjulfShaderCacheMode>
       <NjulfShaderCacheDirectory Condition="'$(NjulfShaderCacheDirectory)' == ''">$(MSBuildProjectDirectory)\..\artifacts\shader-cache\v1</NjulfShaderCacheDirectory>
       <NjulfGlslangValidator Condition="'$(NjulfGlslangValidator)' == ''">glslangValidator</NjulfGlslangValidator>
-      <NjulfSpirvOptimizer Condition="'$(NjulfSpirvOptimizer)' == ''">spirv-opt</NjulfSpirvOptimizer>
       <NjulfShaderBuildTaskProject>$(MSBuildProjectDirectory)\..\Njulf.ShaderBuild\Njulf.ShaderBuild.csproj</NjulfShaderBuildTaskProject>
       <NjulfShaderBuildTaskSource>$(MSBuildProjectDirectory)\..\Njulf.ShaderBuild\CompileNjulfShaderArtifacts.cs</NjulfShaderBuildTaskSource>
       <NjulfShaderBuildTaskLockFile>$(MSBuildProjectDirectory)\..\Njulf.ShaderBuild\packages.lock.json</NjulfShaderBuildTaskLockFile>
@@ -1057,7 +1041,6 @@
           <Source>$(MSBuildProjectDirectory)\%(NearFieldDirectSourceShaderVariant.Source)</Source>
           <Defines>%(NearFieldDirectSourceShaderVariant.Defines)</Defines>
           <AdditionalCompileOptions>%(NearFieldDirectSourceShaderVariant.AdditionalCompileOptions)</AdditionalCompileOptions>
-          <FunctionPreservingInstructionThreshold>%(NearFieldDirectSourceShaderVariant.FunctionPreservingInstructionThreshold)</FunctionPreservingInstructionThreshold>
         </NjulfShaderArtifact>
         <NjulfShaderArtifact Include="@(SparseHybridLobeShaderVariant -&gt; '%(Filename)_sparse_lobe%(Extension)')">
           <Source>$(MSBuildProjectDirectory)\%(SparseHybridLobeShaderVariant.Source)</Source>
@@ -1086,7 +1069,6 @@
                                       IntermediateShaderDirectory="$(IntermediateOutputPath)Shaders"
                                       CacheDirectory="$(NjulfShaderCacheDirectory)"
                                       CompilerPath="$(NjulfGlslangValidator)"
-                                      OptimizerPath="$(NjulfSpirvOptimizer)"
                                       GlobalCompileOptions="$(NjulfShaderCompileOptions)"
                                       MaxParallelism="$(NjulfShaderMaxParallelism)"
                                       CacheMode="$(NjulfShaderCacheMode)"

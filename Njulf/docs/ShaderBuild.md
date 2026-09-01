@@ -1,10 +1,8 @@
 # Shader build pipeline
 
-`Njulf.Shaders` models every base shader and generated variant as an independent artifact. The build task hashes each artifact's source and transitive includes, exact compiler arguments, and every compiler/optimizer binary and version used by its recipe. Independent misses compile concurrently; unchanged outputs and cache objects are verified before reuse.
+`Njulf.Shaders` models every base shader and generated variant as an independent artifact. The build task hashes each artifact's source and transitive includes, exact compiler arguments, and the `glslangValidator` binary and version. Independent misses compile concurrently; unchanged outputs and cache objects are verified before reuse.
 
-Production configurations retain their output names, embedded resource names, and validation scripts. The deterministic `njulf-shaders.manifest.json` drives validation incrementality and records the SHA-256 of all 436 embedded SPIR-V artifacts.
-
-The four C5 trace-resolution source variants use a bounded function-preserving production recipe. `glslangValidator` first emits a raw `-Od` module. The build task validates its instruction stream and marks non-entry functions containing at least 200 SPIR-V instructions `DontInline`, then runs `spirv-opt --preserve-bindings --preserve-interface --preserve-spec-constants -Os`. The threshold, exact pass list, and optimizer fingerprint are part of the artifact cache key. Debug does not use this recipe. A requested selective recipe fails clearly if the optimizer is unavailable; it never silently publishes the raw module.
+Production configurations retain their existing compiler options, output names, embedded resource names, and validation scripts. The deterministic `njulf-shaders.manifest.json` drives validation incrementality and records the SHA-256 of every one of the 254 embedded SPIR-V artifacts.
 
 ## Build properties
 
@@ -15,7 +13,6 @@ The four C5 trace-resolution source variants use a bounded function-preserving p
 | `NjulfShaderCacheMode` | `ReadWrite` | Enables the verified persistent cache. Set `Off` to bypass it for equivalence testing. |
 | `NjulfShaderCacheDirectory` | `artifacts/shader-cache/v1` | Cache location, deliberately outside `obj` so `dotnet clean` does not remove it. |
 | `NjulfGlslangValidator` | `glslangValidator` | Compiler executable name or explicit path. |
-| `NjulfSpirvOptimizer` | `spirv-opt` | Optimizer executable name or explicit path. Resolved only when an active artifact requests the selective function-preserving recipe. |
 
 Examples:
 

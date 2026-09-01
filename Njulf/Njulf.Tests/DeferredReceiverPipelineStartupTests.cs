@@ -53,50 +53,6 @@ public sealed class DeferredReceiverPipelineStartupTests
         });
     }
 
-    [Test]
-    public void TraceResolutionArtifactsUseSelectiveFunctionPreservingOptimization()
-    {
-        string projectPath = FindRepoFile(
-            "Njulf.Shaders",
-            "Njulf.Shaders.csproj");
-        XDocument project = XDocument.Load(projectPath);
-        XElement[] traceVariants = project.Descendants()
-            .Where(element => (element.Element("Defines")?.Value ?? string.Empty)
-                .Contains("NJULF_C5_TRACE_RESOLUTION_SOURCE=1", StringComparison.Ordinal))
-            .ToArray();
-        XElement task = project.Descendants("CompileNjulfShaderArtifacts").Single();
-
-        Assert.That(traceVariants, Has.Length.EqualTo(4));
-        Assert.Multiple(() =>
-        {
-            XElement options = project.Descendants(
-                "NjulfTraceResolutionOptimizationOptions").Single();
-            XElement threshold = project.Descendants(
-                "NjulfTraceResolutionFunctionPreservingInstructionThreshold").Single();
-            Assert.That(options.Value, Is.EqualTo("-Od"));
-            Assert.That(options.Attribute("Condition")?.Value,
-                Does.Not.Contain("'Debug'"));
-            Assert.That(threshold.Value, Is.EqualTo("200"));
-            Assert.That(threshold.Attribute("Condition")?.Value,
-                Does.Not.Contain("'Debug'"));
-            Assert.That(task.Attribute("OptimizerPath")?.Value,
-                Is.EqualTo("$(NjulfSpirvOptimizer)"));
-            foreach (XElement variant in traceVariants)
-            {
-                string include = variant.Attribute("Include")?.Value ??
-                    variant.Name.LocalName;
-                Assert.That(
-                    variant.Element("AdditionalCompileOptions")?.Value,
-                    Is.EqualTo("$(NjulfTraceResolutionOptimizationOptions)"),
-                    $"Trace artifact '{include}' lost its trailing -Od compile stage.");
-                Assert.That(
-                    variant.Element("FunctionPreservingInstructionThreshold")?.Value,
-                    Is.EqualTo("$(NjulfTraceResolutionFunctionPreservingInstructionThreshold)"),
-                    $"Trace artifact '{include}' lost its selective DontInline threshold.");
-            }
-        });
-    }
-
     [TestCase("ddgi_simple_receiver_cache_b1.comp.spv")]
     [TestCase("ddgi_simple_receiver_cache_adaptive_b1.comp.spv")]
     [TestCase("ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv")]
@@ -108,10 +64,6 @@ public sealed class DeferredReceiverPipelineStartupTests
     [TestCase("foliage_mesh_b1_compacted.mesh.spv")]
     [TestCase("fog_b1.comp.spv")]
     [TestCase("particle_b1.vert.spv")]
-    [TestCase("foliage_forward_ddgi_near_field_trace_source.frag.spv")]
-    [TestCase("forward_opaque_ddgi_near_field_trace_source.frag.spv")]
-    [TestCase("forward_opaque_simple_ddgi_near_field_trace_source.frag.spv")]
-    [TestCase("forward_opaque_simple_full_input_ddgi_near_field_trace_source.frag.spv")]
     public void ExactAttributionArtifactRetainsMultipleFunctions(string artifact)
     {
         string path = FindShaderArtifact(artifact);
