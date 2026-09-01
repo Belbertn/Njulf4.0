@@ -82,6 +82,40 @@ public sealed class PipelineBinaryStoreTests
     }
 
     [Test]
+    public void CountEntries_ReportsWritableAndSeedPipelineMappings()
+    {
+        string writable = Path.Combine(_root, "writable");
+        string seed = Path.Combine(_root, "seed");
+        PipelineBinaryStoreIdentity identity = CreateIdentity();
+        var writableWriter = new PipelineBinaryStore(
+            identity,
+            writable,
+            Path.Combine(_root, "unused-writable-seed"));
+        writableWriter.Save(
+            new PipelineArtifactId("writable"),
+            [0x11],
+            [new PipelineBinaryBlob([0x21], [1])]);
+        var seedWriter = new PipelineBinaryStore(
+            identity,
+            seed,
+            Path.Combine(_root, "unused-seed-seed"));
+        seedWriter.Save(
+            new PipelineArtifactId("seed-one"),
+            [0x12],
+            [new PipelineBinaryBlob([0x22], [2])]);
+        seedWriter.Save(
+            new PipelineArtifactId("seed-two"),
+            [0x13],
+            [new PipelineBinaryBlob([0x23], [3])]);
+
+        var reader = new PipelineBinaryStore(identity, writable, seed);
+
+        Assert.That(
+            reader.CountEntries(),
+            Is.EqualTo(new PipelineBinaryStoreEntryCounts(1, 2)));
+    }
+
+    [Test]
     public void CorruptBlob_IsRejectedWithoutTouchingSeedOrThrowing()
     {
         PipelineBinaryStore store = CreateStore();

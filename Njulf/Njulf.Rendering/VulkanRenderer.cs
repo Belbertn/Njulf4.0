@@ -1586,6 +1586,14 @@ namespace Njulf.Rendering
                 _performanceCaptureMetadataProvider.BuildIdentity
                     .CompileConfiguration,
                 cacheDirectory: null);
+            GiPipelineCacheHealthReport pipelineCacheHealth =
+                GiPipelineCacheHealthFormatter.Format(
+                    _giPipelineCacheService.Telemetry,
+                    _giPipelineCacheService.PipelineBinaryCacheMode,
+                    _giPipelineCacheService.CountPipelineBinaryStoreEntries());
+            Console.WriteLine(pipelineCacheHealth.Summary);
+            if (pipelineCacheHealth.Advice is { Length: > 0 })
+                Console.Error.WriteLine(pipelineCacheHealth.Advice);
             _simpleDdgiReceiverFeedback.SetPipelineCacheService(
                 _giPipelineCacheService);
             _simpleDdgiGuidingRuntime.SetPipelineCacheService(

@@ -115,13 +115,20 @@ Use `--pipeline-binary-cache <mode>` or
 
 | Value | Behavior |
 | --- | --- |
-| `auto` (default) | Consume compatible stored binaries. A miss uses the shared Vulkan pipeline cache; drivers advertising an internal binary cache may expose a binary afterward. |
+| `auto` (default) | Consume compatible stored binaries. With a current Vulkan cache, a miss keeps using that cache. On an application-cold run, drivers without an internal binary cache use capture-on-miss so the writable binary store is populated for later launches. |
 | `off` | Disable the application-owned binary store and use only the Vulkan pipeline cache. |
 | `capture` | Explicit population mode. A miss uses the capture-data path with a null `VkPipelineCache`, extracts the resulting binaries, and persists them asynchronously. |
 | `require` | Consume-only verification mode. Fail if binary support or any requested artifact is missing; never silently compile a missing artifact. |
 
 The store is bounded to 512 MiB, collects least-recently-used mappings, and uses
 cross-process locking plus atomic manifest/blob publication.
+Set `NJULF_PIPELINE_BINARY_AUTO_CAPTURE=off` to disable the application-cold
+capture-on-miss path without disabling binary-store consumption.
+
+Startup prints one `Pipeline cache:` health line with the Vulkan cache source,
+provenance, admitted payload size, binary-store mode, and writable/seed mapping
+counts. A rejected cache or stale deployment seed also prints actionable advice
+to `stderr`.
 
 ## Startup compilation and verification
 

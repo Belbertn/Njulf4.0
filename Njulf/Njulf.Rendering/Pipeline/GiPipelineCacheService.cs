@@ -679,6 +679,13 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
     internal PipelineCompilationScheduler CompilationScheduler =>
         _compilationScheduler;
 
+    internal RendererPipelineBinaryCacheMode PipelineBinaryCacheMode =>
+        _pipelineBinaryCacheMode;
+
+    internal PipelineBinaryStoreEntryCounts CountPipelineBinaryStoreEntries() =>
+        _pipelineBinaryStore?.CountEntries() ??
+        PipelineBinaryStoreEntryCounts.Empty;
+
     internal IReadOnlyList<PipelineCreationObservation> CreationObservations
     {
         get
@@ -943,6 +950,11 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             ? TryGetPipelineKey(createInfo)
             : Array.Empty<byte>();
         bool capturePipelineData = ShouldCapturePipelineData(pipelineKey);
+        bool autoCapturePipelineData = capturePipelineData &&
+            _pipelineBinaryCacheMode == RendererPipelineBinaryCacheMode.Auto;
+        bool capturedPipelineData = false;
+        bool pipelineCacheParticipated =
+            cacheUsage == PipelineCacheUsage.Shared && !capturePipelineData;
         var extendedFlagsInfo = new PipelineCreateFlags2CreateInfoKHR
         {
             SType = StructureType.PipelineCreateFlags2CreateInfoKhr,
@@ -1006,6 +1018,34 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 createInfo,
                 null,
                 out pipeline);
+            capturedPipelineData = capturePipelineData &&
+                                   result == Result.Success;
+            if (autoCapturePipelineData && result != Result.Success)
+            {
+                if (pipeline.Handle != 0)
+                {
+                    _context.Api.DestroyPipeline(
+                        _context.Device,
+                        pipeline,
+                        null);
+                    pipeline = default;
+                }
+                feedback = default;
+                feedbackInfo.PNext = originalNext;
+                createInfo->PNext = feedbackAttached
+                    ? &feedbackInfo
+                    : originalNext;
+                createInfo->Flags = originalFlags;
+                ApplyVerificationFlag(ref createInfo->Flags);
+                result = _context.Api.CreateGraphicsPipelines(
+                    _context.Device,
+                    _cache,
+                    1,
+                    createInfo,
+                    null,
+                    out pipeline);
+                pipelineCacheParticipated = true;
+            }
             bool feedbackValidNow = feedbackAttached &&
                 (feedback.Flags & PipelineCreationFeedbackFlags.ValidBit) != 0;
             cacheHit = feedbackValidNow &&
@@ -1017,7 +1057,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                     ? PipelineArtifactSource.Compiled
                     : PipelineArtifactSource.Unknown;
             if (result == Result.Success && pipelineKey.Length != 0 &&
-                (capturePipelineData ||
+                (capturedPipelineData ||
                  _pipelineBinaryCacheMode ==
                      RendererPipelineBinaryCacheMode.Auto &&
                  _context.PipelineOptimizationSupport
@@ -1028,8 +1068,8 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 CapturePipelineBinaries(
                     artifactId,
                     pipelineKey,
-                    capturePipelineData ? pipeline : default,
-                    capturePipelineData ? null : createInfo);
+                    capturedPipelineData ? pipeline : default,
+                    capturedPipelineData ? null : createInfo);
             }
             return result;
         }
@@ -1049,9 +1089,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 feedback.Duration,
                 stageCount,
                 source,
-                pipelineCacheParticipated:
-                    cacheUsage == PipelineCacheUsage.Shared &&
-                    !capturePipelineData);
+                pipelineCacheParticipated);
         }
     }
 
@@ -1077,6 +1115,11 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             ? TryGetPipelineKey(createInfo)
             : Array.Empty<byte>();
         bool capturePipelineData = ShouldCapturePipelineData(pipelineKey);
+        bool autoCapturePipelineData = capturePipelineData &&
+            _pipelineBinaryCacheMode == RendererPipelineBinaryCacheMode.Auto;
+        bool capturedPipelineData = false;
+        bool pipelineCacheParticipated =
+            cacheUsage == PipelineCacheUsage.Shared && !capturePipelineData;
         var extendedFlagsInfo = new PipelineCreateFlags2CreateInfoKHR
         {
             SType = StructureType.PipelineCreateFlags2CreateInfoKhr,
@@ -1138,6 +1181,35 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 createInfo,
                 null,
                 out pipeline);
+            capturedPipelineData = capturePipelineData &&
+                                   result == Result.Success;
+            if (autoCapturePipelineData && result != Result.Success)
+            {
+                if (pipeline.Handle != 0)
+                {
+                    _context.Api.DestroyPipeline(
+                        _context.Device,
+                        pipeline,
+                        null);
+                    pipeline = default;
+                }
+                feedback = default;
+                stageFeedback = default;
+                feedbackInfo.PNext = originalNext;
+                createInfo->PNext = feedbackAttached
+                    ? &feedbackInfo
+                    : originalNext;
+                createInfo->Flags = originalFlags;
+                ApplyVerificationFlag(ref createInfo->Flags);
+                result = _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _cache,
+                    1,
+                    createInfo,
+                    null,
+                    out pipeline);
+                pipelineCacheParticipated = true;
+            }
             bool feedbackValidNow = feedbackAttached &&
                 (feedback.Flags & PipelineCreationFeedbackFlags.ValidBit) != 0;
             cacheHit = feedbackValidNow &&
@@ -1149,7 +1221,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                     ? PipelineArtifactSource.Compiled
                     : PipelineArtifactSource.Unknown;
             if (result == Result.Success && pipelineKey.Length != 0 &&
-                (capturePipelineData ||
+                (capturedPipelineData ||
                  _pipelineBinaryCacheMode ==
                      RendererPipelineBinaryCacheMode.Auto &&
                  _context.PipelineOptimizationSupport
@@ -1160,8 +1232,8 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 CapturePipelineBinaries(
                     artifactId,
                     pipelineKey,
-                    capturePipelineData ? pipeline : default,
-                    capturePipelineData ? null : createInfo);
+                    capturedPipelineData ? pipeline : default,
+                    capturedPipelineData ? null : createInfo);
             }
             return result;
         }
@@ -1181,19 +1253,34 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                 feedback.Duration,
                 stageCount: 1,
                 source,
-                pipelineCacheParticipated:
-                    cacheUsage == PipelineCacheUsage.Shared &&
-                    !capturePipelineData);
+                pipelineCacheParticipated);
         }
     }
 
     private bool ShouldCapturePipelineData(byte[] pipelineKey)
     {
-        return pipelineKey.Length != 0 &&
-               _pipelineBinaryStore != null &&
-               _context.KhrPipelineBinary != null &&
-               _pipelineBinaryCacheMode ==
-                   RendererPipelineBinaryCacheMode.Capture;
+        if (pipelineKey.Length == 0)
+            return false;
+
+        bool applicationCacheLikelyWarm;
+        lock (_gate)
+        {
+            applicationCacheLikelyWarm =
+                _cacheLoaded &&
+                !_cacheRejected &&
+                !_loadedFromDifferentShaderBundle &&
+                !_loadedFromDifferentBuildConfiguration &&
+                !_legacyEnvelopeLoaded &&
+                _loadedPayloadBytes > 0;
+        }
+        return PipelineBinaryCapturePolicy.ShouldCapture(
+            _pipelineBinaryCacheMode,
+            storeAvailable:
+                _pipelineBinaryStore != null &&
+                _context.KhrPipelineBinary != null,
+            _context.PipelineOptimizationSupport.PipelineBinaryInternalCache,
+            applicationCacheLikelyWarm,
+            RendererBuildConfiguration.PipelineBinaryAutoCaptureEnabled);
     }
 
     private PipelineCreateFlags2 BuildExtendedPipelineCreationFlags(

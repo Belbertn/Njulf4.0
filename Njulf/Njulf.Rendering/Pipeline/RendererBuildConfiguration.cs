@@ -39,6 +39,8 @@ internal static class RendererBuildConfiguration
         "NJULF_STARTUP_LATENCY_GATE";
     internal const string PipelineBinaryCacheEnvironmentVariable =
         "NJULF_PIPELINE_BINARY_CACHE";
+    internal const string PipelineBinaryAutoCaptureEnvironmentVariable =
+        "NJULF_PIPELINE_BINARY_AUTO_CAPTURE";
     internal const string StartupWaitEnvironmentVariable =
         "NJULF_STARTUP_WAIT";
     internal const string PipelineCacheVerifyEnvironmentVariable =
@@ -69,6 +71,11 @@ internal static class RendererBuildConfiguration
             ResolveCommandLineValue("--pipeline-binary-cache") ??
             Environment.GetEnvironmentVariable(
                 PipelineBinaryCacheEnvironmentVariable));
+
+    internal static bool PipelineBinaryAutoCaptureEnabled { get; } =
+        ResolvePipelineBinaryAutoCaptureEnabled(
+            Environment.GetEnvironmentVariable(
+                PipelineBinaryAutoCaptureEnvironmentVariable));
 
     internal static bool VerifyPipelineCacheCompleteness { get; } =
         ResolveBooleanSwitch(
@@ -215,6 +222,28 @@ internal static class RendererBuildConfiguration
         throw new InvalidOperationException(
             $"Unsupported pipeline binary cache mode '{requested}'. Use " +
             "'auto', 'off', 'capture', or 'require'.");
+    }
+
+    internal static bool ResolvePipelineBinaryAutoCaptureEnabled(
+        string? requested)
+    {
+        if (string.IsNullOrWhiteSpace(requested) ||
+            requested.Equals("on", StringComparison.OrdinalIgnoreCase) ||
+            requested.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+            requested.Equals("1", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (requested.Equals("off", StringComparison.OrdinalIgnoreCase) ||
+            requested.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+            requested.Equals("0", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        throw new InvalidOperationException(
+            $"Unsupported pipeline binary auto-capture setting " +
+            $"'{requested}'. Use 'on' or 'off'.");
     }
 
     private static bool ResolveBooleanSwitch(

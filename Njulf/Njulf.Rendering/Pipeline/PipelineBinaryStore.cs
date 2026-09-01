@@ -16,6 +16,13 @@ internal readonly record struct PipelineBinaryLookup(
     PipelineArtifactSource Source,
     IReadOnlyList<PipelineBinaryBlob> Binaries);
 
+internal readonly record struct PipelineBinaryStoreEntryCounts(
+    int WritablePipelineCount,
+    int SeedPipelineCount)
+{
+    internal static PipelineBinaryStoreEntryCounts Empty => new(0, 0);
+}
+
 internal sealed record PipelineBinaryStoreIdentity(
     uint VendorId,
     uint DeviceId,
@@ -70,6 +77,20 @@ internal sealed class PipelineBinaryStore
     }
 
     internal string WritableRoot => _writableRoot;
+
+    internal PipelineBinaryStoreEntryCounts CountEntries()
+    {
+        lock (_gate)
+        {
+            // Health reporting is a one-shot startup operation. Refresh both
+            // manifests here instead of adding filesystem work to Telemetry.
+            _writableManifest = ReadManifest(_writableRoot);
+            _seedManifest = ReadManifest(_seedRoot);
+            return new PipelineBinaryStoreEntryCounts(
+                _writableManifest.Pipelines.Count,
+                _seedManifest.Pipelines.Count);
+        }
+    }
 
     internal bool TryLoad(
         ReadOnlySpan<byte> pipelineKey,
