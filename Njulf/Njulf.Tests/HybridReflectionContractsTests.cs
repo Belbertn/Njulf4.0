@@ -65,6 +65,38 @@ public sealed class HybridReflectionContractsTests
         });
     }
 
+    [Test]
+    public void SplitProgramSelector_DoesNotFragmentNativePipelineIdentity()
+    {
+        var settings = new RenderSettings();
+        settings.PerformanceOptimizations.EnabledFeatures =
+            PerformanceOptimizationFeature.HybridOwnershipProjectionElision |
+            PerformanceOptimizationFeature.SplitHybridForwardPrograms;
+
+        uint splitMask = MeshPipeline
+            .ResolveForwardPerformanceSpecializationMask(settings);
+        (int splitFirst, int splitLimit) = MeshPipeline
+            .ResolveHybridReflectionPerformancePipelineRange(settings);
+
+        settings.PerformanceOptimizations.EnabledFeatures &=
+            ~PerformanceOptimizationFeature.SplitHybridForwardPrograms;
+        uint combinedMask = MeshPipeline
+            .ResolveForwardPerformanceSpecializationMask(settings);
+        (int combinedFirst, int combinedLimit) = MeshPipeline
+            .ResolveHybridReflectionPerformancePipelineRange(settings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(splitMask, Is.EqualTo(combinedMask));
+            Assert.That(
+                splitMask,
+                Is.EqualTo((uint)PerformanceOptimizationFeature
+                    .HybridOwnershipProjectionElision));
+            Assert.That((splitFirst, splitLimit), Is.EqualTo((2, 4)));
+            Assert.That((combinedFirst, combinedLimit), Is.EqualTo((1, 2)));
+        });
+    }
+
     [TestCase(Format.R32G32B32A32Uint, 16)]
     [TestCase(Format.R16G16B16A16Sfloat, 8)]
     [TestCase(Format.R16G16Sfloat, 4)]
@@ -867,8 +899,10 @@ public sealed class HybridReflectionContractsTests
                 "if (NjulfHybridDebugViewsStaticNone())\n" +
                 "        return DEBUG_VIEW_NONE;"));
             Assert.That(forward, Does.Contain(
-                "if (!NjulfHybridDebugViewsStaticNone() &&\n" +
-                "        environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)"));
+                "#define FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE 1"));
+            Assert.That(forward, Does.Contain(
+                "#if !FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE\n" +
+                "    if (environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)"));
             Assert.That(admission, Does.Contain(
                 "sceneData.DebugViewMode != 0u"));
             Assert.That(admission, Does.Contain(
@@ -893,6 +927,11 @@ public sealed class HybridReflectionContractsTests
             .ReplaceLineEndings("\n");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline",
             "ForwardPlusPass.cs").ReplaceLineEndings("\n");
+        string shaderProject = ReadRepoText(
+            "Njulf.Shaders", "Njulf.Shaders.csproj");
+        string contract = ReadRepoText(
+            "Njulf.Rendering", "Pipeline",
+            "ForwardHybridReflectionReceiverContract.cs");
         int admissionStart = pass.IndexOf(
             "private bool ShouldUseHybridReflectionReceiverCacheSplit(",
             StringComparison.Ordinal);
@@ -911,6 +950,17 @@ public sealed class HybridReflectionContractsTests
             Assert.That(forward, Does.Contain(
                 "if (NjulfReceiverCacheSplitLane())\n" +
                 "        return 0u;"));
+            Assert.That(forward, Does.Contain(
+                "#if !FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY\n" +
+                "    bool globalIlluminationEnabled"));
+            Assert.That(shaderProject, Does.Contain(
+                "cache_exact_fallback_hybrid_reflection.frag"));
+            Assert.That(shaderProject, Does.Contain(
+                "cache_combined_hybrid_reflection.frag"));
+            Assert.That(contract, Does.Contain(
+                "receiverCacheExactFallbackOnly"));
+            Assert.That(contract, Does.Contain(
+                "receiverCacheCombined"));
             Assert.That(admission, Does.Contain(
                 "sceneData.AmbientOcclusionBentNormalMode ==\n" +
                 "                       AmbientOcclusionBentNormalMode.Off"));
@@ -1364,9 +1414,15 @@ public sealed class HybridReflectionContractsTests
             Assert.That(exactPreparation, Does.Not.Contain(
                 "HybridReflectionCacheCombinedPipelineLane"));
             Assert.That(performancePreparation, Does.Contain(
-                "HybridReflectionCacheCombinedPipelineLane"));
+                "ResolveHybridReflectionPerformancePipelineRange("));
             Assert.That(performancePreparation, Does.Contain(
-                "ResolveRequiredHybridReflectionLaneCount()"));
+                "range.FirstReceiverLane"));
+            Assert.That(performancePreparation, Does.Contain(
+                "range.ReceiverLaneLimit"));
+            Assert.That(mesh, Does.Contain(
+                "? (HybridReflectionCacheAcceptedPipelineLane,"));
+            Assert.That(mesh, Does.Contain(
+                ": (HybridReflectionCacheCombinedPipelineLane,"));
             Assert.That(mesh, Does.Contain(
                 "private const int HybridReflectionLaneCount = 4;"));
             Assert.That(mesh, Does.Contain(

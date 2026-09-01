@@ -71,6 +71,32 @@ const uint NJULF_PERFORMANCE_COMPACT_MASKED_FEEDBACK = 1u << 12u;
 const uint NJULF_RECEIVER_CACHE_LANE_COMBINED = 0u;
 const uint NJULF_RECEIVER_CACHE_LANE_ACCEPTED = 1u;
 const uint NJULF_RECEIVER_CACHE_LANE_EXACT_FALLBACK = 2u;
+
+// The default-on split uses distinct SPIR-V modules so the accepted native
+// program contains no exact gather graph and the fallback program contains no
+// accepted-cache shading graph. The specialization lane remains the rollback
+// mechanism for the combined artifact and an additional fail-closed guard.
+#ifndef FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
+#define FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY 0
+#endif
+#ifndef FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
+#define FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY 0
+#endif
+#if FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY && \
+    FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
+#error Receiver-cache accepted and exact-fallback lanes are mutually exclusive
+#endif
+
+// These views are rejected before the split pipelines are selected. Publish
+// that contract as a preprocessor constant so the native programs do not keep
+// the incompatible debug branches alive through a specialization constant.
+#if FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY || \
+    FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
+#define FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE 1
+#else
+#define FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE 0
+#endif
+
 layout(constant_id = 30) const uint
     NjulfReceiverCacheLane = NJULF_RECEIVER_CACHE_LANE_COMBINED;
 layout(constant_id = 31) const uint
@@ -83,23 +109,40 @@ bool NjulfPerformanceOptimizationEnabled(uint feature)
 
 bool NjulfReceiverCacheAcceptedLane()
 {
+#if FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
+    return true;
+#elif FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
+    return false;
+#else
     return NjulfPerformanceOptimizationEnabled(
             NJULF_PERFORMANCE_SPLIT_HYBRID_FORWARD) &&
         NjulfReceiverCacheLane == NJULF_RECEIVER_CACHE_LANE_ACCEPTED;
+#endif
 }
 
 bool NjulfReceiverCacheExactFallbackLane()
 {
+#if FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
+    return true;
+#elif FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
+    return false;
+#else
     return NjulfPerformanceOptimizationEnabled(
             NJULF_PERFORMANCE_SPLIT_HYBRID_FORWARD) &&
         NjulfReceiverCacheLane ==
             NJULF_RECEIVER_CACHE_LANE_EXACT_FALLBACK;
+#endif
 }
 
 bool NjulfReceiverCacheSplitLane()
 {
+#if FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY || \
+    FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
+    return true;
+#else
     return NjulfReceiverCacheAcceptedLane() ||
         NjulfReceiverCacheExactFallbackLane();
+#endif
 }
 
 // Ordinary forward variants consume the current frame's depth prepass. The
@@ -151,11 +194,16 @@ layout(early_fragment_tests) in;
 // specialization-controlled rollback to the diagnostic-capable program.
 bool NjulfHybridDebugViewsStaticNone()
 {
+#if FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY || \
+    FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
+    return true;
+#else
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
     return NjulfPerformanceOptimizationEnabled(
         NJULF_PERFORMANCE_STATIC_SHADER_SPECIALIZATION);
 #else
     return false;
+#endif
 #endif
 }
 
@@ -644,6 +692,12 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 #error FORWARD_DDGI_RECEIVER_CACHE_LEGACY requires the cache-required artifact
 #endif
 
+#if (FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY || \
+     FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY) && \
+    !FORWARD_DDGI_RECEIVER_CACHE_REQUIRED
+#error Receiver-cache split lanes require the cache-required artifact
+#endif
+
 #if FORWARD_DDGI_RECEIVER_CACHE && !NJULF_DDGI_DETAILED_COUNTERS && !NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 #define FORWARD_DDGI_RECEIVER_CACHE_ACTIVE 1
 #else
@@ -670,9 +724,13 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 
 uint ForwardDebugViewMode()
 {
+#if FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE
+    return DEBUG_VIEW_NONE;
+#else
     if (NjulfHybridDebugViewsStaticNone())
         return DEBUG_VIEW_NONE;
     return pc.Push.DebugAndAoFlags & 0xffu;
+#endif
 }
 
 uint ForwardDirectionalShadowPreviewCascade()
@@ -687,9 +745,13 @@ uint ForwardAmbientOcclusionEnabled()
 
 uint ForwardAmbientOcclusionDebugView()
 {
+#if FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE
+    return 0u;
+#else
     if (NjulfHybridDebugViewsStaticNone())
         return 0u;
     return (pc.Push.DebugAndAoFlags >> 16u) & 0x3fu;
+#endif
 }
 
 uint ForwardAmbientOcclusionBentNormalMode()
@@ -706,9 +768,13 @@ uint ForwardTransparentReceiveShadows()
 
 uint ForwardTransparencyDebugView()
 {
+#if FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE
+    return 0u;
+#else
     if (NjulfHybridDebugViewsStaticNone())
         return 0u;
     return (pc.Push.DebugAndAoFlags >> 25u) & 0x07u;
+#endif
 }
 
 uint ForwardAmbientOcclusionSamplingMode()
@@ -5889,10 +5955,18 @@ void main()
     RecordForwardDdgiReceiverCacheAdmission(
         pc.Push.CurrentFrameIndex,
         receiverCacheAdmission.Reason);
+#if FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
+    if (!receiverCacheAccepted)
+        discard;
+#elif FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
+    if (receiverCacheAccepted)
+        discard;
+#else
     if (NjulfReceiverCacheAcceptedLane() && !receiverCacheAccepted)
         discard;
     if (NjulfReceiverCacheExactFallbackLane() && receiverCacheAccepted)
         discard;
+#endif
 #endif
 #if NJULF_DDGI_RECEIVER_CACHE_DEBUG_VIEW
     WriteForwardColor(vec4(
@@ -6517,7 +6591,8 @@ void main()
     cachedGather.Packed = uvec4(0u);
 #endif
 #if !FORWARD_GLOBAL_ILLUMINATION_DISABLED && \
-    !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+    !FORWARD_DDGI_RECEIVER_CACHE_LEGACY && \
+    !FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
     if (!NjulfReceiverCacheAcceptedLane())
     {
     bool directionalGlobalIlluminationEnabled = geometryDecal
@@ -6702,12 +6777,13 @@ void main()
     uint lastShadowCascade = 0u;
     vec3 lastShadowEvaluationNormal = shadowNormal;
 
-    if (!NjulfHybridDebugViewsStaticNone() &&
-        environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)
+#if !FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE
+    if (environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)
     {
         WriteForwardColor(vec4(vec3(indirectAo), 1.0));
         return;
     }
+#endif
 
     if (ambientOcclusionDebugView == AO_DEBUG_FINAL)
     {
@@ -6986,7 +7062,8 @@ void main()
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
 
-#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE && \
+    !FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
     if (receiverCacheAccepted)
     {
         // Keep the radiance record out of the direct-light loop. Rejected
@@ -7021,7 +7098,8 @@ void main()
         reflectionDebugActive,
         reflectionDebugColor);
 
-#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE && \
+    !FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
     if ((!receiverCacheAccepted ||
          (ForwardAmbientOcclusionBentNormalMode() != 0u &&
           bentNormalValid)) &&
@@ -7048,19 +7126,19 @@ void main()
     }
 #endif
 
-    if (!NjulfHybridDebugViewsStaticNone() &&
-        environment.DebugView == ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY)
+#if !FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE
+    if (environment.DebugView == ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY)
     {
         WriteForwardColor(vec4(diffuseIbl, 1.0));
         return;
     }
 
-    if (!NjulfHybridDebugViewsStaticNone() &&
-        environment.DebugView == ENVIRONMENT_DEBUG_SPECULAR_IBL_ONLY)
+    if (environment.DebugView == ENVIRONMENT_DEBUG_SPECULAR_IBL_ONLY)
     {
         WriteForwardColor(vec4(specularIbl, 1.0));
         return;
     }
+#endif
 
     vec3 subsurfaceBackDiffuseIndirect = vec3(0.0);
     if (subsurfaceStrength > 0.0 &&
@@ -7090,7 +7168,8 @@ void main()
     // retain the sparse-gather graph as dead control flow.
     finalDiffuseIndirect = diffuseIbl * indirectAo;
 #else
-#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE && \
+    !FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
     if (receiverCacheAccepted)
     {
         // The admitted sidecar proves that this resolved record belongs to
@@ -7114,7 +7193,8 @@ void main()
         }
 
         finalDiffuseIndirect = cachedDdgiDiffuse + cachedEnvironmentDiffuse;
-#if !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+#if !FORWARD_DDGI_RECEIVER_CACHE_LEGACY && \
+    !FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
         if (!NjulfReceiverCacheAcceptedLane() &&
             ForwardAmbientOcclusionBentNormalMode() == 2u && bentNormalValid)
         {
@@ -7158,11 +7238,14 @@ void main()
         }
 #endif
     }
-#if !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+#if !FORWARD_DDGI_RECEIVER_CACHE_LEGACY && \
+    !FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY && \
+    !FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
     if (!NjulfReceiverCacheAcceptedLane() && !receiverCacheAccepted)
     {
 #endif
 #endif
+#if !FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
     bool globalIlluminationEnabled = geometryDecal
         ? ForwardDecalGlobalIlluminationEnabled()
         : ForwardGlobalIlluminationEnabled() != 0u;
@@ -7478,8 +7561,11 @@ void main()
 #if !FORWARD_WEIGHTED_OIT && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
     WriteMaterialTransportProvenance(materialTransportProvenance);
 #endif
+#endif
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE && \
-    !FORWARD_DDGI_RECEIVER_CACHE_LEGACY
+    !FORWARD_DDGI_RECEIVER_CACHE_LEGACY && \
+    !FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY && \
+    !FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
     }
 #endif
 #endif // FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE

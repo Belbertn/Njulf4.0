@@ -131,11 +131,11 @@ $receiverCacheFragmentModuleNames = @(
 
 # These production DdgiHigh artifacts have an exclusive opaque GI owner split:
 # the receiver cache owns admitted diffuse/visibility and the deferred hybrid
-# pass owns indirect specular. Their rejected and exception lanes deliberately
-# retain the same exact gather as the cache-only artifacts, but the compact
-# directional L2 buffer (static bindless slots 178/179) must be absent from the
-# optimized SPIR-V.
-$ownershipLockedReceiverCacheFragmentModuleNames = @(
+# pass owns indirect specular. The default split uses complementary accepted
+# and exact-fallback native programs; combined programs remain the immediate
+# rollback. Compact directional L2 (static bindless slots 178/179) must be
+# absent from every production-specialized ownership-locked module.
+$ownershipLockedReceiverCacheAcceptedModuleNames = @(
     'forward_opaque_ddgi_cache_required_hybrid_reflection.frag.spv',
     'forward_opaque_simple_ddgi_cache_required_hybrid_reflection.frag.spv',
     'forward_opaque_simple_full_input_ddgi_cache_required_hybrid_reflection.frag.spv',
@@ -149,10 +149,25 @@ $ownershipLockedReceiverCacheFragmentModuleNames = @(
     'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv',
     'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv'
 )
-$ownershipLockedReceiverCacheFragmentModuleNames += @(
-    $ownershipLockedReceiverCacheFragmentModuleNames | ForEach-Object {
+$ownershipLockedReceiverCacheAcceptedModuleNames += @(
+    $ownershipLockedReceiverCacheAcceptedModuleNames | ForEach-Object {
         $_ -replace '\.frag\.spv$', '_sparse_lobe.frag.spv'
     }
+)
+$ownershipLockedReceiverCacheExactFallbackModuleNames = @(
+    $ownershipLockedReceiverCacheAcceptedModuleNames | ForEach-Object {
+        $_ -replace 'cache_required_', 'cache_exact_fallback_'
+    }
+)
+$ownershipLockedReceiverCacheCombinedModuleNames = @(
+    $ownershipLockedReceiverCacheAcceptedModuleNames | ForEach-Object {
+        $_ -replace 'cache_required_', 'cache_combined_'
+    }
+)
+$ownershipLockedReceiverCacheFragmentModuleNames = @(
+    $ownershipLockedReceiverCacheAcceptedModuleNames
+    $ownershipLockedReceiverCacheExactFallbackModuleNames
+    $ownershipLockedReceiverCacheCombinedModuleNames
 )
 
 $giDisabledControlModuleNames = @(
@@ -368,6 +383,12 @@ foreach ($moduleName in @(
 
     $isOwnershipLockedModule =
         $ownershipLockedReceiverCacheFragmentModuleNames -contains $moduleName
+    $isOwnershipLockedAcceptedModule =
+        $ownershipLockedReceiverCacheAcceptedModuleNames -contains $moduleName
+    $isOwnershipLockedExactFallbackModule =
+        $ownershipLockedReceiverCacheExactFallbackModuleNames -contains $moduleName
+    $isOwnershipLockedCombinedModule =
+        $ownershipLockedReceiverCacheCombinedModuleNames -contains $moduleName
     $isCacheModule =
         $receiverCacheFragmentModuleNames -contains $moduleName -or
         $isOwnershipLockedModule
@@ -382,15 +403,31 @@ foreach ($moduleName in @(
     $compactDirectionalNextBankReferences = [regex]::Matches(
         $ownershipDisassembly,
         '%(?:u?int)_179\b').Count
-    $expectedCacheSamples = if ($isCacheModule) { 1 } else { 0 }
-    $expectedExactReceiverConstants = if ($isCacheModule) { 4 } else { 0 }
-    $expectedExactReceiverAccesses = if ($isCacheModule) { 3 } else { 0 }
+    $expectedSurfaceSamples = if ($isCacheModule) { 1 } else { 0 }
+    $expectedRadianceSamples = if (
+        $isCacheModule -and
+        -not $isOwnershipLockedExactFallbackModule) { 1 } else { 0 }
+    $expectedExactReceiverConstants = if (
+        $isCacheModule -and
+        -not $isOwnershipLockedAcceptedModule) { 4 } else { 0 }
+    $expectedExactReceiverAccesses = if (
+        $isCacheModule -and
+        -not $isOwnershipLockedAcceptedModule) { 3 } else { 0 }
     # Cache-capable opaque programs retain both independent fail-closed lanes:
     # the canonical rejection gather and exact B1 ownership. The optimized
     # masked path adds three bounded list operations: candidate high-water,
     # overflow fallback, and dense publication maximum. Overflow still executes
     # the original exact gather in the same fragment.
-    $expectedAtomicInstructions = if ($isCacheModule) { 46 } else { 0 }
+    $expectedAtomicInstructions = if (
+        $isOwnershipLockedAcceptedModule) {
+        0
+    } elseif ($isOwnershipLockedExactFallbackModule) {
+        29
+    } elseif ($isCacheModule) {
+        46
+    } else {
+        0
+    }
 
     if ($atomicInstructions -ne $expectedAtomicInstructions) {
         $violations.Add(
@@ -413,27 +450,28 @@ foreach ($moduleName in @(
             "computeState=$computeStateConstants sourceCache=$sourceCacheConstants; expected " +
             "receiverConstants=$expectedExactReceiverConstants receiverAccesses=$expectedExactReceiverAccesses computeState=0 sourceCache=0")
     }
-    if ($cacheDescriptorSetCount -ne $expectedCacheSamples -or
-        $cacheBindingCount -ne $expectedCacheSamples -or
-        $surfaceDescriptorSetCount -ne $expectedCacheSamples -or
-        $surfaceBindingCount -ne $expectedCacheSamples) {
+    if ($cacheDescriptorSetCount -ne $expectedRadianceSamples -or
+        $cacheBindingCount -ne $expectedRadianceSamples -or
+        $surfaceDescriptorSetCount -ne $expectedSurfaceSamples -or
+        $surfaceBindingCount -ne $expectedSurfaceSamples) {
         $violations.Add(
             "${moduleName}: found radiance set=$cacheDescriptorSetCount binding0=$cacheBindingCount and " +
-            "surface set=$surfaceDescriptorSetCount binding1=$surfaceBindingCount decoration(s), expected $expectedCacheSamples each")
+            "surface set=$surfaceDescriptorSetCount binding1=$surfaceBindingCount decoration(s), expected radiance=$expectedRadianceSamples surface=$expectedSurfaceSamples")
     }
-    if ($cacheEntryAccesses.Count -ne $expectedCacheSamples -or
-        $cacheEntryReadCount -ne $expectedCacheSamples -or
-        $surfaceEntryAccesses.Count -ne $expectedCacheSamples -or
-        $surfaceEntryReadCount -ne $expectedCacheSamples) {
+    if ($cacheEntryAccesses.Count -ne $expectedRadianceSamples -or
+        $cacheEntryReadCount -ne $expectedRadianceSamples -or
+        $surfaceEntryAccesses.Count -ne $expectedSurfaceSamples -or
+        $surfaceEntryReadCount -ne $expectedSurfaceSamples) {
         $violations.Add(
             "${moduleName}: found radiance accesses=$($cacheEntryAccesses.Count)/uvec4 reads=$cacheEntryReadCount and " +
-            "surface accesses=$($surfaceEntryAccesses.Count)/uvec2 reads=$surfaceEntryReadCount, expected $expectedCacheSamples each")
+            "surface accesses=$($surfaceEntryAccesses.Count)/uvec2 reads=$surfaceEntryReadCount, expected radiance=$expectedRadianceSamples surface=$expectedSurfaceSamples")
     }
-    if ($surfaceEfficientAddressCount -ne $expectedCacheSamples) {
+    if ($surfaceEfficientAddressCount -ne $expectedSurfaceSamples) {
         $violations.Add(
-            "${moduleName}: found $surfaceEfficientAddressCount division-free receiver-surface address(es), expected $expectedCacheSamples")
+            "${moduleName}: found $surfaceEfficientAddressCount division-free receiver-surface address(es), expected $expectedSurfaceSamples")
     }
-    if ($isCacheModule -and
+    if ($expectedRadianceSamples -eq 1 -and
+        $expectedSurfaceSamples -eq 1 -and
         $cacheEntryAccesses.Count -eq 1 -and
         $surfaceEntryAccesses.Count -eq 1 -and
         $cacheEntryAccesses[0].Groups['index'].Value -ne
@@ -526,5 +564,5 @@ if ($violations.Count -ne 0) {
 
 Write-Host "Validated and verified $($receiverModuleNames.Count) production Simple-DDGI receiver modules use exactly one compact uvec4 load per inlined gather site, the exact bounded paging-demand/B1 contribution atomic protocol, no compute-state/source-cache access, and no obsolete SSGI artifact."
 Write-Host "Validated $($receiverCacheFragmentModuleNames.Count) cache-required forward modules each perform one aligned set-2/binding-1 receiver-surface admission read, conditionally read the matching binding-0 FP16 radiance entry, and retain the exact three-gather fallback; the $($giDisabledControlModuleNames.Count) paired controls contain none of those paths."
-Write-Host "Validated $($ownershipLockedReceiverCacheFragmentModuleNames.Count) ownership-locked cache/hybrid modules retain exact rollback fallback while their production-specialized IR contains no compact directional L2 bindless references."
+Write-Host "Validated $($ownershipLockedReceiverCacheFragmentModuleNames.Count) ownership-locked cache/hybrid modules implement complementary accepted/exact-fallback plus combined rollback ABIs while their production-specialized IR contains no compact directional L2 bindless references."
 Write-Host "Validated the receiver-cache resolve publishes all four deterministic radiance and receiver-surface write paths through set-2 bindings 0 and 1 and contains no atomics."

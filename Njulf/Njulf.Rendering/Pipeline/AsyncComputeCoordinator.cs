@@ -283,10 +283,7 @@ internal sealed class AsyncComputeCoordinator
                 : null;
         AsyncComputePath? autoTimingProbe =
             effectiveMode == AsyncComputeMode.Auto &&
-            !autoEnabledPath.HasValue &&
-            !allPaths.Any(path =>
-                requestedByFeature[path] &&
-                settings.AsyncCompute.IsPreferred(path))
+            !autoEnabledPath.HasValue
                 ? SelectAutoTimingProbe(input, requestedByFeature)
                 : null;
         AsyncComputePath? autoIsolatedPath =
@@ -303,30 +300,24 @@ internal sealed class AsyncComputeCoordinator
             bool pauseForAutoIsolation =
                 effectiveMode == AsyncComputeMode.Auto &&
                 requested &&
-                !preferred &&
                 autoIsolatedPath.HasValue &&
                 !isSelectedAutoPath;
             bool timingEligible = effectiveMode == AsyncComputeMode.Auto
-                ? preferred || isSelectedAutoPath && timing.Eligible
+                ? isSelectedAutoPath && timing.Eligible
                 : timing.Eligible;
-            AsyncComputePathStatus timingStatus = preferred
-                ? AsyncComputePathStatus.Enabled
-                : pauseForAutoIsolation
+            AsyncComputePathStatus timingStatus = pauseForAutoIsolation
                 ? timing.Status == AsyncComputePathStatus.Enabled
                     ? AsyncComputePathStatus.PendingWarmup
                     : timing.Status
                 : timing.Status;
             string reason = !requested
                 ? DescribeInactivePath(path, input)
-                : preferred
-                    ? "Preferred production path; concrete queue/resource validation still applies."
                 : isProbe
                     ? $"Collecting isolated Auto timing samples for {path}; no other async path is scheduled this frame."
                     : pauseForAutoIsolation
                         ? $"Waiting while {autoIsolatedPath!.Value} is the sole isolated Auto path for this workload."
-                        : effectiveMode == AsyncComputeMode.Auto &&
-                          !autoIsolatedPath.HasValue
-                            ? "No complete, independently validated Auto path is available for this workload."
+                        : preferred
+                            ? $"Preferred path remains timing-gated. {timing.Reason}"
                             : timing.Reason;
             paths.Add(new AsyncComputePathEligibility(
                 path,
@@ -336,8 +327,7 @@ internal sealed class AsyncComputeCoordinator
                 reason,
                 IsAutoTimingProbe: isProbe,
                 CorrectnessCertified:
-                    AsyncComputePassCatalog
-                        .IsProductionActivationAuthorized(path),
+                    IsProductionActivationAuthorized(path, input),
                 ForceValidationAuthorized:
                     effectiveMode ==
                         AsyncComputeMode.ForceEnabledForValidation &&
@@ -474,16 +464,70 @@ internal sealed class AsyncComputeCoordinator
             status);
         if (!string.IsNullOrWhiteSpace(
                 input.GraphicsOnlyConstraintReason) &&
-            result.SubmissionPlan.ContainsAsyncCompute)
+            result.SubmissionPlan.ContainsAsyncCompute &&
+            RequiresGraphicsOnlyFallback(
+                result.SubmissionPlan,
+                input.GraphicsCompletionDomainPasses,
+                out string graphicsConstraintFailure))
         {
             _stateProjection.Discard();
             result = CreateGraphicsFallbackPlan(
                 result,
-                input.GraphicsOnlyConstraintReason);
+                string.IsNullOrWhiteSpace(graphicsConstraintFailure)
+                    ? input.GraphicsOnlyConstraintReason
+                    : input.GraphicsOnlyConstraintReason + ": " +
+                      graphicsConstraintFailure);
         }
 
         CurrentPlan = result;
         return result;
+    }
+
+    private static bool RequiresGraphicsOnlyFallback(
+        AsyncComputeSubmissionPlan plan,
+        IReadOnlyList<string>? graphicsCompletionDomainPasses,
+        out string failure)
+    {
+        // A legacy caller without a concrete producer inventory requests the
+        // conservative all-graphics fallback.  When the inventory is known,
+        // multiple ordered graphics submissions still form one completion
+        // domain: they target the same queue and the terminal fence covers all
+        // earlier submissions.  Only a named producer moved to the compute
+        // queue requires rejection.
+        if (graphicsCompletionDomainPasses is null ||
+            graphicsCompletionDomainPasses.Count == 0)
+        {
+            failure = string.Empty;
+            return true;
+        }
+
+        foreach (AsyncComputeSubmissionSegment segment in plan.Segments)
+        {
+            if (segment.Queue != AsyncComputeQueue.Compute)
+                continue;
+
+            foreach (string passName in segment.Passes)
+            {
+                for (int constrainedIndex = 0;
+                     constrainedIndex < graphicsCompletionDomainPasses.Count;
+                     constrainedIndex++)
+                {
+                    if (!string.Equals(
+                            passName,
+                            graphicsCompletionDomainPasses[constrainedIndex],
+                            StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    failure = $"producer pass '{passName}' was scheduled on the compute queue";
+                    return true;
+                }
+            }
+        }
+
+        failure = string.Empty;
+        return false;
     }
 
     internal AsyncComputeRecordingDecision ValidateForRecording(
@@ -1251,13 +1295,13 @@ internal sealed class AsyncComputeCoordinator
                 new AsyncComputeTimingStats(0, 0, 0, 0));
         }
 
-        if (!AsyncComputePassCatalog.IsProductionActivationAuthorized(path))
+        if (!IsProductionActivationAuthorized(path, input))
         {
             return new AsyncComputeTimingDecision(
                 AsyncComputePathStatus.Uncertified,
                 Eligible: false,
                 Active: false,
-                "Path is quarantined from Auto until correctness certification is reviewed.",
+                DescribeProductionActivationRejection(path, input),
                 new AsyncComputeTimingStats(0, 0, 0, 0),
                 new AsyncComputeTimingStats(0, 0, 0, 0));
         }
@@ -1309,7 +1353,7 @@ internal sealed class AsyncComputeCoordinator
             int index = (_nextAutoTimingProbePath + offset) %
                 allPaths.Length;
             AsyncComputePath path = allPaths[index];
-            if (!AsyncComputePassCatalog.IsProductionActivationAuthorized(path))
+            if (!IsProductionActivationAuthorized(path, input))
                 continue;
             if (!requestedByFeature.TryGetValue(
                     path,
@@ -1335,6 +1379,31 @@ internal sealed class AsyncComputeCoordinator
         }
 
         return null;
+    }
+
+    private static bool IsProductionActivationAuthorized(
+        AsyncComputePath path,
+        in AsyncComputePlanningInput input) =>
+        AsyncComputePassCatalog.IsProductionActivationAuthorized(path) &&
+        input.DedicatedQueueFamilyAvailable &&
+        input.GraphicsQueueFamily != input.ComputeQueueFamily;
+
+    private static string DescribeProductionActivationRejection(
+        AsyncComputePath path,
+        in AsyncComputePlanningInput input)
+    {
+        if (!AsyncComputePassCatalog.IsProductionActivationAuthorized(path))
+        {
+            return "Path is quarantined from Auto until correctness " +
+                   "certification is reviewed.";
+        }
+
+        return
+            $"Path is certified only for a distinct dedicated compute " +
+            $"queue family; the current topology is graphics family " +
+            $"{input.GraphicsQueueFamily}, compute family " +
+            $"{input.ComputeQueueFamily}. Forced validation remains " +
+            "available for topology-specific certification.";
     }
 
     private bool HasCompleteResourcePlan(
@@ -1575,7 +1644,7 @@ internal sealed class AsyncComputeCoordinator
         return total;
     }
 
-    private static long EstimateOverlapMicroseconds(
+    internal static long EstimateOverlapMicroseconds(
         AsyncComputeSubmissionPlan plan,
         FrameTimingSnapshot timings)
     {
@@ -1596,6 +1665,7 @@ internal sealed class AsyncComputeCoordinator
                 compute.Passes,
                 timings);
             long graphicsWindow = 0;
+            ulong? computeSignal = compute.TimelineSignalValue;
             for (int next = segmentIndex + 1;
                  next < plan.Segments.Count;
                  next++)
@@ -1604,10 +1674,21 @@ internal sealed class AsyncComputeCoordinator
                     plan.Segments[next];
                 if (candidate.Queue != AsyncComputeQueue.Graphics)
                     continue;
-                graphicsWindow = SumGpuPassMicroseconds(
-                    candidate.Passes,
-                    timings);
-                break;
+
+                // Graphics submitted before the first consumer wait can overlap this
+                // compute segment. The segment carrying the wait cannot: none of its
+                // commands begin until the timeline dependency has completed.
+                if (computeSignal.HasValue &&
+                    candidate.TimelineWaits.Any(wait =>
+                        wait.Value >= computeSignal.Value))
+                {
+                    break;
+                }
+
+                graphicsWindow = checked(
+                    graphicsWindow + SumGpuPassMicroseconds(
+                        candidate.Passes,
+                        timings));
             }
 
             totalOverlap = checked(
@@ -1618,7 +1699,7 @@ internal sealed class AsyncComputeCoordinator
         return Math.Max(0, totalOverlap);
     }
 
-    private static long EstimateFirstConsumerWaitMicroseconds(
+    internal static long EstimateFirstConsumerWaitMicroseconds(
         AsyncComputeSubmissionPlan plan,
         FrameTimingSnapshot timings)
     {
@@ -1639,6 +1720,7 @@ internal sealed class AsyncComputeCoordinator
                 compute.Passes,
                 timings);
             long graphicsWindow = 0;
+            ulong? computeSignal = compute.TimelineSignalValue;
             for (int next = segmentIndex + 1;
                  next < plan.Segments.Count;
                  next++)
@@ -1647,10 +1729,18 @@ internal sealed class AsyncComputeCoordinator
                     plan.Segments[next];
                 if (candidate.Queue != AsyncComputeQueue.Graphics)
                     continue;
-                graphicsWindow = SumGpuPassMicroseconds(
-                    candidate.Passes,
-                    timings);
-                break;
+
+                if (computeSignal.HasValue &&
+                    candidate.TimelineWaits.Any(wait =>
+                        wait.Value >= computeSignal.Value))
+                {
+                    break;
+                }
+
+                graphicsWindow = checked(
+                    graphicsWindow + SumGpuPassMicroseconds(
+                        candidate.Passes,
+                        timings));
             }
 
             totalWait = checked(

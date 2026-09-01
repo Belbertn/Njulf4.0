@@ -83,6 +83,34 @@ public sealed class AsyncComputeStateContractTests
     }
 
     [Test]
+    public void Projection_GrowsAtPlanGenerationBoundaryAndReusesExactAliases()
+    {
+        var bindings = new RenderGraphResourceBindings();
+        RenderGraphConcreteResourceBinding first = CreateBuffer(701);
+        RenderGraphConcreteResourceBinding alias = first with
+        {
+            Resource = RenderGraphResourceId.MaterialBuffers,
+            Name = "alias-701"
+        };
+        RenderGraphConcreteResourceBinding second = CreateBuffer(702);
+        RenderGraphConcreteResourceBinding third = CreateBuffer(703);
+        bindings.Replace(new[] { first, alias, second, third });
+
+        var projection = new AsyncComputeResourceStateProjection(1);
+        Assert.That(projection.Begin(bindings), Is.True);
+        int grownCapacity = projection.Capacity;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grownCapacity, Is.GreaterThanOrEqualTo(4));
+            Assert.That(projection.Count, Is.EqualTo(3));
+            Assert.That(projection.Begin(bindings), Is.True);
+            Assert.That(projection.Capacity, Is.EqualTo(grownCapacity));
+            Assert.That(projection.Count, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
     public void VariantCache_RejectsUnacceptedOrStalePlansAndEvictsLeastRecentlyUsed()
     {
         var cache = new AsyncComputePlanVariantCache(2);

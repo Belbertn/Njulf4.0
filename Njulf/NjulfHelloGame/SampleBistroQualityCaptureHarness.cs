@@ -732,6 +732,34 @@ internal sealed class SampleBistroQualityCaptureRunner
         WriteReport("running", string.Empty);
     }
 
+    /// <summary>
+    /// The deterministic quality clock must not consume bootstrap clears or an
+    /// exact fallback frame when the run explicitly requests a cache path. A
+    /// cold driver or RenderDoc injection can make post-present compilation
+    /// much slower than the ordinary 720-frame script.
+    /// </summary>
+    internal static bool IsReadyForCapture(
+        bool fullQualityPresented,
+        SimpleDdgiReceiverCacheMode configuredMode,
+        in SimpleDdgiReceiverCacheDiagnostics diagnostics)
+    {
+        if (!fullQualityPresented)
+            return false;
+
+        SimpleDdgiReceiverCacheMode requested = configuredMode.Sanitize();
+        if (!requested.UsesCache())
+        {
+            return diagnostics.RequestedMode == requested &&
+                   diagnostics.EffectiveMode ==
+                       SimpleDdgiReceiverCacheMode.Exact;
+        }
+
+        return diagnostics.RequestedMode == requested &&
+               diagnostics.EffectiveMode == requested &&
+               diagnostics.FallbackReason ==
+                   SimpleDdgiReceiverCacheFallbackReason.None;
+    }
+
     public void PrepareFrame(int absoluteFrameIndex)
     {
         if (_completed)

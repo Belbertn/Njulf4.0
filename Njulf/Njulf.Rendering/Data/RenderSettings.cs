@@ -2722,9 +2722,13 @@ namespace Njulf.Rendering.Data
         public const SimpleDdgiNearFieldResidualQualityPreset
             DefaultSimpleDdgiNearFieldResidualQualityPreset =
                 SimpleDdgiNearFieldResidualQualityPreset.Balanced;
+        // The adaptive receiver cache remains an explicit experiment. Native
+        // 1080p qualification found that its producer/feedback work cost more
+        // than the exact gather and changed stable pixels outside the A/A
+        // envelope, so production presets default to the canonical exact path.
         public const SimpleDdgiReceiverCacheMode
             DefaultSimpleDdgiReceiverCacheMode =
-                SimpleDdgiReceiverCacheMode.TemporalAdaptive;
+                SimpleDdgiReceiverCacheMode.Exact;
 
         private float _indirectIntensity = 1.0f;
         private float _environmentFallbackIntensity = 1.0f;

@@ -1,3 +1,4 @@
+using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Pipeline;
@@ -10,6 +11,29 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class AsyncComputePhase3Tests
 {
+    [Test]
+    public void QueueTopologyPrefersIndependentSameFamilyComputeWhenAvailable()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                VulkanContext.ShouldUseSecondaryGraphicsComputeQueue(
+                    2,
+                    QueueFlags.GraphicsBit | QueueFlags.ComputeBit),
+                Is.True);
+            Assert.That(
+                VulkanContext.ShouldUseSecondaryGraphicsComputeQueue(
+                    1,
+                    QueueFlags.GraphicsBit | QueueFlags.ComputeBit),
+                Is.False);
+            Assert.That(
+                VulkanContext.ShouldUseSecondaryGraphicsComputeQueue(
+                    2,
+                    QueueFlags.GraphicsBit),
+                Is.False);
+        });
+    }
+
     [Test]
     public void Scheduler_DisabledModeProducesNoComputeSubmission()
     {
@@ -373,6 +397,84 @@ public sealed class AsyncComputePhase3Tests
     }
 
     [Test]
+    public void Scheduler_CoalescesAllGraphicsPassesAfterTheFirstComputeConsumer()
+    {
+        RenderGraphResourceBindings bindings = CreateBindings(
+            CreateBufferBinding(
+                RenderGraphResourceId.SceneSubmissionBuffers,
+                "shared-a",
+                1110,
+                0,
+                1024),
+            CreateBufferBinding(
+                RenderGraphResourceId.SimpleDdgiScheduler,
+                "shared-b",
+                1111,
+                0,
+                1024),
+            CreateBufferBinding(
+                RenderGraphResourceId.LightTiles,
+                "unrelated",
+                1112,
+                0,
+                1024));
+
+        AsyncComputeSubmissionPlan plan = Compile(
+            bindings,
+            new[]
+            {
+                GraphicsPass(
+                    "producer-a",
+                    RenderGraphResourceId.SceneSubmissionBuffers,
+                    RenderGraphResourceAccess.Write),
+                GraphicsPass(
+                    "producer-b",
+                    RenderGraphResourceId.SimpleDdgiScheduler,
+                    RenderGraphResourceAccess.Write),
+                ComputePass(
+                    "async-a",
+                    AsyncComputePath.AmbientOcclusionBlur,
+                    RenderGraphResourceId.SceneSubmissionBuffers,
+                    RenderGraphResourceAccess.ReadWrite),
+                ComputePass(
+                    "async-b",
+                    AsyncComputePath.AmbientOcclusionBlur,
+                    RenderGraphResourceId.SimpleDdgiScheduler,
+                    RenderGraphResourceAccess.ReadWrite),
+                GraphicsPass(
+                    "unrelated",
+                    RenderGraphResourceId.LightTiles,
+                    RenderGraphResourceAccess.ReadWrite),
+                GraphicsPass(
+                    "consumer-a",
+                    RenderGraphResourceId.SceneSubmissionBuffers,
+                    RenderGraphResourceAccess.Read),
+                GraphicsPass(
+                    "consumer-b",
+                    RenderGraphResourceId.SimpleDdgiScheduler,
+                    RenderGraphResourceAccess.Read)
+            },
+            Enabled(AsyncComputePath.AmbientOcclusionBlur));
+
+        AsyncComputeSubmissionSegment compute = plan.Segments.Single(
+            segment => segment.Queue == AsyncComputeQueue.Compute);
+        AsyncComputeSubmissionSegment consumerGraphics = plan.Segments.Single(
+            segment => segment.Passes.Contains("consumer-a"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Accepted, Is.True, plan.FailureReason);
+            Assert.That(plan.GraphicsSegmentCount, Is.EqualTo(3));
+            Assert.That(
+                consumerGraphics.Passes,
+                Is.EqualTo(new[] { "consumer-a", "consumer-b" }));
+            Assert.That(
+                consumerGraphics.TimelineWaits.Select(wait => wait.Value),
+                Does.Contain(compute.TimelineSignalValue!.Value));
+        });
+    }
+
+    [Test]
     public void Scheduler_UsesAnEmptyTerminalSubmissionForComputeOnlyResources()
     {
         RenderGraphResourceBindings bindings = CreateBindings(
@@ -647,11 +749,15 @@ public sealed class AsyncComputePhase3Tests
             Assert.That(sameFamilyPlan.Transfers, Is.Not.Empty);
             Assert.That(sameFamilyPlan.Transfers.All(transfer => !transfer.RequiresQueueFamilyOwnershipTransfer), Is.True);
             Assert.That(sameFamilyPlan.Transfers.All(transfer => !transfer.IsConcurrentResource), Is.True);
+            Assert.That(sameFamilyPlan.PlannedReleaseBarrierCount, Is.Zero);
+            Assert.That(sameFamilyPlan.PlannedAcquireBarrierCount, Is.Zero);
 
             Assert.That(concurrentPlan.Accepted, Is.True, concurrentPlan.FailureReason);
             Assert.That(concurrentPlan.Transfers, Is.Not.Empty);
             Assert.That(concurrentPlan.Transfers.All(transfer => !transfer.RequiresQueueFamilyOwnershipTransfer), Is.True);
             Assert.That(concurrentPlan.Transfers.All(transfer => transfer.IsConcurrentResource), Is.True);
+            Assert.That(concurrentPlan.PlannedReleaseBarrierCount, Is.Zero);
+            Assert.That(concurrentPlan.PlannedAcquireBarrierCount, Is.Zero);
         });
     }
 
@@ -903,9 +1009,13 @@ public sealed class AsyncComputePhase3Tests
             Assert.That(graphicsToCompute.ReleaseOldLayout, Is.EqualTo(ImageLayout.ColorAttachmentOptimal));
             Assert.That(graphicsToCompute.ReleaseNewLayout, Is.EqualTo(ImageLayout.ColorAttachmentOptimal));
             Assert.That(graphicsToCompute.AcquireNewLayout, Is.EqualTo(ImageLayout.General));
+            Assert.That(graphicsToCompute.RequiresReleaseBarrier, Is.False);
+            Assert.That(graphicsToCompute.RequiresAcquireBarrier, Is.True);
             Assert.That(computeToGraphics.OldLayout, Is.EqualTo(ImageLayout.ShaderReadOnlyOptimal));
             Assert.That(computeToGraphics.NewLayout, Is.EqualTo(ImageLayout.ShaderReadOnlyOptimal));
             Assert.That(computeToGraphics.ReleaseNewLayout, Is.EqualTo(ImageLayout.ShaderReadOnlyOptimal));
+            Assert.That(computeToGraphics.RequiresReleaseBarrier, Is.False);
+            Assert.That(computeToGraphics.RequiresAcquireBarrier, Is.False);
         });
     }
 

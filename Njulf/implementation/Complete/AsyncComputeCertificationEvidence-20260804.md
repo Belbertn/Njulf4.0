@@ -57,6 +57,38 @@ All artifacts are generated under the ignored `artifacts/` directory. SHA-256 va
 
 The benchmark harness now locks particle simulation to its authored 1/60 timestep only when `--benchmark` is active. This removed wall-clock particle trajectory noise from graphics/async image comparisons; interactive rendering remains wall-clock driven.
 
+## 2026-09-01 integration addendum
+
+The quality-locked integration completes the concrete resource plans for the
+atomic Simple-DDGI and far-field paths, including DDGI residency and light-tree
+buffers, and fixes first-consumer wait segmentation, completion-domain
+projection, and same-family barrier emission. The device selector now prefers a
+second compute-capable queue in the graphics family over a distinct family when
+both exist, avoiding thousands of exclusive-resource ownership pairs.
+
+On the RTX 3060 Laptop topology this selects graphics family 0 / compute family
+0. A forced same-family Standard-validation smoke completed with zero Vulkan
+warnings/errors and concrete compute scheduling, but did not establish useful
+overlap or a whole-frame benefit. The available graphics/forced captures also
+predate the final independent-pass reconciliation fix and are not comparable
+ABBA evidence. They must not be used for a keep claim.
+
+The older certificates in this document were recorded on graphics family 0 /
+dedicated compute family 2. Auto authorization is now explicitly scoped to that
+distinct-family topology as well as the source evidence revision. Consequently,
+the current same-family production run reports no eligible async path and stays
+on graphics; `ForceEnabledForValidation` remains available for new
+topology-specific evidence. Simple-DDGI and far-field resource-plan completion
+is retained as correctness/fallback infrastructure, but neither path is
+promoted as a performance win by this addendum.
+
 ## Required follow-up
 
-Run three or more identity-locked `ShippingPerformance` graphics/async pairs per correctness-certified path. Promote only if median GPU improvement is at least 3%, GPU P95 does not regress, material pass timings remain within comparer tolerance, CPU record/submit cost does not materially regress, and the first-consumer wait does not consume the predicted overlap. Re-run the pending paths only after their stated resource/graph blockers are fixed.
+Run three or more identity-locked `ShippingPerformance` graphics/async pairs per
+correctness-certified path and queue topology. Promote only if median GPU
+improvement is at least 3%, GPU P95 does not regress, material pass timings
+remain within comparer tolerance, CPU record/submit cost does not materially
+regress, and the first-consumer wait does not consume the predicted overlap.
+The Simple-DDGI and far-field graph/resource blockers are implemented; their
+remaining blocker is production quality/performance certification on the
+selected topology.

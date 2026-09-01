@@ -365,6 +365,7 @@ internal sealed class HelloGame : Game
     private SampleBistroQualityRuntimeController?
         _bistroQualityRuntimeController;
     private SampleBistroQualityCaptureRunner? _bistroQualityCaptureRunner;
+    private int _bistroQualityCaptureFrameOrigin = -1;
     private SampleMaterialGiCaptureRunner? _materialGiCaptureRunner;
     private SampleSponzaTemporalCaptureRunner?
         _sponzaTemporalCaptureRunner;
@@ -1587,8 +1588,20 @@ internal sealed class HelloGame : Game
         ApplyBenchmarkDynamicScenarioFrameControls();
         ApplyBenchmarkCameraScenarioFrameControls();
         ApplyBenchmarkNamedTrajectoryFrameControls();
-        if (_bistroQualityCaptureRunner != null)
-            _bistroQualityCaptureRunner.PrepareFrame(_drawnFrames);
+        if (_bistroQualityCaptureRunner != null &&
+            Renderer is VulkanRenderer bistroCaptureRenderer &&
+            SampleBistroQualityCaptureRunner.IsReadyForCapture(
+                bistroCaptureRenderer.StartupSnapshot.FullQualityPresented,
+                bistroCaptureRenderer.Settings.GlobalIllumination
+                    .SimpleDdgiReceiverCacheMode,
+                bistroCaptureRenderer.LastDiagnostics
+                    .SimpleDdgiReceiverCache))
+        {
+            if (_bistroQualityCaptureFrameOrigin < 0)
+                _bistroQualityCaptureFrameOrigin = _drawnFrames;
+            _bistroQualityCaptureRunner.PrepareFrame(
+                _drawnFrames - _bistroQualityCaptureFrameOrigin);
+        }
         else if (_benchmarkRunner != null &&
                  SampleBenchmarkTrajectory.RequiresBistro(
                      _smokeOptions.Benchmark.Trajectory) &&
@@ -2000,9 +2013,13 @@ internal sealed class HelloGame : Game
                 _drawnFrames,
                 benchmarkRenderer.LastDiagnostics);
             _textureHotReloadSmokeRunner?.OnFrameRendered(_drawnFrames);
-            _bistroQualityCaptureRunner?.OnFrameRendered(
-                _drawnFrames,
-                benchmarkRenderer.LastDiagnostics);
+            if (_bistroQualityCaptureRunner != null &&
+                _bistroQualityCaptureFrameOrigin >= 0)
+            {
+                _bistroQualityCaptureRunner.OnFrameRendered(
+                    _drawnFrames - _bistroQualityCaptureFrameOrigin,
+                    benchmarkRenderer.LastDiagnostics);
+            }
             _benchmarkRunner?.OnFrameRendered(
                 _drawnFrames,
                 benchmarkRenderer.LastDiagnostics,

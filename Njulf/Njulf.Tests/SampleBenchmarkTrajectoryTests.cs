@@ -163,16 +163,27 @@ public sealed class SampleBenchmarkTrajectoryTests
             SamplePerformanceScenario.Normal,
             () => { },
             () => "settings");
+        RendererDiagnostics initialized = RendererDiagnostics.Empty with
+        {
+            GpuTimingValid = 1,
+            CaptureRun = PerformanceCaptureRunMetadata.Unknown with
+            {
+                Commit =
+                    "0123456789abcdef0123456789abcdef01234567",
+                ShaderBundleHash =
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+        };
 
         int before = runner.ResolveTrajectoryFrameIndexForNextRender(959);
         runner.OnFrameRendered(
             959,
-            RendererDiagnostics.Empty,
+            initialized,
             RenderBudgetSnapshot.Empty);
         int started = runner.ResolveTrajectoryFrameIndexForNextRender(1_920);
         runner.OnFrameRendered(
             1_920,
-            RendererDiagnostics.Empty,
+            initialized,
             RenderBudgetSnapshot.Empty);
         int afterFirstSample =
             runner.ResolveTrajectoryFrameIndexForNextRender(2_880);

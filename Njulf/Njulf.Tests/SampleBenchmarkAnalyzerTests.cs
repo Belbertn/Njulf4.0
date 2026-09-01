@@ -192,6 +192,114 @@ public sealed class SampleBenchmarkAnalyzerTests
         }
     }
 
+    [Test]
+    public void ProductionTiming_WaitsForRequestedReceiverCachePublication()
+    {
+        string reportPath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"benchmark-deferred-receiver-bank-{Guid.NewGuid():N}.json");
+        const string settingsFingerprint =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        bool exited = false;
+        var options = new SampleBenchmarkOptions(
+            Enabled: true,
+            WarmupFrameCount: 0,
+            MeasureFrameCount: 1,
+            ReportPath: reportPath)
+        {
+            RequireProductionTiming = true,
+            CapturePairId = "deferred-receiver-bank-test",
+            MaximumAdditionalSettlingFrameCount = 29
+        };
+        RendererDiagnostics exactFallback = RendererDiagnostics.Empty with
+        {
+            GpuTimingSupported = 1,
+            GpuTimingValid = 1,
+            GpuFrameMicroseconds = 1_000,
+            CaptureRun = PerformanceCaptureRunMetadata.Unknown with
+            {
+                Commit = "0123456789abcdef0123456789abcdef01234567",
+                ShaderBundleHash =
+                    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            CaptureFrame = PerformanceCaptureFrameMetadata.Unknown with
+            {
+                WarmupState = DdgiRuntimeWarmupState.SteadyState,
+                TransportConvergencePending = false
+            },
+            CaptureGpuDeviceName = "Synthetic benchmark GPU",
+            CaptureGpuDriverVersion = "1.0-test",
+            SimpleDdgiReceiverCache = SimpleDdgiReceiverCacheDiagnostics.Exact(
+                SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                SimpleDdgiReceiverCacheFallbackReason.DispatchUnavailable,
+                "receiver bank is still compiling"),
+            ForwardGiExactGatherUsed = 1
+        };
+        RendererDiagnostics cacheActive = exactFallback with
+        {
+            SimpleDdgiReceiverCache = SimpleDdgiReceiverCacheDiagnostics.Active(
+                SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                SimpleDdgiReceiverCacheFallbackReason.None,
+                string.Empty,
+                radianceBytes: 1,
+                surfaceSidecarBytes: 1,
+                pipelineArtifact: "receiver-cache-temporal-adaptive"),
+            ForwardGiReceiverCacheGenerated = 1,
+            ForwardGiReceiverCacheConsumed = 1,
+            ForwardGiExactGatherUsed = 0
+        };
+
+        try
+        {
+            var runner = new SampleBenchmarkRunner(
+                options,
+                SamplePerformanceScenario.Normal,
+                () => exited = true,
+                () => settingsFingerprint);
+
+            for (int frame = 0; frame < 100; frame++)
+            {
+                runner.OnFrameRendered(
+                    frame,
+                    exactFallback,
+                    RenderBudgetSnapshot.Empty);
+            }
+
+            Assert.That(exited, Is.False);
+            for (int frame = 100; frame < 130; frame++)
+            {
+                runner.OnFrameRendered(
+                    frame,
+                    cacheActive,
+                    RenderBudgetSnapshot.Empty);
+            }
+
+            SampleBenchmarkReport report = runner.Report ??
+                throw new AssertionException(
+                    "The active receiver cache did not complete the benchmark.");
+            Assert.Multiple(() =>
+            {
+                Assert.That(exited, Is.True);
+                Assert.That(report.SettlingWaitTimedOut, Is.False);
+                Assert.That(
+                    report.AdditionalSettlingFrameCount,
+                    Is.EqualTo(29));
+                Assert.That(
+                    report.LastDiagnostics.ForwardGiReceiverCacheConsumed,
+                    Is.EqualTo(1));
+                Assert.That(
+                    report.LastDiagnostics.ForwardGiExactGatherUsed,
+                    Is.Zero);
+            });
+        }
+        finally
+        {
+            if (File.Exists(reportPath))
+                File.Delete(reportPath);
+        }
+    }
+
     [TestCase(SamplePerformanceScenario.GiMovingPointLight)]
     [TestCase(SamplePerformanceScenario.GiMovingRigidObject)]
     public void DynamicQualificationScenario_FreezesAfterBoundedBenchmarkDisturbance(
@@ -859,6 +967,68 @@ public sealed class SampleBenchmarkAnalyzerTests
                 Is.EqualTo(0.573));
             Assert.That(report.GpuIndependentPassSumMilliseconds.AverageMilliseconds,
                 Is.EqualTo(0.573));
+            Assert.That(report.GpuUnexplainedMilliseconds.AverageMilliseconds,
+                Is.Zero);
+            Assert.That(report.CaptureContract.Mismatches.Any(mismatch =>
+                mismatch.Contains("GPU pass sum differs", StringComparison.Ordinal)),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void CreateReport_ReconcilesIndependentShadowAndPlanarTimingsWithGpuFrame()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        analyzer.AddSample(RendererDiagnostics.Empty with
+        {
+            GpuTimingSupported = 1,
+            GpuTimingValid = 1,
+            GpuDirectionalRayShadowMicroseconds = 101,
+            GpuAreaRayShadowMicroseconds = 102,
+            GpuDirectionalShadowTemporalMicroseconds = 103,
+            GpuDirectionalShadowSpatialMicroseconds = 104,
+            GpuAutomaticPlanarCaptureMicroseconds = 105,
+            GpuFrameMicroseconds = 515
+        }, RenderBudgetSnapshot.Empty);
+
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            new SampleBenchmarkOptions(true, 0, 1, null),
+            SamplePerformanceScenario.Normal,
+            warmupFrameCount: 0,
+            measurementFrameCount: 1,
+            firstMeasurementFrameIndex: 0,
+            lastMeasurementFrameIndex: 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                report.GpuPasses.Single(pass =>
+                        pass.Name == "DirectionalRayShadowPass")
+                    .AverageMilliseconds,
+                Is.EqualTo(0.101));
+            Assert.That(
+                report.GpuPasses.Single(pass =>
+                        pass.Name == "AreaRayShadowPass")
+                    .AverageMilliseconds,
+                Is.EqualTo(0.102));
+            Assert.That(
+                report.GpuPasses.Single(pass =>
+                        pass.Name == "DirectionalShadowTemporalPass")
+                    .AverageMilliseconds,
+                Is.EqualTo(0.103));
+            Assert.That(
+                report.GpuPasses.Single(pass =>
+                        pass.Name == "DirectionalShadowSpatialPass")
+                    .AverageMilliseconds,
+                Is.EqualTo(0.104));
+            Assert.That(
+                report.GpuPasses.Single(pass =>
+                        pass.Name == "AutomaticPlanarReflectionPass")
+                    .AverageMilliseconds,
+                Is.EqualTo(0.105));
+            Assert.That(
+                report.GpuIndependentPassSumMilliseconds.AverageMilliseconds,
+                Is.EqualTo(0.515));
             Assert.That(report.GpuUnexplainedMilliseconds.AverageMilliseconds,
                 Is.Zero);
             Assert.That(report.CaptureContract.Mismatches.Any(mismatch =>

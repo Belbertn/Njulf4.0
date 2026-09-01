@@ -86,7 +86,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     .HybridOwnershipProjectionElision |
                 PerformanceOptimizationFeature
                     .ScreenLocalReceiverAdmission |
-                PerformanceOptimizationFeature.SplitHybridForwardPrograms |
                 PerformanceOptimizationFeature.StaticShaderSpecialization |
                 PerformanceOptimizationFeature.DirectionalLatticeLoadSharing |
                 PerformanceOptimizationFeature.DdgiPublicationGenerationReuse |
@@ -99,6 +98,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ArgumentNullException.ThrowIfNull(settings);
             return (uint)(settings.EffectivePerformanceOptimizationFeatures &
                 ForwardPerformanceSpecializationFeatures);
+        }
+
+        internal static (int FirstReceiverLane, int ReceiverLaneLimit)
+            ResolveHybridReflectionPerformancePipelineRange(
+                RenderSettings settings)
+        {
+            ArgumentNullException.ThrowIfNull(settings);
+            return settings.IsPerformanceOptimizationEnabled(
+                    PerformanceOptimizationFeature.SplitHybridForwardPrograms)
+                ? (HybridReflectionCacheAcceptedPipelineLane,
+                    HybridReflectionLaneCount)
+                : (HybridReflectionCacheCombinedPipelineLane,
+                    HybridReflectionCacheAcceptedPipelineLane);
         }
 
         internal static bool UsesForwardPerformanceSpecialization(
@@ -736,6 +748,27 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (!requestedMode.UsesCache())
                 return;
 
+            // A production hybrid receiver owns the complete opaque output
+            // contract. Its cache lanes are prepared immediately before this
+            // scene-specialization family, so the ordinary one-target cache
+            // program cannot be selected by the active scene. If hybrid
+            // preparation fails, command recording retains the already-ready
+            // exact hybrid program instead of compiling another native graph.
+            bool hybridReceiverOwnsProductionOutput =
+                HybridReflectionAttachmentEnabled &&
+                Settings.Reflections.Enabled &&
+                Settings.Reflections.Mode is
+                    (ReflectionMode.StaticProbesAndSsr or
+                     ReflectionMode.StaticProbesAndPlanar or
+                     ReflectionMode.HybridRayQuery) &&
+                Settings.GlobalIllumination.DebugView ==
+                    GlobalIlluminationDebugView.None &&
+                requestedMode !=
+                    SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark &&
+                !Settings.Diagnostics.DdgiForwardEstimateCountersEnabled;
+            if (hybridReceiverOwnsProductionOutput)
+                return;
+
             ForwardOpaquePipelineFamily family =
                 ResolveEffectiveForwardOpaquePipelineFamily(
                     ForwardOpaquePipelineFamily.Full);
@@ -1171,12 +1204,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         public bool AreHybridReflectionPerformancePipelinesReady(
             bool nearFieldDirectSourceEnabled,
-            bool giCausticReceiverEnabled) =>
-            AreHybridReflectionPipelineRangeReady(
+            bool giCausticReceiverEnabled)
+        {
+            var range = ResolveHybridReflectionPerformancePipelineRange(
+                Settings);
+            return AreHybridReflectionPipelineRangeReady(
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled,
-                HybridReflectionCacheCombinedPipelineLane,
-                ResolveRequiredHybridReflectionLaneCount());
+                range.FirstReceiverLane,
+                range.ReceiverLaneLimit);
+        }
 
         private bool AreHybridReflectionPipelineRangeReady(
             bool nearFieldDirectSourceEnabled,
@@ -1234,12 +1271,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         public bool TryPrepareHybridReflectionPerformancePipelines(
             bool nearFieldDirectSourceEnabled,
-            bool giCausticReceiverEnabled) =>
-            TryPrepareHybridReflectionPipelineRange(
+            bool giCausticReceiverEnabled)
+        {
+            var range = ResolveHybridReflectionPerformancePipelineRange(
+                Settings);
+            return TryPrepareHybridReflectionPipelineRange(
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled,
-                HybridReflectionCacheCombinedPipelineLane,
-                ResolveRequiredHybridReflectionLaneCount());
+                range.FirstReceiverLane,
+                range.ReceiverLaneLimit);
+        }
 
         private bool TryPrepareHybridReflectionPipelineRange(
             bool nearFieldDirectSourceEnabled,
@@ -1281,12 +1322,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             }
             return true;
         }
-
-        private int ResolveRequiredHybridReflectionLaneCount() =>
-            Settings.IsPerformanceOptimizationEnabled(
-                PerformanceOptimizationFeature.SplitHybridForwardPrograms)
-                ? HybridReflectionLaneCount
-                : HybridReflectionCacheAcceptedPipelineLane;
 
         private bool TryResolveBasePipelineFamily(
             VkPipeline pipeline,
@@ -3747,6 +3782,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             bool receiverCacheRequired = receiverLane !=
                 HybridReflectionExactLane;
+            bool receiverCacheExactFallbackOnly = receiverLane ==
+                HybridReflectionCacheFallbackPipelineLane;
+            bool receiverCacheCombined = receiverLane ==
+                HybridReflectionCacheCombinedPipelineLane;
             uint receiverCacheLane = receiverLane switch
             {
                 HybridReflectionCacheAcceptedPipelineLane =>
@@ -3770,6 +3809,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     giCaustic,
                     nearField,
                     receiverCacheRequired,
+                    receiverCacheExactFallbackOnly,
+                    receiverCacheCombined,
                     sparseLobePayload);
             string meshShader = simple && !simpleFullInput
                 ? compacted

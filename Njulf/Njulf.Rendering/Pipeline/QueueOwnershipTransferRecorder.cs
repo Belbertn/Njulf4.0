@@ -20,9 +20,9 @@ namespace Njulf.Rendering.Pipeline
     /// Emits the two sides of compiled cross-queue handoffs using synchronization2. Releases and
     /// acquires are deliberately recorded in different command buffers/submissions; recording both
     /// sides in a single command buffer is not a queue-family ownership transfer. For same-family
-    /// or concurrently shared images, the release is a memory-only dependency and the acquire
-    /// performs the layout transition. Repeating an ordinary image layout transition in both
-    /// submissions would make the acquire's old layout invalid.
+    /// or concurrently shared resources, the timeline semaphore supplies the cross-queue memory
+    /// dependency. Only an acquire-side image layout transition remains when the layouts differ;
+    /// buffers and layout-stable images require no per-allocation Vulkan barrier.
     /// </summary>
     public static class QueueOwnershipTransferRecorder
     {
@@ -80,6 +80,7 @@ namespace Njulf.Rendering.Pipeline
             var imageBarriers = new List<ImageMemoryBarrier2>();
             var bufferBarriers = new List<BufferMemoryBarrier2>();
             int ownershipCount = 0;
+            int barrierCount = 0;
             ulong bytes = 0;
             int subresources = 0;
             foreach (QueueOwnershipTransfer transfer in transfers)
@@ -96,10 +97,17 @@ namespace Njulf.Rendering.Pipeline
 
                 if (transfer.IsImage)
                 {
+                    subresources += transfer.TransferImageSubresources;
+                    bool requiresBarrier = release
+                        ? transfer.RequiresReleaseBarrier
+                        : transfer.RequiresAcquireBarrier;
+                    if (!requiresBarrier)
+                        continue;
+
                     // Queue-family ownership transfer barriers are a matched pair and therefore
                     // carry the same layout transition on both sides. With QueueFamilyIgnored,
-                    // however, these are ordinary barriers: keep the source layout on the release
-                    // and transition once on the destination acquire.
+                    // however, the semaphore owns visibility and only the destination layout
+                    // transition is recorded.
                     ImageLayout oldLayout = release ? transfer.ReleaseOldLayout : transfer.AcquireOldLayout;
                     ImageLayout newLayout = release ? transfer.ReleaseNewLayout : transfer.AcquireNewLayout;
                     imageBarriers.Add(new ImageMemoryBarrier2
@@ -116,10 +124,17 @@ namespace Njulf.Rendering.Pipeline
                         Image = transfer.Binding.Image,
                         SubresourceRange = transfer.Binding.SubresourceRange
                     });
-                    subresources += transfer.TransferImageSubresources;
+                    barrierCount++;
                 }
                 else
                 {
+                    bytes = checked(bytes + transfer.Binding.ByteSize);
+                    bool requiresBarrier = release
+                        ? transfer.RequiresReleaseBarrier
+                        : transfer.RequiresAcquireBarrier;
+                    if (!requiresBarrier)
+                        continue;
+
                     bufferBarriers.Add(BarrierBuilder.BufferBarrier(
                         transfer.Binding.Buffer,
                         release ? transfer.SourceStageMask : PipelineStageFlags2.None,
@@ -130,7 +145,7 @@ namespace Njulf.Rendering.Pipeline
                         transfer.Binding.ByteSize,
                         sourceFamily,
                         destinationFamily));
-                    bytes = checked(bytes + transfer.Binding.ByteSize);
+                    barrierCount++;
                 }
             }
 
@@ -148,8 +163,8 @@ namespace Njulf.Rendering.Pipeline
             }
 
             return release
-                ? new QueueOwnershipTransferBarrierCounts(transfers.Count, 0, ownershipCount, bytes, subresources)
-                : new QueueOwnershipTransferBarrierCounts(0, transfers.Count, ownershipCount, bytes, subresources);
+                ? new QueueOwnershipTransferBarrierCounts(barrierCount, 0, ownershipCount, bytes, subresources)
+                : new QueueOwnershipTransferBarrierCounts(0, barrierCount, ownershipCount, bytes, subresources);
         }
     }
 }

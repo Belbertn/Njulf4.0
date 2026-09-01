@@ -46,19 +46,19 @@ public sealed class GtaoImplementationTests
             (RenderQualityPreset.Medium, AmbientOcclusionMode.Gtao,
                 GtaoQualityPreset.Low,
                 AmbientOcclusionBentNormalMode.Off,
-                SimpleDdgiReceiverCacheMode.TemporalAdaptive, true),
+                SimpleDdgiReceiverCacheMode.Exact, true),
             (RenderQualityPreset.High, AmbientOcclusionMode.Gtao,
                 GtaoQualityPreset.Balanced,
                 AmbientOcclusionBentNormalMode.EnvironmentOnly,
-                SimpleDdgiReceiverCacheMode.TemporalAdaptive, true),
+                SimpleDdgiReceiverCacheMode.Exact, true),
             (RenderQualityPreset.DdgiHigh, AmbientOcclusionMode.Gtao,
                 GtaoQualityPreset.High,
                 AmbientOcclusionBentNormalMode.Off,
-                SimpleDdgiReceiverCacheMode.TemporalAdaptive, true),
+                SimpleDdgiReceiverCacheMode.Exact, true),
             (RenderQualityPreset.Ultra, AmbientOcclusionMode.Gtao,
                 GtaoQualityPreset.High,
                 AmbientOcclusionBentNormalMode.EnvironmentAndDdgi,
-                SimpleDdgiReceiverCacheMode.TemporalAdaptive, true)
+                SimpleDdgiReceiverCacheMode.Exact, true)
         };
 
         foreach (var entry in expected)

@@ -56,7 +56,8 @@ internal readonly record struct AsyncComputePlanningInput(
     string DriverVersion,
     bool FarFieldBakePending,
     int BloomMipCount,
-    string GraphicsOnlyConstraintReason = "");
+    string GraphicsOnlyConstraintReason = "",
+    IReadOnlyList<string>? GraphicsCompletionDomainPasses = null);
 
 internal readonly record struct AsyncComputeTimingCaptureInput(
     RenderSettings Settings,

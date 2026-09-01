@@ -6,16 +6,21 @@ at the same time in a rendered scene. Requested settings alone never pass.
 
 ## Active production profile
 
-Medium, High, DdgiHigh, and Ultra request the temporal-adaptive receiver cache,
-the two-sweep accelerated solver, C1 `ExtFourStateExperiment`, C3
-`PerProbeHistogramExperiment`, and C4 `WorldCacheExperiment`. Low retains the
-exact receiver gather and canonical solver with C1/C3/C4 disabled. Unsupported
-hardware, missing cooked C1 content, an ABI or allocation failure, or an empty
-C4 scene still falls back safely during normal rendering.
+Every production preset now requests the exact receiver gather. Native 1080p
+qualification found that the temporal-adaptive receiver path both cost more and
+changed stable pixels outside the accepted A/A envelope. The two-sweep
+accelerated solver, C1 `ExtFourStateExperiment`, C3
+`PerProbeHistogramExperiment`, and C4 `WorldCacheExperiment` retain their
+independent requested/effective contracts. Unsupported hardware, missing cooked
+C1 content, an ABI or allocation failure, or an empty C4 scene still falls back
+safely during normal rendering.
 
-The standalone qualifier pins DdgiHigh, GPU-resident scheduling, disabled async
-compute, the explicit modes above, two accelerated sweeps, and an uninterrupted
-Material Showcase, Sponza, or Bistro workload. It attaches the same real
+The standalone all-on qualifier deliberately opts back into
+`TemporalAdaptive`; proving simultaneous receiver-cache execution is its purpose
+and is not a production-default recommendation. It also pins DdgiHigh,
+GPU-resident scheduling, disabled async compute, the explicit modes above, two
+accelerated sweeps, and an uninterrupted Material Showcase, Sponza, or Bistro
+workload. It attaches the same real
 alpha-masked grass fixture to every supported scene and adds a validated C4
 caster/receiver hero where the scene has none. Material Showcase uses its
 authored receiver lattice without a redundant camera ring so it remains inside

@@ -91,6 +91,30 @@ namespace Njulf.Rendering
         internal static IReadOnlyList<string> ProductionRenderPassOrder =>
             ProductionRenderPipelineDeclaration.Instance.PassOrder;
 
+        // The exact B1 transaction may span ordered graphics submissions, but
+        // every pass that writes its private candidate buffer must remain on
+        // that one graphics queue. Alpha/foliage feedback is emitted inside
+        // ForwardPlus; reflection-capture and refinement completion are
+        // appended to the terminal graphics command buffer outside the graph.
+        private static readonly string[]
+            ExactReceiverFeedbackGraphicsProducerPasses =
+            [
+                "ForwardPlusPass",
+                "TransparentForwardPass",
+                "WeightedTransparentPass",
+                "ParticlePass"
+            ];
+
+        private static readonly string[]
+            ExactReceiverFeedbackGraphicsProducerPassesWithFog =
+            [
+                "ForwardPlusPass",
+                "TransparentForwardPass",
+                "WeightedTransparentPass",
+                "ParticlePass",
+                "FogPass"
+            ];
+
         private readonly IWindow _window;
         private readonly VulkanContext _context;
         private readonly RendererStartupLog? _startupLog;
@@ -4219,6 +4243,16 @@ namespace Njulf.Rendering
             return true;
         }
 
+        private bool AreReceiverCachePerformancePipelinesRequested()
+        {
+            SimpleDdgiReceiverCacheMode requestedMode =
+                SimpleDdgiReceiverCachePolicy.ResolveRequestedMode(
+                    Settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+                    Settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark,
+                    Settings.Diagnostics.ForceExactForwardGiGatherForBenchmark);
+            return requestedMode.UsesCache();
+        }
+
         private void PrepareHybridReflectionsForFullQuality()
         {
             HybridReflectionVulkanRuntime runtime =
@@ -4645,13 +4679,14 @@ namespace Njulf.Rendering
             bool fogRequired,
             bool hybridReflectionsRequired)
         {
-            if (hybridReflectionsRequired &&
-                _meshPipeline.HybridReflectionAttachmentEnabled)
-            {
+            bool hybridReceiverPerformanceRequired =
+                hybridReflectionsRequired &&
+                _meshPipeline.HybridReflectionAttachmentEnabled &&
+                AreReceiverCachePerformancePipelinesRequested();
+            bool hybridReady = !hybridReceiverPerformanceRequired ||
                 TryPreparePostFirstPresentFamily(
                     "Pipeline.Prepare.PostFirstPresentHybridReflectionSpecializations",
                     PrepareHybridReflectionReceiverPerformancePipelines);
-            }
 
             bool meshReady = TryPreparePostFirstPresentFamily(
                 "Pipeline.Prepare.PostFirstPresentSpecializations",
@@ -4711,7 +4746,7 @@ namespace Njulf.Rendering
                         .PrepareSimpleDdgiReceiverPipelineBank() == true);
 
             bool complete = receiverFeedbackRequired &&
-                meshReady && foliageReady && particleReady && fogReady &&
+                hybridReady && meshReady && foliageReady && particleReady && fogReady &&
                 runtimeReady && forwardReady &&
                 AreSceneReceiverFeedbackPipelinesReady(
                     pipelineManifest,
@@ -5870,6 +5905,12 @@ namespace Njulf.Rendering
 
             DeviceRequirementReport? asyncDevice =
                 _context.SelectedDeviceRequirementReport;
+            bool exactReceiverFeedbackReady =
+                _simpleDdgiReceiverFeedback?.IsOwnedCaptureReady == true;
+            bool exactFogFeedbackRequired =
+                Settings.Fog.Enabled &&
+                Settings.Fog.Mode != FogMode.Disabled &&
+                sceneData.AnimationDebugView == AnimationDebugView.None;
             var asyncPlanningInput = new AsyncComputePlanningInput(
                 Settings,
                 sceneData,
@@ -5890,9 +5931,14 @@ namespace Njulf.Rendering
                     : asyncDevice.DriverVersion,
                 _farFieldClipmapManager?.BakePending == true,
                 _renderTargets?.BloomMipCount ?? 0,
-                _simpleDdgiReceiverFeedback?.IsOwnedCaptureReady == true
+                exactReceiverFeedbackReady
                     ? "exact receiver-feedback capture requires one graphics queue completion domain"
-                    : string.Empty);
+                    : string.Empty,
+                exactReceiverFeedbackReady
+                    ? exactFogFeedbackRequired
+                        ? ExactReceiverFeedbackGraphicsProducerPassesWithFog
+                        : ExactReceiverFeedbackGraphicsProducerPasses
+                    : null);
             Njulf.Rendering.Pipeline.AsyncComputeFramePlan
                 frameAsyncComputePlan =
                     _asyncComputeCoordinator.PlanFrame(asyncPlanningInput);
@@ -8348,6 +8394,9 @@ namespace Njulf.Rendering
                     farField.PageTableBuffer);
 
             SimpleDdgiVolumeManager? simpleDdgi = _simpleDdgiVolumeManager;
+            SimpleDdgiLightTreeGraphResourceSnapshot simpleDdgiLightTree =
+                _simpleDdgiLightTreeResources?.CaptureGraphResources() ??
+                default;
             var simpleDdgiBuffers = simpleDdgi == null
                 ? default
                 : new SimpleDdgiAsyncBufferIdentity(
@@ -8364,6 +8413,11 @@ namespace Njulf.Rendering
                     simpleDdgi.ProbeUpdateQueueBuffer,
                     simpleDdgi.RelocationClassificationBuffer,
                     simpleDdgi.GpuSchedulerArenaBuffer,
+                    simpleDdgi.ProbeResidencyGraphBuffer,
+                    simpleDdgiLightTree.Node,
+                    simpleDdgiLightTree.Leaf,
+                    simpleDdgiLightTree.State,
+                    simpleDdgiLightTree.Scratch,
                     simpleDdgi.SampledAtlasAllocationGeneration);
             NearFieldResidualGraphResourceSnapshot nearFieldResources =
                 _nearFieldResidual.CaptureGraphResources();
@@ -8818,6 +8872,32 @@ namespace Njulf.Rendering
                 AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiScheduler,
                     "Simple DDGI GPU scheduler arena",
                     _simpleDdgiVolumeManager.GpuSchedulerArenaBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiResidency,
+                    "Simple DDGI residency arena",
+                    _simpleDdgiVolumeManager.ProbeResidencyGraphBuffer, queueFamilies, graphicsFamily);
+
+                SimpleDdgiLightTreeGraphResourceSnapshot lightTree =
+                    _simpleDdgiLightTreeResources?.CaptureGraphResources() ??
+                    default;
+                var uniqueLightTreeBuffers = new HashSet<BufferHandle>();
+                foreach ((string name, BufferHandle handle) in new[]
+                         {
+                             ("Simple DDGI light-tree nodes", lightTree.Node),
+                             ("Simple DDGI light-tree leaves", lightTree.Leaf),
+                             ("Simple DDGI light-tree state", lightTree.State),
+                             ("Simple DDGI light-tree scratch", lightTree.Scratch)
+                         })
+                {
+                    if (!handle.IsValid || !uniqueLightTreeBuffers.Add(handle))
+                        continue;
+                    AddAsyncComputeBufferBinding(
+                        bindings,
+                        RenderGraphResourceId.SimpleDdgiLightTree,
+                        name,
+                        handle,
+                        queueFamilies,
+                        graphicsFamily);
+                }
 
                 if (_simpleDdgiVolumeManager
                     .TryGetSampledAtlasGraphResourceSnapshot(
@@ -9378,6 +9458,11 @@ namespace Njulf.Rendering
             BufferHandle UpdateQueue,
             BufferHandle RelocationClassification,
             BufferHandle Scheduler,
+            BufferHandle Residency,
+            BufferHandle LightTreeNode,
+            BufferHandle LightTreeLeaf,
+            BufferHandle LightTreeState,
+            BufferHandle LightTreeScratch,
             ulong SampledAtlasAllocationGeneration);
 
         private readonly record struct NearFieldResidualAsyncBufferIdentity(

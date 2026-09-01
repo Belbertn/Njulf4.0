@@ -2147,6 +2147,13 @@ namespace Njulf.Rendering.Resources
         public Silk.NET.Vulkan.Buffer GetProbeUpdateQueueVkBuffer() =>
             _bufferManager.GetBuffer(_probeUpdateQueueBuffer);
         public BufferHandle RelocationClassificationBuffer => _relocationClassificationBuffer;
+        // The residency descriptor aliases the parameter buffer until sparse
+        // paging owns a concrete arena. Queue ownership must follow that exact
+        // physical allocation instead of the bindless descriptor index.
+        public BufferHandle ProbeResidencyGraphBuffer =>
+            _probePageCache.IsReady
+                ? _probePageCache.ArenaBuffer
+                : _paramsBuffer;
 
         public BufferHandle GetProbeStateReadbackBuffer(int frameIndex)
         {

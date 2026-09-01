@@ -234,13 +234,18 @@ public sealed class SampleBenchmarkRunner
         }
 
         // Progressive startup can present thousands of inexpensive bootstrap
-        // frames while production pipelines are prepared. Those are not
-        // convergence frames and must not consume the bounded settling window
-        // or contaminate benchmark observers. A real production diagnostic is
-        // identifiable by the authenticated build/shader identity populated
-        // during production-resource initialization.
+        // or exact-fallback frames while production pipelines are prepared.
+        // Those are not convergence frames and must not consume the bounded
+        // settling window or contaminate benchmark observers. A real
+        // production diagnostic is identifiable by the authenticated
+        // build/shader identity populated during production-resource
+        // initialization. Production-required captures additionally wait for
+        // the requested receiver-cache path to generate and consume a frame;
+        // otherwise a slow deferred bank can be mislabeled as optimized timing.
         if (_samplesCaptured == 0 &&
-            !HasInitializedProductionIdentity(diagnostics))
+            (!HasInitializedProductionIdentity(diagnostics) ||
+             _options.RequireProductionTiming &&
+             !HasEffectiveRequestedProductionPath(diagnostics)))
         {
             _lastPreMeasurementDiagnostics = diagnostics;
             return;
@@ -607,6 +612,22 @@ public sealed class SampleBenchmarkRunner
                 "0123456789abcdef") < 0;
     }
 
+    internal static bool HasEffectiveRequestedProductionPath(
+        RendererDiagnostics diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        SimpleDdgiReceiverCacheDiagnostics cache =
+            diagnostics.SimpleDdgiReceiverCache;
+        if (!cache.RequestedMode.UsesCache())
+            return true;
+
+        return cache.EffectiveMode == cache.RequestedMode &&
+            cache.FallbackReason == SimpleDdgiReceiverCacheFallbackReason.None &&
+            diagnostics.ForwardGiReceiverCacheGenerated != 0 &&
+            diagnostics.ForwardGiReceiverCacheConsumed != 0 &&
+            diagnostics.ForwardGiExactGatherUsed == 0;
+    }
+
     internal static bool IsReadyForMeasurement(
         RendererDiagnostics diagnostics,
         SampleBenchmarkTrajectoryKind trajectory)
@@ -911,6 +932,10 @@ public sealed class SampleBenchmarkAnalyzer
         new("DepthPrePass", d => d.GpuDepthPrePassMicroseconds),
         new("MotionVectorPass", d => d.GpuMotionVectorMicroseconds),
         new("DirectionalShadowPass", d => d.GpuDirectionalShadowMicroseconds),
+        new("DirectionalRayShadowPass", d => d.GpuDirectionalRayShadowMicroseconds),
+        new("AreaRayShadowPass", d => d.GpuAreaRayShadowMicroseconds),
+        new("DirectionalShadowTemporalPass", d => d.GpuDirectionalShadowTemporalMicroseconds),
+        new("DirectionalShadowSpatialPass", d => d.GpuDirectionalShadowSpatialMicroseconds),
         new("SpotShadowPass", d => d.GpuSpotShadowMicroseconds),
         new("PointShadowPass", d => d.GpuPointShadowMicroseconds),
         new("HiZBuildPass", d => d.GpuHiZBuildMicroseconds),
@@ -959,6 +984,7 @@ public sealed class SampleBenchmarkAnalyzer
         new("ReflectionProbeCapture", d => d.GpuReflectionProbeCaptureMicroseconds),
         new("ReflectionProbePrefilter", d => d.GpuReflectionProbePrefilterMicroseconds),
         new("ReflectionProbePublish", d => d.GpuReflectionProbePublishMicroseconds),
+        new("AutomaticPlanarReflectionPass", d => d.GpuAutomaticPlanarCaptureMicroseconds),
         new("HybridReflectionSsrPass", d => d.GpuHybridReflectionSsrMicroseconds),
         new("HybridReflectionRayQueryPass", d => d.GpuHybridReflectionRayQueryMicroseconds),
         new("HybridReflectionDdgiBasePass", d => d.GpuHybridReflectionDdgiBaseMicroseconds),

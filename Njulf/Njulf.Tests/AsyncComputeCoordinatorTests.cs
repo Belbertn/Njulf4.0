@@ -136,6 +136,70 @@ public sealed class AsyncComputeCoordinatorTests
     }
 
     [Test]
+    public void ExactReceiverDomainAllowsOrderedGraphicsSegmentsAroundCompute()
+    {
+        using RenderGraph graph = CreateHiZGraph(bindingHandle: 211);
+        var coordinator = new AsyncComputeCoordinator(graph, framesInFlight: 2);
+        (RenderSettings settings, SceneRenderingData sceneData) =
+            CreateForcedHiZFrame();
+        coordinator.BeginFrame(new AsyncComputeFrameBoundaryInput(1, 0));
+
+        AsyncComputeFramePlan plan = coordinator.PlanFrame(
+            CreateInput(
+                settings,
+                sceneData,
+                "exact receiver-feedback capture requires one graphics queue completion domain",
+                graphicsCompletionDomainPasses:
+                [
+                    "DepthPrePass",
+                    "ForwardVisibilityCompactionPass"
+                ]));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.SubmissionPlan.ContainsAsyncCompute, Is.True);
+            Assert.That(
+                plan.EffectiveMode,
+                Is.EqualTo(AsyncComputeMode.ForceEnabledForValidation));
+            Assert.That(
+                plan.SubmissionPlan.Segments
+                    .Where(segment => segment.Queue == AsyncComputeQueue.Graphics)
+                    .SelectMany(segment => segment.Passes),
+                Does.Contain("DepthPrePass"));
+            Assert.That(
+                plan.SubmissionPlan.Segments
+                    .Where(segment => segment.Queue == AsyncComputeQueue.Graphics)
+                    .SelectMany(segment => segment.Passes),
+                Does.Contain("ForwardVisibilityCompactionPass"));
+        });
+    }
+
+    [Test]
+    public void ExactReceiverDomainRejectsProducerScheduledOnCompute()
+    {
+        using RenderGraph graph = CreateHiZGraph(bindingHandle: 212);
+        var coordinator = new AsyncComputeCoordinator(graph, framesInFlight: 2);
+        (RenderSettings settings, SceneRenderingData sceneData) =
+            CreateForcedHiZFrame();
+        coordinator.BeginFrame(new AsyncComputeFrameBoundaryInput(1, 0));
+
+        AsyncComputeFramePlan plan = coordinator.PlanFrame(
+            CreateInput(
+                settings,
+                sceneData,
+                "exact receiver-feedback capture requires one graphics queue completion domain",
+                graphicsCompletionDomainPasses: ["HiZBuildPass"]));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.SubmissionPlan.ContainsAsyncCompute, Is.False);
+            Assert.That(plan.EffectiveMode, Is.EqualTo(AsyncComputeMode.Disabled));
+            Assert.That(plan.Status, Does.Contain("HiZBuildPass"));
+            Assert.That(plan.Status, Does.Contain("compute queue"));
+        });
+    }
+
+    [Test]
     public void StaleConcreteGenerationIsRecoverableAndCountedOnce()
     {
         using RenderGraph graph = CreateHiZGraph(bindingHandle: 301);
@@ -278,11 +342,172 @@ public sealed class AsyncComputeCoordinatorTests
         });
     }
 
+    [Test]
+    public void AutoRejectsCertificationFromDifferentQueueFamilyTopology()
+    {
+        using RenderGraph graph = CreateHiZGraph(bindingHandle: 511);
+        var coordinator = new AsyncComputeCoordinator(
+            graph,
+            framesInFlight: 2);
+        var settings = new RenderSettings();
+        settings.AsyncCompute.Mode = AsyncComputeMode.Auto;
+        var sceneData = new SceneRenderingData
+        {
+            ActiveFeatureIsolation = RenderFeatureIsolationMode.FullFrame,
+            HiZBuildEnabled = true
+        };
+
+        coordinator.BeginFrame(new AsyncComputeFrameBoundaryInput(1, 0));
+        AsyncComputeFramePlan plan = coordinator.PlanFrame(
+            CreateInput(
+                settings,
+                sceneData,
+                dedicatedQueueFamilyAvailable: false,
+                computeQueueFamily: 0));
+        AsyncComputePathRuntimeStatus status =
+            plan.SubmissionPlan.Paths.Single(candidate =>
+                candidate.Path == AsyncComputePath.HiZBuild);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.Requested, Is.True);
+            Assert.That(status.Status,
+                Is.EqualTo(AsyncComputePathStatus.Uncertified));
+            Assert.That(status.Reason,
+                Does.Contain("distinct dedicated compute queue family"));
+            Assert.That(plan.SubmissionPlan.ContainsAsyncCompute, Is.False);
+        });
+    }
+
+    [Test]
+    public void ForcedValidationAllowsSameFamilyCertificationRun()
+    {
+        using RenderGraph graph = CreateHiZGraph(bindingHandle: 512);
+        var coordinator = new AsyncComputeCoordinator(
+            graph,
+            framesInFlight: 2);
+        (RenderSettings settings, SceneRenderingData sceneData) =
+            CreateForcedHiZFrame();
+
+        coordinator.BeginFrame(new AsyncComputeFrameBoundaryInput(1, 0));
+        AsyncComputeFramePlan plan = coordinator.PlanFrame(
+            CreateInput(
+                settings,
+                sceneData,
+                dedicatedQueueFamilyAvailable: false,
+                computeQueueFamily: 0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.EffectiveMode,
+                Is.EqualTo(AsyncComputeMode.ForceEnabledForValidation));
+            Assert.That(plan.SubmissionPlan.ContainsAsyncCompute, Is.True,
+                plan.SubmissionPlan.FailureReason);
+            Assert.That(plan.SubmissionPlan.QueueFamilyOwnershipTransferCount,
+                Is.Zero);
+        });
+    }
+
+    [Test]
+    public void TimingEstimatorCountsOnlyGraphicsBeforeFirstConsumerWait()
+    {
+        var plan = new AsyncComputeSubmissionPlan(
+            Accepted: true,
+            FailureReason: string.Empty,
+            ResourcePlanGeneration: 1,
+            Segments:
+            [
+                CreateTimingSegment(
+                    id: 0,
+                    AsyncComputeQueue.Compute,
+                    ["ComputeWork"],
+                    signalValue: 1),
+                CreateTimingSegment(
+                    id: 1,
+                    AsyncComputeQueue.Graphics,
+                    ["IndependentGraphics"]),
+                CreateTimingSegment(
+                    id: 2,
+                    AsyncComputeQueue.Graphics,
+                    ["ComputeConsumer"],
+                    waitValue: 1)
+            ],
+            Transfers: Array.Empty<QueueOwnershipTransfer>(),
+            Paths: Array.Empty<AsyncComputePathRuntimeStatus>());
+        var timings = new FrameTimingSnapshot(
+        [
+            new PassTiming("ComputeWork", 0, 100, true),
+            new PassTiming("IndependentGraphics", 0, 40, true),
+            new PassTiming("ComputeConsumer", 0, 80, true)
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                AsyncComputeCoordinator.EstimateOverlapMicroseconds(
+                    plan,
+                    timings),
+                Is.EqualTo(40));
+            Assert.That(
+                AsyncComputeCoordinator.EstimateFirstConsumerWaitMicroseconds(
+                    plan,
+                    timings),
+                Is.EqualTo(60));
+        });
+    }
+
+    [Test]
+    public void TimingEstimatorDoesNotCountWaitingSegmentAsOverlap()
+    {
+        var plan = new AsyncComputeSubmissionPlan(
+            Accepted: true,
+            FailureReason: string.Empty,
+            ResourcePlanGeneration: 1,
+            Segments:
+            [
+                CreateTimingSegment(
+                    id: 0,
+                    AsyncComputeQueue.Compute,
+                    ["ComputeWork"],
+                    signalValue: 1),
+                CreateTimingSegment(
+                    id: 1,
+                    AsyncComputeQueue.Graphics,
+                    ["ComputeConsumer"],
+                    waitValue: 1)
+            ],
+            Transfers: Array.Empty<QueueOwnershipTransfer>(),
+            Paths: Array.Empty<AsyncComputePathRuntimeStatus>());
+        var timings = new FrameTimingSnapshot(
+        [
+            new PassTiming("ComputeWork", 0, 100, true),
+            new PassTiming("ComputeConsumer", 0, 80, true)
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                AsyncComputeCoordinator.EstimateOverlapMicroseconds(
+                    plan,
+                    timings),
+                Is.Zero);
+            Assert.That(
+                AsyncComputeCoordinator.EstimateFirstConsumerWaitMicroseconds(
+                    plan,
+                    timings),
+                Is.EqualTo(100));
+        });
+    }
+
     private static AsyncComputePlanningInput CreateInput(
         RenderSettings settings,
         SceneRenderingData sceneData,
         string constraint = "",
-        bool farFieldBakePending = false) =>
+        bool farFieldBakePending = false,
+        IReadOnlyList<string>? graphicsCompletionDomainPasses = null,
+        bool dedicatedQueueFamilyAvailable = true,
+        uint graphicsQueueFamily = 0,
+        uint computeQueueFamily = 1) =>
         new(
             settings,
             sceneData,
@@ -290,9 +515,9 @@ public sealed class AsyncComputeCoordinatorTests
             TimingFrameNumber: 1,
             IndependentQueueAvailable: true,
             TimelineSemaphoreAvailable: true,
-            DedicatedQueueFamilyAvailable: true,
-            GraphicsQueueFamily: 0,
-            ComputeQueueFamily: 1,
+            DedicatedQueueFamilyAvailable: dedicatedQueueFamilyAvailable,
+            GraphicsQueueFamily: graphicsQueueFamily,
+            ComputeQueueFamily: computeQueueFamily,
             QueueFlags.GraphicsBit | QueueFlags.ComputeBit |
                 QueueFlags.TransferBit,
             QueueFlags.ComputeBit | QueueFlags.TransferBit,
@@ -300,7 +525,32 @@ public sealed class AsyncComputeCoordinatorTests
             "test-driver",
             FarFieldBakePending: farFieldBakePending,
             BloomMipCount: 0,
-            constraint);
+            constraint,
+            graphicsCompletionDomainPasses);
+
+    private static AsyncComputeSubmissionSegment CreateTimingSegment(
+        int id,
+        AsyncComputeQueue queue,
+        IReadOnlyList<string> passes,
+        ulong? waitValue = null,
+        ulong? signalValue = null) =>
+        new(
+            id,
+            queue,
+            passes,
+            Array.Empty<QueueOwnershipTransfer>(),
+            Array.Empty<QueueOwnershipTransfer>(),
+            waitValue.HasValue
+                ?
+                [
+                    new AsyncComputeTimelineWait(
+                        waitValue.Value,
+                        PipelineStageFlags2.AllCommandsBit)
+                ]
+                : Array.Empty<AsyncComputeTimelineWait>(),
+            signalValue,
+            AccessesSwapchain: false,
+            IsTerminalGraphicsSegment: false);
 
     private static (RenderSettings Settings, SceneRenderingData SceneData)
         CreateForcedHiZFrame()

@@ -12,6 +12,12 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Resources;
 
+public readonly record struct SimpleDdgiLightTreeGraphResourceSnapshot(
+    BufferHandle Node,
+    BufferHandle Leaf,
+    BufferHandle State,
+    BufferHandle Scratch);
+
 public readonly record struct SimpleDdgiLightTreeRuntimeDiagnostics(
     SimpleDdgiLocalLightSamplingMode RequestedMode,
     SimpleDdgiLocalLightSamplingMode EffectiveMode,
@@ -193,6 +199,25 @@ public sealed class SimpleDdgiLightTreeGpuResources : IDisposable
     }
 
     public BufferHandle StateBuffer => _stateBuffer;
+
+    /// <summary>
+    /// Captures the exact allocations published through the four light-tree
+    /// descriptors. Before tree capacity exists every descriptor deliberately
+    /// aliases the canonical light buffer, so the render graph must track that
+    /// same allocation rather than an invalid optional handle.
+    /// </summary>
+    public SimpleDdgiLightTreeGraphResourceSnapshot CaptureGraphResources()
+    {
+        lock (_sync)
+        {
+            BufferHandle alias = _lightManager.LightBuffer;
+            return new SimpleDdgiLightTreeGraphResourceSnapshot(
+                ResolveGraphBuffer(_nodeBuffer, alias),
+                ResolveGraphBuffer(_leafBuffer, alias),
+                ResolveGraphBuffer(_stateBuffer, alias),
+                ResolveGraphBuffer(_scratchBuffer, alias));
+        }
+    }
 
     public bool StateNeedsInitialization
     {
@@ -716,6 +741,10 @@ public sealed class SimpleDdgiLightTreeGpuResources : IDisposable
             0,
             Math.Max(16UL, range));
     }
+
+    private static BufferHandle ResolveGraphBuffer(
+        BufferHandle preferred,
+        BufferHandle alias) => preferred.IsValid ? preferred : alias;
 
     private void Retire(BufferHandle handle, ulong bytes)
     {

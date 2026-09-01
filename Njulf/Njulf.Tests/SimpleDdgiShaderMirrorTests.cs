@@ -1102,10 +1102,14 @@ namespace Njulf.Tests
                     "ShouldUseHybridReflectionReceiverCacheSplit("));
                 Assert.That(pass, Does.Contain(
                     "receiverCacheFallbackPipeline"));
-                Assert.That(shaderProject, Does.Not.Contain(
+                Assert.That(shaderProject, Does.Contain(
                     "cache_exact_fallback_hybrid_reflection.frag"));
-                Assert.That(shaderProject, Does.Not.Contain(
+                Assert.That(shaderProject, Does.Contain(
                     "cache_combined_hybrid_reflection.frag"));
+                Assert.That(shaderProject, Does.Contain(
+                    "-DFORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY=1"));
+                Assert.That(shaderProject, Does.Contain(
+                    "-DFORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY=1"));
             });
         }
 

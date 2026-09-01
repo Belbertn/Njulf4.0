@@ -65,6 +65,20 @@ The equivalent environment variables are
 `asymmetric-sided-streams`, `compact-masked-feedback`,
 `sparse-hybrid-lobe`, and `async-gi`.
 
+The master switch requests the retained implementation stack; it does not
+override runtime qualification. The receiver cache defaults to exact gathering,
+and async `Auto` may keep every path on graphics when the current queue topology
+has no matching certificate or measured benefit.
+
+| Symptom | Smallest first rollback |
+| --- | --- |
+| Missing or unstable meshlets/LOD | `all,-meshlet-working-set,-resolved-meshlet-addressing` |
+| DDGI refinement churn or stale receiver publication | `all,-stable-ddgi-refinement,-generation-reuse` |
+| Opaque GI/cache shading difference | `all,-hybrid-projection-elision,-screen-local-receiver,-split-hybrid-forward,-row-major-gather,-shared-resolve-staging,-static-shader-specialization,-directional-lattice-sharing` |
+| Masked/curtain/foliage feedback issue | `all,-asymmetric-sided-streams,-compact-masked-feedback` |
+| Missing hybrid glossy-lobe payload | `all,-sparse-hybrid-lobe` |
+| Queue validation error, wait spike, or no overlap | `--async-compute-mode disabled` |
+
 `RenderSettings` defaults to `DdgiHigh`, the Simple-DDGI production profile. `Ultra` remains selectable as the highest Simple-DDGI quality tier.
 
 ## Dynamic Resolution
@@ -349,6 +363,7 @@ AO debug views:
 | `SimpleDdgiExactLocalLightThreshold` | Local-light count at or below which every local light is evaluated exactly. Directional lights do not consume this threshold or sample budget. |
 | `SimpleDdgiLightTreeUniformMixtureProbability` | Exact uniform-over-tree-leaves proposal mixed with the point-dependent contribution-bound proposal so every represented nonzero light retains support. Default `0.02`; clamped to `[0.001, 0.25]`. |
 | `SimpleDdgiLightTreeMaximumRefitAge` | Maximum consecutive refits before a deterministic inactive-bank rebuild is requested. Default `120`; clamped to `[1, 4096]`. |
+| `SimpleDdgiReceiverCacheMode` | `Exact` is the production default and evaluates the canonical gather per fragment. `TemporalAdaptive` and `LegacyDepthOnlyBenchmark` are explicit experiment/benchmark paths; their requested and effective modes, fallback reason, generation, and consumption are reported independently. |
 | `SimpleDdgiDirectionalRadianceMode` | Probe incident-radiance sidecar: `Off`, validation-only `L1Reference`, or canonical RGB L2 SH. Each representation has a distinct ABI and cannot reinterpret live data from another mode. |
 | `SimpleDdgiGlossyTransportMode` | `Off`, `ReceiverOnly`, bounded `OneBounce`, or opt-in `RecursiveCertified`. Ultra defaults to `OneBounce`; High defaults to `Off`. High, DDGI High, and Ultra evaluate opaque diffuse DDGI per fragment so the receiver keeps the true surface normal/material signal; the approximate screen-space cache remains a lower-tier accelerator and an explicit benchmark path. The directional/glossy modes remain explicit editor opt-ins on High. Recursive transport adds a four-byte F0/roughness sidecar per cached ray, includes glossy energy in the same coupled Jacobi operator and per-channel tail audit as diffuse transport, and falls back to `OneBounce` if its storage ABI or certification contract is unavailable. Schema versions before 12 migrate the former numeric recursive experiment to `OneBounce`. |
 | `SimpleDdgiDirectionalRadianceMemoryBudgetBytes` | Independent hard admission budget for the canonical 64-byte-per-probe L2 sidecar and any mode-required parity allocation. Allocation failure leaves diffuse DDGI active and disables the DDGI rough-specular source. |
@@ -831,12 +846,28 @@ Meshes without authored LOD1/LOD2 meshlet ranges safely remain on their availabl
 
 | Setting | Purpose |
 | --- | --- |
-| `Enabled` | Enables async compute. |
+| `Mode` | `Disabled`, profitability/certification-gated `Auto`, or `ForceEnabledForValidation`. The obsolete `Enabled` compatibility property maps `true` to forced validation, not production Auto. |
+| `PreferredPathMask` | Paths considered preferred after validation. New production settings request `SimpleDdgiUpdate | FarFieldClipmapBake`; preference never bypasses timing or topology certification. |
+| `ForceValidationPath` | Restricts forced-validation mode to one atomic path. |
 | `HiZBuildEnabled` | Allows Hi-Z build on async compute. |
 | `AmbientOcclusionBlurEnabled` | Allows AO blur on async compute. |
 | `FogEnabled` | Allows fog on async compute. |
 | `BloomEnabled` | Allows bloom on async compute. |
+| `SimpleDdgiUpdateEnabled` | Allows the complete atomic DDGI schedule/guiding/trace/transport/publication/commit chain to be considered. |
+| `FarFieldClipmapBakeEnabled` | Allows the complete far-field bake transaction to be considered. |
 | `GpuParticlesEnabled` | Allows GPU particles on async compute. |
+| `AutoMinimumSampleCount`, `AutoWarmupFrameCount` | Minimum isolated timing evidence before Auto can decide. Defaults are 30 samples and 60 warm-up frames. |
+| `AutoMinimumAbsoluteBenefitMilliseconds`, `AutoMinimumRelativeBenefit` | Required whole-frame benefit. Defaults are 0.25 ms and 3%. |
+| `AutoDecisionCooldownFrames` | Minimum decision hold time; default 180 frames. |
+
+Njulf prefers an independent compute-capable queue in the graphics family when
+available, because the renderer owns thousands of exclusive ray-scene
+allocations and same-family submission avoids per-allocation ownership pairs.
+The current Auto certificates are topology-specific to a distinct dedicated
+compute family, so Auto fails closed on this same-family RTX 3060 topology and
+reports the demotion. Forced validation remains available. Same-family timeline
+semaphores provide memory ordering; only a required image layout transition
+emits an acquire-side barrier.
 
 ## Diagnostics
 

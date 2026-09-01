@@ -461,6 +461,7 @@ namespace Njulf.Rendering.Core
             uint transferFamily = uint.MaxValue;
             uint computeFamily = uint.MaxValue;
             bool computeUsesSecondaryGraphicsQueue = false;
+            bool selectedDedicatedComputeQueueAvailable = false;
             bool memoryBudgetExtensionEnabled = false;
             bool imageCompressionControlEnabled = false;
             bool rayQuerySupported = false;
@@ -566,9 +567,14 @@ namespace Njulf.Rendering.Core
                 bool candidateHasDedicatedTransferQueue = transferIndex != graphicsIndex;
                 bool selectedHasDedicatedTransferQueue = transferFamily != graphicsFamily;
                 bool candidateHasDedicatedComputeQueue = computeIndex != graphicsIndex;
-                bool selectedHasDedicatedComputeQueue = computeFamily != graphicsFamily;
+                bool selectedHasDedicatedComputeQueue =
+                    selectedDedicatedComputeQueueAvailable;
+                bool candidateUsesSecondaryGraphicsQueue =
+                    ShouldUseSecondaryGraphicsComputeQueue(
+                        queueFamilies[graphicsIndex].QueueCount,
+                        queueFamilies[graphicsIndex].QueueFlags);
                 bool candidateHasIndependentComputeQueue = candidateHasDedicatedComputeQueue ||
-                    queueFamilies[graphicsIndex].QueueCount > 1;
+                    candidateUsesSecondaryGraphicsQueue;
                 bool selectedHasIndependentComputeQueue = selectedHasDedicatedComputeQueue ||
                     computeUsesSecondaryGraphicsQueue;
                 bool candidateSupportsSampledAtlasPublication =
@@ -599,9 +605,20 @@ namespace Njulf.Rendering.Core
                     selectedDevice = device;
                     graphicsFamily = graphicsIndex;
                     transferFamily = transferIndex;
-                    computeFamily = computeIndex;
-                    computeUsesSecondaryGraphicsQueue = !candidateHasDedicatedComputeQueue &&
-                        queueFamilies[graphicsIndex].QueueCount > 1;
+                    // Renderer resources are predominantly exclusive and a
+                    // ray-query frame can reference thousands of BLAS backing
+                    // allocations. A second queue in the graphics+compute
+                    // family preserves independent submission/overlap while
+                    // avoiding a queue-family ownership pair for every one of
+                    // those allocations. Use a dedicated compute family only
+                    // when no same-family independent queue exists.
+                    computeUsesSecondaryGraphicsQueue =
+                        candidateUsesSecondaryGraphicsQueue;
+                    computeFamily = computeUsesSecondaryGraphicsQueue
+                        ? graphicsIndex
+                        : computeIndex;
+                    selectedDedicatedComputeQueueAvailable =
+                        candidateHasDedicatedComputeQueue;
                     memoryBudgetExtensionEnabled = requirements.MemoryBudgetExtensionAvailable;
                     imageCompressionControlEnabled = requirements.ImageCompressionControlAvailable;
                     rayQuerySupported = requirements.RayQuerySupported;
@@ -677,6 +694,12 @@ namespace Njulf.Rendering.Core
 
             System.Diagnostics.Debug.WriteLine("Physical device selected with mesh shader support.");
         }
+
+        internal static bool ShouldUseSecondaryGraphicsComputeQueue(
+            uint graphicsQueueCount,
+            QueueFlags graphicsQueueFlags) =>
+            graphicsQueueCount > 1 &&
+            (graphicsQueueFlags & QueueFlags.ComputeBit) != 0;
 
         private bool TryGetDeviceRequirements(PhysicalDevice device, out DeviceRequirements requirements)
         {

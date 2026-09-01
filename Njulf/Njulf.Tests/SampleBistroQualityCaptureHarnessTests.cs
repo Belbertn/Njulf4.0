@@ -13,6 +13,64 @@ namespace Njulf.Tests;
 public sealed class SampleBistroQualityCaptureHarnessTests
 {
     [Test]
+    public void CaptureReadinessRejectsBootstrapAndRequestedCacheFallback()
+    {
+        SimpleDdgiReceiverCacheDiagnostics active =
+            SimpleDdgiReceiverCacheDiagnostics.Active(
+                SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                SimpleDdgiReceiverCacheFallbackReason.None,
+                "active",
+                1,
+                1,
+                "adaptive");
+        SimpleDdgiReceiverCacheDiagnostics fallback =
+            SimpleDdgiReceiverCacheDiagnostics.Exact(
+                SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                SimpleDdgiReceiverCacheFallbackReason.PipelineUnavailable,
+                "pipeline unavailable");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleBistroQualityCaptureRunner.IsReadyForCapture(
+                    fullQualityPresented: false,
+                    SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                    active),
+                Is.False);
+            Assert.That(
+                SampleBistroQualityCaptureRunner.IsReadyForCapture(
+                    fullQualityPresented: true,
+                    SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                    fallback),
+                Is.False);
+            Assert.That(
+                SampleBistroQualityCaptureRunner.IsReadyForCapture(
+                    fullQualityPresented: true,
+                    SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                    active),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void CaptureReadinessAcceptsFullQualityExactOracle()
+    {
+        SimpleDdgiReceiverCacheDiagnostics exact =
+            SimpleDdgiReceiverCacheDiagnostics.Exact(
+                SimpleDdgiReceiverCacheMode.Exact,
+                SimpleDdgiReceiverCacheFallbackReason.ExactRequested,
+                "exact requested");
+
+        Assert.That(
+            SampleBistroQualityCaptureRunner.IsReadyForCapture(
+                fullQualityPresented: true,
+                SimpleDdgiReceiverCacheMode.Exact,
+                exact),
+            Is.True);
+    }
+
+    [Test]
     public void MotionPath_IsDeterministicContinuousAndCrossesProbeCells()
     {
         var first = new SampleBistroQualityCaptureContract(

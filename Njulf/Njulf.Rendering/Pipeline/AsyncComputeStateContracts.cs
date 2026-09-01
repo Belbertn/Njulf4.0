@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Njulf.Rendering.Data;
 using Silk.NET.Vulkan;
 
@@ -26,13 +27,17 @@ public enum AsyncComputeProjectionFailure : byte
 /// <summary>
 /// Two-phase projection of concrete queue/layout state.  Mutable state is changed while a plan is
 /// being compiled; committed state is copied only after command recording and validation succeed.
-/// The arrays are fixed for the renderer lifetime, so a rejected plan cannot partially mutate the
-/// next frame and a stable plan hit performs no dictionary or closure allocation.
+/// The arrays grow only at immutable resource-plan generation boundaries, so a rejected plan
+/// cannot partially mutate the next frame and a stable plan performs no allocation.
 /// </summary>
 public sealed class AsyncComputeResourceStateProjection
 {
-    private readonly AsyncComputeProjectedResourceState[] _committed;
-    private readonly AsyncComputeProjectedResourceState[] _mutable;
+    private const int MaximumCapacity = 131_072;
+
+    private AsyncComputeProjectedResourceState[] _committed;
+    private AsyncComputeProjectedResourceState[] _mutable;
+    private readonly Dictionary<RenderGraphAllocationIdentity, int>
+        _mutableIndices;
     private int _count;
     private int _committedCount;
     private ulong _committedPlanGeneration;
@@ -42,8 +47,12 @@ public sealed class AsyncComputeResourceStateProjection
     {
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));
+        if (capacity > MaximumCapacity)
+            throw new ArgumentOutOfRangeException(nameof(capacity));
         _committed = new AsyncComputeProjectedResourceState[capacity];
         _mutable = new AsyncComputeProjectedResourceState[capacity];
+        _mutableIndices = new Dictionary<RenderGraphAllocationIdentity, int>(
+            capacity);
     }
 
     public int Capacity => _committed.Length;
@@ -55,17 +64,20 @@ public sealed class AsyncComputeResourceStateProjection
     {
         if (plan == null)
             throw new ArgumentNullException(nameof(plan));
-        if (plan.BindingCount > Capacity)
+        // Resource plans are immutable and only change when allocation
+        // generations change. Grow once at that boundary; stable frames reuse
+        // both arrays and the open dictionary storage without allocation.
+        if (!EnsureCapacity(plan.BindingCount))
             return false;
 
         _count = 0;
         _mutablePlanGeneration = plan.Generation;
+        _mutableIndices.Clear();
         for (int index = 0; index < plan.Bindings.Count; index++)
         {
             RenderGraphConcreteResourceBinding binding = plan.Bindings[index];
             RenderGraphAllocationIdentity identity = binding.AllocationIdentity;
-            int existing = Find(identity);
-            if (existing >= 0)
+            if (!_mutableIndices.TryAdd(identity, _count))
             {
                 // Exact aliases intentionally share physical state. The immutable plan already
                 // checked their compatibility, so one state entry is sufficient.
@@ -83,7 +95,7 @@ public sealed class AsyncComputeResourceStateProjection
                 ? binding.Layout
                 : ImageLayout.Undefined;
             uint owner = binding.InitialOwnerQueueFamily ?? 0U;
-            _mutable[_count++] = new AsyncComputeProjectedResourceState(
+            _mutable[_count] = new AsyncComputeProjectedResourceState(
                 identity,
                 AsyncComputeQueue.Graphics,
                 owner,
@@ -91,6 +103,7 @@ public sealed class AsyncComputeResourceStateProjection
                 binding.InitialStageMask,
                 binding.InitialAccessMask,
                 plan.Generation);
+            _count++;
         }
 
         return true;
@@ -129,7 +142,9 @@ public sealed class AsyncComputeResourceStateProjection
     {
         AsyncComputeProjectedResourceState[] source = committed ? _committed : _mutable;
         int count = committed ? _committedCount : _count;
-        int index = Find(identity, source, count);
+        int index = committed
+            ? Find(identity, source, count)
+            : Find(identity);
         if (index < 0)
         {
             state = default;
@@ -199,10 +214,48 @@ public sealed class AsyncComputeResourceStateProjection
             Array.Clear(_mutable, _committedCount, _count - _committedCount);
         _count = _committedCount;
         _mutablePlanGeneration = _committedPlanGeneration;
+        RebuildMutableIndices();
     }
 
     private int Find(in RenderGraphAllocationIdentity identity) =>
-        Find(identity, _mutable, _count);
+        _mutableIndices.TryGetValue(identity, out int index) ? index : -1;
+
+    private bool EnsureCapacity(int required)
+    {
+        if (required <= Capacity)
+            return true;
+        if (required > MaximumCapacity)
+            return false;
+
+        int capacity = Capacity;
+        while (capacity < required)
+        {
+            int next = capacity <= MaximumCapacity / 2
+                ? capacity * 2
+                : MaximumCapacity;
+            if (next == capacity)
+                return false;
+            capacity = next;
+        }
+
+        var committed =
+            new AsyncComputeProjectedResourceState[capacity];
+        var mutable =
+            new AsyncComputeProjectedResourceState[capacity];
+        Array.Copy(_committed, committed, _committedCount);
+        Array.Copy(_mutable, mutable, _count);
+        _committed = committed;
+        _mutable = mutable;
+        _mutableIndices.EnsureCapacity(capacity);
+        return true;
+    }
+
+    private void RebuildMutableIndices()
+    {
+        _mutableIndices.Clear();
+        for (int index = 0; index < _count; index++)
+            _mutableIndices.Add(_mutable[index].Allocation, index);
+    }
 
     private static int Find(
         in RenderGraphAllocationIdentity identity,

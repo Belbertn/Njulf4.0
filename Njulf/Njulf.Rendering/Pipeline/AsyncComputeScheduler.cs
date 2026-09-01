@@ -85,8 +85,9 @@ namespace Njulf.Rendering.Pipeline
         uint DestinationQueueFamily);
 
     /// <summary>
-    /// One concrete cross-queue resource handoff.  The same object produces exactly one release
-    /// and one acquire barrier; pairing them by Id is part of plan validation.
+    /// One concrete cross-queue resource handoff. Distinct-family exclusive resources produce a
+    /// matched release/acquire pair. Same-family and concurrent resources use the semaphore's
+    /// memory dependency and emit only an acquire-side image layout transition when required.
     /// </summary>
     public sealed record QueueOwnershipTransfer(
         int Id,
@@ -118,6 +119,11 @@ namespace Njulf.Rendering.Pipeline
             ConstituentBindings.Count == 0 ? new[] { Binding } : ConstituentBindings;
 
         public bool IsImage => Binding.Kind == RenderGraphConcreteResourceKind.Image;
+        public bool RequiresReleaseBarrier =>
+            RequiresQueueFamilyOwnershipTransfer;
+        public bool RequiresAcquireBarrier =>
+            RequiresQueueFamilyOwnershipTransfer ||
+            IsImage && AcquireOldLayout != AcquireNewLayout;
         public ulong TransferBytes => IsImage ? 0UL : Binding.ByteSize;
         public int TransferImageSubresources => IsImage ? CountImageSubresources(Binding.SubresourceRange) : 0;
 
@@ -176,8 +182,10 @@ namespace Njulf.Rendering.Pipeline
 
         public int GraphicsSegmentCount => Segments.Count(segment => segment.Queue == AsyncComputeQueue.Graphics);
         public int ComputeSegmentCount => Segments.Count(segment => segment.Queue == AsyncComputeQueue.Compute);
-        public int PlannedReleaseBarrierCount => Transfers.Count;
-        public int PlannedAcquireBarrierCount => Transfers.Count;
+        public int PlannedReleaseBarrierCount => Transfers.Count(transfer =>
+            transfer.RequiresReleaseBarrier);
+        public int PlannedAcquireBarrierCount => Transfers.Count(transfer =>
+            transfer.RequiresAcquireBarrier);
         public int QueueFamilyOwnershipTransferCount => Transfers.Count(transfer => transfer.RequiresQueueFamilyOwnershipTransfer);
         public ulong TransferBytes => Transfers.Aggregate(0UL, (total, transfer) => checked(total + transfer.TransferBytes));
         public int TransferImageSubresources => Transfers.Sum(transfer => transfer.TransferImageSubresources);
@@ -265,7 +273,9 @@ namespace Njulf.Rendering.Pipeline
                 else if (input.Mode == AsyncComputeMode.Auto && !eligibility.CorrectnessCertified)
                 {
                     status = AsyncComputePathStatus.Uncertified;
-                    reason = "Auto cannot submit this path until its correctness evidence is source-certified.";
+                    reason = string.IsNullOrWhiteSpace(eligibility.Reason)
+                        ? "Auto cannot submit this path until its correctness evidence is source-certified."
+                        : eligibility.Reason;
                 }
                 else if (input.Mode == AsyncComputeMode.ForceEnabledForValidation && !eligibility.ForceValidationAuthorized)
                 {
@@ -559,35 +569,50 @@ namespace Njulf.Rendering.Pipeline
             // a graphics run at that first consumer, rather than attaching the timeline wait to
             // unrelated graphics work at the beginning of the run.
             var computeOwnedResources = new HashSet<RenderGraphResourceId>();
+            bool currentGraphicsRunWaitsForCompute = false;
 
             foreach (AsyncComputePassRequest pass in passes)
             {
                 bool onCompute = pass.Path.HasValue && activePaths.Contains(pass.Path.Value);
                 AsyncComputeQueue desiredQueue = onCompute ? AsyncComputeQueue.Compute : AsyncComputeQueue.Graphics;
+                bool consumesComputeOwnedResource =
+                    desiredQueue == AsyncComputeQueue.Graphics &&
+                    pass.ResourceUsages.Any(usage =>
+                        computeOwnedResources.Contains(usage.Resource));
                 if (current.Queue != desiredQueue)
                 {
                     current = new MutableSegment(segments.Count, desiredQueue);
                     segments.Add(current);
+                    currentGraphicsRunWaitsForCompute =
+                        desiredQueue == AsyncComputeQueue.Graphics &&
+                        consumesComputeOwnedResource;
                 }
                 else if (desiredQueue == AsyncComputeQueue.Graphics &&
                          current.Passes.Count > 0 &&
-                         pass.ResourceUsages.Any(usage => computeOwnedResources.Contains(usage.Resource)))
+                         !currentGraphicsRunWaitsForCompute &&
+                         consumesComputeOwnedResource)
                 {
                     // Keep the already-recorded unrelated graphics work free of the compute
                     // wait. BuildTransfers will attach the acquire and timeline edge to this new
-                    // segment because it contains the first concrete consumer.
+                    // segment because it contains the first concrete consumer. Every later pass
+                    // on the same graphics queue is ordered after that wait, so it must remain in
+                    // this segment even when it consumes another compute-owned allocation.
                     current = new MutableSegment(segments.Count, AsyncComputeQueue.Graphics);
                     segments.Add(current);
+                    currentGraphicsRunWaitsForCompute = true;
                 }
 
                 current.Passes.Add(pass);
                 if (desiredQueue == AsyncComputeQueue.Compute)
                 {
+                    currentGraphicsRunWaitsForCompute = false;
                     foreach (RenderGraphResourceUsage usage in pass.ResourceUsages)
                         computeOwnedResources.Add(usage.Resource);
                 }
                 else
                 {
+                    currentGraphicsRunWaitsForCompute |=
+                        consumesComputeOwnedResource;
                     foreach (RenderGraphResourceUsage usage in pass.ResourceUsages)
                         computeOwnedResources.Remove(usage.Resource);
                 }

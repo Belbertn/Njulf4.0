@@ -123,24 +123,52 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_ddgi_near_field_direct_source_cache_required.frag.spv' = 23
     'forward_opaque_simple_ddgi_near_field_direct_source_cache_required.frag.spv' = 23
     'forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag.spv' = 23
-    'forward_opaque_ddgi_cache_required_hybrid_reflection.frag.spv' = 23
-    'forward_opaque_simple_ddgi_cache_required_hybrid_reflection.frag.spv' = 23
-    'forward_opaque_simple_full_input_ddgi_cache_required_hybrid_reflection.frag.spv' = 23
+    # Hybrid DdgiHigh is split into complementary native programs. Accepted
+    # modules contain only admission/cache shading and therefore no functional
+    # receiver atomics. Exact-fallback modules preserve the canonical 14, while
+    # combined rollback modules preserve the prior 23-operation graph.
+    'forward_opaque_ddgi_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_simple_ddgi_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_simple_full_input_ddgi_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_ddgi_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_cache_combined_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_cache_combined_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_ddgi_c4_receiver_cache_required.frag.spv' = 23
     'forward_opaque_simple_ddgi_c4_receiver_cache_required.frag.spv' = 23
     'forward_opaque_simple_full_input_ddgi_c4_receiver_cache_required.frag.spv' = 23
     'forward_opaque_ddgi_c4_c5_cache_required.frag.spv' = 23
     'forward_opaque_simple_ddgi_c4_c5_cache_required.frag.spv' = 23
     'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required.frag.spv' = 23
-    'forward_opaque_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 23
-    'forward_opaque_simple_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 23
-    'forward_opaque_simple_full_input_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 23
-    'forward_opaque_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 23
-    'forward_opaque_simple_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 23
-    'forward_opaque_simple_full_input_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 23
-    'forward_opaque_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 23
-    'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 23
-    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_simple_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_simple_full_input_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_ddgi_c4_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_c4_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_c4_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c4_cache_combined_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c4_cache_combined_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c4_cache_combined_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_simple_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_simple_full_input_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_ddgi_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c5_cache_combined_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c5_cache_combined_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c5_cache_combined_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 0
+    'forward_opaque_ddgi_c4_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_c4_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c4_c5_cache_combined_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c4_c5_cache_combined_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_combined_hybrid_reflection.frag.spv' = 23
     # Legacy cache variants do not compile the canonical rejection gather, but
     # still carry the same seven exact B1 ownership operations.
     'forward_opaque_ddgi_cache_legacy.frag.spv' = 7

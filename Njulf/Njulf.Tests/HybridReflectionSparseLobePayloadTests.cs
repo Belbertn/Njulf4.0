@@ -112,6 +112,51 @@ public sealed class HybridReflectionSparseLobePayloadTests
                     "forward_opaque_simple_full_input_ddgi_c4_c5_" +
                     "cache_required_hybrid_reflection_sparse_lobe.frag.spv"));
             Assert.That(
+                ForwardHybridReflectionReceiverContract
+                    .ResolveFragmentShader(
+                        simple: true,
+                        simpleFullInput: false,
+                        giCaustic: false,
+                        nearField: true,
+                        receiverCacheRequired: true,
+                        receiverCacheExactFallbackOnly: true),
+                Is.EqualTo(
+                    "forward_opaque_simple_ddgi_c5_" +
+                    "cache_exact_fallback_hybrid_reflection.frag.spv"));
+            Assert.That(
+                ForwardHybridReflectionReceiverContract
+                    .ResolveFragmentShader(
+                        simple: false,
+                        simpleFullInput: false,
+                        giCaustic: true,
+                        nearField: false,
+                        receiverCacheRequired: true,
+                        receiverCacheCombined: true,
+                        sparseLobePayload: true),
+                Is.EqualTo(
+                    "forward_opaque_ddgi_c4_" +
+                    "cache_combined_hybrid_reflection_sparse_lobe.frag.spv"));
+            Assert.That(
+                () => ForwardHybridReflectionReceiverContract
+                    .ResolveFragmentShader(
+                        simple: false,
+                        simpleFullInput: false,
+                        giCaustic: false,
+                        nearField: false,
+                        receiverCacheExactFallbackOnly: true),
+                Throws.TypeOf<ArgumentException>());
+            Assert.That(
+                () => ForwardHybridReflectionReceiverContract
+                    .ResolveFragmentShader(
+                        simple: false,
+                        simpleFullInput: false,
+                        giCaustic: false,
+                        nearField: false,
+                        receiverCacheRequired: true,
+                        receiverCacheExactFallbackOnly: true,
+                        receiverCacheCombined: true),
+                Throws.TypeOf<ArgumentException>());
+            Assert.That(
                 BindlessIndex.HybridReflectionSparseLobeBufferFrame1,
                 Is.EqualTo(
                     BindlessIndex.HybridReflectionSparseLobeBufferBase + 1));

@@ -25,6 +25,10 @@ rendering continues on the canonical exact DDGI and production color pipelines
 until the complete immutable bank is published atomically. A failed or partial
 bank is never visible and permanently retains the exact path for that renderer
 generation.
+Hybrid-reflection receiver specializations follow the same rule. The first
+production frame uses the already-ready exact hybrid receiver, while the
+cache-accepted, exact-fallback, and combined rollback programs are prepared as
+one post-present family only when the requested receiver mode needs them.
 Thick-transmission ray-query draws always retain the full canonical ray color
 program: the compact feedback shader is never substituted for that path.
 
@@ -156,6 +160,10 @@ Each milestone is measured from `Game.Run`:
 | Visually qualified final frame | Exact warm writable cache | 5 s | 10 s |
 | Visually qualified final frame | Empty cache or exact deployment seed | 15 s | 30 s |
 
+The cache class is evidence, not a command-line label. A compatible writable
+cache that reports any feedback-backed compile miss is not an exact-warm run
+and must use the empty/incomplete-cache row.
+
 The production-graph present is a control-plane timing only: it does not prove
 that the swapchain contains scene pixels. Startup qualification uses the
 renderer-owned final-LDR readback, rejects black or uniform bootstrap images,
@@ -178,6 +186,19 @@ was 39.109 s, so this measured final-frame path is 32.512 s (83.1%) faster. This
 is pipeline-cache/ownership work only; no content or shader recook was required.
 Machine-readable seed and capture evidence is recorded in
 `NjulfHelloGame/pipeline-seed-qualification.json`.
+
+On 2026-09-01, the current ShippingPerformance integration was exercised on the
+same RTX 3060 Laptop GPU and driver with Bistro, DdgiHigh, Standard validation,
+and a renderer-owned 1600x900 final-LDR capture. The responsive bootstrap
+presented in 3.811 s, the production graph in 15.676 s, and the visually
+qualified frame in 16.733 s. The run had 16 compile misses, so it is not an
+exact-warm result: it misses the 15 s incomplete-cache target but passes the
+30 s hard limit. It reported zero validation warnings/errors and zero
+render-critical pipeline creations. Post-present receiver specializations and
+the receiver compute bank completed after visible scene publication and did not
+extend the final-frame milestone. This replaces the multi-minute black startup,
+but the soft bootstrap and incomplete-cache targets remain open performance
+work.
 
 Startup JSONL can be requested with `--startup-log <path>`. Its throttled
 snapshots include active pipeline count, oldest-active duration, and the active

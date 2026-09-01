@@ -61,7 +61,7 @@ public sealed class GlobalIlluminationEditorPanelTests
     }
 
     [Test]
-    public void AdvancedGiFeatureSelection_DefaultSettingsEnableAllBoundedPaths()
+    public void AdvancedGiFeatureSelection_DefaultSettingsKeepRejectedReceiverCacheOff()
     {
         var settings = new GlobalIlluminationSettings();
 
@@ -75,8 +75,10 @@ public sealed class GlobalIlluminationEditorPanelTests
                 OpacityMicromapsEnabled: true,
                 DirectionalGuidingEnabled: true,
                 TaggedCausticsEnabled: true,
-                NearFieldResidualEnabled: true)));
-            Assert.That(selection.AreAllEnabled, Is.True);
+                NearFieldResidualEnabled: true,
+                ReceiverCacheEnabled: false,
+                AcceleratedTransportSolverEnabled: true)));
+            Assert.That(selection.AreAllEnabled, Is.False);
         });
     }
 

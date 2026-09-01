@@ -224,6 +224,30 @@ public sealed class ForwardNearFieldDirectSourceContractTests
                     shaderProject,
                     "-DFORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED=1")
                     .Count,
+                Is.EqualTo(36));
+            Assert.That(
+                Regex.Matches(
+                    shaderProject,
+                    "cache_exact_fallback_hybrid_reflection\\.frag\"")
+                    .Count,
+                Is.EqualTo(12));
+            Assert.That(
+                Regex.Matches(
+                    shaderProject,
+                    "cache_combined_hybrid_reflection\\.frag\"")
+                    .Count,
+                Is.EqualTo(12));
+            Assert.That(
+                Regex.Matches(
+                    shaderProject,
+                    "-DFORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY=1")
+                    .Count,
+                Is.EqualTo(12));
+            Assert.That(
+                Regex.Matches(
+                    shaderProject,
+                    "-DFORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY=1")
+                    .Count,
                 Is.EqualTo(12));
             Assert.That(forward, Does.Contain(
                 "#if FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED"));

@@ -18,8 +18,24 @@ public static class ForwardHybridReflectionReceiverContract
         bool giCaustic,
         bool nearField,
         bool receiverCacheRequired = false,
+        bool receiverCacheExactFallbackOnly = false,
+        bool receiverCacheCombined = false,
         bool sparseLobePayload = false)
     {
+        if ((receiverCacheExactFallbackOnly || receiverCacheCombined) &&
+            !receiverCacheRequired)
+        {
+            throw new ArgumentException(
+                "A specialized receiver-cache lane requires the cache-required contract.",
+                nameof(receiverCacheRequired));
+        }
+        if (receiverCacheExactFallbackOnly && receiverCacheCombined)
+        {
+            throw new ArgumentException(
+                "Combined and exact-fallback receiver-cache lanes are mutually exclusive.",
+                nameof(receiverCacheExactFallbackOnly));
+        }
+
         string material = simple
             ? (simpleFullInput ? "simple_full_input_" : "simple_")
             : string.Empty;
@@ -30,9 +46,13 @@ public static class ForwardHybridReflectionReceiverContract
             (false, true) => "c5_",
             _ => string.Empty
         };
-        string receiver = receiverCacheRequired
-            ? "cache_required_"
-            : string.Empty;
+        string receiver = receiverCacheExactFallbackOnly
+            ? "cache_exact_fallback_"
+            : receiverCacheCombined
+                ? "cache_combined_"
+                : receiverCacheRequired
+                    ? "cache_required_"
+                    : string.Empty;
         string sparse = sparseLobePayload ? "_sparse_lobe" : string.Empty;
         return $"forward_opaque_{material}ddgi_{producers}{receiver}hybrid_reflection{sparse}.frag.spv";
     }
