@@ -5,14 +5,14 @@ using Njulf.Core.Math;
 namespace Njulf.Assets;
 
 /// <summary>
-/// Physical corrections for Amazon Bistro architectural window materials.
-/// FBX exposes generic material names and no transmission semantics, so the
-/// profile is admitted only by the explicit AmazonBistro import convention,
-/// an exact Bistro asset identity, and a stable base-texture identity.
+/// Physical corrections for Amazon Bistro materials whose FBX transport loses
+/// renderer semantics. The profile is admitted only by the explicit
+/// AmazonBistro import convention, an exact Bistro asset identity, and a
+/// stable base-texture identity.
 /// </summary>
 internal static class AmazonBistroMaterialProfile
 {
-    internal const string ProfileRevision = "amazon-bistro-thin-glass/v2";
+    internal const string ProfileRevision = "amazon-bistro-material-profile/v3";
 
     public static bool Apply(string modelPath, ModelMaterial material)
     {
@@ -20,11 +20,22 @@ internal static class AmazonBistroMaterialProfile
         ArgumentNullException.ThrowIfNull(material);
 
         if (!IsBistroAsset(modelPath) ||
-            !TryResolveBaseTextureIdentity(material, out string identity) ||
-            !TryResolveProfile(identity, out ThinGlassProfile profile))
+            !TryResolveBaseTextureIdentity(material, out string identity))
         {
             return false;
         }
+
+        if (IsFoliageBaseColor(identity))
+        {
+            material.AlphaMode = ModelAlphaMode.Mask;
+            material.AlphaCutoff = 0.5f;
+            material.DoubleSided = true;
+            material.FeatureFlags |= ModelMaterialFeatureBits.Foliage;
+            return true;
+        }
+
+        if (!TryResolveThinGlassProfile(identity, out ThinGlassProfile profile))
+            return false;
 
         material.IsThinGlass = true;
         material.AlphaMode = ModelAlphaMode.Blend;
@@ -65,7 +76,26 @@ internal static class AmazonBistroMaterialProfile
         return !string.IsNullOrWhiteSpace(identity);
     }
 
-    private static bool TryResolveProfile(
+    private static bool IsFoliageBaseColor(string identity)
+    {
+        string stem = Path.GetFileNameWithoutExtension(identity);
+        return stem.Equals("Foliage_Bux_Hedges46_BaseColor",
+                   StringComparison.OrdinalIgnoreCase) ||
+               stem.Equals("Foliage_Flowers_BaseColor",
+                   StringComparison.OrdinalIgnoreCase) ||
+               stem.Equals("Foliage_Ivy_leaf_a_BaseColor",
+                   StringComparison.OrdinalIgnoreCase) ||
+               stem.Equals("Foliage_Leaves_BaseColor",
+                   StringComparison.OrdinalIgnoreCase) ||
+               stem.Equals("Foliage_Linde_Tree_Large_Green_Leaves_BaseColor",
+                   StringComparison.OrdinalIgnoreCase) ||
+               stem.Equals("Foliage_Linde_Tree_Large_Orange_Leaves_BaseColor",
+                   StringComparison.OrdinalIgnoreCase) ||
+               stem.Equals("Plants_plants_BaseColor",
+                   StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryResolveThinGlassProfile(
         string identity,
         out ThinGlassProfile profile)
     {

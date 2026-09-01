@@ -1524,6 +1524,7 @@ namespace Njulf.Assets
                         : GetMaterialFloat(material, 1f, "$mat.roughnessFactor", "$mat.gltf.pbrMetallicRoughness.roughnessFactor"),
                     AmbientOcclusion = 1f,
                     NormalScale = GetMaterialFloat(material, 1f, "$mat.normalScale"),
+                    DoubleSided = ReadAssimpDoubleSided(_assimp, material),
                     AlbedoTexturePath = albedoTexturePath,
                     NormalTexturePath = normalTexturePath,
                     MetallicRoughnessTexturePath = metallicRoughnessTexturePath,
@@ -1582,6 +1583,23 @@ namespace Njulf.Assets
             }
 
             return fallback;
+        }
+
+        internal static unsafe bool ReadAssimpDoubleSided(
+            Assimp assimp,
+            Material* material)
+        {
+            int value = 0;
+            uint count = 1;
+            return assimp.GetMaterialIntegerArray(
+                       material,
+                       Assimp.MaterialTwosidedBase,
+                       0,
+                       0,
+                       &value,
+                       &count) == Return.Success &&
+                   count > 0 &&
+                   value != 0;
         }
 
         private unsafe string? GetFirstTexturePath(Material* material, params TextureType[] textureTypes)

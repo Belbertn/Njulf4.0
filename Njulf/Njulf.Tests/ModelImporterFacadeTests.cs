@@ -3,6 +3,9 @@ using System.IO;
 using System.Linq;
 using Njulf.Assets;
 using NUnit.Framework;
+using AssimpApi = Silk.NET.Assimp.Assimp;
+using AssimpPostProcessSteps = Silk.NET.Assimp.PostProcessSteps;
+using AssimpScene = Silk.NET.Assimp.Scene;
 
 namespace Njulf.Tests;
 
@@ -57,6 +60,35 @@ public sealed class ModelImporterFacadeTests
             Assert.That(result.Mesh.Indices, Has.Length.EqualTo(3));
             Assert.That(result.Diagnostics, Is.SameAs(result.Mesh.ImportDiagnostics));
         });
+    }
+
+    [Test]
+    public unsafe void AssimpMaterialTransport_PreservesAuthoredDoubleSidedProperty()
+    {
+        string path = CreateDoubleSidedGltfForAssimp();
+        AssimpApi assimp = AssimpApi.GetApi();
+        AssimpScene* scene = assimp.ImportFile(
+            path,
+            (uint)AssimpPostProcessSteps.Triangulate);
+        if (scene == null)
+            Assert.Fail(assimp.GetErrorStringS());
+        try
+        {
+            bool foundDoubleSided = false;
+            for (uint index = 0; index < scene->MNumMaterials; index++)
+            {
+                foundDoubleSided |= ModelImporter.ReadAssimpDoubleSided(
+                    assimp,
+                    scene->MMaterials[index]);
+            }
+
+            Assert.That(foundDoubleSided, Is.True,
+                "AI_MATKEY_TWOSIDED must survive the native Assimp boundary.");
+        }
+        finally
+        {
+            assimp.ReleaseImport(scene);
+        }
     }
 
     [Test]
@@ -586,6 +618,23 @@ public sealed class ModelImporterFacadeTests
             """);
 
         return gltfPath;
+    }
+
+    private static string CreateDoubleSidedGltfForAssimp()
+    {
+        string path = CreateMinimalExternalGltf("-assimp-two-sided");
+        string json = File.ReadAllText(path)
+            .Replace(
+                "\"mode\": 4",
+                "\"mode\": 4,\n                        \"material\": 0",
+                StringComparison.Ordinal)
+            .Replace(
+                "\"buffers\":",
+                "\"materials\": [{ \"name\": \"TwoSidedMaterial\", " +
+                "\"doubleSided\": true }],\n                \"buffers\":",
+                StringComparison.Ordinal);
+        File.WriteAllText(path, json);
+        return path;
     }
 
     private static string CreateTestDirectory()

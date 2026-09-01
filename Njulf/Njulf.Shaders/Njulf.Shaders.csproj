@@ -16,6 +16,10 @@
 
     <ItemGroup>
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
+      <!-- The trace source is a template for the storage/role/content variants
+           declared below. Runtime never loads the unspecialized artifact, so
+           keep the source without emitting or embedding ddgi_simple_trace.comp.spv. -->
+      <ShaderSource Remove="ddgi_simple_trace.comp" />
       <!-- C3's directional staging kernel is storage-specialized below. The
            dynamic union is intentionally not emitted or embedded. -->
       <ShaderSource Remove="ddgi_simple_directional_stage.comp" />
@@ -926,7 +930,10 @@
     <PropertyGroup>
       <NjulfShaderOptimizationOptions Condition="'$(Configuration)' == 'Development' or '$(Configuration)' == 'Release' or '$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation'">-Os</NjulfShaderOptimizationOptions>
       <NjulfShaderDebugInformation Condition="'$(NJULF_SHADER_PROFILE)' == '1'">true</NjulfShaderDebugInformation>
-      <NjulfShaderDebugOptions Condition="'$(NjulfShaderDebugInformation)' == 'true'">-gVS</NjulfShaderDebugOptions>
+      <!-- Classic SPIR-V OpLine/OpSource debug retains profiler source
+           attribution without constructing the enormous non-semantic debug
+           graph that can overflow glslang's ID space in large forward variants. -->
+      <NjulfShaderDebugOptions Condition="'$(NjulfShaderDebugInformation)' == 'true'">-g</NjulfShaderDebugOptions>
       <NjulfShaderVisualDebugOptions>-DNJULF_DDGI_VISUAL_DEBUG_VIEWS=0</NjulfShaderVisualDebugOptions>
       <NjulfShaderVisualDebugOptions Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'Development' or '$(Configuration)' == 'DetailedInvestigation'">-DNJULF_DDGI_VISUAL_DEBUG_VIEWS=1</NjulfShaderVisualDebugOptions>
       <NjulfShaderDetailedDiagnosticsOptions>-DNJULF_DDGI_DETAILED_COUNTERS=0</NjulfShaderDetailedDiagnosticsOptions>
@@ -959,6 +966,7 @@
       <NjulfReceiverAttributionOptimizationOptions>-Od</NjulfReceiverAttributionOptimizationOptions>
       <NjulfShaderBuildMode Condition="'$(NjulfShaderBuildMode)' == ''">Compile</NjulfShaderBuildMode>
       <NjulfShaderMaxParallelism Condition="'$(NjulfShaderMaxParallelism)' == ''">0</NjulfShaderMaxParallelism>
+      <NjulfShaderCompilerTimeoutSeconds Condition="'$(NjulfShaderCompilerTimeoutSeconds)' == ''">900</NjulfShaderCompilerTimeoutSeconds>
       <NjulfShaderCacheMode Condition="'$(NjulfShaderCacheMode)' == ''">ReadWrite</NjulfShaderCacheMode>
       <NjulfShaderCacheDirectory Condition="'$(NjulfShaderCacheDirectory)' == ''">$(MSBuildProjectDirectory)\..\artifacts\shader-cache\v1</NjulfShaderCacheDirectory>
       <NjulfGlslangValidator Condition="'$(NjulfGlslangValidator)' == ''">glslangValidator</NjulfGlslangValidator>
@@ -1170,6 +1178,7 @@
                                       CompilerPath="$(NjulfGlslangValidator)"
                                       GlobalCompileOptions="$(NjulfShaderCompileOptions)"
                                       MaxParallelism="$(NjulfShaderMaxParallelism)"
+                                      CompilerTimeoutSeconds="$(NjulfShaderCompilerTimeoutSeconds)"
                                       CacheMode="$(NjulfShaderCacheMode)"
                                       BuildMode="$(NjulfShaderBuildMode)">
         <Output TaskParameter="BundleManifestPath" PropertyName="NjulfShaderBundleManifest" />

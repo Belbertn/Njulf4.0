@@ -8,6 +8,8 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class BistroCookedReflectionIntegrationTests
 {
+    private const uint FoliageFeature = 1u << 22;
+
     [Test]
     [Explicit("Requires both local Amazon Bistro source assets and their win-x64 cooks.")]
     public void BothBistroCooks_ResolveUnderExactRuntimeImportContracts()
@@ -208,6 +210,187 @@ public sealed class BistroCookedReflectionIntegrationTests
         }
     }
 
+    [Test]
+    [Explicit("Requires both local Amazon Bistro source assets and their win-x64 cooks.")]
+    public void BothBistroCooks_PreserveMaskedFoliageAndCoverageSemantics()
+    {
+        string[] expectedFoliage =
+        [
+            "Foliage_Bux_Hedges46_BaseColor",
+            "Foliage_Flowers_BaseColor",
+            "Foliage_Ivy_leaf_a_BaseColor",
+            "Foliage_Leaves_BaseColor",
+            "Foliage_Linde_Tree_Large_Green_Leaves_BaseColor",
+            "Foliage_Linde_Tree_Large_Orange_Leaves_BaseColor",
+            "Plants_plants_BaseColor"
+        ];
+        string[] opaqueControls =
+        [
+            "Foliage_Ivy_branches_BaseColor",
+            "Foliage_Linde_Tree_Large_Trunk_BaseColor",
+            "Foliage_Trunk_BaseColor",
+            "Foliage_Paris_Flowers_BaseColor",
+            "Plants_Metal_Base_01_BaseColor"
+        ];
+
+        IReadOnlyList<CookedBaseColorMaterial> entries =
+            LoadBistroBaseColorMaterials();
+        var foliageNames = new HashSet<string>(
+            expectedFoliage,
+            StringComparer.OrdinalIgnoreCase);
+        var controlNames = new HashSet<string>(
+            opaqueControls,
+            StringComparer.OrdinalIgnoreCase);
+        CookedBaseColorMaterial[] foliage = entries
+            .Where(entry => foliageNames.Contains(entry.TextureStem))
+            .ToArray();
+        CookedBaseColorMaterial[] controls = entries
+            .Where(entry => controlNames.Contains(entry.TextureStem))
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                foliage.Select(entry => entry.TextureStem).Distinct(
+                    StringComparer.OrdinalIgnoreCase),
+                Is.EquivalentTo(expectedFoliage),
+                "Every approved alpha-bearing Bistro foliage identity must be present.");
+            Assert.That(
+                controls.Select(entry => entry.TextureStem).Distinct(
+                    StringComparer.OrdinalIgnoreCase),
+                Is.EquivalentTo(opaqueControls),
+                "Opaque controls must remain represented in the cooked assets.");
+        });
+
+        foreach (CookedBaseColorMaterial entry in foliage)
+        {
+            double sourceCoverage =
+                entry.Metadata.TransportStatistics.GetAlphaCoverage(0.5);
+            Assert.Multiple(() =>
+            {
+                Assert.That(entry.Material.AlphaMode,
+                    Is.EqualTo(ModelAlphaMode.Mask), entry.Identity);
+                Assert.That(entry.Material.AlphaCutoff,
+                    Is.EqualTo(0.5f), entry.Identity);
+                Assert.That(entry.Material.DoubleSided,
+                    Is.True, entry.Identity);
+                Assert.That(entry.Material.FeatureFlags & FoliageFeature,
+                    Is.Not.Zero, entry.Identity);
+                Assert.That(entry.Material.IsThinGlass,
+                    Is.False, entry.Identity);
+                Assert.That(entry.Pipeline,
+                    Is.EqualTo(CookedMaterialPipeline.Foliage), entry.Identity);
+                Assert.That(entry.Metadata.AlphaCoveragePreserved,
+                    Is.True, entry.Identity);
+                Assert.That(entry.Metadata.AlphaCoverageCutoff,
+                    Is.EqualTo(0.5f), entry.Identity);
+                Assert.That(sourceCoverage,
+                    Is.GreaterThan(0.0).And.LessThan(1.0),
+                    $"{entry.Identity} must contain meaningful cutout alpha.");
+            });
+        }
+
+        foreach (CookedBaseColorMaterial entry in controls)
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(entry.Material.AlphaMode,
+                    Is.EqualTo(ModelAlphaMode.Opaque), entry.Identity);
+                Assert.That(entry.Material.FeatureFlags & FoliageFeature,
+                    Is.Zero, entry.Identity);
+                Assert.That(entry.Material.IsThinGlass,
+                    Is.False, entry.Identity);
+                Assert.That(entry.Pipeline,
+                    Is.EqualTo(CookedMaterialPipeline.Opaque), entry.Identity);
+                Assert.That(entry.Metadata.AlphaCoveragePreserved,
+                    Is.False, entry.Identity);
+                Assert.That(entry.Metadata.AlphaCoverageCutoff,
+                    Is.Null, entry.Identity);
+            });
+        }
+    }
+
+    private static IReadOnlyList<CookedBaseColorMaterial>
+        LoadBistroBaseColorMaterials()
+    {
+        string root = FindRepositoryRoot();
+        string contentRoot = Path.Combine(root, "NjulfHelloGame");
+        var entries = new List<CookedBaseColorMaterial>();
+
+        foreach (SampleAssetReference asset in
+                 SampleAssetManifest.Bistro.EnumerateAssets())
+        {
+            string sourcePath = Path.GetFullPath(Path.Combine(
+                contentRoot,
+                asset.Path));
+            string modelPath = Path.Combine(
+                contentRoot,
+                "Cooked",
+                "win-x64",
+                "models",
+                Path.GetFileNameWithoutExtension(asset.Path) + ".njmodel");
+            if (!File.Exists(sourcePath) || !File.Exists(modelPath))
+            {
+                Assert.Ignore(
+                    $"The local Bistro source and win-x64 cook are required: " +
+                    $"{asset.Path}");
+            }
+
+            ContentLoadOptions loadOptions = asset.CreateLoadOptions();
+            ulong expectedImportContract = CookedModelImportContract.Compute(
+                sourcePath,
+                loadOptions.ImporterOptions);
+            CookedModelManifest manifest;
+            using (var reader = new CookedAssetReader(
+                       modelPath,
+                       CookedAssetKind.Model,
+                       CookedAssetReaderFlags.StrictSourceHash,
+                       CookedHash.File(sourcePath)))
+            {
+                Assert.That(reader.Header.ImportSettingsHash,
+                    Is.EqualTo(expectedImportContract), asset.Path);
+                manifest = CookedJson.Deserialize<CookedModelManifest>(
+                    reader.GetRequiredSection(CookedSectionIds.Manifest).Span,
+                    modelPath,
+                    "manifest");
+            }
+
+            string materialPath = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(modelPath)!,
+                manifest.Material.RelativePath));
+            CookedMaterialTable materials = CookedPackage.LoadMaterials(
+                materialPath,
+                CookedAssetReaderFlags.StrictSourceHash,
+                out _);
+            Assert.That(materials.Pipelines,
+                Has.Count.EqualTo(materials.Materials.Count), asset.Path);
+
+            string materialDirectory = Path.GetDirectoryName(materialPath)!;
+            for (int index = 0; index < materials.Materials.Count; index++)
+            {
+                ModelMaterial material = materials.Materials[index];
+                ModelTextureSource? source = material.BaseColorTexture?.Source;
+                if (source is null)
+                    continue;
+
+                CookedTextureMeta metadata = LoadBoundTextureMetadata(
+                    asset.Path,
+                    materialDirectory,
+                    source,
+                    out string texturePath);
+                entries.Add(new CookedBaseColorMaterial(
+                    asset.Path,
+                    Path.GetFileNameWithoutExtension(metadata.SourceIdentity),
+                    material,
+                    materials.Pipelines[index],
+                    metadata,
+                    texturePath));
+            }
+        }
+
+        return entries;
+    }
+
     private static void AssertCompressedTextureBindings(
         string assetPath,
         string materialPath,
@@ -350,5 +533,17 @@ public sealed class BistroCookedReflectionIntegrationTests
 
         throw new DirectoryNotFoundException(
             "Could not locate the repository root containing Njulf.sln.");
+    }
+
+    private sealed record CookedBaseColorMaterial(
+        string AssetPath,
+        string TextureStem,
+        ModelMaterial Material,
+        CookedMaterialPipeline Pipeline,
+        CookedTextureMeta Metadata,
+        string TexturePath)
+    {
+        public string Identity =>
+            $"{AssetPath}:{Material.Name}:{TextureStem}:{TexturePath}";
     }
 }

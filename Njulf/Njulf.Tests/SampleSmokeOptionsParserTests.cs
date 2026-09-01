@@ -1287,11 +1287,16 @@ public sealed class SampleSmokeOptionsParserTests
         SampleSceneKind.Bistro,
         SampleBistroQualityCaptureVariant.Presentation)]
     [TestCase(
+        "bistro-foliage-incident",
+        SampleBenchmarkTrajectoryKind.BistroFoliageIncident,
+        SampleSceneKind.Bistro,
+        SampleBistroQualityCaptureVariant.Presentation)]
+    [TestCase(
         "sponza-snapshot-incident",
         SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident,
         SampleSceneKind.SponzaPlaza,
         SampleBistroQualityCaptureVariant.SunScaleStep)]
-    public void BenchmarkSnapshotIncidentTrajectories_OwnTheirReportedSceneAndCamera(
+    public void BenchmarkIncidentTrajectories_OwnTheirReportedSceneAndCamera(
         string trajectory,
         SampleBenchmarkTrajectoryKind expectedTrajectory,
         SampleSceneKind expectedScene,

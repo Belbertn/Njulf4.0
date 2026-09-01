@@ -11,6 +11,7 @@ public sealed class SampleBenchmarkTrajectoryTests
     [TestCase("stationary", SampleBenchmarkTrajectoryKind.Stationary, 1, false)]
     [TestCase("bistro-presentation", SampleBenchmarkTrajectoryKind.BistroPresentation, 1, false)]
     [TestCase("bistro-snapshot-incident", SampleBenchmarkTrajectoryKind.BistroSnapshotIncident, 1, false)]
+    [TestCase("bistro-foliage-incident", SampleBenchmarkTrajectoryKind.BistroFoliageIncident, 1, false)]
     [TestCase("bistro-loop", SampleBenchmarkTrajectoryKind.BistroLoop, 240, true)]
     [TestCase("sponza-low", SampleBenchmarkTrajectoryKind.SponzaLow, 1, false)]
     [TestCase("sponza-high", SampleBenchmarkTrajectoryKind.SponzaHigh, 1, false)]
@@ -95,6 +96,29 @@ public sealed class SampleBenchmarkTrajectoryTests
             Assert.That(sponza.Pitch, Is.EqualTo(0.10086344f));
             Assert.That(sponza.FieldOfView, Is.EqualTo(0.98174775f));
             Assert.That(sponza.FarPlane, Is.EqualTo(250.0f));
+        });
+    }
+
+    [Test]
+    public void BistroFoliageIncidentTrajectory_PreservesReportedCamera()
+    {
+        SampleBenchmarkCameraPose pose = SampleBenchmarkTrajectory.ResolveCamera(
+            SampleBenchmarkTrajectoryKind.BistroFoliageIncident,
+            0,
+            SampleBistroQualityCaptureVariant.SunScaleStep)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pose.Name,
+                Is.EqualTo("BistroFoliageOpacityIncident20260901"));
+            Assert.That(pose.Position.X, Is.EqualTo(-5.6780605f));
+            Assert.That(pose.Position.Y, Is.EqualTo(2.5552828f));
+            Assert.That(pose.Position.Z, Is.EqualTo(1.6660455f));
+            Assert.That(pose.Yaw, Is.EqualTo(1.6427298f));
+            Assert.That(pose.Pitch, Is.EqualTo(0.0660575f));
+            Assert.That(pose.FieldOfView, Is.EqualTo(0.98174775f));
+            Assert.That(pose.NearPlane, Is.EqualTo(0.05f));
+            Assert.That(pose.FarPlane, Is.EqualTo(500.0f));
         });
     }
 

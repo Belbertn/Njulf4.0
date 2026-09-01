@@ -12,6 +12,31 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+function Get-RelativeShaderPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Root,
+
+        [Parameter(Mandatory = $true)]
+        [string] $Path
+    )
+
+    $separators = [char[]] @(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar)
+    $normalizedRoot = [IO.Path]::GetFullPath($Root).TrimEnd($separators)
+    $normalizedPath = [IO.Path]::GetFullPath($Path)
+    $rootPrefix = $normalizedRoot + [IO.Path]::DirectorySeparatorChar
+
+    if (-not $normalizedPath.StartsWith(
+            $rootPrefix,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Shader path '$normalizedPath' is outside root '$normalizedRoot'."
+    }
+
+    return $normalizedPath.Substring($rootPrefix.Length)
+}
+
 $shippingRoot = (Resolve-Path -LiteralPath $ShippingShaderDirectory).Path
 $profileRoot = (Resolve-Path -LiteralPath $ProfileShaderDirectory).Path
 $spirvOpt = (Get-Command spirv-opt -ErrorAction Stop).Source
@@ -22,13 +47,13 @@ $manifestFullPath = [IO.Path]::GetFullPath($ManifestPath)
 New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
 try {
     $shippingFiles = @(Get-ChildItem -LiteralPath $shippingRoot -Filter *.spv -File -Recurse |
-        Sort-Object { [IO.Path]::GetRelativePath($shippingRoot, $_.FullName) })
+        Sort-Object { Get-RelativeShaderPath -Root $shippingRoot -Path $_.FullName })
     if ($shippingFiles.Count -eq 0) {
         throw "No shipping SPIR-V artifacts were found under '$shippingRoot'."
     }
 
     $entries = @(foreach ($shippingFile in $shippingFiles) {
-        $relativePath = [IO.Path]::GetRelativePath($shippingRoot, $shippingFile.FullName)
+        $relativePath = Get-RelativeShaderPath -Root $shippingRoot -Path $shippingFile.FullName
         $profileFile = Join-Path $profileRoot $relativePath
         if (-not (Test-Path -LiteralPath $profileFile -PathType Leaf)) {
             throw "ProfileSymbols artifact '$relativePath' is missing."
@@ -36,13 +61,13 @@ try {
 
         $shippingStripped = Join-Path $temporaryRoot ("shipping-" + [Guid]::NewGuid().ToString('N') + '.spv')
         $profileStripped = Join-Path $temporaryRoot ("profile-" + [Guid]::NewGuid().ToString('N') + '.spv')
-        & $spirvOpt --strip-debug $shippingFile.FullName -o $shippingStripped
+        & $spirvOpt --strip-debug --compact-ids $shippingFile.FullName -o $shippingStripped
         if ($LASTEXITCODE -ne 0) {
-            throw "spirv-opt failed while stripping '$($shippingFile.FullName)'."
+            throw "spirv-opt failed while stripping and normalizing '$($shippingFile.FullName)'."
         }
-        & $spirvOpt --strip-debug $profileFile -o $profileStripped
+        & $spirvOpt --strip-debug --compact-ids $profileFile -o $profileStripped
         if ($LASTEXITCODE -ne 0) {
-            throw "spirv-opt failed while stripping '$profileFile'."
+            throw "spirv-opt failed while stripping and normalizing '$profileFile'."
         }
 
         $shippingSemanticHash = (Get-FileHash -LiteralPath $shippingStripped -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -80,10 +105,12 @@ try {
     if ($manifestDirectory) {
         New-Item -ItemType Directory -Path $manifestDirectory -Force | Out-Null
     }
-    $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestFullPath -Encoding utf8NoBOM
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    $manifestJson = $manifest | ConvertTo-Json -Depth 6
+    [IO.File]::WriteAllText($manifestFullPath, $manifestJson, $utf8NoBom)
 
     if ($failed.Count -ne 0) {
-        throw "$($failed.Count) ProfileSymbols shader artifact(s) differ semantically from ShippingPerformance after debug stripping. See '$manifestFullPath'."
+        throw "$($failed.Count) ProfileSymbols shader artifact(s) differ semantically from ShippingPerformance after debug stripping and ID normalization. See '$manifestFullPath'."
     }
 }
 finally {

@@ -903,6 +903,12 @@ public sealed class HybridReflectionContractsTests
             Assert.That(forward, Does.Contain(
                 "#if !FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE\n" +
                 "    if (environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)"));
+            Assert.That(forward, Does.Contain(
+                "#if !FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE && \\\n" +
+                "    !FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE && \\\n" +
+                "    !FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE\n" +
+                "    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)"),
+                "Split receiver artifacts statically reject this GI debug block and must not compile its omitted fallback state.");
             Assert.That(admission, Does.Contain(
                 "sceneData.DebugViewMode != 0u"));
             Assert.That(admission, Does.Contain(

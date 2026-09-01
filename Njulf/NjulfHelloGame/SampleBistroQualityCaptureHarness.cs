@@ -158,6 +158,23 @@ public sealed class SampleBistroQualityCaptureContract
         500.0f);
 
     /// <summary>
+    /// Exact camera from the 2026-09-01 Bistro foliage-opacity incident.
+    /// It remains independent of the beauty and prior incident bookmarks so
+    /// foliage fixes can be compared against the originally reported pixels.
+    /// </summary>
+    public static SampleBistroQualityCameraBookmark FoliageIncidentBookmark
+    {
+        get;
+    } = new(
+        "BistroFoliageOpacityIncident20260901",
+        new Vector3(-5.6780605f, 2.5552828f, 1.6660455f),
+        1.6427298f,
+        0.0660575f,
+        0.98174775f,
+        0.05f,
+        500.0f);
+
+    /// <summary>
     /// The motion route is independent of the presentation bookmark. This
     /// keeps visual-composition iteration from weakening the DDGI stress test.
     /// </summary>

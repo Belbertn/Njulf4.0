@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -283,6 +284,24 @@ public sealed class CompileNjulfShaderArtifactsTests
     }
 
     [Test]
+    public void NegativeCompilerTimeoutIsRejectedBeforeCompilerResolution()
+    {
+        string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 42);
+        var engine = new RecordingBuildEngine();
+        CompileNjulfShaderArtifacts task = CreateTask(
+            [CreateArtifact("sample.comp", sourcePath)],
+            engine,
+            compilerPath: "compiler-that-must-not-be-resolved",
+            compilerTimeoutSeconds: -1);
+
+        Assert.That(task.Execute(), Is.False);
+        Assert.That(
+            engine.FormatErrors(),
+            Does.Contain("NjulfShaderCompilerTimeoutSeconds cannot be negative"));
+        Assert.That(Directory.Exists(_cacheDirectory), Is.False);
+    }
+
+    [Test]
     public void UseExistingNeverResolvesCompilerOrCreatesCache()
     {
         string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 4);
@@ -398,7 +417,7 @@ public sealed class CompileNjulfShaderArtifactsTests
     }
 
     [Test]
-    public async Task ConcurrentCacheWritersPublishAReusableObject()
+    public async Task ConcurrentCacheMissesCompileOnceAndPublishAReusableObject()
     {
         string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 7);
         TaskItem artifact = CreateArtifact("sample.comp", sourcePath);
@@ -406,18 +425,33 @@ public sealed class CompileNjulfShaderArtifactsTests
         string secondOutput = Path.Combine(_testDirectory, "obj-b");
         var firstEngine = new RecordingBuildEngine();
         var secondEngine = new RecordingBuildEngine();
+        var runner = new ControlledCompilerProcessRunner(blockCompilation: true);
         CompileNjulfShaderArtifacts first = CreateTask(
             [artifact],
             firstEngine,
-            outputDirectory: firstOutput);
+            outputDirectory: firstOutput,
+            processRunner: runner);
         CompileNjulfShaderArtifacts second = CreateTask(
             [artifact],
             secondEngine,
-            outputDirectory: secondOutput);
+            outputDirectory: secondOutput,
+            processRunner: runner);
 
-        bool[] results = await Task.WhenAll(
-            Task.Run(first.Execute),
-            Task.Run(second.Execute));
+        Task<bool> firstExecution = Task.Run(first.Execute);
+        Assert.That(
+            runner.CompileStarted.Wait(TimeSpan.FromSeconds(5)),
+            Is.True,
+            "The first synthetic compiler invocation did not start.");
+        Task<bool> secondExecution = Task.Run(second.Execute);
+        Assert.That(
+            SpinWait.SpinUntil(
+                () => secondEngine.ContainsMessage("single-flight waiting"),
+                TimeSpan.FromSeconds(5)),
+            Is.True,
+            "The second task did not reach the shared recipe lock.");
+
+        runner.ReleaseCompilation.Set();
+        bool[] results = await Task.WhenAll(firstExecution, secondExecution);
 
         Assert.That(
             results,
@@ -425,17 +459,295 @@ public sealed class CompileNjulfShaderArtifactsTests
             firstEngine.FormatErrors() + Environment.NewLine + secondEngine.FormatErrors());
         AssertValidSpirv(Path.Combine(firstOutput, "sample.comp.spv"));
         AssertValidSpirv(Path.Combine(secondOutput, "sample.comp.spv"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(runner.CompileCallCount, Is.EqualTo(1));
+            Assert.That(first.CompiledCount, Is.EqualTo(1));
+            Assert.That(second.CompiledCount, Is.Zero);
+            Assert.That(second.CacheHitCount, Is.EqualTo(1));
+        });
 
         string thirdOutput = Path.Combine(_testDirectory, "obj-c");
         CompileNjulfShaderArtifacts third = CreateTask(
             [artifact],
             new RecordingBuildEngine(),
-            outputDirectory: thirdOutput);
+            outputDirectory: thirdOutput,
+            processRunner: runner);
         Assert.That(third.Execute(), Is.True);
         Assert.That(third.CompiledCount, Is.Zero);
         Assert.That(third.CacheHitCount, Is.EqualTo(1));
+        Assert.That(runner.CompileCallCount, Is.EqualTo(1));
         AssertValidSpirv(Path.Combine(thirdOutput, "sample.comp.spv"));
     }
+
+    [Test]
+    public void CompilerTimeoutDoesNotPublishOrLeaveTemporaryFiles()
+    {
+        string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 8);
+        var engine = new RecordingBuildEngine();
+        var runner = new ControlledCompilerProcessRunner(
+            outcome: ControlledCompileOutcome.Timeout,
+            createTemporaryFilesBeforeCompletion: true);
+        CompileNjulfShaderArtifacts task = CreateTask(
+            [CreateArtifact("sample.comp", sourcePath)],
+            engine,
+            compilerTimeoutSeconds: 1,
+            processRunner: runner);
+
+        Assert.That(task.Execute(), Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(engine.FormatErrors(), Does.Contain("timed out compiling 'sample.comp.spv'"));
+            Assert.That(File.Exists(Path.Combine(_outputDirectory, "sample.comp.spv")), Is.False);
+            Assert.That(
+                Directory.GetFiles(_outputDirectory, ".njulf-*", SearchOption.TopDirectoryOnly),
+                Is.Empty);
+            Assert.That(
+                Directory.GetFiles(Path.Combine(_outputDirectory, ".state"), "*.json"),
+                Is.Empty);
+            Assert.That(
+                Directory.GetFiles(Path.Combine(_cacheDirectory, "index"), "*.json"),
+                Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task CancelStopsCompilationWithoutPublishingPartialState()
+    {
+        string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 9);
+        var engine = new RecordingBuildEngine();
+        var runner = new ControlledCompilerProcessRunner(
+            blockCompilation: true,
+            createTemporaryFilesBeforeCompletion: true);
+        CompileNjulfShaderArtifacts task = CreateTask(
+            [CreateArtifact("sample.comp", sourcePath)],
+            engine,
+            processRunner: runner);
+
+        Task<bool> execution = Task.Run(task.Execute);
+        Assert.That(
+            runner.CompileStarted.Wait(TimeSpan.FromSeconds(5)),
+            Is.True,
+            "The synthetic compiler invocation did not start.");
+        task.Cancel();
+
+        Assert.That(await execution.WaitAsync(TimeSpan.FromSeconds(5)), Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(runner.CancelAllCallCount, Is.GreaterThanOrEqualTo(1));
+            Assert.That(File.Exists(Path.Combine(_outputDirectory, "sample.comp.spv")), Is.False);
+            Assert.That(
+                Directory.GetFiles(_outputDirectory, ".njulf-*", SearchOption.TopDirectoryOnly),
+                Is.Empty);
+            Assert.That(
+                Directory.GetFiles(Path.Combine(_outputDirectory, ".state"), "*.json"),
+                Is.Empty);
+            Assert.That(
+                Directory.GetFiles(Path.Combine(_cacheDirectory, "index"), "*.json"),
+                Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task FailedRecipeOwnerReleasesLockForWaitingBuild()
+    {
+        string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 10);
+        TaskItem artifact = CreateArtifact("sample.comp", sourcePath);
+        var ownerEngine = new RecordingBuildEngine();
+        var waiterEngine = new RecordingBuildEngine();
+        var ownerRunner = new ControlledCompilerProcessRunner(
+            blockCompilation: true,
+            outcome: ControlledCompileOutcome.Failure,
+            createTemporaryFilesBeforeCompletion: true);
+        var waiterRunner = new ControlledCompilerProcessRunner();
+        CompileNjulfShaderArtifacts owner = CreateTask(
+            [artifact],
+            ownerEngine,
+            outputDirectory: Path.Combine(_testDirectory, "owner-obj"),
+            processRunner: ownerRunner);
+        CompileNjulfShaderArtifacts waiter = CreateTask(
+            [artifact],
+            waiterEngine,
+            outputDirectory: Path.Combine(_testDirectory, "waiter-obj"),
+            processRunner: waiterRunner);
+
+        Task<bool> ownerExecution = Task.Run(owner.Execute);
+        Assert.That(
+            ownerRunner.CompileStarted.Wait(TimeSpan.FromSeconds(5)),
+            Is.True);
+        Task<bool> waiterExecution = Task.Run(waiter.Execute);
+        Assert.That(
+            SpinWait.SpinUntil(
+                () => waiterEngine.ContainsMessage("single-flight waiting"),
+                TimeSpan.FromSeconds(5)),
+            Is.True);
+
+        ownerRunner.ReleaseCompilation.Set();
+        bool[] results = await Task.WhenAll(ownerExecution, waiterExecution);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(results[0], Is.False, ownerEngine.FormatErrors());
+            Assert.That(results[1], Is.True, waiterEngine.FormatErrors());
+            Assert.That(waiter.CompiledCount, Is.EqualTo(1));
+            Assert.That(waiterRunner.CompileCallCount, Is.EqualTo(1));
+            AssertValidSpirv(Path.Combine(
+                _testDirectory,
+                "waiter-obj",
+                "sample.comp.spv"));
+        });
+    }
+
+    [Test]
+    public void ProcessRunnerTimeoutTerminatesCompleteProcessTree()
+    {
+        string processIdsPath = Path.Combine(_testDirectory, "timeout-processes.txt");
+        ProcessStartInfo startInfo = CreateProcessTreeStartInfo(processIdsPath);
+        var runner = new CompilerProcessRunner();
+        int heartbeatCount = 0;
+
+        CompilerProcessTimeoutException? exception = Assert.Throws<CompilerProcessTimeoutException>(() =>
+            runner.Run(
+                startInfo,
+                TimeSpan.FromSeconds(3),
+                TimeSpan.FromMilliseconds(100),
+                CancellationToken.None,
+                _ => Interlocked.Increment(ref heartbeatCount)));
+
+        Assert.That(exception, Is.Not.Null);
+        Assert.That(File.Exists(processIdsPath), Is.True);
+        int[] processIds = ReadProcessIds(processIdsPath);
+        Assert.Multiple(() =>
+        {
+            Assert.That(processIds, Has.Length.EqualTo(2));
+            Assert.That(processIds[0], Is.EqualTo(exception!.ProcessId));
+            Assert.That(heartbeatCount, Is.GreaterThan(0));
+            foreach (int processId in processIds)
+            {
+                Assert.That(
+                    WaitForProcessExit(processId),
+                    Is.True,
+                    $"Process {processId} survived timeout cleanup.");
+            }
+        });
+    }
+
+    [Test]
+    public async Task ProcessRunnerCancellationTerminatesCompleteProcessTree()
+    {
+        string processIdsPath = Path.Combine(_testDirectory, "cancel-processes.txt");
+        ProcessStartInfo startInfo = CreateProcessTreeStartInfo(processIdsPath);
+        var runner = new CompilerProcessRunner();
+        using var cancellation = new CancellationTokenSource();
+
+        Task<CompilerProcessResult> execution = Task.Run(() => runner.Run(
+            startInfo,
+            timeout: null,
+            TimeSpan.Zero,
+            cancellation.Token,
+            heartbeat: null));
+        Assert.That(
+            SpinWait.SpinUntil(
+                () => File.Exists(processIdsPath),
+                TimeSpan.FromSeconds(5)),
+            Is.True,
+            "The process-tree fixture did not publish its process IDs.");
+
+        cancellation.Cancel();
+        try
+        {
+            await execution.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Fail("The process runner completed normally after cancellation.");
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected cancellation result.
+        }
+
+        foreach (int processId in ReadProcessIds(processIdsPath))
+        {
+            Assert.That(
+                WaitForProcessExit(processId),
+                Is.True,
+                $"Process {processId} survived cancellation cleanup.");
+        }
+    }
+
+    private static ProcessStartInfo CreateProcessTreeStartInfo(
+        string processIdsPath)
+    {
+        var start = new ProcessStartInfo
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        if (OperatingSystem.IsWindows())
+        {
+            string systemDirectory = Environment.GetFolderPath(
+                Environment.SpecialFolder.System);
+            string powershell = Path.Combine(
+                systemDirectory,
+                "WindowsPowerShell",
+                "v1.0",
+                "powershell.exe");
+            if (!File.Exists(powershell))
+                powershell = "powershell.exe";
+            string escapedPath = processIdsPath.Replace("'", "''", StringComparison.Ordinal);
+            string script =
+                "$child = Start-Process " +
+                "-FilePath (Join-Path $env:SystemRoot 'System32\\PING.EXE') " +
+                "-ArgumentList @('-t','127.0.0.1') -WindowStyle Hidden -PassThru; " +
+                $"[IO.File]::WriteAllLines('{escapedPath}', @([string]$PID, [string]$child.Id)); " +
+                "Wait-Process -Id $child.Id";
+            start.FileName = powershell;
+            start.ArgumentList.Add("-NoProfile");
+            start.ArgumentList.Add("-NonInteractive");
+            start.ArgumentList.Add("-EncodedCommand");
+            start.ArgumentList.Add(Convert.ToBase64String(
+                Encoding.Unicode.GetBytes(script)));
+            return start;
+        }
+
+        start.FileName = "/bin/sh";
+        start.ArgumentList.Add("-c");
+        start.ArgumentList.Add(
+            "sleep 300 & child=$!; " +
+            $"printf '%s\\n%s\\n' $$ $child > {QuotePosix(processIdsPath)}; " +
+            "wait $child");
+        return start;
+    }
+
+    private static string QuotePosix(string value) =>
+        "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
+
+    private static int[] ReadProcessIds(string path) =>
+        File.ReadAllLines(path)
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Select(line => int.Parse(line.Trim(), System.Globalization.CultureInfo.InvariantCulture))
+            .ToArray();
+
+    private static bool WaitForProcessExit(int processId) =>
+        SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    using Process process = Process.GetProcessById(processId);
+                    return process.HasExited;
+                }
+                catch (ArgumentException)
+                {
+                    return true;
+                }
+                catch (InvalidOperationException)
+                {
+                    return true;
+                }
+            },
+            TimeSpan.FromSeconds(5));
 
     private string WriteShader(string includePath, uint value)
     {
@@ -487,8 +799,11 @@ public sealed class CompileNjulfShaderArtifactsTests
         string compilerPath = "glslangValidator",
         string buildMode = "Compile",
         string? outputDirectory = null,
-        string globalOptions = "") =>
-        new()
+        string globalOptions = "",
+        int compilerTimeoutSeconds = 900,
+        ICompilerProcessRunner? processRunner = null)
+    {
+        var task = new CompileNjulfShaderArtifacts
         {
             BuildEngine = engine,
             Artifacts = artifacts,
@@ -499,8 +814,13 @@ public sealed class CompileNjulfShaderArtifactsTests
             BuildMode = buildMode,
             CacheMode = "ReadWrite",
             GlobalCompileOptions = globalOptions,
-            MaxParallelism = 2
+            MaxParallelism = 2,
+            CompilerTimeoutSeconds = compilerTimeoutSeconds
         };
+        if (processRunner != null)
+            task.ProcessRunner = processRunner;
+        return task;
+    }
 
     private static TaskItem CreateArtifact(string name, string sourcePath, string defines = "")
     {
@@ -580,8 +900,137 @@ public sealed class CompileNjulfShaderArtifactsTests
         });
     }
 
+    private enum ControlledCompileOutcome
+    {
+        Success,
+        Failure,
+        Timeout
+    }
+
+    private sealed class ControlledCompilerProcessRunner : ICompilerProcessRunner
+    {
+        private readonly bool _blockCompilation;
+        private readonly ControlledCompileOutcome _outcome;
+        private readonly bool _createTemporaryFilesBeforeCompletion;
+        private int _compileCallCount;
+        private int _cancelAllCallCount;
+
+        public ControlledCompilerProcessRunner(
+            bool blockCompilation = false,
+            ControlledCompileOutcome outcome = ControlledCompileOutcome.Success,
+            bool createTemporaryFilesBeforeCompletion = false)
+        {
+            _blockCompilation = blockCompilation;
+            _outcome = outcome;
+            _createTemporaryFilesBeforeCompletion =
+                createTemporaryFilesBeforeCompletion;
+        }
+
+        public ManualResetEventSlim CompileStarted { get; } = new(false);
+
+        public ManualResetEventSlim ReleaseCompilation { get; } = new(false);
+
+        public int CompileCallCount => Volatile.Read(ref _compileCallCount);
+
+        public int CancelAllCallCount => Volatile.Read(ref _cancelAllCallCount);
+
+        public CompilerProcessResult Run(
+            ProcessStartInfo startInfo,
+            TimeSpan? timeout,
+            TimeSpan heartbeatInterval,
+            CancellationToken cancellationToken,
+            Action<CompilerProcessHeartbeat>? heartbeat)
+        {
+            if (startInfo.ArgumentList.Contains("--version"))
+            {
+                return new CompilerProcessResult(
+                    0,
+                    "Njulf controlled compiler 1.0",
+                    10_000,
+                    TimeSpan.Zero);
+            }
+
+            int call = Interlocked.Increment(ref _compileCallCount);
+            string outputPath = GetArgumentValue(startInfo, "-o");
+            string depfilePath = GetArgumentValue(startInfo, "--depfile");
+            string sourcePath = startInfo.ArgumentList[^1];
+            if (_createTemporaryFilesBeforeCompletion)
+            {
+                WriteSyntheticCompilerOutputs(
+                    outputPath,
+                    depfilePath,
+                    sourcePath);
+            }
+
+            CompileStarted.Set();
+            if (_blockCompilation)
+                ReleaseCompilation.Wait(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            switch (_outcome)
+            {
+                case ControlledCompileOutcome.Failure:
+                    throw new InvalidOperationException(
+                        "Controlled compiler failure.");
+                case ControlledCompileOutcome.Timeout:
+                    throw new CompilerProcessTimeoutException(
+                        10_000 + call,
+                        timeout ?? TimeSpan.FromSeconds(1),
+                        "Controlled compiler timeout.");
+            }
+
+            if (!_createTemporaryFilesBeforeCompletion)
+            {
+                WriteSyntheticCompilerOutputs(
+                    outputPath,
+                    depfilePath,
+                    sourcePath);
+            }
+            return new CompilerProcessResult(
+                0,
+                string.Empty,
+                10_000 + call,
+                TimeSpan.FromMilliseconds(1));
+        }
+
+        public void CancelAll()
+        {
+            Interlocked.Increment(ref _cancelAllCallCount);
+            ReleaseCompilation.Set();
+        }
+
+        private static string GetArgumentValue(
+            ProcessStartInfo startInfo,
+            string option)
+        {
+            int index = startInfo.ArgumentList.IndexOf(option);
+            if (index < 0 || index + 1 >= startInfo.ArgumentList.Count)
+            {
+                throw new InvalidOperationException(
+                    $"Controlled compiler invocation did not contain '{option}'.");
+            }
+            return startInfo.ArgumentList[index + 1];
+        }
+
+        private static void WriteSyntheticCompilerOutputs(
+            string outputPath,
+            string depfilePath,
+            string sourcePath)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(depfilePath)!);
+            File.WriteAllBytes(outputPath, [0x03, 0x02, 0x23, 0x07]);
+            File.WriteAllText(
+                depfilePath,
+                $"{Path.GetFileName(outputPath)}: " +
+                $"{Path.GetFileName(sourcePath)} value.glsl{Environment.NewLine}");
+        }
+    }
+
     private sealed class RecordingBuildEngine : IBuildEngine
     {
+        private readonly object _sync = new();
+
         public List<BuildErrorEventArgs> Errors { get; } = [];
 
         public List<BuildWarningEventArgs> Warnings { get; } = [];
@@ -606,12 +1055,41 @@ public sealed class CompileNjulfShaderArtifactsTests
         {
         }
 
-        public void LogErrorEvent(BuildErrorEventArgs eventArgs) => Errors.Add(eventArgs);
+        public void LogErrorEvent(BuildErrorEventArgs eventArgs)
+        {
+            lock (_sync)
+                Errors.Add(eventArgs);
+        }
 
-        public void LogMessageEvent(BuildMessageEventArgs eventArgs) => Messages.Add(eventArgs);
+        public void LogMessageEvent(BuildMessageEventArgs eventArgs)
+        {
+            lock (_sync)
+                Messages.Add(eventArgs);
+        }
 
-        public void LogWarningEvent(BuildWarningEventArgs eventArgs) => Warnings.Add(eventArgs);
+        public void LogWarningEvent(BuildWarningEventArgs eventArgs)
+        {
+            lock (_sync)
+                Warnings.Add(eventArgs);
+        }
 
-        public string FormatErrors() => string.Join(Environment.NewLine, Errors.Select(error => error.Message));
+        public bool ContainsMessage(string text)
+        {
+            lock (_sync)
+            {
+                return Messages.Any(message =>
+                    message.Message?.Contains(text, StringComparison.Ordinal) == true);
+            }
+        }
+
+        public string FormatErrors()
+        {
+            lock (_sync)
+            {
+                return string.Join(
+                    Environment.NewLine,
+                    Errors.Select(error => error.Message));
+            }
+        }
     }
 }

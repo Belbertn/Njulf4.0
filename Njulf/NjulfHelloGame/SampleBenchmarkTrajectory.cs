@@ -23,7 +23,8 @@ public enum SampleBenchmarkTrajectoryKind : byte
     SponzaHorizontal,
     SponzaVertical,
     BistroSnapshotIncident,
-    SponzaSnapshotIncident
+    SponzaSnapshotIncident,
+    BistroFoliageIncident
 }
 
 public sealed record SampleBenchmarkCameraPose(
@@ -41,6 +42,8 @@ public static class SampleBenchmarkTrajectory
     public const string BistroPresentationName = "bistro-presentation";
     public const string BistroSnapshotIncidentName =
         "bistro-snapshot-incident";
+    public const string BistroFoliageIncidentName =
+        "bistro-foliage-incident";
     public const string BistroLoopName = "bistro-loop";
     public const string SponzaLowName = "sponza-low";
     public const string SponzaHighName = "sponza-high";
@@ -65,6 +68,8 @@ public static class SampleBenchmarkTrajectory
                 SampleBenchmarkTrajectoryKind.BistroPresentation,
             BistroSnapshotIncidentName =>
                 SampleBenchmarkTrajectoryKind.BistroSnapshotIncident,
+            BistroFoliageIncidentName =>
+                SampleBenchmarkTrajectoryKind.BistroFoliageIncident,
             BistroLoopName => SampleBenchmarkTrajectoryKind.BistroLoop,
             SponzaLowName => SampleBenchmarkTrajectoryKind.SponzaLow,
             SponzaHighName => SampleBenchmarkTrajectoryKind.SponzaHigh,
@@ -77,7 +82,8 @@ public static class SampleBenchmarkTrajectory
             _ => throw new ArgumentException(
                 $"Unknown benchmark trajectory '{value}'. Valid values: " +
                 $"{StationaryName}, {BistroPresentationName}, " +
-                $"{BistroSnapshotIncidentName}, {BistroLoopName}, " +
+                $"{BistroSnapshotIncidentName}, {BistroFoliageIncidentName}, " +
+                $"{BistroLoopName}, " +
                 $"{SponzaLowName}, {SponzaHighName}, " +
                 $"{SponzaReceiverCacheIncidentName}, {SponzaSnapshotIncidentName}, " +
                 $"{SponzaHorizontalName}, " +
@@ -92,6 +98,8 @@ public static class SampleBenchmarkTrajectory
         SampleBenchmarkTrajectoryKind.BistroPresentation => BistroPresentationName,
         SampleBenchmarkTrajectoryKind.BistroSnapshotIncident =>
             BistroSnapshotIncidentName,
+        SampleBenchmarkTrajectoryKind.BistroFoliageIncident =>
+            BistroFoliageIncidentName,
         SampleBenchmarkTrajectoryKind.BistroLoop => BistroLoopName,
         SampleBenchmarkTrajectoryKind.SponzaLow => SponzaLowName,
         SampleBenchmarkTrajectoryKind.SponzaHigh => SponzaHighName,
@@ -113,6 +121,7 @@ public static class SampleBenchmarkTrajectory
         SampleBenchmarkTrajectoryKind kind) => kind is
         SampleBenchmarkTrajectoryKind.BistroPresentation or
         SampleBenchmarkTrajectoryKind.BistroSnapshotIncident or
+        SampleBenchmarkTrajectoryKind.BistroFoliageIncident or
         SampleBenchmarkTrajectoryKind.BistroLoop;
 
     public static bool RequiresSponza(
@@ -191,6 +200,7 @@ public static class SampleBenchmarkTrajectory
         {
             SampleBenchmarkTrajectoryKind.BistroPresentation or
                 SampleBenchmarkTrajectoryKind.BistroSnapshotIncident or
+                SampleBenchmarkTrajectoryKind.BistroFoliageIncident or
                 SampleBenchmarkTrajectoryKind.BistroLoop =>
                 new SampleBistroQualityCaptureContract(bistroVariant).Fingerprint,
             SampleBenchmarkTrajectoryKind.SponzaLow or
@@ -278,6 +288,9 @@ public static class SampleBenchmarkTrajectory
                 SampleBenchmarkTrajectoryKind.BistroSnapshotIncident =>
                     SampleBistroQualityCaptureContract
                         .SnapshotIncidentBookmark,
+                SampleBenchmarkTrajectoryKind.BistroFoliageIncident =>
+                    SampleBistroQualityCaptureContract
+                        .FoliageIncidentBookmark,
                 _ => contract.ResolveCamera(ValidateFrameIndex(
                     kind,
                     trajectoryFrameIndex))

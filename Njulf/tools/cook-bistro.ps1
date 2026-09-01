@@ -37,6 +37,7 @@ $cookedModels = @(
 $testFilter =
     "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.BothBistroCooks_ResolveUnderExactRuntimeImportContracts|" +
     "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.ExteriorCook_PreservesThinGlassAndImportSemantics|" +
+    "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.BothBistroCooks_PreserveMaskedFoliageAndCoverageSemantics|" +
     "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.BothBistroCooks_PreserveCompressedMaterialTextureBindings"
 
 function Assert-File {

@@ -42,6 +42,13 @@ pipeline creation so they can be used for fallback-path and deep GPU diagnosis.
 | `ShippingPerformance` | Controlled production performance evidence | No | Yes | Off | No |
 | `Release` | Cooked release output | No | Yes | Off | No |
 
+`NJULF_SHADER_PROFILE=1` opts any configuration into shader source symbols.
+Combining it with `DetailedInvestigation` therefore requests optimized shaders,
+source-line symbols, visual diagnostics, and the expensive detailed DDGI
+and directional-shadow counter graphs together. Use that combination only when
+one capture genuinely needs both counter attribution and shader source lines;
+ordinary detailed-counter work should omit the override.
+
 Override validation for a particular run with `--validation` or
 `NJULF_RENDERER_VALIDATION`; the supported modes are `off`, `standard`, `gpu`,
 `sync`, and `all`.

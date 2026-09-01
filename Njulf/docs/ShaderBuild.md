@@ -1,14 +1,14 @@
 # Shader build pipeline
 
-`Njulf.Shaders` models every base shader and generated variant as an independent artifact. The build task hashes each artifact's source and transitive includes, exact compiler arguments, and the `glslangValidator` binary and version. Independent misses compile concurrently; unchanged outputs and cache objects are verified before reuse.
+`Njulf.Shaders` models every active base shader and generated variant as an independent artifact. The build task hashes each artifact's source and transitive includes, exact compiler arguments, and the `glslangValidator` binary and version. Independent misses compile concurrently; unchanged outputs and cache objects are verified before reuse. Source templates such as `ddgi_simple_trace.comp` remain inputs to their declared variants without being emitted as unspecialized runtime artifacts.
 
 Production configurations retain their existing output names, embedded
 resource names, and validation scripts. The deterministic
 `njulf-shaders.manifest.json` drives validation incrementality and records the
 SHA-256 of every embedded SPIR-V artifact. The 2026-09-01 Release inventory is
-484 logical artifacts, 468 unique binaries, and 16 content duplicates, with
+483 logical artifacts, 467 unique binaries, and 16 content duplicates, with
 shader-bundle fingerprint
-`sha256:8193e99307cfadb5787a1358914f66aaa7465a35ca79a3e0eb539f18781241c4`.
+`sha256:6b8884b2d08200a4402e2742632a5d782f7acb22f441a230ae821f970845b0bf`.
 
 ## Build properties
 
@@ -16,6 +16,7 @@ shader-bundle fingerprint
 |---|---|---|
 | `NjulfShaderBuildMode` | `Compile` | Builds, reuses, or materializes artifacts. `UseExisting` performs no compiler or cache access and fails if any active output is missing or invalid. |
 | `NjulfShaderMaxParallelism` | `0` | Auto-selects the logical processor count, clamped to 1 through 8. Set `1` for serial equivalence testing. |
+| `NjulfShaderCompilerTimeoutSeconds` | `900` | Maximum wall time for one compiler process. A timeout terminates its complete process tree and fails the build. Set `0` to disable. |
 | `NjulfShaderCacheMode` | `ReadWrite` | Enables the verified persistent cache. Set `Off` to bypass it for equivalence testing. |
 | `NjulfShaderCacheDirectory` | `artifacts/shader-cache/v1` | Cache location, deliberately outside `obj` so `dotnet clean` does not remove it. |
 | `NjulfGlslangValidator` | `glslangValidator` | Compiler executable name or explicit path. |
@@ -25,9 +26,25 @@ Examples:
 ```powershell
 dotnet build Njulf.Shaders/Njulf.Shaders.csproj -c Release -p:NjulfShaderMaxParallelism=1 -p:NjulfShaderCacheMode=Off
 dotnet build Njulf.Shaders/Njulf.Shaders.csproj -c Release -p:NjulfShaderBuildMode=UseExisting
+dotnet build Njulf.Shaders/Njulf.Shaders.csproj -c ProfileSymbols -p:NjulfShaderCompilerTimeoutSeconds=1800
 ```
 
 `UseExisting` is intentionally an escape hatch: it validates the SPIR-V container but does not prove that the output matches current sources. It warns when an output predates its direct source.
+
+With the default `ReadWrite` cache, separate Rider, CLI, and MSBuild-node
+invocations coordinate each recipe through an exclusive lock under
+`artifacts/shader-cache/v1/locks`. A waiter rechecks the verified cache after
+the owner publishes, so only one process compiles an identical miss. Compiler
+and lock waits emit a progress message every 60 seconds. Build cancellation or
+the first compiler failure cancels pending work and terminates active compiler
+process trees before temporary outputs are discarded.
+
+Symbol builds use classic SPIR-V `OpLine`/`OpSource` debug information. This
+retains profiler source attribution without the much larger non-semantic debug
+graph that can overflow glslang's identifier space in large forward variants.
+The Shipping/Profile parity gate strips debug information and compacts result
+IDs before hashing; ID compaction changes numbering only and leaves executable
+instructions and interfaces unchanged.
 
 ## Targeted native-compiler workarounds
 

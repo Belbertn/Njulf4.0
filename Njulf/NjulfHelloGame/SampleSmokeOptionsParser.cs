@@ -1873,7 +1873,8 @@ public static class SampleSmokeOptionsParser
                 sceneKind = SampleSceneKind.Bistro;
                 if (controlledTrajectory is
                     SampleBenchmarkTrajectoryKind.BistroPresentation or
-                    SampleBenchmarkTrajectoryKind.BistroSnapshotIncident)
+                    SampleBenchmarkTrajectoryKind.BistroSnapshotIncident or
+                    SampleBenchmarkTrajectoryKind.BistroFoliageIncident)
                 {
                     bistroQualityCaptureVariant =
                         SampleBistroQualityCaptureVariant.Presentation;

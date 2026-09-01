@@ -1607,7 +1607,6 @@ internal sealed class HelloGame : Game
         ApplySponzaScenarioFrameControls();
         ApplyBenchmarkDynamicScenarioFrameControls();
         ApplyBenchmarkCameraScenarioFrameControls();
-        ApplyBenchmarkNamedTrajectoryFrameControls();
         if (_bistroQualityCaptureRunner != null &&
             Renderer is VulkanRenderer bistroCaptureRenderer &&
             SampleBistroQualityCaptureRunner.IsReadyForCapture(
@@ -1642,6 +1641,11 @@ internal sealed class HelloGame : Game
         }
         else if (_benchmarkRunner?.HoldTrajectoryForPostMeasurementEvidence != true)
             _bistroQualityRuntimeController?.PrepareFrame(_drawnFrames);
+
+        // Bistro runtime preparation also authors the presentation camera.
+        // Apply the selected benchmark route last so incident bookmarks remain
+        // authoritative while retaining the controller's lighting and settings.
+        ApplyBenchmarkNamedTrajectoryFrameControls();
 
         base.Update(simulationDeltaTime);
         ApplyBenchmarkActivationPreDrawControls();
@@ -1900,8 +1904,11 @@ internal sealed class HelloGame : Game
         SampleBistroQualityCaptureVariant bistroVariant = timingEnabled
             ? _smokeOptions.Benchmark.TrajectoryBistroVariant
             : _smokeOptions.BenchmarkQualitySequence.TrajectoryBistroVariant;
+        bool hasAuthoredCamera =
+            SampleBenchmarkTrajectory.RequiresSponza(trajectory) ||
+            SampleBenchmarkTrajectory.RequiresBistro(trajectory);
         if (!(timingEnabled || qualityEnabled) ||
-            !SampleBenchmarkTrajectory.RequiresSponza(trajectory) ||
+            !hasAuthoredCamera ||
             _benchmarkRunner?.HoldTrajectoryForPostMeasurementEvidence == true ||
             Camera is not FirstPersonCamera camera)
         {
@@ -1926,7 +1933,7 @@ internal sealed class HelloGame : Game
                 trajectoryFrame,
                 bistroVariant) ??
             throw new InvalidOperationException(
-                "A named Sponza benchmark trajectory did not resolve a camera pose.");
+                "A named benchmark trajectory did not resolve a camera pose.");
         camera.Position = pose.Position;
         camera.Yaw = pose.Yaw;
         camera.Pitch = pose.Pitch;

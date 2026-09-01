@@ -38,7 +38,7 @@ public sealed class ShaderBuildTests
         "forward_transparent_thin_glass.frag",
         "forward_transparent_thin_glass_ddgi_b1.frag",
         "ddgi_near_field_residual_finalize.comp",
-        "ddgi_simple_trace.comp",
+        "ddgi_simple_trace_validate_source.comp",
         "ddgi_simple_transport.comp",
         "ddgi_simple_directional_prepare.comp",
         "ddgi_simple_directional_project.comp",
@@ -115,6 +115,10 @@ public sealed class ShaderBuildTests
             Assert.That(
                 shaderResourceNames.Distinct(StringComparer.Ordinal).Count(),
                 Is.EqualTo(shaderResourceNames.Length));
+            Assert.That(
+                shaderResourceNames,
+                Does.Not.Contain("Njulf.Shaders.ddgi_simple_trace.comp"),
+                "The trace template must not be emitted as an unspecialized runtime artifact.");
         });
 
         foreach (string shaderName in RequiredShaders)
@@ -236,10 +240,42 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
+    public void ProfileSymbolsUsesBoundedDebugEncodingAndIdNormalizedParity()
+    {
+        string repoRoot = FindRepoDirectory("Njulf.Shaders");
+        string project = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "Njulf.Shaders.csproj"));
+        string parity = File.ReadAllText(Path.Combine(
+            Directory.GetParent(repoRoot)!.FullName,
+            "eng",
+            "verify-shader-semantic-parity.ps1"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                project,
+                Does.Contain(
+                    "<NjulfShaderDebugOptions Condition=\"'$(NjulfShaderDebugInformation)' == 'true'\">-g</NjulfShaderDebugOptions>"));
+            Assert.That(project, Does.Not.Contain(">-gVS</NjulfShaderDebugOptions>"));
+            Assert.That(project, Does.Not.Contain(">-gV</NjulfShaderDebugOptions>"));
+            Assert.That(parity, Does.Contain("function Get-RelativeShaderPath"));
+            Assert.That(parity, Does.Not.Contain("[IO.Path]::GetRelativePath"));
+            Assert.That(parity, Does.Not.Contain("-Encoding utf8NoBOM"));
+            Assert.That(
+                parity.Split(
+                    "--strip-debug --compact-ids",
+                    StringSplitOptions.None).Length - 1,
+                Is.EqualTo(2),
+                "Both ShippingPerformance and ProfileSymbols must be normalized identically before parity hashing.");
+        });
+    }
+
+    [Test]
     public void ShaderModuleLoaderUsesTheBuildPinnedResource()
     {
-        const string shaderFileName = "ddgi_simple_trace.comp.spv";
-        const string resourceName = "Njulf.Shaders.ddgi_simple_trace.comp";
+        const string shaderFileName = "ddgi_simple_trace_validate_source.comp.spv";
+        const string resourceName = "Njulf.Shaders.ddgi_simple_trace_validate_source.comp";
         byte[] actual = ShaderModuleLoader.LoadBytes(shaderFileName);
         using Stream stream = typeof(ShaderLibrary).Assembly.GetManifestResourceStream(resourceName)
             ?? throw new AssertionException($"Missing shader resource '{resourceName}'.");

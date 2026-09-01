@@ -2,11 +2,14 @@ using System.Collections.Concurrent;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
 using MsBuildTask = Microsoft.Build.Utilities.Task;
+
+[assembly: InternalsVisibleTo("Njulf.ShaderBuild.Tests")]
 
 namespace Njulf.ShaderBuild;
 
@@ -15,15 +18,25 @@ namespace Njulf.ShaderBuild;
 /// content-addressed cache outside <c>obj</c>. The task owns incremental state
 /// because one shader source can intentionally produce many native variants.
 /// </summary>
-public sealed class CompileNjulfShaderArtifacts : MsBuildTask
+public sealed class CompileNjulfShaderArtifacts : MsBuildTask, ICancelableTask
 {
     private const int SchemaVersion = 1;
     private const int MaximumShaderModuleBytes = 16 * 1024 * 1024;
     private const int MaximumStateFileBytes = 4 * 1024 * 1024;
     private const int MaximumDependencyCount = 4096;
     private const int PublicationRetryCount = 8;
+    private const int DefaultCompilerTimeoutSeconds = 15 * 60;
+    private const int CompilerProbeTimeoutSeconds = 30;
+    private const int ProgressHeartbeatSeconds = 60;
+    private const int RecipeLockRetryMilliseconds = 100;
+    private const int RecipeLockTimeoutGraceSeconds = 60;
     private readonly ConcurrentDictionary<string, Lazy<string>> _inputHashes =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly CancellationTokenSource _cancellation = new();
+    private int _externalCancellationRequested;
+
+    internal ICompilerProcessRunner ProcessRunner { get; set; } =
+        new CompilerProcessRunner();
 
     [Required]
     public ITaskItem[] Artifacts { get; set; } = [];
@@ -42,6 +55,8 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
     public string GlobalCompileOptions { get; set; } = string.Empty;
 
     public int MaxParallelism { get; set; }
+
+    public int CompilerTimeoutSeconds { get; set; } = DefaultCompilerTimeoutSeconds;
 
     public string CacheMode { get; set; } = "ReadWrite";
 
@@ -68,11 +83,30 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         {
             return ExecuteCore();
         }
+        catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+        {
+            Log.LogMessage(
+                MessageImportance.High,
+                "Njulf shader compilation was canceled; active compiler process trees were terminated.");
+            return false;
+        }
         catch (Exception exception)
         {
             Log.LogErrorFromException(exception, showStackTrace: true);
             return false;
         }
+    }
+
+    public void Cancel()
+    {
+        Interlocked.Exchange(ref _externalCancellationRequested, 1);
+        RequestCancellation();
+    }
+
+    private void RequestCancellation()
+    {
+        _cancellation.Cancel();
+        ProcessRunner.CancelAll();
     }
 
     private bool ExecuteCore()
@@ -91,6 +125,8 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
             throw new InvalidOperationException($"Unsupported NjulfShaderCacheMode '{CacheMode}'. Use ReadWrite or Off.");
         if (!useExisting && !string.Equals(BuildMode, "Compile", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Unsupported NjulfShaderBuildMode '{BuildMode}'. Use Compile or UseExisting.");
+        if (CompilerTimeoutSeconds < 0)
+            throw new InvalidOperationException("NjulfShaderCompilerTimeoutSeconds cannot be negative. Use 0 to disable the timeout.");
         if (!Directory.Exists(shaderRoot))
             throw new DirectoryNotFoundException($"Shader root '{shaderRoot}' does not exist.");
 
@@ -128,6 +164,7 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         {
             Directory.CreateDirectory(Path.Combine(cacheDirectory, "index"));
             Directory.CreateDirectory(Path.Combine(cacheDirectory, "objects"));
+            Directory.CreateDirectory(Path.Combine(cacheDirectory, "locks"));
         }
         RemoveObsoleteActiveOutputs(outputDirectory, artifacts);
 
@@ -160,39 +197,46 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
             int parallelism = ResolveParallelism(MaxParallelism);
             var failures = new ConcurrentBag<ArtifactFailure>();
             var timings = new ConcurrentBag<ArtifactTiming>();
-            var cancellation = new CancellationTokenSource();
+            var dispositions = new ConcurrentBag<WorkDisposition>();
             var stopwatch = Stopwatch.StartNew();
             ParallelOptions options = new()
             {
                 MaxDegreeOfParallelism = parallelism,
-                CancellationToken = cancellation.Token
+                CancellationToken = _cancellation.Token
             };
 
             try
             {
                 Parallel.ForEach(misses, options, item =>
                 {
-                    if (cancellation.IsCancellationRequested)
-                        return;
-
                     try
                     {
+                        _cancellation.Token.ThrowIfCancellationRequested();
                         Stopwatch artifactStopwatch = Stopwatch.StartNew();
-                        CompileAndPublish(item);
-                        timings.Add(new ArtifactTiming(
-                            item.Artifact.OutputName,
-                            artifactStopwatch.Elapsed));
+                        WorkDisposition disposition = ResolveMiss(item);
+                        dispositions.Add(disposition);
+                        if (disposition == WorkDisposition.Compiled)
+                        {
+                            timings.Add(new ArtifactTiming(
+                                item.Artifact.OutputName,
+                                artifactStopwatch.Elapsed));
+                        }
+                    }
+                    catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+                    {
+                        // The initiating failure or external cancellation is
+                        // reported once after all active compiler trees stop.
                     }
                     catch (Exception exception)
                     {
                         failures.Add(new ArtifactFailure(item.Artifact.OutputName, exception.Message));
-                        cancellation.Cancel();
+                        RequestCancellation();
                     }
                 });
             }
-            catch (OperationCanceledException) when (!failures.IsEmpty)
+            catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
             {
-                // A compiler failure is reported below with artifact-specific diagnostics.
+                // The initiating failure or external cancellation is reported below.
             }
 
             if (!failures.IsEmpty)
@@ -202,11 +246,24 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
                 return false;
             }
 
-            CompiledCount = misses.Count;
+            if (Volatile.Read(ref _externalCancellationRequested) != 0)
+            {
+                Log.LogMessage(
+                    MessageImportance.High,
+                    "Njulf shader compilation was canceled; no partial compiler output was published.");
+                return false;
+            }
+
+            CompiledCount += dispositions.Count(disposition => disposition == WorkDisposition.Compiled);
+            CacheHitCount += dispositions.Count(disposition => disposition == WorkDisposition.CacheHit);
+            UpToDateCount += dispositions.Count(disposition => disposition == WorkDisposition.UpToDate);
             Log.LogMessage(MessageImportance.High,
-                "Njulf shaders: compiled {0} artifact(s) with parallelism {1} in {2:F1}s.",
+                "Njulf shaders: resolved {0} initial miss(es) with parallelism {1}: {2} compiled, {3} cache hit, {4} up-to-date in {5:F1}s.",
                 misses.Count,
                 parallelism,
+                dispositions.Count(disposition => disposition == WorkDisposition.Compiled),
+                dispositions.Count(disposition => disposition == WorkDisposition.CacheHit),
+                dispositions.Count(disposition => disposition == WorkDisposition.UpToDate),
                 stopwatch.Elapsed.TotalSeconds);
 
             foreach (ArtifactTiming timing in timings
@@ -362,6 +419,118 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         return state;
     }
 
+    private WorkDisposition ResolveMiss(ArtifactWork work)
+    {
+        _cancellation.Token.ThrowIfCancellationRequested();
+        if (!work.CacheEnabled)
+        {
+            CompileAndPublish(work);
+            return WorkDisposition.Compiled;
+        }
+
+        using FileStream recipeLock = AcquireRecipeLock(work);
+        _cancellation.Token.ThrowIfCancellationRequested();
+
+        WorkDisposition disposition = TryMaterializeOrReuse(work);
+        if (disposition != WorkDisposition.Compile)
+        {
+            Log.LogMessage(
+                MessageImportance.Normal,
+                "Njulf shader single-flight reuse: {0} became {1} after waiting for recipe {2}.",
+                work.Artifact.OutputName,
+                disposition == WorkDisposition.CacheHit ? "a cache hit" : "up-to-date",
+                work.RecipeKey);
+            return disposition;
+        }
+
+        CompileAndPublish(work);
+        return WorkDisposition.Compiled;
+    }
+
+    private FileStream AcquireRecipeLock(ArtifactWork work)
+    {
+        string lockPath = Path.Combine(
+            work.CacheDirectory,
+            "locks",
+            work.RecipeKey + ".lock");
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        TimeSpan nextHeartbeat = TimeSpan.FromSeconds(ProgressHeartbeatSeconds);
+        TimeSpan? timeout = CompilerTimeoutSeconds == 0
+            ? null
+            : TimeSpan.FromSeconds(
+                (long)CompilerTimeoutSeconds + RecipeLockTimeoutGraceSeconds);
+        IOException? lastFailure = null;
+        bool loggedContention = false;
+
+        while (true)
+        {
+            _cancellation.Token.ThrowIfCancellationRequested();
+            try
+            {
+                FileStream stream = new(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.None);
+                if (loggedContention)
+                {
+                    Log.LogMessage(
+                        MessageImportance.Normal,
+                        "Njulf shader single-flight acquired: {0} after {1:F1}s.",
+                        work.Artifact.OutputName,
+                        stopwatch.Elapsed.TotalSeconds);
+                }
+                return stream;
+            }
+            catch (IOException exception)
+            {
+                lastFailure = exception;
+            }
+
+            if (!loggedContention)
+            {
+                loggedContention = true;
+                Log.LogMessage(
+                    MessageImportance.High,
+                    "Njulf shader single-flight waiting: {0} is already being built by another task (recipe {1}).",
+                    work.Artifact.OutputName,
+                    work.RecipeKey);
+            }
+
+            if (timeout.HasValue && stopwatch.Elapsed >= timeout.Value)
+            {
+                throw new TimeoutException(
+                    $"Timed out after {stopwatch.Elapsed.TotalSeconds:F1}s waiting for the shared shader-cache recipe lock " +
+                    $"'{lockPath}' for '{work.Artifact.OutputName}'.",
+                    lastFailure);
+            }
+
+            if (stopwatch.Elapsed >= nextHeartbeat)
+            {
+                Log.LogMessage(
+                    MessageImportance.High,
+                    "Njulf shader single-flight still waiting: {0}, elapsed {1:F0}s{2}.",
+                    work.Artifact.OutputName,
+                    stopwatch.Elapsed.TotalSeconds,
+                    timeout.HasValue
+                        ? $", timeout {timeout.Value.TotalSeconds:F0}s"
+                        : ", timeout disabled");
+                do
+                {
+                    nextHeartbeat += TimeSpan.FromSeconds(ProgressHeartbeatSeconds);
+                }
+                while (stopwatch.Elapsed >= nextHeartbeat);
+            }
+
+            if (_cancellation.Token.WaitHandle.WaitOne(RecipeLockRetryMilliseconds))
+                _cancellation.Token.ThrowIfCancellationRequested();
+        }
+    }
+
     private void CompileAndPublish(ArtifactWork work)
     {
         string outputDirectory = Path.GetDirectoryName(work.Artifact.OutputPath)!;
@@ -376,7 +545,11 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         string temporaryDepfile = Path.Combine(outputDirectory, temporaryStem + ".d.tmp");
         try
         {
-            ProcessResult result = RunCompiler(work, temporaryOutput, temporaryDepfile);
+            CompilerProcessResult result = RunCompiler(
+                work,
+                temporaryOutput,
+                temporaryDepfile);
+            _cancellation.Token.ThrowIfCancellationRequested();
             if (result.ExitCode != 0)
             {
                 throw new InvalidOperationException(
@@ -390,6 +563,7 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
             string contentKey = CreateContentKey(work.RecipeKey, dependencies);
             var state = new ArtifactState(SchemaVersion, work.RecipeKey, contentKey, outputHash, dependencies);
 
+            _cancellation.Token.ThrowIfCancellationRequested();
             PublishFile(temporaryOutput, work.Artifact.OutputPath);
             temporaryOutput = string.Empty;
             WriteStateIfChanged(work.LocalStatePath, state);
@@ -411,7 +585,10 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         }
     }
 
-    private ProcessResult RunCompiler(ArtifactWork work, string temporaryOutput, string temporaryDepfile)
+    private CompilerProcessResult RunCompiler(
+        ArtifactWork work,
+        string temporaryOutput,
+        string temporaryDepfile)
     {
         var start = new ProcessStartInfo
         {
@@ -435,15 +612,37 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         start.ArgumentList.Add(temporaryOutput);
         start.ArgumentList.Add(work.Artifact.SourcePath);
 
-        using Process process = Process.Start(start) ??
-            throw new InvalidOperationException($"Could not start '{work.Toolchain.ExecutablePath}'.");
-        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
-        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
-        string stdout = stdoutTask.GetAwaiter().GetResult();
-        string stderr = stderrTask.GetAwaiter().GetResult();
-        string output = string.Join(Environment.NewLine, new[] { stdout, stderr }.Where(text => !string.IsNullOrWhiteSpace(text)));
-        return new ProcessResult(process.ExitCode, output);
+        TimeSpan? timeout = CompilerTimeoutSeconds == 0
+            ? null
+            : TimeSpan.FromSeconds(CompilerTimeoutSeconds);
+        try
+        {
+            return ProcessRunner.Run(
+                start,
+                timeout,
+                TimeSpan.FromSeconds(ProgressHeartbeatSeconds),
+                _cancellation.Token,
+                heartbeat => Log.LogMessage(
+                    MessageImportance.High,
+                    "Njulf shader compiler still running: {0}, PID {1}, elapsed {2:F0}s{3}.",
+                    work.Artifact.OutputName,
+                    heartbeat.ProcessId,
+                    heartbeat.Elapsed.TotalSeconds,
+                    timeout.HasValue
+                        ? $", timeout {timeout.Value.TotalSeconds:F0}s"
+                        : ", timeout disabled"));
+        }
+        catch (CompilerProcessTimeoutException exception)
+        {
+            string output = string.IsNullOrWhiteSpace(exception.Output)
+                ? string.Empty
+                : Environment.NewLine + exception.Output;
+            throw new TimeoutException(
+                $"glslangValidator timed out compiling '{work.Artifact.OutputName}' after " +
+                $"{exception.Elapsed.TotalSeconds:F1}s (PID {exception.ProcessId}); the compiler process tree was terminated." +
+                output,
+                exception);
+        }
     }
 
     private List<DependencyState> ParseDependencies(string depfilePath, string sourcePath)
@@ -637,10 +836,24 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         }
     }
 
-    private static Toolchain ResolveToolchain(string compilerPath)
+    private Toolchain ResolveToolchain(string compilerPath)
     {
         string executablePath = ResolveExecutablePath(compilerPath);
-        ProcessResult result = RunProcess(executablePath, ["--version"]);
+        CompilerProcessResult result;
+        try
+        {
+            result = RunProcess(
+                executablePath,
+                ["--version"],
+                TimeSpan.FromSeconds(CompilerProbeTimeoutSeconds));
+        }
+        catch (CompilerProcessTimeoutException exception)
+        {
+            throw new TimeoutException(
+                $"Timed out after {exception.Elapsed.TotalSeconds:F1}s querying " +
+                $"'{executablePath} --version' (PID {exception.ProcessId}); the process tree was terminated.",
+                exception);
+        }
         if (result.ExitCode != 0)
             throw new InvalidOperationException($"Could not query '{executablePath} --version': {result.Output}");
         string binaryHash = File.Exists(executablePath) ? HashFile(executablePath) : "path:" + executablePath;
@@ -670,7 +883,10 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         return compilerPath;
     }
 
-    private static ProcessResult RunProcess(string executablePath, IReadOnlyList<string> arguments)
+    private CompilerProcessResult RunProcess(
+        string executablePath,
+        IReadOnlyList<string> arguments,
+        TimeSpan timeout)
     {
         var start = new ProcessStartInfo
         {
@@ -682,13 +898,12 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
         };
         foreach (string argument in arguments)
             start.ArgumentList.Add(argument);
-        using Process process = Process.Start(start) ?? throw new InvalidOperationException($"Could not start '{executablePath}'.");
-        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
-        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
-        string stdout = stdoutTask.GetAwaiter().GetResult();
-        string stderr = stderrTask.GetAwaiter().GetResult();
-        return new ProcessResult(process.ExitCode, string.Join(Environment.NewLine, new[] { stdout, stderr }.Where(text => !string.IsNullOrWhiteSpace(text))));
+        return ProcessRunner.Run(
+            start,
+            timeout,
+            TimeSpan.Zero,
+            _cancellation.Token,
+            heartbeat: null);
     }
 
     private static int ResolveParallelism(int requested) =>
@@ -966,8 +1181,6 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
 
     private sealed record Toolchain(string ExecutablePath, string Fingerprint);
 
-    private sealed record ProcessResult(int ExitCode, string Output);
-
     private sealed record ArtifactFailure(string OutputName, string Message);
 
     private sealed record ArtifactTiming(string OutputName, TimeSpan Elapsed);
@@ -991,7 +1204,231 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
     private enum WorkDisposition
     {
         Compile,
+        Compiled,
         CacheHit,
         UpToDate
+    }
+}
+
+internal interface ICompilerProcessRunner
+{
+    CompilerProcessResult Run(
+        ProcessStartInfo startInfo,
+        TimeSpan? timeout,
+        TimeSpan heartbeatInterval,
+        CancellationToken cancellationToken,
+        Action<CompilerProcessHeartbeat>? heartbeat);
+
+    void CancelAll();
+}
+
+internal sealed record CompilerProcessResult(
+    int ExitCode,
+    string Output,
+    int ProcessId,
+    TimeSpan Elapsed);
+
+internal readonly record struct CompilerProcessHeartbeat(
+    int ProcessId,
+    TimeSpan Elapsed);
+
+internal sealed class CompilerProcessTimeoutException : TimeoutException
+{
+    public CompilerProcessTimeoutException(
+        int processId,
+        TimeSpan elapsed,
+        string output)
+        : base($"Process {processId} timed out after {elapsed.TotalSeconds:F1}s.")
+    {
+        ProcessId = processId;
+        Elapsed = elapsed;
+        Output = output;
+    }
+
+    public int ProcessId { get; }
+
+    public TimeSpan Elapsed { get; }
+
+    public string Output { get; }
+}
+
+internal sealed class CompilerProcessRunner : ICompilerProcessRunner
+{
+    private const int WaitSliceMilliseconds = 250;
+    private const int TerminationWaitMilliseconds = 5_000;
+    private readonly ConcurrentDictionary<int, Process> _activeProcesses = new();
+
+    public CompilerProcessResult Run(
+        ProcessStartInfo startInfo,
+        TimeSpan? timeout,
+        TimeSpan heartbeatInterval,
+        CancellationToken cancellationToken,
+        Action<CompilerProcessHeartbeat>? heartbeat)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        if (timeout.HasValue && timeout.Value <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        if (heartbeatInterval < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(heartbeatInterval));
+
+        using var process = new Process
+        {
+            StartInfo = startInfo,
+            EnableRaisingEvents = true
+        };
+        if (!process.Start())
+            throw new InvalidOperationException($"Could not start '{startInfo.FileName}'.");
+
+        int processId = process.Id;
+        if (!_activeProcesses.TryAdd(processId, process))
+        {
+            TryKillProcessTree(process);
+            throw new InvalidOperationException(
+                $"Compiler process ID {processId} was already active.");
+        }
+
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        TimeSpan nextHeartbeat = heartbeatInterval;
+        bool completed = false;
+        try
+        {
+            while (true)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    bool terminated = TerminateAndWait(process);
+                    string output = terminated
+                        ? DrainOutput(stdoutTask, stderrTask)
+                        : string.Empty;
+                    throw new OperationCanceledException(
+                        $"Compiler process {processId} was canceled" +
+                        (terminated
+                            ? "."
+                            : " but did not exit within the termination grace period.") +
+                        FormatOutput(output),
+                        cancellationToken);
+                }
+
+                if (process.WaitForExit(WaitSliceMilliseconds))
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        string canceledOutput = DrainOutput(
+                            stdoutTask,
+                            stderrTask);
+                        throw new OperationCanceledException(
+                            $"Compiler process {processId} was canceled." +
+                            FormatOutput(canceledOutput),
+                            cancellationToken);
+                    }
+                    break;
+                }
+
+                TimeSpan elapsed = stopwatch.Elapsed;
+                if (timeout.HasValue && elapsed >= timeout.Value)
+                {
+                    bool terminated = TerminateAndWait(process);
+                    string output = terminated
+                        ? DrainOutput(stdoutTask, stderrTask)
+                        : string.Empty;
+                    throw new CompilerProcessTimeoutException(
+                        processId,
+                        elapsed,
+                        output + (terminated
+                            ? string.Empty
+                            : Environment.NewLine +
+                              "The process tree did not exit within the termination grace period."));
+                }
+
+                if (heartbeat != null &&
+                    heartbeatInterval > TimeSpan.Zero &&
+                    elapsed >= nextHeartbeat)
+                {
+                    heartbeat(new CompilerProcessHeartbeat(processId, elapsed));
+                    do
+                    {
+                        nextHeartbeat += heartbeatInterval;
+                    }
+                    while (elapsed >= nextHeartbeat);
+                }
+            }
+
+            string processOutput = DrainOutput(stdoutTask, stderrTask);
+            completed = true;
+            return new CompilerProcessResult(
+                process.ExitCode,
+                processOutput,
+                processId,
+                stopwatch.Elapsed);
+        }
+        finally
+        {
+            if (!completed)
+                TerminateAndWait(process);
+            _activeProcesses.TryRemove(processId, out _);
+        }
+    }
+
+    public void CancelAll()
+    {
+        foreach (Process process in _activeProcesses.Values)
+            TryKillProcessTree(process);
+    }
+
+    private static string DrainOutput(
+        Task<string> stdoutTask,
+        Task<string> stderrTask)
+    {
+        string stdout = stdoutTask.GetAwaiter().GetResult();
+        string stderr = stderrTask.GetAwaiter().GetResult();
+        return string.Join(
+            Environment.NewLine,
+            new[] { stdout, stderr }.Where(text => !string.IsNullOrWhiteSpace(text)));
+    }
+
+    private static string FormatOutput(string output) =>
+        string.IsNullOrWhiteSpace(output)
+            ? string.Empty
+            : Environment.NewLine + output;
+
+    private static bool TerminateAndWait(Process process)
+    {
+        TryKillProcessTree(process);
+        try
+        {
+            return process.HasExited ||
+                   process.WaitForExit(TerminationWaitMilliseconds);
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // The process exited between the state check and the kill request.
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // The owning Run call reports a failed termination after its wait.
+        }
+        catch (NotSupportedException)
+        {
+            // The owning Run call reports a failed termination after its wait.
+        }
     }
 }

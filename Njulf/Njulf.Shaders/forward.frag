@@ -7579,7 +7579,8 @@ void main()
     }
 
 #if !FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE && \
-    !FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+    !FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE && \
+    !FORWARD_INCOMPATIBLE_DEBUG_VIEWS_STATIC_NONE
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
     {
         WriteForwardColor(vec4(finalDiffuseIndirect, forwardDebugOutputAlpha));
@@ -8091,7 +8092,7 @@ void main()
         return;
     }
 #endif
-#endif // !FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE
+#endif // GI debug views are dynamically available for this artifact
 
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
     // This must remain independent of final scene colour and every indirect

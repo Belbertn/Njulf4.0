@@ -307,7 +307,6 @@ $algorithmicAtomicCounts = @{
     'ddgi_simple_publish_sampled.comp.spv' = 5
     'ddgi_simple_relocate_classify.comp.spv' = 5
     'ddgi_simple_relocate_classify_guided.comp.spv' = 5
-    'ddgi_simple_trace.comp.spv' = 7
     'ddgi_simple_trace_legacy_source.comp.spv' = 5
     'ddgi_simple_trace_legacy_reuse.comp.spv' = 6
     'ddgi_simple_trace_legacy_final.comp.spv' = 6
