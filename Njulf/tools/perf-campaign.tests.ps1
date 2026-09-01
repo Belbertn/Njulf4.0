@@ -220,9 +220,34 @@ function Invoke-SyntheticHealthReportCase {
     $health.diagnostics | Add-Member -NotePropertyName ValidationErrorMessageCount -NotePropertyValue 0
     $health.diagnostics | Add-Member -NotePropertyName GiWarnings -NotePropertyValue @(
         [pscustomobject]@{ Severity = "Error"; Code = "GiBudgetOverrun" })
+    $gateFailure = [pscustomobject]@{
+        Name = "budget-metrics-within-gate"
+        Passed = $false
+        Detail = "overBudget=DDGI total memory"
+    }
+    $report.DdgiProductionGate = [pscustomobject]@{
+        Passed = $false
+        Criteria = @($gateFailure)
+        Failures = @($gateFailure)
+    }
     Assert-HealthReport `
         $null $workload $health $report $build $commit `
         "synthetic-pair" "Synthetic pre-target reference" $true
+
+    $gateFailure.Detail = "overBudget=Upload budget"
+    $unexpectedGateFailureFailed = $false
+    try {
+        Assert-HealthReport `
+            $null $workload $health $report $build $commit `
+            "synthetic-pair" "Synthetic invalid gate reference" $true
+    } catch {
+        $unexpectedGateFailureFailed = $_.Exception.Message -match
+            "production gate outside the admitted reference budgets"
+    }
+    if (-not $unexpectedGateFailureFailed) {
+        throw "Reference initialization admitted a mismatched production-gate failure."
+    }
+    $report.DdgiProductionGate = $null
 
     $report.BudgetMetrics[0].Name = "Upload budget"
     $health.failure = "Benchmark exceeded 'Upload budget': 210287208 bytes > 201326592 bytes."

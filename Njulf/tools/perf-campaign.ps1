@@ -5793,16 +5793,59 @@ function Assert-PretargetReferenceHealth {
     if ([bool]$Report.Options.RequireRealtime1080p60Target) {
         throw "$Label enabled the final 1080p60 gate during reference initialization."
     }
-    if ($null -ne $Report.DdgiProductionGate -and
-        -not [bool]$Report.DdgiProductionGate.Passed) {
-        throw "$Label failed the DDGI production gate."
-    }
     $overBudget = @($Report.BudgetMetrics | Where-Object { [int]$_.Status -eq 3 })
     $unexpected = @($overBudget | Where-Object {
             -not $allowedBudgetNames.Contains([string]$_.Name)
         })
     if ($unexpected.Count -ne 0) {
         throw "$Label exceeded an unapproved reference budget: $(@($unexpected.Name) -join ', ')."
+    }
+    if ($null -ne $Report.DdgiProductionGate -and
+        -not [bool]$Report.DdgiProductionGate.Passed) {
+        $gateFailures = @((Get-PropertyValue `
+            $Report.DdgiProductionGate "Failures" @()))
+        $failedCriteria = @((Get-PropertyValue `
+            $Report.DdgiProductionGate "Criteria" @()) | Where-Object {
+                -not [bool]$_.Passed
+            })
+        $expectedGateFailureName = "budget-metrics-within-gate"
+        $detailPrefix = "overBudget="
+        $gateDetail = if ($gateFailures.Count -eq 1) {
+            [string]$gateFailures[0].Detail
+        } else {
+            ""
+        }
+        $reportedBudgetNames = @()
+        if ($gateDetail.StartsWith($detailPrefix, [StringComparison]::Ordinal)) {
+            $reportedBudgetNames = @(
+                $gateDetail.Substring($detailPrefix.Length).Split(
+                    ',',
+                    [StringSplitOptions]::RemoveEmptyEntries) |
+                ForEach-Object { $_.Trim() })
+        }
+        $actualBudgetNames = @($overBudget | ForEach-Object {
+                [string]$_.Name
+            })
+        $reportedUnique = @($reportedBudgetNames |
+            Sort-Object -Unique)
+        $actualUnique = @($actualBudgetNames |
+            Sort-Object -Unique)
+        $sameBudgetSet =
+            $reportedBudgetNames.Count -eq $reportedUnique.Count -and
+            $actualBudgetNames.Count -eq $actualUnique.Count -and
+            $reportedUnique.Count -eq $actualUnique.Count -and
+            @(Compare-Object $reportedUnique $actualUnique).Count -eq 0
+        $admittedGateFailure =
+            $gateFailures.Count -eq 1 -and
+            $failedCriteria.Count -eq 1 -and
+            [string]$gateFailures[0].Name -ceq $expectedGateFailureName -and
+            [string]$failedCriteria[0].Name -ceq $expectedGateFailureName -and
+            [string]$failedCriteria[0].Detail -ceq $gateDetail -and
+            $actualBudgetNames.Count -gt 0 -and
+            $sameBudgetSet
+        if (-not $admittedGateFailure) {
+            throw "$Label failed the DDGI production gate outside the admitted reference budgets."
+        }
     }
     $ddgiMemoryExceeded = @($overBudget | Where-Object {
             [string]$_.Name -ceq "DDGI total memory"
