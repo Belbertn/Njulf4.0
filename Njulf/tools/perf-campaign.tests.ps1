@@ -69,6 +69,7 @@ function Invoke-SyntheticHealthReportCase {
         "Get-RuntimeExecutableBundleHash",
         "Test-CanonicalIdentityText",
         "Assert-BenchmarkReport",
+        "Assert-PretargetReferenceHealth",
         "Assert-HealthReport")
     foreach ($functionName in $requiredFunctions) {
         $definition = @($driverAst.FindAll({
@@ -197,6 +198,45 @@ function Invoke-SyntheticHealthReportCase {
     }
     if (-not $failedClosed) {
         throw "Synthetic failed health report did not fail closed."
+    }
+
+    $report | Add-Member -NotePropertyName Options -NotePropertyValue ([pscustomobject]@{
+        RequireRealtime1080p60Target = $false
+    })
+    $report | Add-Member -NotePropertyName DdgiProductionGate -NotePropertyValue $null
+    $report | Add-Member -NotePropertyName BudgetMetrics -NotePropertyValue @(
+        [pscustomobject]@{
+            Name = "DDGI total memory"
+            Status = 3
+            Value = 210287208
+            Unit = "bytes"
+            FailureThreshold = 201326592
+        })
+    $health.failure = "Benchmark exceeded 'DDGI total memory': 210287208 bytes > 201326592 bytes."
+    $health | Add-Member -NotePropertyName validationWarningCount -NotePropertyValue 0
+    $health | Add-Member -NotePropertyName validationErrorCount -NotePropertyValue 0
+    $health | Add-Member -NotePropertyName operations -NotePropertyValue @()
+    $health.diagnostics | Add-Member -NotePropertyName ValidationWarningMessageCount -NotePropertyValue 0
+    $health.diagnostics | Add-Member -NotePropertyName ValidationErrorMessageCount -NotePropertyValue 0
+    $health.diagnostics | Add-Member -NotePropertyName GiWarnings -NotePropertyValue @(
+        [pscustomobject]@{ Severity = "Error"; Code = "GiBudgetOverrun" })
+    Assert-HealthReport `
+        $null $workload $health $report $build $commit `
+        "synthetic-pair" "Synthetic pre-target reference" $true
+
+    $report.BudgetMetrics[0].Name = "Upload budget"
+    $health.failure = "Benchmark exceeded 'Upload budget': 210287208 bytes > 201326592 bytes."
+    $unexpectedReferenceBudgetFailed = $false
+    try {
+        Assert-HealthReport `
+            $null $workload $health $report $build $commit `
+            "synthetic-pair" "Synthetic invalid reference" $true
+    } catch {
+        $unexpectedReferenceBudgetFailed = $_.Exception.Message -match
+            "unapproved reference budget"
+    }
+    if (-not $unexpectedReferenceBudgetFailed) {
+        throw "Reference initialization admitted an unexpected budget failure."
     }
     Write-Host "PASS synthetic-benchmark-v5-health-v3-contract"
 
@@ -2270,6 +2310,10 @@ function Invoke-SyntheticSceneProfileArgumentCase {
             maximumSettlingFrames = 4096
             budgetProfile = "stress"
         }
+        quality = [pscustomobject]@{
+            maximumRelativeRmse = 0.005
+            maximumFlipP95 = 0.02
+        }
         qualitySequence = [pscustomobject]@{
             maximumReadbackDrainFrames = 120
         }
@@ -2295,9 +2339,12 @@ function Invoke-SyntheticSceneProfileArgumentCase {
             bistroQualityVariant = ""
             arguments = @()
         }
-        $timing = @(Get-BenchmarkArguments `
+        $referenceTiming = @(Get-BenchmarkArguments `
             $manifest $workload "report.json" "health.json" "pair" `
             "quality.json" "reference.pfm" $true)
+        $timing = @(Get-BenchmarkArguments `
+            $manifest $workload "report.json" "health.json" "pair" `
+            "quality.json" "reference.pfm" $false)
         $quality = @(Get-QualitySequenceArguments `
             $manifest $workload "canonical" "sequence" "quality-report.json" `
             "quality-health.json" "quality-output" "reference.json" `
@@ -2309,6 +2356,10 @@ function Invoke-SyntheticSceneProfileArgumentCase {
         if ($timing -notcontains "--benchmark-activation" -or
             $timing -contains "--benchmark-quality-sequence-activation") {
             throw "$scene timing arguments do not own the timing activation namespace."
+        }
+        if ($referenceTiming -contains "--benchmark-require-1080p60" -or
+            $timing -notcontains "--benchmark-require-1080p60") {
+            throw "$scene reference and candidate timing do not separate the final target gate."
         }
         if ($quality -notcontains "--benchmark-quality-sequence-activation" -or
             $quality -contains "--benchmark-activation" -or

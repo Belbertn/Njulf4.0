@@ -237,7 +237,8 @@ function Invoke-CheckedProcess {
         [string]$LogPath,
         [int]$TimeoutSeconds,
         [string]$Label,
-        $Environment = $null)
+        $Environment = $null,
+        [int[]]$AllowedExitCodes = @(0))
     $info = [System.Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $FilePath
     $info.WorkingDirectory = $WorkingDirectory
@@ -272,7 +273,7 @@ function Invoke-CheckedProcess {
         $errText = $stderr.GetAwaiter().GetResult()
         $log = "COMMAND: $FilePath $($Arguments -join ' ')`nENVIRONMENT: $($environmentLog -join '; ')`nEXIT: $($process.ExitCode)`nSTDOUT:`n$outText`nSTDERR:`n$errText"
         [System.IO.File]::WriteAllText($LogPath, $log, [System.Text.UTF8Encoding]::new($false))
-        if ($process.ExitCode -ne 0) {
+        if ($process.ExitCode -notin $AllowedExitCodes) {
             throw "$Label failed with exit code $($process.ExitCode); see $LogPath"
         }
     } finally {
@@ -407,7 +408,7 @@ function Get-WorkloadArguments {
         "--benchmark-trajectory", ([string]$Workload.trajectory),
         "--benchmark-activation", ([string]$Workload.activation),
         "--benchmark-budget-profile", ([string]$Manifest.capture.budgetProfile),
-        "--benchmark-require-1080p60", "--scene", ([string]$Workload.scene),
+        "--scene", ([string]$Workload.scene),
         "--performance-scenario", ([string]$Workload.scenario),
         "--validation", "off", "--gpu-timing")
     $bistro = [string](Get-PropertyValue $Workload "bistroQualityVariant" "")
@@ -443,9 +444,181 @@ function Get-ReferenceEntry {
     return $entry.Value
 }
 
+function Get-PretargetOperationalFindings {
+    param($Manifest, $Report, $Health, [string]$Label)
+    $allowedBudgetNames = [System.Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal)
+    foreach ($name in @(
+            "DDGI Topology certified latency",
+            "DDGI Topology first-visible latency",
+            "DDGI total memory")) {
+        [void]$allowedBudgetNames.Add($name)
+    }
+
+    if ([bool]$Report.Options.RequireRealtime1080p60Target) {
+        throw "$Label unexpectedly enabled the final 1080p60 gate during pre-target measurement."
+    }
+    if ([int]$Report.MeasurementFrameCount -le 0 -or
+        [int]$Report.GpuTimingSupported -ne 1 -or
+        [int]$Report.GpuTimingValidSampleCount -ne [int]$Report.MeasurementFrameCount -or
+        [int]$Report.GpuFrameMilliseconds.Count -ne [int]$Report.MeasurementFrameCount -or
+        [bool]$Report.SettlingWaitTimedOut) {
+        throw "$Label lacks complete settled GPU timing."
+    }
+    if ($null -eq $Report.CaptureContract -or
+        -not [bool]$Report.CaptureContract.Comparable -or
+        @($Report.CaptureContract.Mismatches).Count -ne 0) {
+        throw "$Label is not a comparable capture."
+    }
+    if ($null -ne $Report.DdgiProductionGate -and
+        -not [bool]$Report.DdgiProductionGate.Passed) {
+        throw "$Label failed the DDGI production gate."
+    }
+
+    $overBudget = @($Report.BudgetMetrics | Where-Object { [int]$_.Status -eq 3 })
+    $unexpectedBudget = @($overBudget | Where-Object {
+            -not $allowedBudgetNames.Contains([string]$_.Name)
+        })
+    if ($unexpectedBudget.Count -ne 0) {
+        throw "$Label exceeded an unapproved operational budget: $(@($unexpectedBudget.Name) -join ', ')."
+    }
+
+    $giErrors = @($Health.diagnostics.GiWarnings | Where-Object {
+            [string]$_.Severity -ceq "Error"
+        })
+    $ddgiMemoryExceeded = @($overBudget | Where-Object {
+            [string]$_.Name -ceq "DDGI total memory"
+        }).Count -eq 1
+    $unexpectedGiErrors = @($giErrors | Where-Object {
+            [string]$_.Code -cne "GiBudgetOverrun" -or -not $ddgiMemoryExceeded
+        })
+    if ($unexpectedGiErrors.Count -ne 0) {
+        throw "$Label reported an unexpected GI diagnostic error: $(@($unexpectedGiErrors.Code) -join ', ')."
+    }
+    if ([int]$Health.validationWarningCount -ne 0 -or
+        [int]$Health.validationErrorCount -ne 0 -or
+        [int]$Health.diagnostics.ValidationWarningMessageCount -ne 0 -or
+        [int]$Health.diagnostics.ValidationErrorMessageCount -ne 0) {
+        throw "$Label emitted Vulkan validation messages."
+    }
+    $failedOperations = @($Health.operations | Where-Object {
+            [string]$_.status -ceq "failed"
+        })
+    if ($failedOperations.Count -ne 0) {
+        throw "$Label reported a failed runtime operation: $(@($failedOperations.name) -join ', ')."
+    }
+
+    $failure = [string](Get-PropertyValue $Health "failure" "")
+    if ([string]$Health.status -ceq "passed") {
+        if (-not [string]::IsNullOrWhiteSpace($failure)) {
+            throw "$Label has a passing health status with a failure detail."
+        }
+    } elseif ([string]$Health.status -ceq "failed") {
+        $budgetFailure = [regex]::Match(
+            $failure,
+            "^Benchmark exceeded '([^']+)':")
+        $allowedFailure = $budgetFailure.Success -and
+            $allowedBudgetNames.Contains($budgetFailure.Groups[1].Value) -and
+            @($overBudget | Where-Object {
+                    [string]$_.Name -ceq $budgetFailure.Groups[1].Value
+                }).Count -eq 1
+        $allowedFailure = $allowedFailure -or (
+            $failure.StartsWith(
+                "GI diagnostic GiBudgetOverrun ",
+                [StringComparison]::Ordinal) -and
+            $ddgiMemoryExceeded)
+        if (-not $allowedFailure) {
+            throw "$Label health failed outside the admitted pre-target blockers: $failure"
+        }
+    } else {
+        throw "$Label has unknown health status '$($Health.status)'."
+    }
+
+    $findings = @($overBudget | ForEach-Object {
+            [pscustomobject][ordered]@{
+                kind = "admitted-pretarget-budget"
+                name = [string]$_.Name
+                value = [double]$_.Value
+                unit = [string]$_.Unit
+                threshold = [double]$_.FailureThreshold
+            }
+        })
+    foreach ($target in @(
+            [pscustomobject]@{
+                name = "CPU p95"
+                value = [double]$Report.CpuFrameMilliseconds.P95Milliseconds
+                threshold = [double]$Manifest.performanceTarget.cpuP95Milliseconds
+            },
+            [pscustomobject]@{
+                name = "GPU p95"
+                value = [double]$Report.GpuFrameMilliseconds.P95Milliseconds
+                threshold = [double]$Manifest.performanceTarget.gpuP95Milliseconds
+            },
+            [pscustomobject]@{
+                name = "Frame p99"
+                value = [Math]::Max(
+                    [double]$Report.CpuFrameMilliseconds.P99Milliseconds,
+                    [double]$Report.GpuFrameMilliseconds.P99Milliseconds)
+                threshold = [double]$Manifest.performanceTarget.frameP99Milliseconds
+            })) {
+        if ($target.value -gt $target.threshold) {
+            $findings += [pscustomobject][ordered]@{
+                kind = "unmet-final-target"
+                name = $target.name
+                value = $target.value
+                unit = "ms"
+                threshold = $target.threshold
+            }
+        }
+    }
+    return @($findings)
+}
+
+function Assert-AutomaticPlanarCaptureEvidence {
+    param($Report, $Variant, [string]$Label)
+    $evidence = $Report.AutomaticPlanarEvidence
+    if ($null -eq $evidence -or -not [bool]$evidence.Available -or
+        [int]$evidence.CompletedFrameCount -ne [int]$Report.MeasurementFrameCount -or
+        [int]$evidence.CaptureFrameCount -le 0 -or
+        [int]$evidence.CaptureFrameMilliseconds.Count -le 0) {
+        throw "$Label lacks classified automatic-planar capture timing."
+    }
+    $frames = @($evidence.Frames)
+    if ($frames.Count -ne [int]$evidence.CompletedFrameCount -or
+        @($frames | Where-Object {
+                -not [bool]$_.CompletedLifecycle.Valid -or
+                -not [bool]$_.CompletedLifecycle.GpuTimingRecorded -or
+                [int]$_.CompletedLifecycle.SelectedCount -le 0 -or
+                [int]$_.CompletedLifecycle.MetadataCapacityRejectionCount -ne 0
+            }).Count -ne 0) {
+        throw "$Label has incomplete or rejected automatic-planar lifecycle evidence."
+    }
+    $selector = [string](Get-PropertyValue `
+        $Variant.environment "NJULF_AUTOMATIC_PLANAR_EXCLUSION_ENCODING" "")
+    if ($selector -ceq "BitsetAuto") {
+        if (@($frames | Where-Object {
+                    [int]$_.CompletedLifecycle.BitsetCaptureCount -le 0 -or
+                    [int]$_.CompletedLifecycle.SortedListFallbackCount -ne 0
+                }).Count -ne 0) {
+            throw "$Label did not prove exclusive BitsetAuto encoding."
+        }
+    } elseif ($selector -ceq "SortedList") {
+        if (@($frames | Where-Object {
+                    [int]$_.CompletedLifecycle.BitsetCaptureCount -ne 0 -or
+                    [int]$_.CompletedLifecycle.SortedListFallbackCount -le 0
+                }).Count -ne 0) {
+            throw "$Label did not prove exclusive SortedList encoding."
+        }
+    } else {
+        throw "$Label automatic-planar claim lacks an exact encoding selector."
+    }
+}
+
 function Assert-CaptureReport {
-    param($Report, $Health, $Workload, $Build, [string]$PairId, [string]$Label)
-    if ([string]$Health.status -cne "passed") { throw "$Label health failed: $($Health.failure)" }
+    param($Report, $Health, $Workload, $Build, $Variant,
+        [string]$PairId, [string]$Label, [bool]$AutomaticPlanarClaim)
+    $preTargetFindings = @(Get-PretargetOperationalFindings `
+        $Manifest $Report $Health $Label)
     if ([string]$Report.Kind -cne "njulf-renderer-benchmark" -or
         [string]$Report.Schema -cne "njulf-renderer-benchmark/v5") {
         throw "$Label has an unsupported benchmark report."
@@ -463,6 +636,10 @@ function Assert-CaptureReport {
         [double]$Report.HdrDifference.FlipP95 -gt [double]$Manifest.quality.maximumFlipP95) {
         throw "$Label exceeds the hard image-quality gate."
     }
+    if ($AutomaticPlanarClaim) {
+        Assert-AutomaticPlanarCaptureEvidence $Report $Variant $Label
+    }
+    return @($preTargetFindings)
 }
 
 function Get-Median {
@@ -493,6 +670,14 @@ function Get-BootstrapLowerBound {
 
 function Get-TimingValue {
     param($Report, [string]$Domain, [string]$Name)
+    if ($Domain -ceq "gpu" -and $Name -ceq "__automatic_planar_capture__") {
+        if ($null -eq $Report.AutomaticPlanarEvidence -or
+            -not [bool]$Report.AutomaticPlanarEvidence.Available -or
+            [int]$Report.AutomaticPlanarEvidence.CaptureFrameMilliseconds.Count -le 0) {
+            throw "Classified automatic-planar capture timing is unavailable."
+        }
+        return [double]$Report.AutomaticPlanarEvidence.CaptureFrameMilliseconds.P95Milliseconds
+    }
     if ($Name -ceq "__frame__") {
         $stats = if ($Domain -ceq "cpu") { $Report.CpuFrameMilliseconds } else { $Report.GpuFrameMilliseconds }
         return [double]$stats.P95Milliseconds
@@ -757,6 +942,7 @@ if (-not $AnalyzeOnly) {
 }
 
 $results = @()
+$preTargetEvidence = @()
 foreach ($configuration in @($Spec.configurations)) {
     $configurationBuilds = $builds.PSObject.Properties[$configuration]
     if ($null -eq $configurationBuilds) { $configurationBuilds = $builds[$configuration] }
@@ -785,11 +971,24 @@ foreach ($configuration in @($Spec.configurations)) {
                     Invoke-CheckedProcess ([string]$slot.build.executablePath) $arguments `
                         ([string]$slot.build.rootPath) $logPath ([int]$Manifest.capture.benchmarkTimeoutSeconds) `
                         "$configuration/$($workload.id) cycle $cycle slot $($slotIndex + 1) $($slot.phase)" `
-                        $slot.variant.environment
+                        $slot.variant.environment @(0, 1)
                 }
                 $report = Read-JsonFile $reportPath "Benchmark report"
                 $health = Read-JsonFile $healthPath "Health report"
-                Assert-CaptureReport $report $health $workload $slot.build $pairId "$configuration/$($workload.id)/$stem"
+                $automaticPlanarClaim = @($claim | Where-Object {
+                        [string]$_.targetDomain -ceq "gpu" -and
+                        [string]$_.targetPass -ceq "__automatic_planar_capture__"
+                    }).Count -eq 1
+                $findings = @(Assert-CaptureReport `
+                    $report $health $workload $slot.build $slot.variant $pairId `
+                    "$configuration/$($workload.id)/$stem" $automaticPlanarClaim)
+                $preTargetEvidence += [pscustomobject][ordered]@{
+                    configuration = $configuration
+                    workloadId = [string]$workload.id
+                    capture = $stem
+                    phase = [string]$slot.phase
+                    findings = @($findings)
+                }
                 $orderedReports += $report
             }
             if (-not $AnalyzeOnly) {
@@ -837,6 +1036,7 @@ $decisionValue = [ordered]@{
     acceptanceMode = [string]$Spec.acceptanceMode
     completeConfigurations = $completeConfigurations
     decision = $decision
+    preTargetEvidence = $preTargetEvidence
     results = $results
 }
 Write-JsonFile (Join-Path $experimentRoot "decision.json") $decisionValue

@@ -45,6 +45,20 @@ regression limit. It invokes the frozen reference build's benchmark pair
 comparer for each A/B pair and writes build logs, raw reports, health reports,
 HDR images, pair reports, hashes, and `decision.json` beneath the experiment ID.
 
+Experiments are a pre-target comparison stage, so they do not ask the runtime to
+declare the final 1080p60 gate passed. The driver still fails closed on incomplete
+timing, settling, identity, DDGI production, validation, unexpected GI, runtime,
+image-quality, and unapproved budget failures. It admits only the explicitly
+tracked DDGI topology-latency and DDGI-total-memory blockers and records those,
+along with every unmet final CPU/GPU/frame target, in `preTargetEvidence`.
+
+Use the reserved GPU timing name `__automatic_planar_capture__` for an automatic
+planar claim. It reads the p95 of capture-classified frames rather than pooling
+capture, reprojection, and no-work frames. Such a claim additionally requires an
+exact `NJULF_AUTOMATIC_PLANAR_EXCLUSION_ENCODING` value (`SortedList` or
+`BitsetAuto`) and proves the selected encoding on every completed frame with no
+metadata-capacity rejection.
+
 Phase arguments cannot override scene, resolution, trajectory, warmup,
 measurement, validation, quality-reference, or production requirements. They
 are intended only for a candidate's narrow internal selector or rollback

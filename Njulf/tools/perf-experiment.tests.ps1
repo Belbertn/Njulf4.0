@@ -38,6 +38,11 @@ function New-TestManifest {
             bootstrapSamples = 10000
             bootstrapConfidence = 0.95
         }
+        performanceTarget = [pscustomobject]@{
+            cpuP95Milliseconds = 6.0
+            gpuP95Milliseconds = 10.0
+            frameP99Milliseconds = 16.666666666666668
+        }
         workloads = @(
             [pscustomobject]@{ id = "bistro-test"; qualification = $true })
     }
@@ -61,7 +66,55 @@ function New-TestReport {
         GpuPasses = @(
             [pscustomobject]@{ Name = "TargetPass"; P95Milliseconds = $Target },
             [pscustomobject]@{ Name = "OtherPass"; P95Milliseconds = $Other })
+        AutomaticPlanarEvidence = [pscustomobject]@{
+            Available = $true
+            CaptureFrameMilliseconds = [pscustomobject]@{
+                Count = 2
+                P95Milliseconds = $Target
+            }
+        }
     }
+}
+
+function New-PretargetCapture {
+    param([string]$BudgetName = "DDGI total memory", [string]$GiError = "GiBudgetOverrun")
+    $report = New-TestReport 20.0 5.0
+    $report | Add-Member -NotePropertyName Options -NotePropertyValue ([pscustomobject]@{
+        RequireRealtime1080p60Target = $false
+    })
+    $report | Add-Member -NotePropertyName MeasurementFrameCount -NotePropertyValue 1
+    $report | Add-Member -NotePropertyName GpuTimingSupported -NotePropertyValue 1
+    $report | Add-Member -NotePropertyName GpuTimingValidSampleCount -NotePropertyValue 1
+    $report.GpuFrameMilliseconds | Add-Member -NotePropertyName Count -NotePropertyValue 1
+    $report | Add-Member -NotePropertyName SettlingWaitTimedOut -NotePropertyValue $false
+    $report | Add-Member -NotePropertyName CaptureContract -NotePropertyValue ([pscustomobject]@{
+        Comparable = $true
+        Mismatches = @()
+    })
+    $report | Add-Member -NotePropertyName DdgiProductionGate -NotePropertyValue $null
+    $report | Add-Member -NotePropertyName BudgetMetrics -NotePropertyValue @(
+        [pscustomobject]@{
+            Name = $BudgetName
+            Status = 3
+            Value = 210287208
+            Unit = "bytes"
+            FailureThreshold = 201326592
+        })
+    $health = [pscustomobject]@{
+        status = "failed"
+        failure = "Benchmark exceeded '$BudgetName': 210287208 bytes > 201326592 bytes."
+        validationWarningCount = 0
+        validationErrorCount = 0
+        operations = @()
+        diagnostics = [pscustomobject]@{
+            ValidationWarningMessageCount = 0
+            ValidationErrorMessageCount = 0
+            GiWarnings = if ([string]::IsNullOrEmpty($GiError)) { @() } else {
+                @([pscustomobject]@{ Severity = "Error"; Code = $GiError })
+            }
+        }
+    }
+    return [pscustomobject]@{ Report = $report; Health = $health }
 }
 
 function New-AbbaReports {
@@ -137,6 +190,46 @@ try {
     $missingFailed = $_.Exception.Message -match "missing or duplicated"
 }
 Assert-True $missingFailed "missing-target-pass-fails-closed"
+
+$planarClaim = [pscustomobject]@{
+    workloadId = "bistro-test"
+    targetDomain = "gpu"
+    targetPass = "__automatic_planar_capture__"
+}
+$planarComparison = Compare-ExperimentReports $manifest $planarClaim `
+    (New-AbbaReports 20.0 20.0 5.0 4.5) "pass-only" "ab"
+Assert-True ($planarComparison.accepted -and
+    $planarComparison.baselineTargetP95Milliseconds -eq 5.0 -and
+    $planarComparison.candidateTargetP95Milliseconds -eq 4.5) `
+    "classified-planar-capture-timing-is-addressable"
+
+$pretarget = New-PretargetCapture
+$pretargetFindings = @(Get-PretargetOperationalFindings `
+    $manifest $pretarget.Report $pretarget.Health "synthetic-pretarget")
+Assert-True (@($pretargetFindings | Where-Object {
+            [string]$_.kind -ceq "admitted-pretarget-budget" -and
+            [string]$_.name -ceq "DDGI total memory"
+        }).Count -eq 1) "known-pretarget-blocker-is-recorded"
+
+$unexpectedBudgetFailed = $false
+$unexpectedBudget = New-PretargetCapture "Upload budget" ""
+try {
+    $null = Get-PretargetOperationalFindings `
+        $manifest $unexpectedBudget.Report $unexpectedBudget.Health "unexpected-budget"
+} catch {
+    $unexpectedBudgetFailed = $_.Exception.Message -match "unapproved operational budget"
+}
+Assert-True $unexpectedBudgetFailed "unexpected-pretarget-budget-fails-closed"
+
+$unexpectedGiFailed = $false
+$unexpectedGi = New-PretargetCapture "DDGI total memory" "NonFiniteTransport"
+try {
+    $null = Get-PretargetOperationalFindings `
+        $manifest $unexpectedGi.Report $unexpectedGi.Health "unexpected-gi"
+} catch {
+    $unexpectedGiFailed = $_.Exception.Message -match "unexpected GI diagnostic"
+}
+Assert-True $unexpectedGiFailed "unexpected-pretarget-gi-error-fails-closed"
 
 $driverText = Get-Content -LiteralPath $driver -Raw
 $gitCallSites = @([regex]::Matches($driverText, 'Get-GitText\s+\$root\s+@\("([^"]+)"'))
@@ -217,6 +310,20 @@ try {
 } finally {
     if (Test-Path -LiteralPath $environmentLog -PathType Leaf) {
         Remove-Item -LiteralPath $environmentLog -Force
+    }
+}
+
+$allowedExitLog = Join-Path ([System.IO.Path]::GetTempPath()) (
+    "njulf-perf-experiment-allowed-exit-{0}.log" -f [Guid]::NewGuid().ToString("N"))
+try {
+    Invoke-CheckedProcess (Get-Command pwsh).Source @(
+        "-NoProfile", "-Command", "exit 1") `
+        (Get-Location).Path $allowedExitLog 10 "allowed-pretarget-exit" $null @(0, 1)
+    Assert-True ((Get-Content -LiteralPath $allowedExitLog -Raw) -match 'EXIT: 1') `
+        "pretarget-process-allows-recorded-health-exit"
+} finally {
+    if (Test-Path -LiteralPath $allowedExitLog -PathType Leaf) {
+        Remove-Item -LiteralPath $allowedExitLog -Force
     }
 }
 

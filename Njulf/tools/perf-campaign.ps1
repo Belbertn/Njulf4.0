@@ -1643,7 +1643,8 @@ function Invoke-ProcessChecked {
         [string[]]$Arguments,
         [string]$Label,
         [int]$TimeoutSeconds,
-        [string]$WorkingDirectory = $script:SolutionRoot
+        [string]$WorkingDirectory = $script:SolutionRoot,
+        [int[]]$AllowedExitCodes = @(0)
     )
     $info = [System.Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $FilePath
@@ -1687,7 +1688,7 @@ function Invoke-ProcessChecked {
         if (-not [string]::IsNullOrWhiteSpace($stderr)) {
             Write-Warning $stderr.TrimEnd()
         }
-        if ($process.ExitCode -ne 0) {
+        if ($process.ExitCode -notin $AllowedExitCodes) {
             throw "$Label failed with exit code $($process.ExitCode)."
         }
     } finally {
@@ -5304,11 +5305,13 @@ function Get-BenchmarkArguments {
         "--benchmark-trajectory", ([string]$Workload.trajectory),
         "--benchmark-activation", ([string]$Workload.activation),
         "--benchmark-budget-profile", ([string]$Manifest.capture.budgetProfile),
-        "--benchmark-require-1080p60",
         "--scene", ([string]$Workload.scene),
         "--performance-scenario", ([string]$Workload.scenario),
         "--validation", "off",
         "--gpu-timing")
+    if (-not $ReferenceInitialization) {
+        $arguments += "--benchmark-require-1080p60"
+    }
     $bistroVariant = [string](Get-PropertyValue $Workload "bistroQualityVariant" "")
     if (-not [string]::IsNullOrWhiteSpace($bistroVariant)) {
         $arguments += @("--bistro-quality-variant", $bistroVariant)
@@ -5464,6 +5467,10 @@ function Assert-BenchmarkReport {
     }
     if ([bool]$Report.SettlingWaitTimedOut) {
         throw "$Label exhausted the deterministic settling/alignment window."
+    }
+    if ([bool]$Report.Options.RequireRealtime1080p60Target -eq
+        [bool]$ReferenceInitialization) {
+        throw "$Label used the wrong final-target gate mode for its capture role."
     }
     if ($null -eq $Report.CaptureContract -or -not [bool]$Report.CaptureContract.Comparable) {
         throw "$Label is not comparable: $(@($Report.CaptureContract.Mismatches) -join '; ')"
@@ -5728,6 +5735,78 @@ function Assert-BenchmarkReport {
     }
 }
 
+function Assert-PretargetReferenceHealth {
+    param($Health, $Report, [string]$Label)
+    $allowedBudgetNames = [System.Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal)
+    foreach ($name in @(
+            "DDGI Topology certified latency",
+            "DDGI Topology first-visible latency",
+            "DDGI total memory")) {
+        [void]$allowedBudgetNames.Add($name)
+    }
+    if ([bool]$Report.Options.RequireRealtime1080p60Target) {
+        throw "$Label enabled the final 1080p60 gate during reference initialization."
+    }
+    if ($null -ne $Report.DdgiProductionGate -and
+        -not [bool]$Report.DdgiProductionGate.Passed) {
+        throw "$Label failed the DDGI production gate."
+    }
+    $overBudget = @($Report.BudgetMetrics | Where-Object { [int]$_.Status -eq 3 })
+    $unexpected = @($overBudget | Where-Object {
+            -not $allowedBudgetNames.Contains([string]$_.Name)
+        })
+    if ($unexpected.Count -ne 0) {
+        throw "$Label exceeded an unapproved reference budget: $(@($unexpected.Name) -join ', ')."
+    }
+    $ddgiMemoryExceeded = @($overBudget | Where-Object {
+            [string]$_.Name -ceq "DDGI total memory"
+        }).Count -eq 1
+    $giErrors = @((Get-PropertyValue $Health.diagnostics "GiWarnings" @()) |
+        Where-Object { [string]$_.Severity -ceq "Error" })
+    $unexpectedGiErrors = @($giErrors | Where-Object {
+            [string]$_.Code -cne "GiBudgetOverrun" -or -not $ddgiMemoryExceeded
+        })
+    if ($unexpectedGiErrors.Count -ne 0) {
+        throw "$Label reported an unexpected GI diagnostic error: $(@($unexpectedGiErrors.Code) -join ', ')."
+    }
+    if ([int](Get-PropertyValue $Health "validationWarningCount" 0) -ne 0 -or
+        [int](Get-PropertyValue $Health "validationErrorCount" 0) -ne 0 -or
+        [int](Get-PropertyValue $Health.diagnostics "ValidationWarningMessageCount" 0) -ne 0 -or
+        [int](Get-PropertyValue $Health.diagnostics "ValidationErrorMessageCount" 0) -ne 0) {
+        throw "$Label emitted Vulkan validation messages."
+    }
+    $failedOperations = @((Get-PropertyValue $Health "operations" @()) |
+        Where-Object { [string]$_.status -ceq "failed" })
+    if ($failedOperations.Count -ne 0) {
+        throw "$Label reported a failed runtime operation: $(@($failedOperations.name) -join ', ')."
+    }
+    $failure = [string](Get-PropertyValue $Health "failure" "")
+    if ([string]$Health.status -ceq "passed") {
+        if (-not [string]::IsNullOrWhiteSpace($failure) -or $overBudget.Count -ne 0) {
+            throw "$Label has inconsistent passing pre-target health."
+        }
+        return
+    }
+    if ([string]$Health.status -cne "failed") {
+        throw "$Label has unknown health status '$($Health.status)'."
+    }
+    $budgetFailure = [regex]::Match($failure, "^Benchmark exceeded '([^']+)':")
+    $allowedFailure = $budgetFailure.Success -and
+        $allowedBudgetNames.Contains($budgetFailure.Groups[1].Value) -and
+        @($overBudget | Where-Object {
+                [string]$_.Name -ceq $budgetFailure.Groups[1].Value
+            }).Count -eq 1
+    $allowedFailure = $allowedFailure -or (
+        $failure.StartsWith(
+            "GI diagnostic GiBudgetOverrun ",
+            [StringComparison]::Ordinal) -and
+        $ddgiMemoryExceeded)
+    if (-not $allowedFailure) {
+        throw "$Label health failed outside the admitted reference blockers: $failure"
+    }
+}
+
 function Assert-HealthReport {
     param(
         $Manifest,
@@ -5737,14 +5816,17 @@ function Assert-HealthReport {
         $BuildIdentity,
         [string]$ExpectedCommit,
         [string]$ExpectedPairId,
-        [string]$Label)
+        [string]$Label,
+        [bool]$ReferenceInitialization = $false)
     if ([string]$Health.kind -ne "renderer-health" -or
         [string]$Health.schema -ne "renderer-health/v3") {
         throw "$Label has an unexpected health-report contract."
     }
     $failure = [string](Get-PropertyValue $Health "failure" "")
-    if ([string]$Health.status -ne "passed" -or
-        -not [string]::IsNullOrWhiteSpace($failure)) {
+    if ($ReferenceInitialization) {
+        Assert-PretargetReferenceHealth $Health $Report $Label
+    } elseif ([string]$Health.status -ne "passed" -or
+              -not [string]::IsNullOrWhiteSpace($failure)) {
         throw "$Label health gate failed: $failure"
     }
     if ($null -eq $Health.producerIdentity -or
@@ -5868,11 +5950,14 @@ function Invoke-BenchmarkCapture {
         $QualityContractPath $ExpectedQualityContractSha256 `
         $ReferencePath $ExpectedReferenceSha256 `
         $ReferenceInitialization "$Label pre-capture"
+    $allowedExitCodes = if ($ReferenceInitialization) { @(0, 1) } else { @(0) }
     Invoke-ProcessChecked `
         ([string]$BuildIdentity.ExecutablePath) `
         $arguments `
         $Label `
-        ([int]$Manifest.capture.benchmarkTimeoutSeconds)
+        ([int]$Manifest.capture.benchmarkTimeoutSeconds) `
+        $script:SolutionRoot `
+        $allowedExitCodes
     Assert-CaptureInputHashes `
         $BuildIdentity `
         $QualityContractPath $ExpectedQualityContractSha256 `
@@ -5883,17 +5968,13 @@ function Invoke-BenchmarkCapture {
     }
     $health = Get-Content -LiteralPath $healthPath -Raw |
         ConvertFrom-Json -DateKind String
-    $healthFailure = [string](Get-PropertyValue $health "failure" "")
-    if ([string]$health.status -ne "passed") {
-        throw "$Label health gate failed: $healthFailure"
-    }
     $report = Read-BenchmarkReport $ReportPath
     Assert-BenchmarkReport `
         $Manifest $Workload $report $Configuration $Label $ReferenceInitialization `
         $PairId $ExpectedCommit $BuildIdentity $ReferenceIdentity $candidatePath
     Assert-HealthReport `
         $Manifest $Workload $health $report $BuildIdentity `
-        $ExpectedCommit $PairId $Label
+        $ExpectedCommit $PairId $Label $ReferenceInitialization
     $admittedOutputs = [ordered]@{
         ([System.IO.Path]::GetFullPath($ReportPath)) = Get-Sha256 $ReportPath
         ([System.IO.Path]::GetFullPath($healthPath)) = Get-Sha256 $healthPath
@@ -9507,7 +9588,7 @@ function Assert-InitializedCampaignReferences {
             Assert-HealthReport `
                 $Manifest $workload $health $report $build `
                 $BaselineCommit ([string]$entry.pairId) `
-                "Initialized $configuration/$($workload.id) reference"
+                "Initialized $configuration/$($workload.id) reference" $true
             if (($entry.buildIdentity | ConvertTo-Json -Depth 12 -Compress) -cne
                 ($build | ConvertTo-Json -Depth 12 -Compress)) {
                 throw "Initialized $configuration/$($workload.id) build identity differs."
@@ -9921,7 +10002,7 @@ function Read-CampaignLock {
             Assert-HealthReport `
                 $Manifest $workload $health $report $referenceBuild `
                 ([string]$lock.baselineCommit) ([string]$entry.pairId) `
-                "Locked reference $configuration/$($workload.id)"
+                "Locked reference $configuration/$($workload.id)" $true
             if (($entry.buildIdentity | ConvertTo-Json -Depth 12 -Compress) -cne
                 ($referenceBuild | ConvertTo-Json -Depth 12 -Compress)) {
                 throw "Locked reference build identity differs for '$configuration/$($workload.id)'."
