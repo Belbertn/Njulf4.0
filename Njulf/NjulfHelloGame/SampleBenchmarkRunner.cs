@@ -227,13 +227,26 @@ public sealed class SampleBenchmarkRunner
         if (budget == null)
             throw new ArgumentNullException(nameof(budget));
 
-        _tailDdgiObserver.Observe(diagnostics);
-
         if (_waitingForHdrCapture)
         {
             PollHdrCapture();
             return;
         }
+
+        // Progressive startup can present thousands of inexpensive bootstrap
+        // frames while production pipelines are prepared. Those are not
+        // convergence frames and must not consume the bounded settling window
+        // or contaminate benchmark observers. A real production diagnostic is
+        // identifiable by the authenticated build/shader identity populated
+        // during production-resource initialization.
+        if (_samplesCaptured == 0 &&
+            !HasInitializedProductionIdentity(diagnostics))
+        {
+            _lastPreMeasurementDiagnostics = diagnostics;
+            return;
+        }
+
+        _tailDdgiObserver.Observe(diagnostics);
 
         if (_samplesCaptured == 0)
         {
@@ -579,6 +592,20 @@ public sealed class SampleBenchmarkRunner
         IsReadyForMeasurement(
             diagnostics,
             SampleBenchmarkTrajectoryKind.Stationary);
+
+    internal static bool HasInitializedProductionIdentity(
+        RendererDiagnostics diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        string commit = diagnostics.CaptureRun.Commit;
+        string shaderBundle = diagnostics.CaptureRun.ShaderBundleHash;
+        return commit.Length == 40 &&
+            commit.All(static character => char.IsAsciiHexDigit(character)) &&
+            shaderBundle.Length == 71 &&
+            shaderBundle.StartsWith("sha256:", StringComparison.Ordinal) &&
+            shaderBundle.AsSpan("sha256:".Length).IndexOfAnyExcept(
+                "0123456789abcdef") < 0;
+    }
 
     internal static bool IsReadyForMeasurement(
         RendererDiagnostics diagnostics,

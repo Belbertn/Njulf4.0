@@ -105,6 +105,93 @@ public sealed class SampleBenchmarkAnalyzerTests
         }
     }
 
+    [Test]
+    public void ProgressiveBootstrapFrames_DoNotConsumeBenchmarkSettlingWindow()
+    {
+        string reportPath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"benchmark-progressive-startup-{Guid.NewGuid():N}.json");
+        const string settingsFingerprint =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        bool exited = false;
+        var options = new SampleBenchmarkOptions(
+            Enabled: true,
+            WarmupFrameCount: 0,
+            MeasureFrameCount: 1,
+            ReportPath: reportPath)
+        {
+            MaximumAdditionalSettlingFrameCount = 29
+        };
+        RendererDiagnostics production = RendererDiagnostics.Empty with
+        {
+            GpuTimingSupported = 1,
+            GpuTimingValid = 1,
+            GpuFrameMicroseconds = 1_000,
+            CaptureRun = PerformanceCaptureRunMetadata.Unknown with
+            {
+                Commit = "0123456789abcdef0123456789abcdef01234567",
+                ShaderBundleHash =
+                    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            CaptureFrame = PerformanceCaptureFrameMetadata.Unknown with
+            {
+                WarmupState = DdgiRuntimeWarmupState.SteadyState,
+                TransportConvergencePending = false
+            },
+            CaptureGpuDeviceName = "Synthetic benchmark GPU",
+            CaptureGpuDriverVersion = "1.0-test"
+        };
+
+        try
+        {
+            var runner = new SampleBenchmarkRunner(
+                options,
+                SamplePerformanceScenario.Normal,
+                () => exited = true,
+                () => settingsFingerprint);
+
+            for (int frame = 0; frame < 100; frame++)
+            {
+                runner.OnFrameRendered(
+                    frame,
+                    RendererDiagnostics.Empty,
+                    RenderBudgetSnapshot.Empty);
+            }
+
+            Assert.That(exited, Is.False);
+            for (int frame = 100; frame < 130; frame++)
+            {
+                runner.OnFrameRendered(
+                    frame,
+                    production,
+                    RenderBudgetSnapshot.Empty);
+            }
+            SampleBenchmarkReport report = runner.Report ??
+                throw new AssertionException(
+                    "The production diagnostic did not complete the benchmark.");
+            MaterialGiProducerIdentity producer = report.ProducerIdentity ??
+                throw new AssertionException(
+                    "The benchmark did not publish a producer identity.");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(exited, Is.True);
+                Assert.That(
+                    report.AdditionalSettlingFrameCount,
+                    Is.EqualTo(29));
+                Assert.That(report.SettlingWaitTimedOut, Is.False);
+                Assert.That(
+                    producer.BuildCommit,
+                    Is.EqualTo(production.CaptureRun.Commit));
+            });
+        }
+        finally
+        {
+            if (File.Exists(reportPath))
+                File.Delete(reportPath);
+        }
+    }
+
     [TestCase(SamplePerformanceScenario.GiMovingPointLight)]
     [TestCase(SamplePerformanceScenario.GiMovingRigidObject)]
     public void DynamicQualificationScenario_FreezesAfterBoundedBenchmarkDisturbance(
