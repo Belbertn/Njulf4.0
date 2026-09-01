@@ -17,8 +17,8 @@
       "NewSponza_Curtains_glTF",
       "Strut"
     ],
-    "maximumFiles": 1024,
-    "maximumBytes": 1717986918
+    "maximumFiles": 2048,
+    "maximumBytes": 4294967296
   },
   "performanceTarget": {
     "width": 1920,

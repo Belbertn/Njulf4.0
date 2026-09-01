@@ -115,6 +115,13 @@ Material packages currently use format `1.3`. Readers continue to accept older
 `1.x` minors; a material written before `1.3` has no automatic-planar policy and
 therefore loads with that policy disabled.
 
+Performance qualification stages only the authenticated output closure named
+by the five required cook reports from an external immutable root. The pinned
+Bistro/Sponza campaign bounds that closure to 2,048 files and 4 GiB. These
+limits cover the full-resolution `.ktx2` payloads and authenticated `.njtex`
+sidecars without admitting orphaned files or requiring a quality-reducing
+recook.
+
 ## Explicit material classification
 
 Material names are not cook-time semantics. Use glTF material extras to opt a

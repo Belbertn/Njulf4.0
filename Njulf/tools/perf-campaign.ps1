@@ -578,7 +578,10 @@ function Resolve-CookedAssetBundle {
     }
     if ($files.Count -gt [int]$Manifest.cookedAssets.maximumFiles -or
         $totalBytes -gt [long]$Manifest.cookedAssets.maximumBytes) {
-        throw "$Label cooked asset bundle exceeds its admitted file or byte bound."
+        throw "$Label cooked asset bundle has $($files.Count) files and " +
+            "$totalBytes bytes, exceeding the admitted " +
+            "$($Manifest.cookedAssets.maximumFiles)-file / " +
+            "$($Manifest.cookedAssets.maximumBytes)-byte bound."
     }
     $canonical = [System.Text.StringBuilder]::new()
     [void]$canonical.Append("njulf-perf-cooked-assets/v1`n").Append(
@@ -894,9 +897,9 @@ function Assert-CampaignManifest {
         throw "The cooked asset model set differs from the exact Bistro/Sponza contract."
     }
     if ((Assert-JsonInteger $Manifest.cookedAssets.maximumFiles `
-            "cookedAssets.maximumFiles" 1) -ne 1024 -or
+            "cookedAssets.maximumFiles" 1) -ne 2048 -or
         (Assert-JsonInteger $Manifest.cookedAssets.maximumBytes `
-            "cookedAssets.maximumBytes" 1) -ne 1717986918) {
+            "cookedAssets.maximumBytes" 1) -ne 4294967296) {
         throw "The cooked asset package bounds differ from the approved contract."
     }
     $target = $Manifest.performanceTarget

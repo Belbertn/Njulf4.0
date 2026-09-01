@@ -2384,7 +2384,11 @@ try {
     } $false
     Invoke-ManifestCase "wrong-cooked-file-bound" {
         param($manifest)
-        $manifest.cookedAssets.maximumFiles = 2048
+        $manifest.cookedAssets.maximumFiles = 4096
+    } $false
+    Invoke-ManifestCase "wrong-cooked-byte-bound" {
+        param($manifest)
+        $manifest.cookedAssets.maximumBytes = 8589934592
     } $false
     Invoke-ManifestCase "cooked-assets-unknown-property" {
         param($manifest)
