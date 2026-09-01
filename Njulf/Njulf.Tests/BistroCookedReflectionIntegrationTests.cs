@@ -62,6 +62,75 @@ public sealed class BistroCookedReflectionIntegrationTests
     }
 
     [Test]
+    [Explicit("Requires both local Amazon Bistro source assets and their win-x64 cooks.")]
+    public void BothBistroCooks_PersistOnlyReviewedAutomaticPlanarReceiver()
+    {
+        string root = FindRepositoryRoot();
+        string contentRoot = Path.Combine(root, "NjulfHelloGame");
+
+        foreach (SampleAssetReference asset in
+                 SampleAssetManifest.Bistro.EnumerateAssets())
+        {
+            string sourcePath = Path.GetFullPath(Path.Combine(
+                contentRoot,
+                asset.Path));
+            string sourceName = Path.GetFileNameWithoutExtension(asset.Path);
+            string modelPath = Path.Combine(
+                contentRoot,
+                "Cooked",
+                "win-x64",
+                "models",
+                sourceName + ".njmodel");
+            if (!File.Exists(sourcePath) || !File.Exists(modelPath))
+            {
+                Assert.Ignore(
+                    $"The local Bistro source and win-x64 cook are required: " +
+                    asset.Path);
+            }
+
+            CookedModelManifest manifest;
+            using (var reader = new CookedAssetReader(
+                       modelPath,
+                       CookedAssetKind.Model,
+                       CookedAssetReaderFlags.StrictSourceHash,
+                       CookedHash.File(sourcePath)))
+            {
+                manifest = CookedJson.Deserialize<CookedModelManifest>(
+                    reader.GetRequiredSection(CookedSectionIds.Manifest).Span,
+                    modelPath,
+                    "manifest");
+            }
+
+            string materialPath = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(modelPath)!,
+                manifest.Material.RelativePath));
+            CookedMaterialTable materials = CookedPackage.LoadMaterials(
+                materialPath,
+                CookedAssetReaderFlags.StrictSourceHash,
+                out _);
+            string[] enabledMaterials = materials.Materials
+                .Where(static material =>
+                    material.AutomaticPlanarReflectionEnabled)
+                .Select(static material => material.Name)
+                .Order()
+                .ToArray();
+            string[] expected = sourceName == "BistroExterior"
+                ? ["Pavement_Ground_Wet"]
+                : [];
+            string materialNames = string.Join(
+                ", ",
+                materials.Materials
+                    .Select(static material => material.Name)
+                    .Order());
+
+            Assert.That(
+                enabledMaterials,
+                Is.EqualTo(expected),
+                $"{asset.Path}; material names: [{materialNames}]");
+        }
+    }
+
+    [Test]
     [Explicit("Requires the local Amazon Bistro source asset and its win-x64 cook.")]
     public void ExteriorCook_PreservesThinGlassAndImportSemantics()
     {

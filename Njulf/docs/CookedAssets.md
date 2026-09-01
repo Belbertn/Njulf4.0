@@ -144,8 +144,11 @@ cooked packages and materials with no extra. Opt-in only allows a rigid planar
 surface to compete for the bounded capture budget; it does not infer eligibility
 from names, roughness, metallic values, water, or mirror semantics. Amazon
 Bistro's FBX source cannot carry glTF extras, so its reviewed source-import
-policy opts in exactly `BistroExterior.fbx` material `Pavement_Ground_Wet`.
-No Sponza material is implicitly opted in.
+policy opts in exactly `BistroExterior.fbx` source material
+`Pavement_Ground_Wet`. Assimp exposes the FBX slots as `Material_N`, so the
+policy resolves the exact unique `Pavement_Ground_Wet_BaseColor` source
+texture identity and canonicalizes that one runtime material name before
+cooking. No Sponza material is implicitly opted in.
 
 ## Offline foliage impostors
 

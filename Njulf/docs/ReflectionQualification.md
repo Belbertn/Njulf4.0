@@ -30,7 +30,8 @@ result is `reflection-qualification.json` with contract
 following:
 
 - automatic planar reflection is default-off and the Bistro workload opts in
-  exactly `BistroExterior.fbx` material `Pavement_Ground_Wet`; the Sponza
+  exactly `BistroExterior.fbx` source material `Pavement_Ground_Wet`, resolved
+  from its unique `Pavement_Ground_Wet_BaseColor` import identity; the Sponza
   control has zero automatic-planar material opt-ins;
 
 - both model packages use the current format and match their computed Amazon
