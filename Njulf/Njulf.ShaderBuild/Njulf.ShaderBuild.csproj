@@ -15,4 +15,8 @@
     <Reference Include="Microsoft.Build.Utilities.Core" HintPath="$(MSBuildBinPath)\Microsoft.Build.Utilities.Core.dll" Private="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Njulf.ShaderBuild.Tests" />
+  </ItemGroup>
+
 </Project>
