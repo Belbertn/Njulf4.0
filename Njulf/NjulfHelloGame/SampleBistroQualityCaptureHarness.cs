@@ -55,7 +55,7 @@ public sealed record SampleBistroQualityFrameState(
 /// </summary>
 public sealed class SampleBistroQualityCaptureContract
 {
-    public const string Schema = "bistro-quality-run/v10";
+    public const string Schema = "bistro-quality-run/v11";
     public const int Width = 1920;
     public const int Height = 1080;
     public const int FramesPerSecond = 60;
@@ -461,6 +461,16 @@ public sealed record SampleBistroQualityFrameTelemetry(
     public ulong AutomaticPlanarEstimatedBytes { get; init; }
     public float AutomaticPlanarResolutionScale { get; init; }
     public uint AutomaticPlanarMaximumCaptureAge { get; init; }
+    public AutomaticPlanarExclusionEncodingMode
+        AutomaticPlanarExclusionEncodingMode { get; init; }
+    public int AutomaticPlanarBitsetCaptureCount { get; init; }
+    public int AutomaticPlanarSortedListFallbackCount { get; init; }
+    public AutomaticPlanarMetadataSlotTelemetry[]
+        AutomaticPlanarMetadataSlots { get; init; } = [];
+    public int AutomaticPlanarMetadataPayloadWordCount { get; init; }
+    public int AutomaticPlanarMetadataWordsUsed { get; init; }
+    public int AutomaticPlanarMetadataBankHighWaterMark { get; init; }
+    public int AutomaticPlanarMetadataCapacityRejectionCount { get; init; }
     public long GpuAutomaticPlanarCaptureMicroseconds { get; init; }
     public long GpuHybridReflectionSsrMicroseconds { get; init; }
     public long GpuHybridReflectionRayQueryMicroseconds { get; init; }
@@ -1058,6 +1068,22 @@ internal sealed class SampleBistroQualityCaptureRunner
                     diagnostics.AutomaticPlanarResolutionScale,
                 AutomaticPlanarMaximumCaptureAge =
                     diagnostics.AutomaticPlanarMaximumCaptureAge,
+                AutomaticPlanarExclusionEncodingMode =
+                    diagnostics.AutomaticPlanarExclusionEncodingMode,
+                AutomaticPlanarBitsetCaptureCount =
+                    diagnostics.AutomaticPlanarBitsetCaptureCount,
+                AutomaticPlanarSortedListFallbackCount =
+                    diagnostics.AutomaticPlanarSortedListFallbackCount,
+                AutomaticPlanarMetadataSlots =
+                    diagnostics.AutomaticPlanarMetadataSlots.ToArray(),
+                AutomaticPlanarMetadataPayloadWordCount =
+                    diagnostics.AutomaticPlanarMetadataPayloadWordCount,
+                AutomaticPlanarMetadataWordsUsed =
+                    diagnostics.AutomaticPlanarMetadataWordsUsed,
+                AutomaticPlanarMetadataBankHighWaterMark =
+                    diagnostics.AutomaticPlanarMetadataBankHighWaterMark,
+                AutomaticPlanarMetadataCapacityRejectionCount =
+                    diagnostics.AutomaticPlanarMetadataCapacityRejectionCount,
                 GpuAutomaticPlanarCaptureMicroseconds =
                     diagnostics.GpuAutomaticPlanarCaptureMicroseconds,
                 GpuHybridReflectionSsrMicroseconds =

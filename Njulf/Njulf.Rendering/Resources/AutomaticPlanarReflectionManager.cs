@@ -23,7 +23,7 @@ namespace Njulf.Rendering.Resources;
 public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
 {
     public const uint MetadataMagic = 0x31524c50u; // "PLR1"
-    public const uint MetadataVersion = 2u;
+    public const uint MetadataVersion = 3u;
     public const int MaximumCaptureCount = 2;
     public const int MetadataBankWordCount = 1024;
     public const int MetadataHeaderWordCount = 16;
@@ -67,6 +67,8 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
     private readonly MaterialManager _materialManager;
     private readonly BindlessHeap _bindlessHeap;
     private readonly RenderSettings _settings;
+    private readonly AutomaticPlanarExclusionEncodingMode
+        _exclusionEncodingMode;
     private readonly Format _depthFormat;
     private readonly BufferHandle _metadataBuffer;
     private readonly List<AutomaticPlanarCaptureResource> _resources = [];
@@ -77,6 +79,7 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
     private ulong _lastCameraCutSerial;
     private ulong _lastSceneMutationSerial;
     private uint _captureGeneration;
+    private int _metadataBankHighWaterMark;
     private bool _disposed;
 
     public AutomaticPlanarReflectionManager(
@@ -98,6 +101,10 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         _bindlessHeap = bindlessHeap ??
             throw new ArgumentNullException(nameof(bindlessHeap));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _exclusionEncodingMode = AutomaticPlanarMetadataEncoder.ResolveMode(
+            Environment.GetEnvironmentVariable(
+                AutomaticPlanarMetadataEncoder
+                    .EncodingModeEnvironmentVariable));
         _depthFormat = depthFormat;
         _metadataBuffer = _bufferManager.CreateBuffer(
             MetadataBufferBytes,
@@ -201,6 +208,39 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         }
 
         int selectedCount = Math.Min(requestedCount, _resources.Count);
+        int metadataCapacityRejectionCount = 0;
+        string metadataCapacityDetail = string.Empty;
+        while (selectedCount > 0)
+        {
+            AutomaticPlanarMetadataBankLayout prospectiveLayout =
+                BuildProspectiveMetadataLayout(ranked, selectedCount);
+            if (prospectiveLayout.Fits)
+                break;
+            metadataCapacityDetail = prospectiveLayout.Detail;
+            selectedCount--;
+            metadataCapacityRejectionCount++;
+        }
+        if (selectedCount == 0)
+        {
+            if (_lastSelectionSignature != 0UL)
+            {
+                _lastSelectionSignature = 0UL;
+                AdvanceGeneration();
+            }
+            Array.Clear(_slotStates);
+            sceneData.AutomaticPlanarCandidateCount = candidates.Count;
+            sceneData.AutomaticPlanarRejectedCount = checked(
+                rejectedCount + ranked.Count);
+            sceneData.AutomaticPlanarRejectionReason =
+                AutomaticPlanarCandidateRejectionReason.MetadataCapacity;
+            sceneData.AutomaticPlanarRejectionDetail =
+                metadataCapacityDetail;
+            PublishEmptyFrame(
+                sceneData,
+                preserveDiagnostics: true,
+                metadataCapacityRejectionCount);
+            return;
+        }
         ulong selectionSignature = 1469598103934665603UL;
         for (int slot = 0; slot < selectedCount; slot++)
         {
@@ -244,7 +284,12 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         for (int slot = selectedCount; slot < MaximumCaptureCount; slot++)
             _slotStates[slot] = default;
 
-        WriteMetadata(sceneData.CurrentFrameIndex);
+        AutomaticPlanarMetadataBankLayout metadataLayout =
+            WriteMetadata(sceneData.CurrentFrameIndex);
+        PublishMetadataTelemetry(
+            sceneData,
+            metadataLayout,
+            metadataCapacityRejectionCount);
         sceneData.AutomaticPlanarReflectionActive = _prepared.Count != 0;
         sceneData.AutomaticPlanarCandidateCount = candidates.Count;
         sceneData.AutomaticPlanarSelectedCount = selectedCount;
@@ -252,12 +297,18 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         sceneData.AutomaticPlanarReprojectionCount = reprojectionCount;
         sceneData.AutomaticPlanarRejectedCount = checked(
             rejectedCount + Math.Max(0, ranked.Count - selectedCount));
-        sceneData.AutomaticPlanarRejectionReason = ranked.Count > selectedCount
-            ? AutomaticPlanarCandidateRejectionReason.CaptureLimit
-            : lastRejection;
-        sceneData.AutomaticPlanarRejectionDetail = ranked.Count > selectedCount
-            ? "Eligible planes exceeded the active quality-tier capture limit."
-            : lastDetail;
+        sceneData.AutomaticPlanarRejectionReason =
+            metadataCapacityRejectionCount > 0
+                ? AutomaticPlanarCandidateRejectionReason.MetadataCapacity
+                : ranked.Count > selectedCount
+                    ? AutomaticPlanarCandidateRejectionReason.CaptureLimit
+                    : lastRejection;
+        sceneData.AutomaticPlanarRejectionDetail =
+            metadataCapacityRejectionCount > 0
+                ? metadataCapacityDetail
+                : ranked.Count > selectedCount
+                    ? "Eligible planes exceeded the active quality-tier capture limit."
+                    : lastDetail;
         sceneData.AutomaticPlanarCaptureGeneration = _captureGeneration;
         sceneData.AutomaticPlanarEstimatedBytes = AllocationBytes;
         sceneData.AutomaticPlanarResolutionScale = _resources.Count == 0
@@ -822,8 +873,60 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         AdvanceGeneration();
     }
 
-    private void WriteMetadata(uint frameIndex)
+    private AutomaticPlanarMetadataBankLayout BuildProspectiveMetadataLayout(
+        IReadOnlyList<AutomaticPlanarCluster> ranked,
+        int selectedCount)
     {
+        var inputs = new AutomaticPlanarMetadataCaptureInput[selectedCount];
+        for (int slot = 0; slot < selectedCount; slot++)
+        {
+            AutomaticPlanarCluster cluster = ranked[slot];
+            inputs[slot] = new AutomaticPlanarMetadataCaptureInput(
+                slot,
+                cluster.ReceiverIdentities.Order().ToArray(),
+                cluster.Members
+                    .Select(static member => member.ObjectIndex)
+                    .Distinct()
+                    .Order()
+                    .ToArray(),
+                _resources[slot].GetTextureIndices(0));
+        }
+        return AutomaticPlanarMetadataEncoder.Build(
+            inputs,
+            _exclusionEncodingMode,
+            MetadataBankWordCount,
+            VariableDataWordOffset);
+    }
+
+    private AutomaticPlanarMetadataBankLayout BuildPreparedMetadataLayout()
+    {
+        AutomaticPlanarMetadataCaptureInput[] inputs = _prepared
+            .Select(static capture =>
+                new AutomaticPlanarMetadataCaptureInput(
+                    capture.Slot,
+                    capture.ReceiverIdentities,
+                    capture.ExcludedObjectIndices,
+                    capture.Resource.GetTextureIndices(
+                        capture.DestinationBank)))
+            .ToArray();
+        return AutomaticPlanarMetadataEncoder.Build(
+            inputs,
+            _exclusionEncodingMode,
+            MetadataBankWordCount,
+            VariableDataWordOffset);
+    }
+
+    private AutomaticPlanarMetadataBankLayout WriteMetadata(uint frameIndex)
+    {
+        AutomaticPlanarMetadataBankLayout layout =
+            BuildPreparedMetadataLayout();
+        if (!layout.Fits)
+        {
+            throw new InvalidOperationException(
+                layout.Detail +
+                " No mapped metadata memory was modified.");
+        }
+
         int bank = checked((int)(frameIndex % 2u));
         uint* destination = (uint*)_bufferManager.GetMappedPointer(
             _metadataBuffer) + bank * MetadataBankWordCount;
@@ -832,9 +935,10 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         destination[1] = MetadataVersion;
         destination[2] = checked((uint)_prepared.Count);
         destination[3] = _captureGeneration;
-        int cursor = VariableDataWordOffset;
         foreach (AutomaticPlanarPreparedCapture capture in _prepared)
         {
+            AutomaticPlanarMetadataCaptureLayout captureLayout =
+                layout.Captures[capture.Slot];
             int record = MetadataHeaderWordCount +
                 capture.Slot * CaptureRecordWordCount;
             WriteVector4(destination, record + 0, capture.WorldPlane);
@@ -860,32 +964,48 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
             WriteMatrix(destination, record + 72,
                 capture.PreviousInverseViewProjection);
 
-            destination[record + 88] = checked((uint)capture.ReceiverIdentities.Length);
-            destination[record + 89] = checked((uint)cursor);
-            foreach (uint identity in capture.ReceiverIdentities)
-                destination[cursor++] = identity;
-            destination[record + 90] = checked((uint)capture.ExcludedObjectIndices.Length);
-            destination[record + 91] = checked((uint)cursor);
-            foreach (uint objectIndex in capture.ExcludedObjectIndices)
-                destination[cursor++] = objectIndex;
-            destination[record + 92] = checked((uint)cursor);
-            foreach (int textureIndex in capture.Resource.GetTextureIndices(
-                         capture.DestinationBank))
-                destination[cursor++] = checked((uint)textureIndex);
+            destination[record + 88] = checked(
+                (uint)captureLayout.ReceiverIdentities.Length);
+            destination[record + 89] = captureLayout.ReceiverOffset;
+            WritePayload(
+                destination,
+                captureLayout.ReceiverOffset,
+                captureLayout.ReceiverIdentities);
+            destination[record + 90] = captureLayout.ExclusionDescriptor;
+            destination[record + 91] = captureLayout.ExclusionOffset;
+            WritePayload(
+                destination,
+                captureLayout.ExclusionOffset,
+                captureLayout.ExclusionPayload);
+            destination[record + 92] = captureLayout.TextureOffset;
+            WritePayload(
+                destination,
+                captureLayout.TextureOffset,
+                captureLayout.TextureIndices);
             (uint identityLow, uint identityHigh) =
                 SplitClusterIdentity(capture.ClusterIdentity);
             destination[record + 93] = identityLow;
             destination[record + 94] = identityHigh;
             destination[record + 95] = (uint)capture.Action;
-            if (cursor > MetadataBankWordCount)
-                throw new InvalidOperationException(
-                    "Automatic planar metadata exceeded its bounded frame bank.");
         }
         ulong offset = checked((ulong)bank * MetadataBankWordCount * sizeof(uint));
         _bufferManager.FlushBuffer(
             _metadataBuffer,
             offset,
             checked((ulong)MetadataBankWordCount * sizeof(uint)));
+        _metadataBankHighWaterMark = Math.Max(
+            _metadataBankHighWaterMark,
+            layout.WordsUsed);
+        return layout;
+    }
+
+    private static void WritePayload(
+        uint* destination,
+        uint offset,
+        IReadOnlyList<uint> payload)
+    {
+        for (int index = 0; index < payload.Count; index++)
+            destination[checked((int)offset + index)] = payload[index];
     }
 
     internal static (uint Low, uint High) SplitClusterIdentity(
@@ -894,10 +1014,16 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
 
     private void PublishEmptyFrame(
         SceneRenderingData sceneData,
-        bool preserveDiagnostics = false)
+        bool preserveDiagnostics = false,
+        int metadataCapacityRejectionCount = 0)
     {
         _prepared.Clear();
-        WriteMetadata(sceneData.CurrentFrameIndex);
+        AutomaticPlanarMetadataBankLayout metadataLayout =
+            WriteMetadata(sceneData.CurrentFrameIndex);
+        PublishMetadataTelemetry(
+            sceneData,
+            metadataLayout,
+            metadataCapacityRejectionCount);
         sceneData.AutomaticPlanarReflectionActive = false;
         if (!preserveDiagnostics)
         {
@@ -916,6 +1042,34 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
             ? 0.0f
             : _resources[0].LinearScale;
         sceneData.AutomaticPlanarMaximumCaptureAge = 0u;
+    }
+
+    private void PublishMetadataTelemetry(
+        SceneRenderingData sceneData,
+        AutomaticPlanarMetadataBankLayout layout,
+        int capacityRejectionCount)
+    {
+        sceneData.AutomaticPlanarExclusionEncodingMode =
+            _exclusionEncodingMode;
+        sceneData.AutomaticPlanarBitsetCaptureCount =
+            layout.BitsetCaptureCount;
+        sceneData.AutomaticPlanarSortedListFallbackCount =
+            layout.SortedListCaptureCount;
+        sceneData.AutomaticPlanarMetadataSlots = layout.Captures
+            .Select(static capture =>
+                new AutomaticPlanarMetadataSlotTelemetry(
+                    capture.Slot,
+                    capture.ExcludedObjectCount,
+                    capture.BitsetPayloadWords,
+                    capture.SortedListPayloadWords))
+            .ToArray();
+        sceneData.AutomaticPlanarMetadataPayloadWordCount =
+            layout.PayloadWordCount;
+        sceneData.AutomaticPlanarMetadataWordsUsed = layout.WordsUsed;
+        sceneData.AutomaticPlanarMetadataBankHighWaterMark =
+            _metadataBankHighWaterMark;
+        sceneData.AutomaticPlanarMetadataCapacityRejectionCount =
+            capacityRejectionCount;
     }
 
     private static float ResolveProjectedPixels(

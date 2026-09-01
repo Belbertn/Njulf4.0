@@ -951,6 +951,16 @@ namespace Njulf.Rendering.Data
         public ulong AutomaticPlanarEstimatedBytes { get; set; }
         public float AutomaticPlanarResolutionScale { get; set; }
         public uint AutomaticPlanarMaximumCaptureAge { get; set; }
+        public AutomaticPlanarExclusionEncodingMode
+            AutomaticPlanarExclusionEncodingMode { get; set; }
+        public int AutomaticPlanarBitsetCaptureCount { get; set; }
+        public int AutomaticPlanarSortedListFallbackCount { get; set; }
+        public AutomaticPlanarMetadataSlotTelemetry[]
+            AutomaticPlanarMetadataSlots { get; set; } = [];
+        public int AutomaticPlanarMetadataPayloadWordCount { get; set; }
+        public int AutomaticPlanarMetadataWordsUsed { get; set; }
+        public int AutomaticPlanarMetadataBankHighWaterMark { get; set; }
+        public int AutomaticPlanarMetadataCapacityRejectionCount { get; set; }
         public long GpuAutomaticPlanarCaptureMicroseconds { get; set; }
         public bool HybridReflectionPassEnabled { get; set; }
         public uint HybridReflectionWidth { get; set; }
@@ -2822,6 +2832,15 @@ namespace Njulf.Rendering.Data
             AutomaticPlanarEstimatedBytes = 0;
             AutomaticPlanarResolutionScale = 0;
             AutomaticPlanarMaximumCaptureAge = 0;
+            AutomaticPlanarExclusionEncodingMode =
+                AutomaticPlanarExclusionEncodingMode.BitsetAuto;
+            AutomaticPlanarBitsetCaptureCount = 0;
+            AutomaticPlanarSortedListFallbackCount = 0;
+            AutomaticPlanarMetadataSlots = [];
+            AutomaticPlanarMetadataPayloadWordCount = 0;
+            AutomaticPlanarMetadataWordsUsed = 0;
+            AutomaticPlanarMetadataBankHighWaterMark = 0;
+            AutomaticPlanarMetadataCapacityRejectionCount = 0;
             GpuAutomaticPlanarCaptureMicroseconds = 0;
             HybridReflectionPassEnabled = false;
             HybridReflectionWidth = 0;

@@ -24,7 +24,7 @@ An existing capture can be reauthenticated without launching Vulkan:
   -AnalyzeExisting
 ```
 
-The capture contract is `bistro-quality-run/v10`; the authoritative scoped
+The capture contract is `bistro-quality-run/v11`; the authoritative scoped
 result is `reflection-qualification.json` with contract
 `bistro-reflection-qualification/v3`. A passing run proves all of the
 following:
@@ -62,6 +62,17 @@ following:
 scrolling or tail-certification invariant. Those failures are retained under
 `BistroRunFailures` in the scoped report; they do not erase valid reflection
 evidence.
+
+Automatic-planar metadata uses contract version `3`. Excluded object IDs use a
+dense exact bitset when the 1024-word frame bank permits it, with a complete
+sorted-list fallback under capacity pressure; neither encoding truncates the
+set. Frame telemetry records the active encoding override, bitset and
+sorted-list-fallback capture counts, per-slot exclusion payload sizes, words
+used, the lifetime bank high-water mark, and capacity rejections. Production
+defaults to `BitsetAuto`. Performance A/B runs may set
+`NJULF_AUTOMATIC_PLANAR_EXCLUSION_ENCODING=SortedList` to select the exact
+baseline; the value is emitted in capture telemetry and is not a quality
+setting.
 
 For material-level diagnosis, select the `RoughnessInputs` reflection debug
 view (or benchmark variant `reflection-roughness-inputs`). Red is physical BRDF

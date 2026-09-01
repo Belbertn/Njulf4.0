@@ -222,11 +222,17 @@ public sealed class AutomaticPlanarReflectionProductionTests
         string reproject = ReadShader("automatic_planar_reproject.comp");
         string prefilter = ReadShader("automatic_planar_prefilter.comp");
         string sampling = ReadShader("automatic_planar_reflection.glsl");
+        string exactListBody = sampling[
+            sampling.IndexOf(
+                "bool AutomaticPlanarExactListContains",
+                StringComparison.Ordinal)..sampling.IndexOf(
+                "bool AutomaticPlanarExcludedObjectContains",
+                StringComparison.Ordinal)];
 
         Assert.Multiple(() =>
         {
             Assert.That(AutomaticPlanarReflectionManager.MetadataVersion,
-                Is.EqualTo(2));
+                Is.EqualTo(3));
             Assert.That(reproject, Does.Contain("imageAtomicMax"));
             Assert.That(reproject, Does.Contain("depthTolerance"));
             Assert.That(reproject, Does.Contain("environment"));
@@ -234,7 +240,16 @@ public sealed class AutomaticPlanarReflectionProductionTests
             Assert.That(prefilter, Does.Contain("roughness"));
             Assert.That(sampling, Does.Contain("filteredSample.a"));
             Assert.That(sampling, Does.Contain(
-                "AUTOMATIC_PLANAR_METADATA_VERSION = 2u"));
+                "AUTOMATIC_PLANAR_METADATA_VERSION = 3u"));
+            Assert.That(sampling, Does.Contain(
+                "AutomaticPlanarExcludedObjectContains"));
+            Assert.That(sampling, Does.Contain(
+                "AUTOMATIC_PLANAR_EXCLUSION_BITSET_FLAG = 0x80000000u"));
+            Assert.That(sampling, Does.Contain(
+                "wordIndex = objectIndex >> 5u"));
+            Assert.That(sampling, Does.Contain(
+                "AutomaticPlanarExactListContains"));
+            Assert.That(exactListBody, Does.Not.Contain("min(count"));
         });
     }
 

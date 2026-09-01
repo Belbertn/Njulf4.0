@@ -301,6 +301,22 @@ public sealed class SampleBistroQualityCaptureHarnessTests
             HybridReflectionActiveTileCount = 12,
             AutomaticPlanarCandidateCount = 4,
             AutomaticPlanarSelectedCount = 1,
+            AutomaticPlanarExclusionEncodingMode =
+                AutomaticPlanarExclusionEncodingMode.BitsetAuto,
+            AutomaticPlanarBitsetCaptureCount = 1,
+            AutomaticPlanarSortedListFallbackCount = 0,
+            AutomaticPlanarMetadataSlots =
+            [
+                new AutomaticPlanarMetadataSlotTelemetry(
+                    Slot: 0,
+                    ExcludedObjectCount: 3,
+                    BitsetPayloadWords: 2,
+                    SortedListPayloadWords: 0)
+            ],
+            AutomaticPlanarMetadataPayloadWordCount = 8,
+            AutomaticPlanarMetadataWordsUsed = 216,
+            AutomaticPlanarMetadataBankHighWaterMark = 224,
+            AutomaticPlanarMetadataCapacityRejectionCount = 0,
             GpuHybridReflectionDdgiBaseMicroseconds = 211
         };
         var contract = new SampleBistroQualityCaptureContract(
@@ -328,9 +344,9 @@ public sealed class SampleBistroQualityCaptureHarnessTests
         Assert.Multiple(() =>
         {
             Assert.That(SampleBistroQualityCaptureContract.Schema,
-                Is.EqualTo("bistro-quality-run/v10"));
+                Is.EqualTo("bistro-quality-run/v11"));
             Assert.That(document.RootElement.GetProperty("Schema").GetString(),
-                Is.EqualTo("bistro-quality-run/v10"));
+                Is.EqualTo("bistro-quality-run/v11"));
             Assert.That(frame.ReflectionProbeCurrentLifecycle, Is.EqualTo(current));
             Assert.That(frame.ReflectionProbeCompletedLifecycle, Is.EqualTo(completed));
             Assert.That(frame.ReflectionProbeCurrentCaptureBudget, Is.EqualTo(budget));
@@ -372,6 +388,24 @@ public sealed class SampleBistroQualityCaptureHarnessTests
                 jsonFrame.GetProperty("AutomaticPlanarSelectedCount")
                     .GetInt32(),
                 Is.EqualTo(1));
+            Assert.That(
+                jsonFrame.GetProperty("AutomaticPlanarExclusionEncodingMode")
+                    .GetString(),
+                Is.EqualTo(nameof(
+                    AutomaticPlanarExclusionEncodingMode.BitsetAuto)));
+            Assert.That(
+                jsonFrame.GetProperty("AutomaticPlanarBitsetCaptureCount")
+                    .GetInt32(),
+                Is.EqualTo(1));
+            Assert.That(
+                jsonFrame.GetProperty("AutomaticPlanarMetadataSlots")[0]
+                    .GetProperty("BitsetPayloadWords").GetInt32(),
+                Is.EqualTo(2));
+            Assert.That(
+                jsonFrame.GetProperty(
+                        "AutomaticPlanarMetadataBankHighWaterMark")
+                    .GetInt32(),
+                Is.EqualTo(224));
             Assert.That(
                 jsonFrame.GetProperty(
                         "GpuHybridReflectionDdgiBaseMicroseconds")

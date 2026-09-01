@@ -722,6 +722,16 @@ namespace Njulf.Rendering.Data
         public ulong AutomaticPlanarEstimatedBytes { get; init; }
         public float AutomaticPlanarResolutionScale { get; init; }
         public uint AutomaticPlanarMaximumCaptureAge { get; init; }
+        public AutomaticPlanarExclusionEncodingMode
+            AutomaticPlanarExclusionEncodingMode { get; init; }
+        public int AutomaticPlanarBitsetCaptureCount { get; init; }
+        public int AutomaticPlanarSortedListFallbackCount { get; init; }
+        public AutomaticPlanarMetadataSlotTelemetry[]
+            AutomaticPlanarMetadataSlots { get; init; } = [];
+        public int AutomaticPlanarMetadataPayloadWordCount { get; init; }
+        public int AutomaticPlanarMetadataWordsUsed { get; init; }
+        public int AutomaticPlanarMetadataBankHighWaterMark { get; init; }
+        public int AutomaticPlanarMetadataCapacityRejectionCount { get; init; }
         public long GpuAutomaticPlanarCaptureMicroseconds { get; init; }
         public int TransparentReflectionReceiverObjectCount { get; init; }
         public int TransparentReflectionReceiverMeshletCount { get; init; }

@@ -23,8 +23,27 @@ public enum AutomaticPlanarCandidateRejectionReason : uint
     MemoryDenied = 8,
     CaptureLimit = 9,
     Stale = 10,
-    MaterialOptInDisabled = 11
+    MaterialOptInDisabled = 11,
+    MetadataCapacity = 12
 }
+
+public enum AutomaticPlanarExclusionEncodingMode : byte
+{
+    BitsetAuto = 0,
+    SortedList = 1
+}
+
+public enum AutomaticPlanarExclusionPayloadEncoding : byte
+{
+    SortedList = 0,
+    DenseBitset = 1
+}
+
+public readonly record struct AutomaticPlanarMetadataSlotTelemetry(
+    int Slot,
+    int ExcludedObjectCount,
+    int BitsetPayloadWords,
+    int SortedListPayloadWords);
 
 public readonly record struct AutomaticPlanarCandidateInput(
     ulong StableIdentity,

@@ -2,13 +2,15 @@
 #define NJULF_AUTOMATIC_PLANAR_REFLECTION_GLSL
 
 const uint AUTOMATIC_PLANAR_METADATA_MAGIC = 0x31524c50u;
-const uint AUTOMATIC_PLANAR_METADATA_VERSION = 2u;
+const uint AUTOMATIC_PLANAR_METADATA_VERSION = 3u;
 const uint AUTOMATIC_PLANAR_BANK_WORD_COUNT = 1024u;
 const uint AUTOMATIC_PLANAR_HEADER_WORD_COUNT = 16u;
 const uint AUTOMATIC_PLANAR_RECORD_WORD_COUNT = 96u;
 const uint AUTOMATIC_PLANAR_MAXIMUM_CAPTURES = 2u;
 const uint AUTOMATIC_PLANAR_CAPTURE_LAYER_FLAG = 0x1000u;
 const uint AUTOMATIC_PLANAR_RECEIVER_IDENTITY_MASK = 0x003fffffu;
+const uint AUTOMATIC_PLANAR_EXCLUSION_BITSET_FLAG = 0x80000000u;
+const uint AUTOMATIC_PLANAR_EXCLUSION_COUNT_MASK = 0x7fffffffu;
 
 uint AutomaticPlanarHash(uint value)
 {
@@ -136,6 +138,47 @@ bool AutomaticPlanarListContains(
     return false;
 }
 
+bool AutomaticPlanarExactListContains(
+    uint frameIndex,
+    uint offset,
+    uint count,
+    uint value)
+{
+    for (uint index = 0u; index < count; index++)
+    {
+        if (AutomaticPlanarRead(frameIndex, offset + index) == value)
+            return true;
+    }
+    return false;
+}
+
+bool AutomaticPlanarExcludedObjectContains(
+    uint frameIndex,
+    uint record,
+    uint objectIndex)
+{
+    uint descriptor = AutomaticPlanarRead(frameIndex, record + 90u);
+    uint payloadWordCount =
+        descriptor & AUTOMATIC_PLANAR_EXCLUSION_COUNT_MASK;
+    uint payloadOffset = AutomaticPlanarRead(frameIndex, record + 91u);
+    if ((descriptor & AUTOMATIC_PLANAR_EXCLUSION_BITSET_FLAG) != 0u)
+    {
+        uint wordIndex = objectIndex >> 5u;
+        if (wordIndex >= payloadWordCount)
+            return false;
+        uint word = AutomaticPlanarRead(
+            frameIndex,
+            payloadOffset + wordIndex);
+        return (word & (1u << (objectIndex & 31u))) != 0u;
+    }
+
+    return AutomaticPlanarExactListContains(
+        frameIndex,
+        payloadOffset,
+        payloadWordCount,
+        objectIndex);
+}
+
 bool AutomaticPlanarShouldDiscardCaptureFragment(
     uint frameIndex,
     uint slot,
@@ -146,12 +189,9 @@ bool AutomaticPlanarShouldDiscardCaptureFragment(
     if (slot >= AutomaticPlanarCaptureCount(frameIndex))
         return true;
     uint record = AutomaticPlanarRecordBase(slot);
-    uint objectCount = AutomaticPlanarRead(frameIndex, record + 90u);
-    uint objectOffset = AutomaticPlanarRead(frameIndex, record + 91u);
-    if (AutomaticPlanarListContains(
+    if (AutomaticPlanarExcludedObjectContains(
             frameIndex,
-            objectOffset,
-            objectCount,
+            record,
             objectIndex))
     {
         return true;

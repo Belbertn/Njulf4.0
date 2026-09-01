@@ -657,6 +657,22 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.AutomaticPlanarResolutionScale,
             AutomaticPlanarMaximumCaptureAge =
                 sceneData.AutomaticPlanarMaximumCaptureAge,
+            AutomaticPlanarExclusionEncodingMode =
+                sceneData.AutomaticPlanarExclusionEncodingMode,
+            AutomaticPlanarBitsetCaptureCount =
+                sceneData.AutomaticPlanarBitsetCaptureCount,
+            AutomaticPlanarSortedListFallbackCount =
+                sceneData.AutomaticPlanarSortedListFallbackCount,
+            AutomaticPlanarMetadataSlots =
+                sceneData.AutomaticPlanarMetadataSlots.ToArray(),
+            AutomaticPlanarMetadataPayloadWordCount =
+                sceneData.AutomaticPlanarMetadataPayloadWordCount,
+            AutomaticPlanarMetadataWordsUsed =
+                sceneData.AutomaticPlanarMetadataWordsUsed,
+            AutomaticPlanarMetadataBankHighWaterMark =
+                sceneData.AutomaticPlanarMetadataBankHighWaterMark,
+            AutomaticPlanarMetadataCapacityRejectionCount =
+                sceneData.AutomaticPlanarMetadataCapacityRejectionCount,
             GpuAutomaticPlanarCaptureMicroseconds =
                 sceneData.GpuAutomaticPlanarCaptureMicroseconds,
             TransparentReflectionReceiverObjectCount =
