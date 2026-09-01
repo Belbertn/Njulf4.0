@@ -971,6 +971,82 @@ public sealed class SimpleDdgiTransportTailTests
     }
 
     [Test]
+    public void NormalizePathWeightedThroughput_StaysAtOrBelowCertifiedBitsAndPreservesLobeRatios()
+    {
+        const float q = 0.95f;
+        bool success =
+            SimpleDdgiTransportTailEstimator.TryNormalizePathWeightedRecursiveThroughput(
+                reflected: new(0.8f, 0.4f, 0.2f),
+                transmitted: new(0.4f, 0.2f, 0.1f),
+                glossy: new(0.2f, 0.3f, 0.4f),
+                pathThroughput: new(1.75f, 2.25f, 3.5f),
+                contractionCeiling: q,
+                transmissionEnabled: true,
+                out SimpleDdgiTransportTailEstimator.PathWeightedThroughputNormalization result);
+
+        uint qBits = BitConverter.SingleToUInt32Bits(q);
+        Assert.Multiple(() =>
+        {
+            Assert.That(success, Is.True);
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.WasRenormalized, Is.True);
+            Assert.That(result.MaximumBeforeNormalization, Is.GreaterThan(q));
+            Assert.That(result.Reflected.X / result.Transmitted.X,
+                Is.EqualTo(2.0f).Within(1e-6f));
+            Assert.That(result.Reflected.Y / result.Transmitted.Y,
+                Is.EqualTo(2.0f).Within(1e-6f));
+            Assert.That(result.Reflected.Z / result.Transmitted.Z,
+                Is.EqualTo(2.0f).Within(1e-6f));
+            Assert.That(BitConverter.SingleToUInt32Bits(result.EnforcedThroughput.X),
+                Is.LessThanOrEqualTo(qBits));
+            Assert.That(BitConverter.SingleToUInt32Bits(result.EnforcedThroughput.Y),
+                Is.LessThanOrEqualTo(qBits));
+            Assert.That(BitConverter.SingleToUInt32Bits(result.EnforcedThroughput.Z),
+                Is.LessThanOrEqualTo(qBits));
+        });
+    }
+
+    [Test]
+    public void NormalizePathWeightedThroughput_RejectsInvalidPathOrContraction()
+    {
+        Vector3 reflected = new(0.2f, 0.2f, 0.2f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiTransportTailEstimator.TryNormalizePathWeightedRecursiveThroughput(
+                    reflected,
+                    Vector3.Zero,
+                    Vector3.Zero,
+                    new(-1.0f, 1.0f, 1.0f),
+                    0.95f,
+                    false,
+                    out _),
+                Is.False);
+            Assert.That(
+                SimpleDdgiTransportTailEstimator.TryNormalizePathWeightedRecursiveThroughput(
+                    reflected,
+                    Vector3.Zero,
+                    Vector3.Zero,
+                    new(float.PositiveInfinity, 1.0f, 1.0f),
+                    0.95f,
+                    false,
+                    out _),
+                Is.False);
+            Assert.That(
+                SimpleDdgiTransportTailEstimator.TryNormalizePathWeightedRecursiveThroughput(
+                    reflected,
+                    Vector3.Zero,
+                    Vector3.Zero,
+                    Vector3.One,
+                    float.NaN,
+                    false,
+                    out _),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void PositiveEstimator_NormalizesCosineMass()
     {
         bool success = SimpleDdgiTransportTailEstimator.TryEvaluatePositiveIrradiance(

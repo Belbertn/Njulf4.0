@@ -5,6 +5,7 @@
 // kernels.  Keeping lobe admission in one function prevents the regular solve
 // and the certificate from proving different operators.
 const float SIMPLE_DDGI_TRANSPORT_MAX_CERTIFIED_Q = 0.99;
+const uint SIMPLE_DDGI_TRANSPORT_CONTRACTION_ROUNDING_MARGIN_ULPS = 8u;
 
 bool SimpleDdgiTransportFinite(vec3 value)
 {
@@ -16,26 +17,31 @@ bool SimpleDdgiTransportTryNormalizeLobes(
     vec3 reflectedInput,
     vec3 transmittedInput,
     vec3 glossyInput,
+    vec3 pathThroughput,
     bool transmissionEnabled,
     out vec3 reflected,
     out vec3 transmitted,
     out vec3 glossy,
     out float maximumBeforeNormalization,
-    out vec3 scale)
+    out vec3 scale,
+    out vec3 enforcedThroughput)
 {
     reflected = vec3(0.0);
     transmitted = vec3(0.0);
     glossy = vec3(0.0);
     maximumBeforeNormalization = 0.0;
     scale = vec3(1.0);
+    enforcedThroughput = vec3(0.0);
 
     float q = params.transportAlbedoClamp;
     if (!SimpleDdgiTransportFinite(reflectedInput) ||
         !SimpleDdgiTransportFinite(transmittedInput) ||
         !SimpleDdgiTransportFinite(glossyInput) ||
+        !SimpleDdgiTransportFinite(pathThroughput) ||
         any(lessThan(reflectedInput, vec3(0.0))) ||
         any(lessThan(transmittedInput, vec3(0.0))) ||
         any(lessThan(glossyInput, vec3(0.0))) ||
+        any(lessThan(pathThroughput, vec3(0.0))) ||
         isnan(q) || isinf(q) || q < 0.0 || q >= 1.0 ||
         q > SIMPLE_DDGI_TRANSPORT_MAX_CERTIFIED_Q)
     {
@@ -48,17 +54,41 @@ bool SimpleDdgiTransportTryNormalizeLobes(
     reflected = reflectedInput;
     transmitted = transmissionEnabled ? transmittedInput : vec3(0.0);
     glossy = glossyInput;
-    vec3 total = reflected + transmitted + glossy;
+    vec3 total = (reflected + transmitted + glossy) * pathThroughput;
     maximumBeforeNormalization = max(
         total.r,
         max(total.g, total.b));
-    scale = min(vec3(1.0), vec3(q) / max(total, vec3(0.000001)));
+    uint qBits = floatBitsToUint(q);
+    float safeQ = uintBitsToFloat(
+        qBits > SIMPLE_DDGI_TRANSPORT_CONTRACTION_ROUNDING_MARGIN_ULPS
+            ? qBits - SIMPLE_DDGI_TRANSPORT_CONTRACTION_ROUNDING_MARGIN_ULPS
+            : 0u);
+    scale = min(vec3(1.0), vec3(safeQ) / max(total, vec3(0.000001)));
     reflected *= scale;
     transmitted *= scale;
     glossy *= scale;
+
+    // Division, three lobe products, their additions, and the path product
+    // are independently rounded on the GPU. Re-evaluate the actual diagonal
+    // gain and apply one bounded correction with an eight-ULP safety margin;
+    // this prevents an exact q-boundary material from becoming q+1 ULP and
+    // permanently failing the tail certificate.
+    enforcedThroughput =
+        (reflected + transmitted + glossy) * pathThroughput;
+    vec3 correction = min(
+        vec3(1.0),
+        vec3(safeQ) / max(enforcedThroughput, vec3(0.000001)));
+    reflected *= correction;
+    transmitted *= correction;
+    glossy *= correction;
+    scale *= correction;
+    enforcedThroughput =
+        (reflected + transmitted + glossy) * pathThroughput;
     return SimpleDdgiTransportFinite(reflected) &&
         SimpleDdgiTransportFinite(transmitted) &&
-        SimpleDdgiTransportFinite(glossy);
+        SimpleDdgiTransportFinite(glossy) &&
+        SimpleDdgiTransportFinite(enforcedThroughput) &&
+        all(lessThanEqual(enforcedThroughput, vec3(q)));
 }
 
 // Evaluates F(x)'s cached recursive bounce for one source-cache entry. The
@@ -175,21 +205,21 @@ vec3 EvaluateSimpleDdgiCachedRecursiveBounce(
             source.diffuseReflectance,
             source.transmittedDiffuseReflectance,
             glossyInput,
+            source.pathThroughput,
             transmissionEnabled,
             reflected,
             transmitted,
             glossy,
             ignoredMaximum,
-            ignoredScale))
+            ignoredScale,
+            enforcedThroughput))
     {
         invalid = true;
         return vec3(0.0);
     }
-    // Preserve the full diagonal RGB gain. The legacy scalar contraction is
-    // its maximum component, but audit certification can now pair each
-    // channel's fixed-point defect with the gain that actually affects it.
-    enforcedThroughput = (reflected + transmitted + glossy) *
-        source.pathThroughput;
+    // Preserve the normalized diagonal RGB gain. The legacy scalar
+    // contraction is its maximum component, while audit certification pairs
+    // each channel's defect with the gain that actually affects it.
 
     vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) +
         probeState.relocation;

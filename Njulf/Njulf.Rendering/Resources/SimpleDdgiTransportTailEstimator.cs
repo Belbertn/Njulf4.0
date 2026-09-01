@@ -13,12 +13,24 @@ public static class SimpleDdgiTransportTailEstimator
 {
     public const float AbsoluteTolerance = 0.0001f;
     public const float MaximumCertifiedContraction = 0.99f;
+    public const uint ContractionRoundingMarginUlps = 8u;
 
     public readonly record struct ThroughputNormalization(
         Vector3 Reflected,
         Vector3 Transmitted,
         float MaximumBeforeNormalization,
         float Scale,
+        bool TransmissionEnabled,
+        bool WasRenormalized,
+        bool IsValid);
+
+    public readonly record struct PathWeightedThroughputNormalization(
+        Vector3 Reflected,
+        Vector3 Transmitted,
+        Vector3 Glossy,
+        Vector3 EnforcedThroughput,
+        float MaximumBeforeNormalization,
+        Vector3 Scale,
         bool TransmissionEnabled,
         bool WasRenormalized,
         bool IsValid);
@@ -97,6 +109,87 @@ public static class SimpleDdgiTransportTailEstimator
             scale,
             transmissionEnabled,
             scale != 1.0f,
+            true);
+        return true;
+    }
+
+    /// <summary>
+    /// Mirrors the GPU operator's path-weighted RGB contraction ceiling. The
+    /// safety margin and second correction keep independently rounded shader
+    /// operations from admitting a gain one ULP above the certified bound.
+    /// </summary>
+    public static bool TryNormalizePathWeightedRecursiveThroughput(
+        Vector3 reflected,
+        Vector3 transmitted,
+        Vector3 glossy,
+        Vector3 pathThroughput,
+        float contractionCeiling,
+        bool transmissionEnabled,
+        out PathWeightedThroughputNormalization result)
+    {
+        result = default;
+        if (!IsFiniteNonNegative(reflected) ||
+            !IsFiniteNonNegative(transmitted) ||
+            !IsFiniteNonNegative(glossy) ||
+            !IsFiniteNonNegative(pathThroughput) ||
+            !float.IsFinite(contractionCeiling) ||
+            contractionCeiling < 0.0f ||
+            contractionCeiling > MaximumCertifiedContraction)
+        {
+            return false;
+        }
+
+        if (!transmissionEnabled)
+            transmitted = Vector3.Zero;
+
+        Vector3 total = (reflected + transmitted + glossy) * pathThroughput;
+        if (!IsFiniteNonNegative(total))
+            return false;
+
+        float maximumBefore = MaxComponent(total);
+        uint contractionBits = BitConverter.SingleToUInt32Bits(contractionCeiling);
+        float safeCeiling = BitConverter.UInt32BitsToSingle(
+            contractionBits > ContractionRoundingMarginUlps
+                ? contractionBits - ContractionRoundingMarginUlps
+                : 0u);
+        Vector3 scale = ContractionScale(total, safeCeiling);
+        reflected *= scale;
+        transmitted *= scale;
+        glossy *= scale;
+
+        Vector3 enforcedThroughput =
+            (reflected + transmitted + glossy) * pathThroughput;
+        if (!IsFiniteNonNegative(enforcedThroughput))
+            return false;
+
+        Vector3 correction = ContractionScale(enforcedThroughput, safeCeiling);
+        reflected *= correction;
+        transmitted *= correction;
+        glossy *= correction;
+        scale *= correction;
+        enforcedThroughput =
+            (reflected + transmitted + glossy) * pathThroughput;
+
+        if (!IsFiniteNonNegative(reflected) ||
+            !IsFiniteNonNegative(transmitted) ||
+            !IsFiniteNonNegative(glossy) ||
+            !IsFiniteNonNegative(enforcedThroughput) ||
+            enforcedThroughput.X > contractionCeiling ||
+            enforcedThroughput.Y > contractionCeiling ||
+            enforcedThroughput.Z > contractionCeiling)
+        {
+            return false;
+        }
+
+        result = new PathWeightedThroughputNormalization(
+            reflected,
+            transmitted,
+            glossy,
+            enforcedThroughput,
+            maximumBefore,
+            scale,
+            transmissionEnabled,
+            scale.X != 1.0f || scale.Y != 1.0f || scale.Z != 1.0f,
             true);
         return true;
     }
@@ -352,6 +445,11 @@ public static class SimpleDdgiTransportTailEstimator
 
     public static bool IsFiniteNonNegative(Vector3 value) =>
         IsFinite(value) && value.X >= 0.0f && value.Y >= 0.0f && value.Z >= 0.0f;
+
+    private static Vector3 ContractionScale(Vector3 total, float ceiling) => new(
+        MathF.Min(1.0f, ceiling / MathF.Max(total.X, 0.000001f)),
+        MathF.Min(1.0f, ceiling / MathF.Max(total.Y, 0.000001f)),
+        MathF.Min(1.0f, ceiling / MathF.Max(total.Z, 0.000001f)));
 
     private static Vector3 Abs(Vector3 value) => new(
         MathF.Abs(value.X),

@@ -2231,8 +2231,17 @@ namespace Njulf.Tests
                 Assert.That(transport, Does.Contain("uint globalRay = queueOffset * params.raysPerProbe + rayIndex;"));
                 Assert.That(transport, Does.Contain("EvaluateSimpleDdgiCachedRecursiveBounce("));
                 Assert.That(transportOperator, Does.Contain(
-                    "enforcedThroughput = (reflected + transmitted + glossy) *\n" +
-                    "        source.pathThroughput;"));
+                    "SIMPLE_DDGI_TRANSPORT_CONTRACTION_ROUNDING_MARGIN_ULPS = 8u"));
+                Assert.That(transportOperator, Does.Contain(
+                    "vec3 total = (reflected + transmitted + glossy) * pathThroughput;"));
+                Assert.That(transportOperator, Does.Contain(
+                    "qBits - SIMPLE_DDGI_TRANSPORT_CONTRACTION_ROUNDING_MARGIN_ULPS"));
+                Assert.That(transportOperator, Does.Contain("vec3 correction = min("));
+                Assert.That(transportOperator, Does.Contain(
+                    "all(lessThanEqual(enforcedThroughput, vec3(q)))"));
+                Assert.That(transportOperator, Does.Contain(
+                    "source.pathThroughput,\n" +
+                    "            transmissionEnabled,"));
                 Assert.That(shared, Does.Contain(
                     "bool TryEvaluateSimpleDdgiExactCachedHitRelight("));
                 Assert.That(trace, Does.Contain(
