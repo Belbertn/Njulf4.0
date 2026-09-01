@@ -88,6 +88,53 @@ public sealed record SampleBenchmarkReport(
     [JsonRequired]
     public SampleReflectionProbeCaptureEvidence ReflectionProbeCaptureEvidence { get; init; } =
         SampleReflectionProbeCaptureEvidence.NotApplicable;
+    public SampleBenchmarkAutomaticPlanarEvidence AutomaticPlanarEvidence
+        { get; init; } = SampleBenchmarkAutomaticPlanarEvidence.Unavailable;
+}
+
+/// <summary>
+/// One completed automatic-planar workload joined to the GPU timestamp read
+/// from the same renderer frame slot.
+/// </summary>
+public sealed record SampleBenchmarkAutomaticPlanarFrame(
+    [property: JsonRequired] int CompletionObservedMeasurementSampleIndex,
+    [property: JsonRequired]
+    AutomaticPlanarLifecycleFrameSnapshot CompletedLifecycle,
+    [property: JsonRequired] long GpuPassMicroseconds);
+
+/// <summary>
+/// Automatic-planar pass timings classified by the work that produced them.
+/// Capture, reprojection, and no-work frames are intentionally not pooled.
+/// </summary>
+public sealed record SampleBenchmarkAutomaticPlanarEvidence(
+    [property: JsonRequired] bool Available,
+    [property: JsonRequired] int CompletedFrameCount,
+    [property: JsonRequired] int CaptureFrameCount,
+    [property: JsonRequired] int ReprojectionFrameCount,
+    [property: JsonRequired] int NoWorkFrameCount,
+    [property: JsonRequired]
+    SampleBenchmarkTimingStats CaptureFrameMilliseconds,
+    [property: JsonRequired]
+    SampleBenchmarkTimingStats ReprojectionFrameMilliseconds,
+    [property: JsonRequired]
+    SampleBenchmarkTimingStats NoWorkFrameMilliseconds,
+    [property: JsonRequired]
+    IReadOnlyList<SampleBenchmarkAutomaticPlanarFrame> Frames)
+{
+    public static SampleBenchmarkAutomaticPlanarEvidence Unavailable { get; } =
+        new(
+            Available: false,
+            CompletedFrameCount: 0,
+            CaptureFrameCount: 0,
+            ReprojectionFrameCount: 0,
+            NoWorkFrameCount: 0,
+            CaptureFrameMilliseconds: SampleBenchmarkTimingStats.Empty(
+                "Automatic planar capture frames"),
+            ReprojectionFrameMilliseconds: SampleBenchmarkTimingStats.Empty(
+                "Automatic planar reprojection frames"),
+            NoWorkFrameMilliseconds: SampleBenchmarkTimingStats.Empty(
+                "Automatic planar no-work frames"),
+            Frames: Array.Empty<SampleBenchmarkAutomaticPlanarFrame>());
 }
 
 /// <summary>

@@ -139,7 +139,7 @@ public sealed class AutomaticPlanarReflectionProductionTests
     {
         const ulong mebibyte = 1024UL * 1024UL;
         AutomaticPlanarMemoryPlan plan = AutomaticPlanarMemoryPlanner.Compile(
-            fixedReflectionBytes: 120UL * mebibyte,
+            fixedPlanarBytes: 120UL * mebibyte,
             budgetBytes: 160UL * mebibyte,
             requestedCaptureCount: 1,
             preferredScale: 0.5f,
@@ -157,6 +157,60 @@ public sealed class AutomaticPlanarReflectionProductionTests
             Assert.That(plan.LinearScale, Is.EqualTo(0.25f));
             Assert.That(plan.TotalReflectionBytes,
                 Is.EqualTo(150UL * mebibyte));
+        });
+    }
+
+    [Test]
+    public void MemoryPlanner_FeatureLocalBudgetExcludesIndependentReflectionOwners()
+    {
+        const ulong mebibyte = 1024UL * 1024UL;
+        const ulong independentlyOwnedHybridBytes = 184UL * mebibyte;
+        const ulong independentlyOwnedProbeBytes = 32UL * mebibyte;
+        const ulong planarMetadataBytes = 4UL * mebibyte;
+
+        AutomaticPlanarMemoryPlan plan = AutomaticPlanarMemoryPlanner.Compile(
+            fixedPlanarBytes: planarMetadataBytes,
+            budgetBytes: AutomaticPlanarMemoryPlanner.HighBudgetBytes,
+            requestedCaptureCount: 1,
+            preferredScale: 0.5f,
+            (_, _) => 20UL * mebibyte);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                independentlyOwnedHybridBytes + independentlyOwnedProbeBytes,
+                Is.GreaterThan(AutomaticPlanarMemoryPlanner.HighBudgetBytes));
+            Assert.That(plan.Admitted, Is.True);
+            Assert.That(plan.FixedReflectionBytes,
+                Is.EqualTo(planarMetadataBytes));
+            Assert.That(plan.TotalReflectionBytes,
+                Is.EqualTo(24UL * mebibyte));
+        });
+    }
+
+    [Test]
+    public void SubmittedFrameRing_PreservesTheTimestampAlignedWorkload()
+    {
+        var ring = new AutomaticPlanarSubmittedFrameRing();
+        var submitted = new AutomaticPlanarLifecycleFrameSnapshot(
+            Valid: true,
+            FrameSlot: 1,
+            FrameSerial: 42,
+            GpuTimingRecorded: true,
+            SelectedCount: 1,
+            CaptureCount: 1,
+            ReprojectionCount: 0,
+            BitsetCaptureCount: 1,
+            SortedListFallbackCount: 0,
+            MetadataCapacityRejectionCount: 0);
+
+        ring.MarkSubmitted(1, submitted);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ring.TryConsume(1, out var completed), Is.True);
+            Assert.That(completed, Is.EqualTo(submitted));
+            Assert.That(ring.TryConsume(1, out _), Is.False);
         });
     }
 

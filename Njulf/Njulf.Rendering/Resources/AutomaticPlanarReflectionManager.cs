@@ -75,6 +75,11 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
     private readonly AutomaticPlanarSlotState[] _slotStates =
         new AutomaticPlanarSlotState[MaximumCaptureCount];
     private readonly List<AutomaticPlanarPreparedCapture> _prepared = [];
+    private readonly AutomaticPlanarSubmittedFrameRing _submittedFrames =
+        new();
+    private AutomaticPlanarLifecycleFrameSnapshot _currentLifecycle;
+    private AutomaticPlanarLifecycleFrameSnapshot _completedLifecycle;
+    private bool _frameBegun;
     private ulong _lastSelectionSignature;
     private ulong _lastCameraCutSerial;
     private ulong _lastSceneMutationSerial;
@@ -137,10 +142,111 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
 
     public uint CaptureGeneration => _captureGeneration;
 
+    public AutomaticPlanarLifecycleFrameSnapshot CurrentLifecycle =>
+        _currentLifecycle;
+
+    public AutomaticPlanarLifecycleFrameSnapshot CompletedLifecycle =>
+        _completedLifecycle;
+
     public ulong AllocationBytes => checked(
         _resources.Aggregate(
             _bufferManager.GetBufferAllocationSize(_metadataBuffer),
             static (total, resource) => total + resource.AllocationBytes));
+
+    /// <summary>
+    /// Consumes the workload previously submitted through this frame slot
+    /// after its fence and timestamp queries have completed, then opens the
+    /// current frame's submission record.
+    /// </summary>
+    public void BeginFrame(
+        int frameSlot,
+        ulong frameSerial,
+        bool gpuTimingRecorded)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        RenderingConstants.ValidateFrameIndex(frameSlot);
+        if (_frameBegun)
+        {
+            throw new InvalidOperationException(
+                "An automatic-planar frame was begun before the previous frame submission was committed.");
+        }
+
+        _completedLifecycle = _submittedFrames.TryConsume(
+            frameSlot,
+            out AutomaticPlanarLifecycleFrameSnapshot completed)
+                ? completed
+                : default;
+        _currentLifecycle = new AutomaticPlanarLifecycleFrameSnapshot(
+            Valid: true,
+            frameSlot,
+            frameSerial,
+            gpuTimingRecorded,
+            SelectedCount: 0,
+            CaptureCount: 0,
+            ReprojectionCount: 0,
+            BitsetCaptureCount: 0,
+            SortedListFallbackCount: 0,
+            MetadataCapacityRejectionCount: 0);
+        _frameBegun = true;
+    }
+
+    /// <summary>
+    /// Freezes the prepared CPU workload before command submission and exposes
+    /// the completed, timestamp-aligned workload through frame diagnostics.
+    /// </summary>
+    public void RecordPreparedFrame(SceneRenderingData sceneData)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(sceneData);
+        if (!_frameBegun)
+        {
+            throw new InvalidOperationException(
+                "Automatic-planar workload recording requires an active renderer frame.");
+        }
+
+        _currentLifecycle = _currentLifecycle with
+        {
+            SelectedCount = sceneData.AutomaticPlanarSelectedCount,
+            CaptureCount = sceneData.AutomaticPlanarCaptureCount,
+            ReprojectionCount = sceneData.AutomaticPlanarReprojectionCount,
+            BitsetCaptureCount =
+                sceneData.AutomaticPlanarBitsetCaptureCount,
+            SortedListFallbackCount =
+                sceneData.AutomaticPlanarSortedListFallbackCount,
+            MetadataCapacityRejectionCount =
+                sceneData.AutomaticPlanarMetadataCapacityRejectionCount
+        };
+        sceneData.AutomaticPlanarCurrentLifecycle = _currentLifecycle;
+        sceneData.AutomaticPlanarCompletedLifecycle = _completedLifecycle;
+    }
+
+    /// <summary>
+    /// Marks the frozen workload pending only after Vulkan accepts the terminal
+    /// graphics submission for the matching frame slot.
+    /// </summary>
+    public void CommitFrameSubmission(
+        int frameSlot,
+        ulong frameSerial,
+        bool gpuTimingRecorded)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        RenderingConstants.ValidateFrameIndex(frameSlot);
+        if (!_frameBegun || !_currentLifecycle.Valid ||
+            _currentLifecycle.FrameSlot != frameSlot ||
+            _currentLifecycle.FrameSerial != frameSerial)
+        {
+            throw new InvalidOperationException(
+                "Automatic-planar submission does not match the active frame boundary.");
+        }
+
+        _submittedFrames.MarkSubmitted(
+            frameSlot,
+            _currentLifecycle with
+            {
+                GpuTimingRecorded = gpuTimingRecorded
+            });
+        _frameBegun = false;
+    }
 
     public void PrepareFrame(Scene scene, SceneRenderingData sceneData)
     {
@@ -185,16 +291,18 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
             return;
         }
 
-        ulong fixedBytes = checked(
-            sceneData.HybridReflectionEstimatedBytes +
-            sceneData.ReflectionProbeEstimatedBytes +
-            _bufferManager.GetBufferAllocationSize(_metadataBuffer));
+        // Hybrid-reflection and probe allocations have independent owners and
+        // are already covered by the renderer-wide memory gate. Charging them
+        // against this feature-local cap made automatic planar impossible at
+        // 1080p whenever the hybrid targets alone exceeded 160 MiB.
+        ulong fixedPlanarBytes =
+            _bufferManager.GetBufferAllocationSize(_metadataBuffer);
         if (!EnsureResources(
                 requestedCount,
                 quality.PreferredLinearScale,
                 sceneData.ScreenWidth,
                 sceneData.ScreenHeight,
-                fixedBytes,
+                fixedPlanarBytes,
                 out AutomaticPlanarCandidateRejectionReason allocationReason,
                 out string allocationDetail))
         {
@@ -768,7 +876,7 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         float preferredScale,
         uint screenWidth,
         uint screenHeight,
-        ulong fixedBytes,
+        ulong fixedPlanarBytes,
         out AutomaticPlanarCandidateRejectionReason reason,
         out string detail)
     {
@@ -779,13 +887,13 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
                 screenWidth,
                 screenHeight)))
         {
-            ulong total = checked(fixedBytes + _resources.Aggregate(
+            ulong total = checked(fixedPlanarBytes + _resources.Aggregate(
                 0UL,
                 static (sum, resource) => sum + resource.AllocationBytes));
             if (total <= AutomaticPlanarMemoryPlanner.HighBudgetBytes)
                 return true;
             reason = AutomaticPlanarCandidateRejectionReason.MemoryDenied;
-            detail = "Existing exact planar allocations exceed the 160 MiB reflection budget.";
+            detail = "Existing exact planar allocations exceed the 160 MiB automatic-planar budget.";
             return false;
         }
 
@@ -832,7 +940,7 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
                         static (sum, resource) =>
                             sum + resource.AllocationBytes),
                     static (sum, resource) => sum + resource.AllocationBytes);
-                if (checked(fixedBytes + exact) >
+                if (checked(fixedPlanarBytes + exact) >
                     AutomaticPlanarMemoryPlanner.HighBudgetBytes)
                 {
                     foreach (AutomaticPlanarCaptureResource resource in additions)
@@ -854,7 +962,7 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         }
         reason = AutomaticPlanarCandidateRejectionReason.MemoryDenied;
         detail = string.IsNullOrWhiteSpace(detail)
-            ? "The minimum 0.25-scale exact planar allocation exceeds the 160 MiB reflection budget."
+            ? "The minimum 0.25-scale exact planar allocation exceeds the 160 MiB automatic-planar budget."
             : detail;
         return false;
     }

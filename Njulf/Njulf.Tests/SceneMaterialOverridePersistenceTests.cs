@@ -37,8 +37,10 @@ public sealed class SceneMaterialOverridePersistenceTests
 
         Assert.That(roundTrip.SchemaVersion, Is.EqualTo(11));
         Assert.That(
-            roundTrip.Objects.Select(candidate => candidate.MaterialOverride!
-                .AutomaticPlanarReflectionEnabled),
+            roundTrip.Objects
+                .OrderBy(candidate => candidate.Name, StringComparer.Ordinal)
+                .Select(candidate => candidate.MaterialOverride!
+                    .AutomaticPlanarReflectionEnabled),
             Is.EqualTo(states));
     }
 

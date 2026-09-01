@@ -1038,6 +1038,89 @@ public sealed class SampleBenchmarkAnalyzerTests
     }
 
     [Test]
+    public void CreateReport_ClassifiesTimestampAlignedAutomaticPlanarWork()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        AddPlanarSample(
+            analyzer,
+            frameSerial: 10,
+            captureCount: 1,
+            reprojectionCount: 0,
+            gpuMicroseconds: 1_800);
+        AddPlanarSample(
+            analyzer,
+            frameSerial: 11,
+            captureCount: 0,
+            reprojectionCount: 1,
+            gpuMicroseconds: 300);
+        AddPlanarSample(
+            analyzer,
+            frameSerial: 12,
+            captureCount: 0,
+            reprojectionCount: 0,
+            gpuMicroseconds: 0);
+
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            new SampleBenchmarkOptions(true, 0, 3, null),
+            SamplePerformanceScenario.Normal,
+            warmupFrameCount: 0,
+            measurementFrameCount: 3,
+            firstMeasurementFrameIndex: 0,
+            lastMeasurementFrameIndex: 2);
+
+        SampleBenchmarkAutomaticPlanarEvidence evidence =
+            report.AutomaticPlanarEvidence;
+        Assert.Multiple(() =>
+        {
+            Assert.That(evidence.Available, Is.True);
+            Assert.That(evidence.CompletedFrameCount, Is.EqualTo(3));
+            Assert.That(evidence.CaptureFrameCount, Is.EqualTo(1));
+            Assert.That(evidence.ReprojectionFrameCount, Is.EqualTo(1));
+            Assert.That(evidence.NoWorkFrameCount, Is.EqualTo(1));
+            Assert.That(evidence.CaptureFrameMilliseconds.P95Milliseconds,
+                Is.EqualTo(1.8));
+            Assert.That(
+                evidence.ReprojectionFrameMilliseconds.P95Milliseconds,
+                Is.EqualTo(0.3));
+            Assert.That(evidence.NoWorkFrameMilliseconds.P95Milliseconds,
+                Is.Zero);
+            Assert.That(
+                evidence.Frames.Select(frame =>
+                    frame.CompletedLifecycle.FrameSerial),
+                Is.EqualTo(new ulong[] { 10, 11, 12 }));
+        });
+    }
+
+    private static void AddPlanarSample(
+        SampleBenchmarkAnalyzer analyzer,
+        ulong frameSerial,
+        int captureCount,
+        int reprojectionCount,
+        long gpuMicroseconds)
+    {
+        analyzer.AddSample(RendererDiagnostics.Empty with
+        {
+            GpuTimingSupported = 1,
+            GpuTimingValid = 1,
+            GpuAutomaticPlanarCaptureMicroseconds = gpuMicroseconds,
+            GpuFrameMicroseconds = gpuMicroseconds,
+            AutomaticPlanarCompletedLifecycle = new(
+                Valid: true,
+                FrameSlot: 0,
+                FrameSerial: frameSerial,
+                GpuTimingRecorded: true,
+                SelectedCount: captureCount + reprojectionCount > 0 ? 1 : 0,
+                CaptureCount: captureCount,
+                ReprojectionCount: reprojectionCount,
+                BitsetCaptureCount: captureCount + reprojectionCount > 0
+                    ? 1
+                    : 0,
+                SortedListFallbackCount: 0,
+                MetadataCapacityRejectionCount: 0)
+        }, RenderBudgetSnapshot.Empty);
+    }
+
+    [Test]
     public void CreateReport_TimingBudgetsUseMeasurementP95InsteadOfWorstRollingValue()
     {
         var analyzer = new SampleBenchmarkAnalyzer();

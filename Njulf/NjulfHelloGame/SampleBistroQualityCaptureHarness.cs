@@ -471,6 +471,10 @@ public sealed record SampleBistroQualityFrameTelemetry(
     public int AutomaticPlanarMetadataWordsUsed { get; init; }
     public int AutomaticPlanarMetadataBankHighWaterMark { get; init; }
     public int AutomaticPlanarMetadataCapacityRejectionCount { get; init; }
+    public AutomaticPlanarLifecycleFrameSnapshot
+        AutomaticPlanarCurrentLifecycle { get; init; }
+    public AutomaticPlanarLifecycleFrameSnapshot
+        AutomaticPlanarCompletedLifecycle { get; init; }
     public long GpuAutomaticPlanarCaptureMicroseconds { get; init; }
     public long GpuHybridReflectionSsrMicroseconds { get; init; }
     public long GpuHybridReflectionRayQueryMicroseconds { get; init; }
@@ -1084,6 +1088,10 @@ internal sealed class SampleBistroQualityCaptureRunner
                     diagnostics.AutomaticPlanarMetadataBankHighWaterMark,
                 AutomaticPlanarMetadataCapacityRejectionCount =
                     diagnostics.AutomaticPlanarMetadataCapacityRejectionCount,
+                AutomaticPlanarCurrentLifecycle =
+                    diagnostics.AutomaticPlanarCurrentLifecycle,
+                AutomaticPlanarCompletedLifecycle =
+                    diagnostics.AutomaticPlanarCompletedLifecycle,
                 GpuAutomaticPlanarCaptureMicroseconds =
                     diagnostics.GpuAutomaticPlanarCaptureMicroseconds,
                 GpuHybridReflectionSsrMicroseconds =

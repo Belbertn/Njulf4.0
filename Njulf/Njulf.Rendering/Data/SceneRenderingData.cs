@@ -961,6 +961,10 @@ namespace Njulf.Rendering.Data
         public int AutomaticPlanarMetadataWordsUsed { get; set; }
         public int AutomaticPlanarMetadataBankHighWaterMark { get; set; }
         public int AutomaticPlanarMetadataCapacityRejectionCount { get; set; }
+        public AutomaticPlanarLifecycleFrameSnapshot
+            AutomaticPlanarCurrentLifecycle { get; set; }
+        public AutomaticPlanarLifecycleFrameSnapshot
+            AutomaticPlanarCompletedLifecycle { get; set; }
         public long GpuAutomaticPlanarCaptureMicroseconds { get; set; }
         public bool HybridReflectionPassEnabled { get; set; }
         public uint HybridReflectionWidth { get; set; }
@@ -2841,6 +2845,8 @@ namespace Njulf.Rendering.Data
             AutomaticPlanarMetadataWordsUsed = 0;
             AutomaticPlanarMetadataBankHighWaterMark = 0;
             AutomaticPlanarMetadataCapacityRejectionCount = 0;
+            AutomaticPlanarCurrentLifecycle = default;
+            AutomaticPlanarCompletedLifecycle = default;
             GpuAutomaticPlanarCaptureMicroseconds = 0;
             HybridReflectionPassEnabled = false;
             HybridReflectionWidth = 0;

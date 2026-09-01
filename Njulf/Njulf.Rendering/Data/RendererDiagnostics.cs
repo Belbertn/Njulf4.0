@@ -732,6 +732,10 @@ namespace Njulf.Rendering.Data
         public int AutomaticPlanarMetadataWordsUsed { get; init; }
         public int AutomaticPlanarMetadataBankHighWaterMark { get; init; }
         public int AutomaticPlanarMetadataCapacityRejectionCount { get; init; }
+        public AutomaticPlanarLifecycleFrameSnapshot
+            AutomaticPlanarCurrentLifecycle { get; init; }
+        public AutomaticPlanarLifecycleFrameSnapshot
+            AutomaticPlanarCompletedLifecycle { get; init; }
         public long GpuAutomaticPlanarCaptureMicroseconds { get; init; }
         public int TransparentReflectionReceiverObjectCount { get; init; }
         public int TransparentReflectionReceiverMeshletCount { get; init; }

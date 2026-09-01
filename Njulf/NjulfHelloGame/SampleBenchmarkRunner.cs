@@ -1200,6 +1200,8 @@ public sealed class SampleBenchmarkAnalyzer
         SampleReflectionProbeCaptureEvidence reflectionCaptureEvidence =
             SampleBenchmarkReflectionProbeCaptureEvaluator.Recompute(
                 reflectionRawEvidence);
+        SampleBenchmarkAutomaticPlanarEvidence automaticPlanarEvidence =
+            BuildAutomaticPlanarEvidence();
         SampleBenchmarkDdgiTransientRawEvidence ddgiTransientRawEvidence =
             SampleBenchmarkDdgiTransientEvidenceEvaluator.CaptureRaw(
                 _samples,
@@ -1246,6 +1248,7 @@ public sealed class SampleBenchmarkAnalyzer
             CpuSpikeEvidence = BuildCpuSpikeEvidence(),
             ReflectionProbeCaptureRawEvidence = reflectionRawEvidence,
             ReflectionProbeCaptureEvidence = reflectionCaptureEvidence,
+            AutomaticPlanarEvidence = automaticPlanarEvidence,
             DdgiTransientRawEvidence = ddgiTransientRawEvidence,
             DdgiTransientEvidence = ddgiTransientEvidence,
             TailDdgiEvidence = SampleTailDdgiRuntimeEvidenceBuilder.Create(
@@ -2907,6 +2910,68 @@ public sealed class SampleBenchmarkAnalyzer
             .OrderByDescending(stats => stats.P95Milliseconds)
             .ThenByDescending(stats => stats.AverageMilliseconds)
             .ToArray();
+    }
+
+    private SampleBenchmarkAutomaticPlanarEvidence
+        BuildAutomaticPlanarEvidence()
+    {
+        SampleBenchmarkAutomaticPlanarFrame[] frames = _samples
+            .Select((sample, index) => new
+            {
+                Sample = sample,
+                Index = index,
+                Lifecycle = sample.AutomaticPlanarCompletedLifecycle
+            })
+            .Where(static item =>
+                item.Sample.GpuTimingValid != 0 &&
+                item.Lifecycle.Valid &&
+                item.Lifecycle.GpuTimingRecorded)
+            .Select(static item =>
+                new SampleBenchmarkAutomaticPlanarFrame(
+                    item.Index,
+                    item.Lifecycle,
+                    Math.Max(
+                        0L,
+                        item.Sample
+                            .GpuAutomaticPlanarCaptureMicroseconds)))
+            .ToArray();
+        if (frames.Length == 0)
+            return SampleBenchmarkAutomaticPlanarEvidence.Unavailable;
+
+        SampleBenchmarkAutomaticPlanarFrame[] captureFrames = frames
+            .Where(static frame =>
+                frame.CompletedLifecycle.CaptureCount > 0)
+            .ToArray();
+        SampleBenchmarkAutomaticPlanarFrame[] reprojectionFrames = frames
+            .Where(static frame =>
+                frame.CompletedLifecycle.CaptureCount == 0 &&
+                frame.CompletedLifecycle.ReprojectionCount > 0)
+            .ToArray();
+        SampleBenchmarkAutomaticPlanarFrame[] noWorkFrames = frames
+            .Where(static frame =>
+                frame.CompletedLifecycle.CaptureCount == 0 &&
+                frame.CompletedLifecycle.ReprojectionCount == 0)
+            .ToArray();
+
+        return new SampleBenchmarkAutomaticPlanarEvidence(
+            Available: true,
+            CompletedFrameCount: frames.Length,
+            CaptureFrameCount: captureFrames.Length,
+            ReprojectionFrameCount: reprojectionFrames.Length,
+            NoWorkFrameCount: noWorkFrames.Length,
+            CaptureFrameMilliseconds: BuildStats(
+                "Automatic planar capture frames",
+                captureFrames.Select(static frame =>
+                    frame.GpuPassMicroseconds / 1000.0)),
+            ReprojectionFrameMilliseconds: BuildStats(
+                "Automatic planar reprojection frames",
+                reprojectionFrames.Select(static frame =>
+                    frame.GpuPassMicroseconds / 1000.0)),
+            NoWorkFrameMilliseconds: BuildStats(
+                "Automatic planar no-work frames",
+                noWorkFrames.Select(static frame =>
+                    frame.GpuPassMicroseconds / 1000.0)),
+            Frames: Array.AsReadOnly(frames));
     }
 
     private static IReadOnlyList<SampleBenchmarkFinding> BuildFindings(

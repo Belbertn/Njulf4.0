@@ -501,10 +501,13 @@ public readonly record struct AutomaticPlanarMemoryPlan(
 
 public static class AutomaticPlanarMemoryPlanner
 {
+    // This cap owns only automatic-planar metadata and capture resources.
+    // Hybrid-reflection and reflection-probe allocations have independent
+    // owners and remain covered by the renderer-wide memory gate.
     public const ulong HighBudgetBytes = 160UL * 1024UL * 1024UL;
 
     public static AutomaticPlanarMemoryPlan Compile(
-        ulong fixedReflectionBytes,
+        ulong fixedPlanarBytes,
         ulong budgetBytes,
         int requestedCaptureCount,
         float preferredScale,
@@ -515,8 +518,8 @@ public static class AutomaticPlanarMemoryPlanner
         if (maximumCaptures == 0)
         {
             return new AutomaticPlanarMemoryPlan(
-                true, 0, 0.0f, fixedReflectionBytes, 0UL,
-                fixedReflectionBytes,
+                true, 0, 0.0f, fixedPlanarBytes, 0UL,
+                fixedPlanarBytes,
                 AutomaticPlanarCandidateRejectionReason.None,
                 string.Empty);
         }
@@ -531,14 +534,14 @@ public static class AutomaticPlanarMemoryPlanner
             foreach (float scale in scales)
             {
                 ulong planarBytes = queryExactAllocationBytes(count, scale);
-                ulong total = checked(fixedReflectionBytes + planarBytes);
+                ulong total = checked(fixedPlanarBytes + planarBytes);
                 if (total <= budgetBytes)
                 {
                     return new AutomaticPlanarMemoryPlan(
                         true,
                         count,
                         scale,
-                        fixedReflectionBytes,
+                        fixedPlanarBytes,
                         planarBytes,
                         total,
                         AutomaticPlanarCandidateRejectionReason.None,
@@ -550,11 +553,11 @@ public static class AutomaticPlanarMemoryPlanner
             false,
             0,
             0.0f,
-            fixedReflectionBytes,
+            fixedPlanarBytes,
             0UL,
-            fixedReflectionBytes,
+            fixedPlanarBytes,
             AutomaticPlanarCandidateRejectionReason.MemoryDenied,
-            "The minimum 0.25-scale planar allocation exceeds the reflection budget.");
+            "The minimum 0.25-scale planar allocation exceeds the automatic-planar budget.");
     }
 }
 

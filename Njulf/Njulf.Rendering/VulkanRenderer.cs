@@ -3607,6 +3607,10 @@ namespace Njulf.Rendering
                 _nearFieldResidual.IsGenerationExecutable;
             BeginReflectionProbeCaptureFrame(
                 _gpuTimestamps.Supported && gpuTimingRequested);
+            _automaticPlanarReflectionManager.BeginFrame(
+                _currentFrame,
+                _ddgiFrameSerial,
+                _gpuTimestamps.Supported && gpuTimingRequested);
             _lifetime.MarkFrameStarted();
             _gpuTimestamps.BeginFrame(
                 _currentCommandBuffer,
@@ -3783,6 +3787,10 @@ namespace Njulf.Rendering
             _simpleDdgiFrameEvidence.CommitSuccessfulSubmission(
                 _currentFrame);
             _reflectionProbeManager?.CommitCaptureFrameSubmission(
+                _currentFrame,
+                _ddgiFrameSerial,
+                _gpuTimestamps.EnabledThisFrame);
+            _automaticPlanarReflectionManager.CommitFrameSubmission(
                 _currentFrame,
                 _ddgiFrameSerial,
                 _gpuTimestamps.EnabledThisFrame);
@@ -5864,6 +5872,7 @@ namespace Njulf.Rendering
             _automaticPlanarReflectionManager.PrepareFrame(
                 scene,
                 sceneData);
+            _automaticPlanarReflectionManager.RecordPreparedFrame(sceneData);
             long simpleDdgiPrepareMicroseconds =
                 ElapsedMicroseconds(resourceSubstageStart);
             resourceSubstageStart = Stopwatch.GetTimestamp();
@@ -9715,9 +9724,15 @@ namespace Njulf.Rendering
                 reflectionTimingsMatchCompletedLifecycle
                     ? timings.GetGpuMicrosecondsOrZero("ReflectionProbePublishPass")
                     : 0;
+            bool automaticPlanarTimingsMatchCompletedLifecycle =
+                sceneData.AutomaticPlanarCompletedLifecycle.Valid &&
+                sceneData.AutomaticPlanarCompletedLifecycle
+                    .GpuTimingRecorded;
             sceneData.GpuAutomaticPlanarCaptureMicroseconds =
-                timings.GetGpuMicrosecondsOrZero(
-                    "AutomaticPlanarReflectionPass");
+                automaticPlanarTimingsMatchCompletedLifecycle
+                    ? timings.GetGpuMicrosecondsOrZero(
+                        "AutomaticPlanarReflectionPass")
+                    : 0;
             sceneData.GpuHybridReflectionSsrMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("HybridReflectionSsrPass");
             sceneData.GpuHybridReflectionRayQueryMicroseconds =

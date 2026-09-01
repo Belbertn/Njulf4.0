@@ -673,6 +673,10 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.AutomaticPlanarMetadataBankHighWaterMark,
             AutomaticPlanarMetadataCapacityRejectionCount =
                 sceneData.AutomaticPlanarMetadataCapacityRejectionCount,
+            AutomaticPlanarCurrentLifecycle =
+                sceneData.AutomaticPlanarCurrentLifecycle,
+            AutomaticPlanarCompletedLifecycle =
+                sceneData.AutomaticPlanarCompletedLifecycle,
             GpuAutomaticPlanarCaptureMicroseconds =
                 sceneData.GpuAutomaticPlanarCaptureMicroseconds,
             TransparentReflectionReceiverObjectCount =
