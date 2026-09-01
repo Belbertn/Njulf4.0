@@ -24,14 +24,17 @@ internal sealed class SampleHealthReportWriter
         SampleHealthReportEvaluation evaluation =
             SampleHealthReportEvaluation.Evaluate(diagnostics);
         MaterialGiProducerIdentity? producerIdentity = null;
-        if (string.Equals(status, "passed", StringComparison.Ordinal))
+        if (settings != null)
         {
             producerIdentity =
                 SampleMaterialGiProducerIdentityFactory.Create(
                     diagnostics,
-                    SampleRenderSettingsFingerprint.Capture(
-                        settings ?? throw new InvalidOperationException(
-                            "A passed health report requires the exact producer render settings.")));
+                    SampleRenderSettingsFingerprint.Capture(settings));
+        }
+        else if (string.Equals(status, "passed", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "A passed health report requires the exact producer render settings.");
         }
         _writer.Write(options.HealthReportPath, new
         {

@@ -365,6 +365,63 @@ public sealed class SampleHealthReportEvaluationTests
         }
     }
 
+    [Test]
+    public void SampleHealthReportWriter_FailedBenchmarkStillPublishesProducerIdentity()
+    {
+        string directory = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"health-report-failed-producer-{Guid.NewGuid():N}");
+        string reportPath = Path.Combine(directory, "health.json");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+            [
+                "--health-report",
+                reportPath
+            ]);
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                CaptureRun = new PerformanceCaptureRunMetadata(
+                    "Bistro",
+                    "Normal",
+                    "Release",
+                    "1.0.0+synthetic",
+                    new string('a', 40),
+                    "sha256:" + new string('b', 64),
+                    1),
+                CaptureGpuDeviceName = "Synthetic GPU",
+                CaptureGpuDriverVersion = "1.2.3"
+            };
+            var writer = new SampleHealthReportWriter();
+            writer.Write(
+                options,
+                startupLogPath: null,
+                Array.Empty<SampleSmokeOperationResult>(),
+                diagnostics,
+                status: "failed",
+                failure: "synthetic admitted pre-target blocker",
+                settings: new RenderSettings());
+
+            using JsonDocument document =
+                JsonDocument.Parse(File.ReadAllBytes(reportPath));
+            JsonElement root = document.RootElement;
+            Assert.Multiple(() =>
+            {
+                Assert.That(root.GetProperty("status").GetString(), Is.EqualTo("failed"));
+                Assert.That(
+                    root.GetProperty("producerIdentity")
+                        .GetProperty("buildCommit")
+                        .GetString(),
+                    Is.EqualTo(new string('a', 40)));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GiDiagnosticWarning CreateDiagnostic(
         GiDiagnosticWarningCode code,
         GiDiagnosticSeverity severity,
