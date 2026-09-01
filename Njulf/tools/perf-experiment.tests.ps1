@@ -156,12 +156,18 @@ $testSpec = [pscustomobject]@{
         commit = "a" * 40
         arguments = @("--synthetic-toggle", "on")
         workloadArguments = [pscustomobject]@{}
+        environment = [pscustomobject]@{
+            NJULF_SYNTHETIC_SELECTOR = "baseline"
+        }
     }
     candidate = [pscustomobject]@{
         sourceRoot = "C:\baseline"
         commit = "a" * 40
         arguments = @("--synthetic-toggle", "on")
         workloadArguments = [pscustomobject]@{}
+        environment = [pscustomobject]@{
+            NJULF_SYNTHETIC_SELECTOR = "baseline"
+        }
     }
     configurations = @("Release", "ShippingPerformance")
     claims = @($claim)
@@ -178,5 +184,40 @@ try { Assert-ExperimentSpec $testSpec $manifest } catch {
 }
 Assert-True $aaMismatchFailed "aa-spec-rejects-argument-mismatch"
 
-Write-Host "All perf-experiment tests passed."
+$testSpec.candidate.arguments = @("--synthetic-toggle", "on")
+$testSpec.candidate.environment.NJULF_SYNTHETIC_SELECTOR = "candidate"
+$environmentMismatchFailed = $false
+try { Assert-ExperimentSpec $testSpec $manifest } catch {
+    $environmentMismatchFailed = $_.Exception.Message -match "A/A mode requires identical"
+}
+Assert-True $environmentMismatchFailed "aa-spec-rejects-environment-mismatch"
 
+$testSpec.candidate.environment = [pscustomobject]@{
+    PATH = "unsupported"
+}
+$unsafeEnvironmentFailed = $false
+try { Assert-ExperimentSpec $testSpec $manifest } catch {
+    $unsafeEnvironmentFailed = $_.Exception.Message -match "only uppercase NJULF_"
+}
+Assert-True $unsafeEnvironmentFailed "spec-rejects-non-njulf-environment"
+
+$environmentLog = Join-Path ([System.IO.Path]::GetTempPath()) (
+    "njulf-perf-experiment-environment-{0}.log" -f [Guid]::NewGuid().ToString("N"))
+try {
+    Invoke-CheckedProcess (Get-Command pwsh).Source @(
+        "-NoProfile",
+        "-Command",
+        'if ($env:NJULF_SYNTHETIC_SELECTOR -cne "candidate") { exit 9 }') `
+        (Get-Location).Path $environmentLog 10 "variant-environment-test" `
+        ([pscustomobject]@{ NJULF_SYNTHETIC_SELECTOR = "candidate" })
+    $environmentLogText = Get-Content -LiteralPath $environmentLog -Raw
+    Assert-True ($environmentLogText -match
+        'NJULF_SYNTHETIC_SELECTOR=candidate') `
+        "variant-environment-reaches-child-and-log"
+} finally {
+    if (Test-Path -LiteralPath $environmentLog -PathType Leaf) {
+        Remove-Item -LiteralPath $environmentLog -Force
+    }
+}
+
+Write-Host "All perf-experiment tests passed."

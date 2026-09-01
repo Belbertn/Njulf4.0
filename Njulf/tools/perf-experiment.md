@@ -28,7 +28,9 @@ The strict `njulf-perf-experiment/v1` JSON object contains:
 - `cookedAssetRoot`: external immutable cooked-asset bundle root containing the
   manifest's platform directory.
 - `baseline` and `candidate`: objects with `sourceRoot`, exact lowercase
-  `commit`, `arguments`, and a `workloadArguments` object keyed by workload ID.
+  `commit`, `arguments`, an `environment` object, and a `workloadArguments`
+  object keyed by workload ID. Environment keys are restricted to uppercase
+  `NJULF_` variables and are applied only to that variant's benchmark process.
 - `configurations`: a subset of the manifest's final configurations. A decision
   remains inconclusive unless the complete final configuration set runs.
 - `claims`: one or more `{ workloadId, targetDomain, targetPass }` objects.
@@ -46,4 +48,5 @@ HDR images, pair reports, hashes, and `decision.json` beneath the experiment ID.
 Phase arguments cannot override scene, resolution, trajectory, warmup,
 measurement, validation, quality-reference, or production requirements. They
 are intended only for a candidate's narrow internal selector or rollback
-toggle.
+toggle. Variant environment values have the same narrow purpose; A/A specs
+must keep them identical.

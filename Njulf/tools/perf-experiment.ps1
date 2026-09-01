@@ -129,6 +129,34 @@ function Assert-VariantArguments {
     }
 }
 
+function Assert-VariantEnvironment {
+    param($Environment, [string]$Label)
+    if ($null -eq $Environment) {
+        throw "$Label is missing."
+    }
+    foreach ($property in @($Environment.PSObject.Properties)) {
+        $name = [string]$property.Name
+        if ($name -cnotmatch '^NJULF_[A-Z0-9_]{1,121}$') {
+            throw "$Label contains unsupported variable '$name'; only uppercase NJULF_ variables are allowed."
+        }
+        if ($null -eq $property.Value -or
+            $property.Value -isnot [string] -or
+            ([string]$property.Value).Contains([char]0)) {
+            throw "$Label variable '$name' must have a non-null string value without NUL characters."
+        }
+    }
+}
+
+function Get-CanonicalEnvironmentJson {
+    param($Environment)
+    $ordered = [ordered]@{}
+    foreach ($property in @($Environment.PSObject.Properties |
+            Sort-Object Name)) {
+        $ordered[[string]$property.Name] = [string]$property.Value
+    }
+    return ($ordered | ConvertTo-Json -Compress)
+}
+
 function Assert-ExperimentSpec {
     param($Spec, $Manifest)
     Assert-ExactProperties $Spec @(
@@ -149,8 +177,10 @@ function Assert-ExperimentSpec {
     foreach ($phase in @("baseline", "candidate")) {
         $variant = $Spec.$phase
         Assert-ExactProperties $variant @(
-            "sourceRoot", "commit", "arguments", "workloadArguments") "$phase variant"
+            "sourceRoot", "commit", "arguments", "workloadArguments",
+            "environment") "$phase variant"
         Assert-VariantArguments @($variant.arguments) "$phase arguments"
+        Assert-VariantEnvironment $variant.environment "$phase environment"
         foreach ($property in @($variant.workloadArguments.PSObject.Properties)) {
             Assert-VariantArguments @($property.Value) "$phase workload '$($property.Name)' arguments"
         }
@@ -159,9 +189,11 @@ function Assert-ExperimentSpec {
         if ([string]$Spec.baseline.commit -cne [string]$Spec.candidate.commit -or
             ((@($Spec.baseline.arguments) | ConvertTo-Json -Compress) -cne
              (@($Spec.candidate.arguments) | ConvertTo-Json -Compress)) -or
+            ((Get-CanonicalEnvironmentJson $Spec.baseline.environment) -cne
+             (Get-CanonicalEnvironmentJson $Spec.candidate.environment)) -or
             (($Spec.baseline.workloadArguments | ConvertTo-Json -Depth 8 -Compress) -cne
              ($Spec.candidate.workloadArguments | ConvertTo-Json -Depth 8 -Compress))) {
-            throw "A/A mode requires identical commits and runtime arguments."
+            throw "A/A mode requires identical commits, runtime arguments, and environment."
         }
     }
     $expectedConfigurations = @($Manifest.finalConfigurations | ForEach-Object { [string]$_ })
@@ -204,7 +236,8 @@ function Invoke-CheckedProcess {
         [string]$WorkingDirectory,
         [string]$LogPath,
         [int]$TimeoutSeconds,
-        [string]$Label)
+        [string]$Label,
+        $Environment = $null)
     $info = [System.Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $FilePath
     $info.WorkingDirectory = $WorkingDirectory
@@ -213,6 +246,16 @@ function Invoke-CheckedProcess {
     $info.RedirectStandardError = $true
     $info.CreateNoWindow = $true
     foreach ($argument in $Arguments) { [void]$info.ArgumentList.Add($argument) }
+    $environmentLog = @()
+    if ($null -ne $Environment) {
+        foreach ($property in @($Environment.PSObject.Properties |
+                Sort-Object Name)) {
+            $name = [string]$property.Name
+            $value = [string]$property.Value
+            $info.Environment[$name] = $value
+            $environmentLog += "$name=$value"
+        }
+    }
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $info
     Write-Host $Label
@@ -227,7 +270,7 @@ function Invoke-CheckedProcess {
         }
         $outText = $stdout.GetAwaiter().GetResult()
         $errText = $stderr.GetAwaiter().GetResult()
-        $log = "COMMAND: $FilePath $($Arguments -join ' ')`nEXIT: $($process.ExitCode)`nSTDOUT:`n$outText`nSTDERR:`n$errText"
+        $log = "COMMAND: $FilePath $($Arguments -join ' ')`nENVIRONMENT: $($environmentLog -join '; ')`nEXIT: $($process.ExitCode)`nSTDOUT:`n$outText`nSTDERR:`n$errText"
         [System.IO.File]::WriteAllText($LogPath, $log, [System.Text.UTF8Encoding]::new($false))
         if ($process.ExitCode -ne 0) {
             throw "$Label failed with exit code $($process.ExitCode); see $LogPath"
@@ -741,7 +784,8 @@ foreach ($configuration in @($Spec.configurations)) {
                     $logPath = Join-Path $experimentRoot "logs\capture-$configuration-$($workload.id)-$stem.log"
                     Invoke-CheckedProcess ([string]$slot.build.executablePath) $arguments `
                         ([string]$slot.build.rootPath) $logPath ([int]$Manifest.capture.benchmarkTimeoutSeconds) `
-                        "$configuration/$($workload.id) cycle $cycle slot $($slotIndex + 1) $($slot.phase)"
+                        "$configuration/$($workload.id) cycle $cycle slot $($slotIndex + 1) $($slot.phase)" `
+                        $slot.variant.environment
                 }
                 $report = Read-JsonFile $reportPath "Benchmark report"
                 $health = Read-JsonFile $healthPath "Health report"
