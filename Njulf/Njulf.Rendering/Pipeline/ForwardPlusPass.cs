@@ -1569,14 +1569,14 @@ namespace Njulf.Rendering.Pipeline
                 if (hybridReflectionReceiverEnabled)
                 {
                     bool meshVariantsReady =
-                        _meshPipeline.TryPrepareHybridReflectionPipelines(
+                        _meshPipeline.AreHybridReflectionExactPipelinesReady(
                             nearFieldDirectSourceEnabled,
                             giCausticReceiverEnabled);
                     bool foliageVariantsReady =
                         _foliagePipeline is null ||
                         sceneData.FoliageClusterCount <= 0 ||
                         sceneData.FoliageDrawBufferBytes == 0 ||
-                        _foliagePipeline.TryPrepareHybridReflectionPipelines(
+                        _foliagePipeline.AreHybridReflectionExactPipelinesReady(
                             nearFieldDirectSourceEnabled,
                             giCausticReceiverEnabled);
                     if (!meshVariantsReady || !foliageVariantsReady)

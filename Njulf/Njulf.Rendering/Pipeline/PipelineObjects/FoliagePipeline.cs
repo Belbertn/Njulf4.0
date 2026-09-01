@@ -422,6 +422,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             return true;
         }
 
+        public bool AreHybridReflectionExactPipelinesReady(
+            bool nearFieldDirectSource,
+            bool giCausticReceiver) =>
+            AreHybridReflectionPipelinesReady(
+                nearFieldDirectSource,
+                giCausticReceiver);
+
         public bool TryPrepareHybridReflectionPipelines(
             bool nearFieldDirectSource,
             bool giCausticReceiver)
@@ -441,6 +448,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             }
             return true;
         }
+
+        public bool TryPrepareHybridReflectionExactPipelines(
+            bool nearFieldDirectSource,
+            bool giCausticReceiver) =>
+            TryPrepareHybridReflectionPipelines(
+                nearFieldDirectSource,
+                giCausticReceiver);
 
         public bool TryResolveForwardPipeline(
             bool authored,

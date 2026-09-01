@@ -1152,7 +1152,37 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         public bool AreHybridReflectionPipelinesReady(
             bool nearFieldDirectSourceEnabled,
-            bool giCausticReceiverEnabled)
+            bool giCausticReceiverEnabled) =>
+            AreHybridReflectionExactPipelinesReady(
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled) &&
+            AreHybridReflectionPerformancePipelinesReady(
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
+
+        public bool AreHybridReflectionExactPipelinesReady(
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled) =>
+            AreHybridReflectionPipelineRangeReady(
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled,
+                HybridReflectionExactLane,
+                HybridReflectionExactLane + 1);
+
+        public bool AreHybridReflectionPerformancePipelinesReady(
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled) =>
+            AreHybridReflectionPipelineRangeReady(
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled,
+                HybridReflectionCacheCombinedPipelineLane,
+                ResolveRequiredHybridReflectionLaneCount());
+
+        private bool AreHybridReflectionPipelineRangeReady(
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled,
+            int firstReceiverLane,
+            int receiverLaneLimit)
         {
             if (!HybridReflectionAttachmentEnabled)
                 return false;
@@ -1165,12 +1195,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             int familyCount = RendererBuildConfiguration.FastPipelineStartup
                 ? 1
                 : 6;
-            int requiredLaneCount = Settings.IsPerformanceOptimizationEnabled(
-                PerformanceOptimizationFeature.SplitHybridForwardPrograms)
-                ? HybridReflectionLaneCount
-                : HybridReflectionCacheAcceptedPipelineLane;
-            for (int receiver = 0;
-                 receiver < requiredLaneCount;
+            for (int receiver = firstReceiverLane;
+                 receiver < receiverLaneLimit;
                  receiver++)
             {
                 for (int family = firstFamily;
@@ -1189,7 +1215,37 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         public bool TryPrepareHybridReflectionPipelines(
             bool nearFieldDirectSourceEnabled,
-            bool giCausticReceiverEnabled)
+            bool giCausticReceiverEnabled) =>
+            TryPrepareHybridReflectionExactPipelines(
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled) &&
+            TryPrepareHybridReflectionPerformancePipelines(
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
+
+        public bool TryPrepareHybridReflectionExactPipelines(
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled) =>
+            TryPrepareHybridReflectionPipelineRange(
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled,
+                HybridReflectionExactLane,
+                HybridReflectionExactLane + 1);
+
+        public bool TryPrepareHybridReflectionPerformancePipelines(
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled) =>
+            TryPrepareHybridReflectionPipelineRange(
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled,
+                HybridReflectionCacheCombinedPipelineLane,
+                ResolveRequiredHybridReflectionLaneCount());
+
+        private bool TryPrepareHybridReflectionPipelineRange(
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled,
+            int firstReceiverLane,
+            int receiverLaneLimit)
         {
             if (!HybridReflectionAttachmentEnabled)
                 return false;
@@ -1202,12 +1258,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             int familyCount = RendererBuildConfiguration.FastPipelineStartup
                 ? 1
                 : 6;
-            int requiredLaneCount = Settings.IsPerformanceOptimizationEnabled(
-                PerformanceOptimizationFeature.SplitHybridForwardPrograms)
-                ? HybridReflectionLaneCount
-                : HybridReflectionCacheAcceptedPipelineLane;
-            for (int receiver = 0;
-                 receiver < requiredLaneCount;
+            for (int receiver = firstReceiverLane;
+                 receiver < receiverLaneLimit;
                  receiver++)
             {
                 for (int family = firstFamily;
@@ -1229,6 +1281,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             }
             return true;
         }
+
+        private int ResolveRequiredHybridReflectionLaneCount() =>
+            Settings.IsPerformanceOptimizationEnabled(
+                PerformanceOptimizationFeature.SplitHybridForwardPrograms)
+                ? HybridReflectionLaneCount
+                : HybridReflectionCacheAcceptedPipelineLane;
 
         private bool TryResolveBasePipelineFamily(
             VkPipeline pipeline,

@@ -1287,7 +1287,7 @@ public sealed class HybridReflectionContractsTests
     }
 
     [Test]
-    public void SceneTransitionPublication_PreparesReceiverCacheBankBeforeRepublish()
+    public void ExactReceiverPublication_DefersCacheSpecializationsWithoutRenderTimeCreation()
     {
         string runtime = ReadRepoText(
             "Njulf.Rendering",
@@ -1301,6 +1301,10 @@ public sealed class HybridReflectionContractsTests
         string renderer = ReadRepoText(
             "Njulf.Rendering",
             "VulkanRenderer.cs");
+        string forward = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "ForwardPlusPass.cs");
 
         int completedRuntimeDeferral = runtime.IndexOf(
             "if (_initializationState == 2 &&",
@@ -1317,14 +1321,32 @@ public sealed class HybridReflectionContractsTests
             "ScreenPipelinesAvailable = true;",
             backgroundPublication,
             StringComparison.Ordinal);
-        int preparationStart = mesh.IndexOf(
-            "public bool TryPrepareHybridReflectionPipelines(",
+        int exactPreparationStart = mesh.IndexOf(
+            "public bool TryPrepareHybridReflectionExactPipelines(",
             StringComparison.Ordinal);
-        int preparationEnd = mesh.IndexOf(
-            "private bool TryResolveBasePipelineFamily(",
-            preparationStart,
+        int performancePreparationStart = mesh.IndexOf(
+            "public bool TryPrepareHybridReflectionPerformancePipelines(",
+            exactPreparationStart,
             StringComparison.Ordinal);
-        string preparation = mesh[preparationStart..preparationEnd];
+        int performancePreparationEnd = mesh.IndexOf(
+            "private bool TryPrepareHybridReflectionPipelineRange(",
+            performancePreparationStart,
+            StringComparison.Ordinal);
+        string exactPreparation =
+            mesh[exactPreparationStart..performancePreparationStart];
+        string performancePreparation =
+            mesh[performancePreparationStart..performancePreparationEnd];
+        int fullQualityStart = renderer.IndexOf(
+            "private void PrepareHybridReflectionsForFullQuality()",
+            StringComparison.Ordinal);
+        int fullQualityEnd = renderer.IndexOf(
+            "private bool BeginProgressiveFrame()",
+            fullQualityStart,
+            StringComparison.Ordinal);
+        string fullQuality = renderer[fullQualityStart..fullQualityEnd];
+        int postFirstPresent = renderer.IndexOf(
+            "Pipeline.Prepare.PostFirstPresentHybridReflectionSpecializations",
+            StringComparison.Ordinal);
 
         Assert.Multiple(() =>
         {
@@ -1337,22 +1359,45 @@ public sealed class HybridReflectionContractsTests
             Assert.That(publicationRestored,
                 Is.GreaterThan(backgroundPublication),
                 "Screen pipelines must remain unavailable until background preparation returns successfully.");
-            Assert.That(preparation, Does.Contain(
-                "receiver < requiredLaneCount"));
-            Assert.That(preparation, Does.Contain(
-                "receiverLane: receiver"));
+            Assert.That(exactPreparation, Does.Contain(
+                "HybridReflectionExactLane"));
+            Assert.That(exactPreparation, Does.Not.Contain(
+                "HybridReflectionCacheCombinedPipelineLane"));
+            Assert.That(performancePreparation, Does.Contain(
+                "HybridReflectionCacheCombinedPipelineLane"));
+            Assert.That(performancePreparation, Does.Contain(
+                "ResolveRequiredHybridReflectionLaneCount()"));
             Assert.That(mesh, Does.Contain(
                 "private const int HybridReflectionLaneCount = 4;"));
-            Assert.That(preparation, Does.Contain(
+            Assert.That(mesh, Does.Contain(
                 "RendererBuildConfiguration.FastPipelineStartup"));
-            Assert.That(preparation, Does.Contain(
+            Assert.That(mesh, Does.Contain(
                 "familyCount = RendererBuildConfiguration.FastPipelineStartup"));
             Assert.That(renderer, Does.Contain(
                 "ref _hybridReflectionReceiverPipelinesPrepared"));
             Assert.That(renderer, Does.Contain(
-                "PrepareHybridReflectionsForFullQuality"));
-            Assert.That(renderer, Does.Contain(
-                "_foliagePipeline.TryPrepareHybridReflectionPipelines"));
+                "ref _hybridReflectionReceiverPerformancePipelinesPrepared"));
+            Assert.That(fullQuality, Does.Contain(
+                "PrepareHybridReflectionReceiverPipelines)"));
+            Assert.That(fullQuality, Does.Contain(
+                "!RendererBuildConfiguration.ProgressivePipelineStartup"));
+            Assert.That(fullQuality, Does.Contain(
+                "PrepareHybridReflectionReceiverPerformancePipelines()"));
+            Assert.That(postFirstPresent,
+                Is.GreaterThan(fullQualityStart));
+            Assert.That(renderer[postFirstPresent..], Does.Contain(
+                "PrepareHybridReflectionReceiverPerformancePipelines"));
+            Assert.That(renderer[postFirstPresent..], Does.Contain(
+                "exact canonical rendering retained"));
+            Assert.That(forward, Does.Contain(
+                "AreHybridReflectionExactPipelinesReady"));
+            Assert.That(forward, Does.Not.Contain(
+                "TryPrepareHybridReflectionPipelines"),
+                "Render-time command preparation must remain lookup-only.");
+            Assert.That(forward, Does.Contain(
+                "SimpleDdgiReceiverCacheFallbackReason.PipelineUnavailable"));
+            Assert.That(forward, Does.Contain(
+                "exact pipeline selected"));
             Assert.That(renderer, Does.Contain(
                 "!runtime.ScreenPipelinesAvailable"));
         });

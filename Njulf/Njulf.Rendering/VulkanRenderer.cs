@@ -217,6 +217,7 @@ namespace Njulf.Rendering
         private GiPipelineCacheService? _giPipelineCacheService;
         private HybridReflectionVulkanRuntime? _hybridReflectionRuntime;
         private int _hybridReflectionReceiverPipelinesPrepared;
+        private int _hybridReflectionReceiverPerformancePipelinesPrepared;
         private SmaaResources? _smaaResources;
         private SkinningManager _skinningManager = null!;
         private GpuParticleRuntimeManager _gpuParticleRuntimeManager = null!;
@@ -4127,12 +4128,11 @@ namespace Njulf.Rendering
 
         private bool PrepareHybridReflectionReceiverPipelines()
         {
-            // Screen-pipeline publication stays false while the base fallback
-            // and configured graph combination are created. Forward+ retains
-            // lookup-or-create semantics for a later dynamic combination, so
-            // it never demotes the requested reflection mode merely because a
-            // previously unused attachment combination became active.
-            if (!TryPrepareHybridReflectionReceiverCombination(
+            // Screen-pipeline publication waits only for the exact opaque and
+            // foliage receivers. Cache-specialized lanes preserve identical
+            // output but are not quality-critical and are prepared after the
+            // first full-quality present in progressive startup.
+            if (!TryPrepareHybridReflectionExactReceiverCombination(
                     nearFieldDirectSource: false,
                     giCausticReceiver: false))
             {
@@ -4153,7 +4153,7 @@ namespace Njulf.Rendering
             }
 
             if ((nearFieldDirectSource || giCausticReceiver) &&
-                !TryPrepareHybridReflectionReceiverCombination(
+                !TryPrepareHybridReflectionExactReceiverCombination(
                     nearFieldDirectSource,
                     giCausticReceiver))
             {
@@ -4166,11 +4166,11 @@ namespace Njulf.Rendering
             return true;
         }
 
-        private bool TryPrepareHybridReflectionReceiverCombination(
+        private bool TryPrepareHybridReflectionExactReceiverCombination(
             bool nearFieldDirectSource,
             bool giCausticReceiver)
         {
-            if (!_meshPipeline.TryPrepareHybridReflectionPipelines(
+            if (!_meshPipeline.TryPrepareHybridReflectionExactPipelines(
                     nearFieldDirectSource,
                     giCausticReceiver))
             {
@@ -4178,9 +4178,45 @@ namespace Njulf.Rendering
             }
 
             return !_foliagePipeline.IsPrepared ||
-                _foliagePipeline.TryPrepareHybridReflectionPipelines(
+                _foliagePipeline.TryPrepareHybridReflectionExactPipelines(
                     nearFieldDirectSource,
                     giCausticReceiver);
+        }
+
+        private bool PrepareHybridReflectionReceiverPerformancePipelines()
+        {
+            if (!_meshPipeline.TryPrepareHybridReflectionPerformancePipelines(
+                    nearFieldDirectSourceEnabled: false,
+                    giCausticReceiverEnabled: false))
+            {
+                return false;
+            }
+
+            bool nearFieldDirectSource =
+                _advancedGiAdmission.GraphModes.UsesNearFieldHiZResidual &&
+                _meshPipeline.NearFieldDirectSourceConfiguration
+                    .SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.ForwardMrt;
+            bool giCausticReceiver =
+                _advancedGiAdmission.GraphModes.UsesCausticWorldCache;
+            if (nearFieldDirectSource && giCausticReceiver &&
+                !_meshPipeline.CombinedAdvancedGiAttachmentEnabled)
+            {
+                giCausticReceiver = false;
+            }
+
+            if ((nearFieldDirectSource || giCausticReceiver) &&
+                !_meshPipeline.TryPrepareHybridReflectionPerformancePipelines(
+                    nearFieldDirectSource,
+                    giCausticReceiver))
+            {
+                return false;
+            }
+
+            Volatile.Write(
+                ref _hybridReflectionReceiverPerformancePipelinesPrepared,
+                1);
+            return true;
         }
 
         private void PrepareHybridReflectionsForFullQuality()
@@ -4190,9 +4226,9 @@ namespace Njulf.Rendering
                     "Hybrid reflection runtime is not initialized.");
 
             // BeginInitializeAsync also releases a claim made by
-            // DeferInitialize. Waiting here is safe because scene preparation
-            // runs behind the responsive bootstrap presentation, and it keeps
-            // full-quality publication behind the complete receiver bank.
+            // DeferInitialize. Exact receiver readiness is the quality gate;
+            // the cache-specialized lanes are output-equivalent acceleration
+            // paths and may safely retain the exact opaque fallback.
             runtime.BeginInitializeAsync(
                     PrepareHybridReflectionReceiverPipelines)
                 .GetAwaiter()
@@ -4205,11 +4241,20 @@ namespace Njulf.Rendering
                 !runtime.ScreenPipelinesAvailable)
             {
                 throw new InvalidOperationException(
-                    "Hybrid reflections were requested, but their complete " +
+                    "Hybrid reflections were requested, but their exact " +
                     "screen and receiver pipeline bank is unavailable. " +
                     $"Runtime: {runtime.FailureDetail}; mesh: " +
                     $"{_meshPipeline.HybridReflectionFailureReason}; foliage: " +
                     _foliagePipeline.HybridReflectionPipelineFailureReason);
+            }
+
+            if (!RendererBuildConfiguration.ProgressivePipelineStartup &&
+                !PrepareHybridReflectionReceiverPerformancePipelines())
+            {
+                throw new InvalidOperationException(
+                    "Hybrid reflections were requested in blocking startup, " +
+                    "but their cache-specialized receiver pipeline bank is unavailable. " +
+                    _meshPipeline.HybridReflectionFailureReason);
             }
         }
 
@@ -4558,7 +4603,8 @@ namespace Njulf.Rendering
                         decalReceiverCacheRequired,
                         foliageRequired,
                         particlePreparationRequired,
-                        fogRequired);
+                        fogRequired,
+                        hybridReflectionsRequired);
                 lock (_startupGate)
                     _postFirstPresentPipelinePreparation = preparation;
             }
@@ -4596,8 +4642,17 @@ namespace Njulf.Rendering
             bool decalReceiverCacheRequired,
             bool foliageRequired,
             bool particlePreparationRequired,
-            bool fogRequired)
+            bool fogRequired,
+            bool hybridReflectionsRequired)
         {
+            if (hybridReflectionsRequired &&
+                _meshPipeline.HybridReflectionAttachmentEnabled)
+            {
+                TryPreparePostFirstPresentFamily(
+                    "Pipeline.Prepare.PostFirstPresentHybridReflectionSpecializations",
+                    PrepareHybridReflectionReceiverPerformancePipelines);
+            }
+
             bool meshReady = TryPreparePostFirstPresentFamily(
                 "Pipeline.Prepare.PostFirstPresentSpecializations",
                 () =>
