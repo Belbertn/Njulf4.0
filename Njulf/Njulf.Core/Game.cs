@@ -684,7 +684,7 @@ namespace Njulf.Core
                     _pipelinePreparationCancellation.Token);
         }
 
-        private void RunStartupStep(string name, Action action)
+        protected void RunStartupStep(string name, Action action)
         {
             RunStartupStep<object?>(
                 name,
@@ -695,7 +695,7 @@ namespace Njulf.Core
                 });
         }
 
-        private T RunStartupStep<T>(string name, Func<T> action)
+        protected T RunStartupStep<T>(string name, Func<T> action)
         {
             var stopwatch = Stopwatch.StartNew();
             OnStartupStepStarted(name);

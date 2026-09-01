@@ -64,6 +64,45 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void LoadModel_SourceFallbackPrintsReasonAndExactRecookCommand()
+        {
+            string path = WriteTriangleObj();
+            var uploader = new FakeModelRenderUploadService();
+            using var content = new ContentManager(
+                Path.GetDirectoryName(path),
+                uploader);
+            TextWriter originalError = Console.Error;
+            using var output = new StringWriter();
+            try
+            {
+                Console.SetError(output);
+                content.Load<Model>(Path.GetFileName(path));
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+
+            string warning = output.ToString();
+            Assert.Multiple(() =>
+            {
+                Assert.That(warning,
+                    Does.Contain("WARNING [Njulf.Content]: source import fallback"));
+                Assert.That(warning,
+                    Does.Contain($"'{Path.GetFileName(path)}'"));
+                Assert.That(warning,
+                    Does.Contain("cooked package was not found"));
+                Assert.That(warning,
+                    Does.Contain(
+                        "WARNING [Njulf.Content]: recook with: " +
+                        "dotnet run --project Njulf.AssetTool -- cook model"));
+                Assert.That(warning, Does.Contain("--backend Auto"));
+                Assert.That(warning,
+                    Does.Contain("--texture-format AutoBc --force"));
+            });
+        }
+
+        [Test]
         public void LoadModel_RequireCookedRejectsMissingPackageBeforeSourceImport()
         {
             string path = WriteTriangleObj();
@@ -198,6 +237,62 @@ namespace Njulf.Tests
                     Is.GreaterThanOrEqualTo(0));
                 Assert.That(diagnostics.Entries.Single().UploadMilliseconds,
                     Is.GreaterThanOrEqualTo(0));
+            });
+        }
+
+        [Test]
+        public async Task LoadAsyncModel_SourceFallbackPrintsReasonAndExactRecookCommand()
+        {
+            string path = WriteTriangleObj();
+            using var dispatcher = new RenderThreadContentUploadDispatcher();
+            var uploader = new FakeCooperativeModelRenderUploadService();
+            using var content = new ContentManager(
+                Path.GetDirectoryName(path),
+                uploader,
+                dispatcher);
+            TextWriter originalError = Console.Error;
+            using var output = new StringWriter();
+            try
+            {
+                Console.SetError(output);
+                Task<Model> loading = content.LoadAsync<Model>(
+                    Path.GetFileName(path));
+                var timeout = System.Diagnostics.Stopwatch.StartNew();
+                while (!loading.IsCompleted)
+                {
+                    if (dispatcher.PendingCount > 0)
+                    {
+                        dispatcher.ProcessFrame(
+                            TimeSpan.FromMilliseconds(10),
+                            maximumCallbacks: 8,
+                            maximumSubmissionBytes: 4L * 1024L * 1024L);
+                    }
+                    if (timeout.Elapsed > TimeSpan.FromSeconds(10))
+                        Assert.Fail("Timed out pumping the cooperative source upload.");
+                    await Task.Delay(1);
+                }
+
+                await loading;
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+
+            string warning = output.ToString();
+            Assert.Multiple(() =>
+            {
+                Assert.That(warning,
+                    Does.Contain("WARNING [Njulf.Content]: source import fallback"));
+                Assert.That(warning,
+                    Does.Contain($"'{Path.GetFileName(path)}'"));
+                Assert.That(warning,
+                    Does.Contain("cooked package was not found"));
+                Assert.That(warning,
+                    Does.Contain(
+                        "WARNING [Njulf.Content]: recook with: " +
+                        "dotnet run --project Njulf.AssetTool -- cook model"));
+                Assert.That(warning, Does.Contain("--backend Auto"));
             });
         }
 

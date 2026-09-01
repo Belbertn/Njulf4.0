@@ -637,6 +637,11 @@ namespace Njulf.Assets
                         resolution);
                 }
 
+                WarnSourceImportFallback(
+                    requestedPath,
+                    sourcePath,
+                    options,
+                    resolution);
                 RecordCookedDiagnostic(
                     new CookedContentDiagnosticEntry(
                         requestedPath,
@@ -876,6 +881,11 @@ namespace Njulf.Assets
                         resolution);
                 }
 
+                WarnSourceImportFallback(
+                    requestedPath,
+                    sourcePath,
+                    options,
+                    resolution);
                 return new CookedModelAsyncPreparation(
                     requestedPath,
                     resolution,
@@ -1656,6 +1666,20 @@ namespace Njulf.Assets
                 $"{importer.AssimpMaterialTextureConvention} " +
                 $"--max-sampler-anisotropy {maximumSamplerAnisotropy} " +
                 "--texture-format AutoBc --force";
+        }
+
+        private void WarnSourceImportFallback(
+            string requestedPath,
+            string sourcePath,
+            ContentLoadOptions options,
+            CookedResolution resolution)
+        {
+            Console.Error.WriteLine(
+                $"WARNING [Njulf.Content]: source import fallback for " +
+                $"'{requestedPath}': {resolution.Reason}");
+            Console.Error.WriteLine(
+                "WARNING [Njulf.Content]: recook with: " +
+                CreateAssetToolCookCommand(sourcePath, options));
         }
 
         private static string QuotePowerShellArgument(string value) =>

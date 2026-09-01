@@ -939,6 +939,24 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void SponzaManifestRequiresBothSharpGltfCooks()
+    {
+        SampleAssetReference[] assets = SampleAssetManifest.NewSponza
+            .EnumerateAssets()
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(assets, Has.Length.EqualTo(2));
+            Assert.That(assets,
+                Has.All.Matches<SampleAssetReference>(asset =>
+                    asset.RequireCooked &&
+                    asset.ExpectedBackend == ModelImportBackend.SharpGltf &&
+                    asset.CreateLoadOptions().RequireCooked));
+        });
+    }
+
+    [Test]
     public void DdgiContentConformanceFlag_IsRuntimeOnlyAndDefaultsToStartupSmoke()
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]

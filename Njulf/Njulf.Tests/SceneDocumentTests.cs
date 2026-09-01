@@ -158,6 +158,43 @@ public sealed class SceneDocumentTests
     }
 
     [Test]
+    public void Loader_UsesSuppliedModelLoaderForDocumentAssets()
+    {
+        var model = new Model { Name = "Delegated model" };
+        model.Add(new RenderObject { Name = "Mesh" });
+        string? loadedPath = null;
+        var document = new SceneDocument
+        {
+            Objects =
+            [
+                new SceneObjectDocument
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "Delegated object",
+                    Model = new SceneAssetReferenceDocument("delegated.glb")
+                }
+            ]
+        };
+        var loader = new SceneDocumentLoader(
+            new ThrowingContentManager(),
+            path =>
+            {
+                loadedPath = path;
+                return model;
+            });
+
+        using Scene scene = loader.Load(document);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loadedPath, Is.EqualTo("delegated.glb"));
+            Assert.That(scene.RenderObjects, Has.Count.EqualTo(1));
+            Assert.That(scene.RenderObjects[0].Name,
+                Is.EqualTo("Delegated object"));
+        });
+    }
+
+    [Test]
     public void Loader_RejectsNegativeMaterialAlphaCutoffBeforeLoadingContent()
     {
         Guid id = Guid.NewGuid();

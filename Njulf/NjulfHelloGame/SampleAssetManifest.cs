@@ -75,8 +75,17 @@ internal sealed record SampleAssetManifest(
             asset.LoadTier == SampleAssetLoadTier.Deferred);
 
     public static SampleAssetManifest NewSponza { get; } = new(
-        new SampleAssetReference("NewSponza_Main_glTF_003.gltf", ModelImportBackend.SharpGltf),
-        new[] { new SampleAssetReference("NewSponza_Curtains_glTF.gltf", ModelImportBackend.SharpGltf) },
+        new SampleAssetReference(
+            "NewSponza_Main_glTF_003.gltf",
+            ModelImportBackend.SharpGltf,
+            RequireCooked: true),
+        new[]
+        {
+            new SampleAssetReference(
+                "NewSponza_Curtains_glTF.gltf",
+                ModelImportBackend.SharpGltf,
+                RequireCooked: true)
+        },
         Array.Empty<SampleAssetReference>(),
         1.0f,
         CoreVector3.Zero,

@@ -1,6 +1,7 @@
 using System;
 using Microsoft.Extensions.DependencyInjection;
 using Njulf.Assets;
+using Njulf.Assets.Cooked;
 using Njulf.Core;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
@@ -767,6 +768,8 @@ internal sealed class HelloGame : Game
         MeshManager meshManager = services.GetRequiredService<MeshManager>();
         MaterialManager materialManager = services.GetRequiredService<MaterialManager>();
         LightManager lightManager = services.GetRequiredService<LightManager>();
+        ContentManager contentManager =
+            services.GetRequiredService<ContentManager>();
         VulkanRenderer renderer = Renderer as VulkanRenderer
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
         if (_smokeOptions.Mode == SampleSmokeMode.SceneTransition)
@@ -777,16 +780,33 @@ internal sealed class HelloGame : Game
             renderer.DeferHybridReflectionPipelinePreparation();
         }
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
-            SampleAssetValidationGate.Validate(AppContext.BaseDirectory, SponzaAssetManifest);
+        {
+            RunStartupStep(
+                "Content.ValidateSampleAssets",
+                () => SampleAssetValidationGate.Validate(
+                    AppContext.BaseDirectory,
+                    SponzaAssetManifest));
+        }
         SampleInputController.Configure(input);
         Console.WriteLine(
             "Debug overlays: Ctrl+Keypad9/Ctrl+Num9 forward, add Shift for reverse; " +
             "cycle=" + string.Join(" -> ", DebugOverlayCatalog.ActiveCycle.Select(
                 static descriptor => descriptor.DisplayName)) + ".");
         PrintRendererDeviceInfo(renderer);
-        Model model = LoadSampleScene(meshManager, materialManager, lightManager);
-        ContentManager contentManager =
-            services.GetRequiredService<ContentManager>();
+        CookedContentDiagnostics contentDiagnosticsBefore =
+            contentManager.CookedDiagnostics;
+        Model model = RunStartupStep(
+            "Content.LoadSampleScene",
+            () => LoadSampleScene(
+                meshManager,
+                materialManager,
+                lightManager));
+        (string contentSummary, bool contentWarning) =
+            FormatInitialContentSummary(
+                contentDiagnosticsBefore,
+                contentManager.CookedDiagnostics);
+        (contentWarning ? Console.Error : Console.Out)
+            .WriteLine(contentSummary);
         _contentUploadPump =
             services.GetRequiredService<IContentUploadPump>();
         _sceneResidency = new SampleSceneResidencyCache(contentManager);
@@ -2486,7 +2506,9 @@ internal sealed class HelloGame : Game
             _sceneKind,
             meshManager,
             materialManager,
-            lightManager);
+            lightManager,
+            runModelLoadStep: (name, load) =>
+                RunStartupStep(name, load));
         PublishSceneBuild(build);
         return build.Model;
     }
@@ -2497,7 +2519,8 @@ internal sealed class HelloGame : Game
         MeshManager meshManager,
         MaterialManager materialManager,
         LightManager lightManager,
-        bool firstViewOnly = false)
+        bool firstViewOnly = false,
+        Func<string, Func<Model>, Model>? runModelLoadStep = null)
     {
         ArgumentNullException.ThrowIfNull(targetScene);
         IReadOnlyList<ParticleEffectInstance> sampleVfxEffects =
@@ -2657,7 +2680,8 @@ internal sealed class HelloGame : Game
             lightManager,
             assetManifest,
             loadSceneDocument: sceneKind == SampleSceneKind.SponzaPlaza,
-            sponzaFixtureMode: _smokeOptions.SponzaFixtureMode);
+            sponzaFixtureMode: _smokeOptions.SponzaFixtureMode,
+            runModelLoadStep: runModelLoadStep);
         Model model = firstViewOnly
             ? sceneLoader.LoadFirstView(targetScene)
             : sceneLoader.Load(targetScene);
@@ -2687,6 +2711,34 @@ internal sealed class HelloGame : Game
                 sponzaTextureManager);
         }
         return Finish(model);
+    }
+
+    internal static (string Message, bool IsWarning)
+        FormatInitialContentSummary(
+            CookedContentDiagnostics before,
+            CookedContentDiagnostics after)
+    {
+        ArgumentNullException.ThrowIfNull(before);
+        ArgumentNullException.ThrowIfNull(after);
+        int sourceFallbackCount = Math.Max(
+            0,
+            after.SourceFallbackCount - before.SourceFallbackCount);
+        int cookedModelCount = Math.Max(
+            0,
+            after.CookedAssetCount - before.CookedAssetCount);
+        if (sourceFallbackCount != 0)
+        {
+            return (
+                "WARNING [Njulf.Content]: initial scene used " +
+                $"{sourceFallbackCount} source import fallback(s); " +
+                "startup timing is degraded.",
+                true);
+        }
+
+        return (
+            "Cooked content: initial scene used no source import fallback " +
+            $"(cooked models={cookedModelCount}).",
+            false);
     }
 
     private void PublishSceneBuild(SampleSceneBuild build)

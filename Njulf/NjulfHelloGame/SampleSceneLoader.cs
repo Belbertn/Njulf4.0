@@ -46,6 +46,7 @@ internal sealed class SampleSceneLoader
     private readonly LightManager _lightManager;
     private readonly bool _loadSceneDocument;
     private readonly SampleSponzaFixtureMode _sponzaFixtureMode;
+    private readonly Func<string, Func<Model>, Model>? _runModelLoadStep;
     private readonly List<RenderObject> _modelObjects = new();
     private readonly List<RenderObject> _stressObjects = new();
     private readonly List<StaticInstanceBatch> _stressBatches = new();
@@ -62,7 +63,8 @@ internal sealed class SampleSceneLoader
         SampleAssetManifest manifest,
         bool loadSceneDocument = false,
         SampleSponzaFixtureMode sponzaFixtureMode =
-            SampleSponzaFixtureMode.Architecture)
+            SampleSponzaFixtureMode.Architecture,
+        Func<string, Func<Model>, Model>? runModelLoadStep = null)
     {
         _content = content ?? throw new ArgumentNullException(nameof(content));
         _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
@@ -71,6 +73,7 @@ internal sealed class SampleSceneLoader
         _manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
         _loadSceneDocument = loadSceneDocument;
         _sponzaFixtureMode = sponzaFixtureMode;
+        _runModelLoadStep = runModelLoadStep;
 
         if (!Enum.IsDefined(_sponzaFixtureMode))
             throw new ArgumentOutOfRangeException(nameof(sponzaFixtureMode));
@@ -121,7 +124,7 @@ internal sealed class SampleSceneLoader
             _loadedModelBounds = null;
             SceneDocument document = SceneDocumentJson.Read(ScenePath);
             ApplySponzaFixtureMode(document, _sponzaFixtureMode);
-            new SceneDocumentLoader(_content).Populate(
+            new SceneDocumentLoader(_content, LoadModelAsset).Populate(
                 document,
                 scene,
                 new LightManagerSceneLightStore(_lightManager),
@@ -471,6 +474,20 @@ internal sealed class SampleSceneLoader
     }
 
     private Model LoadModelAsset(string modelPath)
+    {
+        Func<string, Func<Model>, Model>? runModelLoadStep =
+            _runModelLoadStep;
+        if (runModelLoadStep != null)
+        {
+            return runModelLoadStep(
+                $"Content.LoadModel.{Path.GetFileName(modelPath)}",
+                () => LoadModelAssetCore(modelPath));
+        }
+
+        return LoadModelAssetCore(modelPath);
+    }
+
+    private Model LoadModelAssetCore(string modelPath)
     {
         Model modelAsset = (_content as ContentManager)?.Load<Model>(
             modelPath,

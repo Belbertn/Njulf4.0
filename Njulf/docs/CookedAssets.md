@@ -6,6 +6,7 @@ Njulf resolves versioned, hashed cooked packages before source models. Cooked st
 
 ```powershell
 dotnet run --project Njulf.AssetTool -- cook model NjulfHelloGame/Strut.glb --out NjulfHelloGame/Cooked
+./tools/cook-sponza.ps1 -Configuration Development
 ./tools/cook-bistro.ps1 -Configuration Development
 dotnet run --project Njulf.AssetTool -- cook folder NjulfHelloGame --out NjulfHelloGame/Cooked
 dotnet run --project Njulf.AssetTool -- cook changed NjulfHelloGame --out NjulfHelloGame/Cooked
@@ -22,6 +23,11 @@ within one cooked mesh.
 `Cooked/` is generated output and is intentionally not version-controlled. After
 a fresh clone, run the folder cook before starting the normal cooked-only runtime
 or producing a Release build or publish.
+
+New Sponza must use `cook-sponza.ps1`. It force-cooks the main and curtain glTF
+files for `win-x64` with the exact SharpGLTF runtime contract and AutoBC texture
+selection, validates both packages, and rebuilds the game so the generated
+packages are copied to the runtime output.
 
 Amazon Bistro must use the shared `cook-bistro.ps1` workflow. It force-cooks both
 the exterior and interior for `win-x64` with Assimp, the explicit

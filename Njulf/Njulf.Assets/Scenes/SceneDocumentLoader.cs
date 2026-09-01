@@ -12,10 +12,21 @@ namespace Njulf.Assets.Scenes;
 public sealed class SceneDocumentLoader
 {
     private readonly IContentManager _content;
+    private readonly Func<string, Model> _loadModel;
 
     public SceneDocumentLoader(IContentManager content)
     {
         _content = content ?? throw new ArgumentNullException(nameof(content));
+        _loadModel = LoadModelFromContent;
+    }
+
+    public SceneDocumentLoader(
+        IContentManager content,
+        Func<string, Model> loadModel)
+    {
+        _content = content ?? throw new ArgumentNullException(nameof(content));
+        _loadModel = loadModel ??
+            throw new ArgumentNullException(nameof(loadModel));
     }
 
     public Scene Load(SceneDocument document, ISceneLightStore? lights = null, ISceneParticleEffectStore? particleEffects = null, ISceneMaterialOverrideStore? materials = null)
@@ -150,7 +161,8 @@ public sealed class SceneDocumentLoader
                     ModelLightRuntimeController.Attach(
                         scene,
                         _content,
-                        mutableLights);
+                        mutableLights,
+                        _loadModel);
                 importedLights.SetImportedModelLightsEnabled(
                     document.ImportedModelLightsEnabled);
             }
@@ -333,8 +345,7 @@ public sealed class SceneDocumentLoader
                 throw new InvalidDataException("Model references require non-empty path and sub-object values.");
             if (!modelInstances.TryGetValue(asset.Path, out ModelInstanceCursor? cursor))
             {
-                Model model = _content.Load<Model>(asset.Path)
-                    ?? throw new InvalidOperationException("Content manager returned null.");
+                Model model = _loadModel(asset.Path);
                 cursor = new ModelInstanceCursor(model.CreateInstance());
                 modelInstances.Add(asset.Path, cursor);
             }
@@ -344,8 +355,7 @@ public sealed class SceneDocumentLoader
                 throw new InvalidDataException($"Sub-object selector '{asset.SubObject}' matched no render object.");
             if (cursor.Used.Contains(selected))
             {
-                Model model = _content.Load<Model>(asset.Path)
-                    ?? throw new InvalidOperationException("Content manager returned null.");
+                Model model = _loadModel(asset.Path);
                 cursor.Reset(model.CreateInstance());
                 selected = SelectSubObject(cursor.Candidates, asset.SubObject)
                     ?? throw new InvalidDataException($"Sub-object selector '{asset.SubObject}' matched no render object.");
@@ -363,6 +373,10 @@ public sealed class SceneDocumentLoader
             throw new InvalidDataException($"Unable to load scene record '{recordName}' ({recordId}) from model '{asset.Path}' (sub-object '{asset.SubObject}').", error);
         }
     }
+
+    private Model LoadModelFromContent(string path) =>
+        _content.Load<Model>(path) ??
+        throw new InvalidOperationException("Content manager returned null.");
 
     private static void DisposeModelInstanceCursors(
         IReadOnlyDictionary<string, ModelInstanceCursor> cursors)
