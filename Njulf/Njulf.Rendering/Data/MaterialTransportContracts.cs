@@ -148,6 +148,11 @@ public enum MaterialChangeMask : uint
     FarField = 1u << 6,
     TextureDependencies = 1u << 7,
     AccelerationStructure = 1u << 8,
+    /// <summary>
+    /// CPU-only automatic-planar receiver policy. This never changes the GPU
+    /// material layout or forward shader classification.
+    /// </summary>
+    AutomaticPlanarReflection = 1u << 9,
     All = RasterAppearance |
           DiffuseTransport |
           Emission |
@@ -156,7 +161,8 @@ public enum MaterialChangeMask : uint
           ShadingModel |
           FarField |
           TextureDependencies |
-          AccelerationStructure
+          AccelerationStructure |
+          AutomaticPlanarReflection
 }
 
 /// <summary>
@@ -285,6 +291,11 @@ public sealed record MaterialDefinition
     public float AlphaCutoff { get; init; } = 0.5f;
     public bool DoubleSided { get; init; }
     public bool ReceivesShadows { get; init; } = true;
+    /// <summary>
+    /// Allows rigid planar surfaces using this material to compete for the
+    /// automatic planar-capture budget. Explicit authoring is required.
+    /// </summary>
+    public bool AutomaticPlanarReflectionEnabled { get; init; }
     /// <summary>
     /// Optional renderer-specific blend policy. When unset, the compiler
     /// derives the conventional blend mode from <see cref="AlphaMode"/> and

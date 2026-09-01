@@ -155,6 +155,9 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
             AlphaCutoff = source.AlphaCutoff ?? material.AlphaCutoff,
             DoubleSided = source.DoubleSided ?? material.DoubleSided,
             ReceivesShadows = source.ReceivesShadows ?? material.ReceivesShadows,
+            AutomaticPlanarReflectionEnabled =
+                source.AutomaticPlanarReflectionEnabled ??
+                material.AutomaticPlanarReflectionEnabled,
             RenderBlendModeOverride = blendMode,
             ShadingModel = shadingModel,
             EmissionGiParticipation = emissionParticipation,
@@ -194,6 +197,8 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
             AlphaCutoff = material.AlphaCutoff,
             DoubleSided = material.DoubleSided,
             ReceivesShadows = material.ReceivesShadows,
+            AutomaticPlanarReflectionEnabled =
+                material.AutomaticPlanarReflectionEnabled,
             RenderBlendModeOverride = material.RenderBlendModeOverride?.ToString() ??
                 SceneMaterialOverrideDocument.AutomaticBlendMode,
             ShadingModel = material.ShadingModel.ToString(),

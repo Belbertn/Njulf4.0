@@ -86,5 +86,28 @@ public sealed class CookedJsonStrictnessTests
                 .With.Message.Contains("invalid metadata"));
     }
 
+    [Test]
+    public void LegacyCookedMaterialWithoutAutomaticPlanarPolicyDefaultsDisabled()
+    {
+        byte[] current = CookedJson.Serialize(
+            new CookedMaterialTable([ModelMaterial.Default]));
+        string legacyJson = Encoding.UTF8.GetString(current).Replace(
+            "\"automaticPlanarReflectionEnabled\":false,",
+            string.Empty,
+            StringComparison.Ordinal);
+
+        Assert.That(legacyJson,
+            Does.Not.Contain("automaticPlanarReflectionEnabled"));
+        CookedMaterialTable legacy =
+            CookedJson.Deserialize<CookedMaterialTable>(
+                Encoding.UTF8.GetBytes(legacyJson),
+                "legacy-1.2.njmaterial",
+                "materials");
+
+        Assert.That(
+            legacy.Materials.Single().AutomaticPlanarReflectionEnabled,
+            Is.False);
+    }
+
     private sealed record FloatFixture(float Value);
 }

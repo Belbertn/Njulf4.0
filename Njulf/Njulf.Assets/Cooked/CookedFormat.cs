@@ -55,7 +55,7 @@ public static class CookedFormatVersions
     // mesh would silently reinterpret quality metadata, so it is rejected.
     public static CookedFormatVersion Model { get; } = new(2, 0);
     public static CookedFormatVersion Mesh { get; } = new(2, 0);
-    public static CookedFormatVersion Material { get; } = new(1, 2);
+    public static CookedFormatVersion Material { get; } = new(1, 3);
     public static CookedFormatVersion Texture { get; } = new(1, 3);
     public static CookedFormatVersion Animation { get; } = new(1, 1);
 

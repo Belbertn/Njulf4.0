@@ -29,6 +29,10 @@ result is `reflection-qualification.json` with contract
 `bistro-reflection-qualification/v3`. A passing run proves all of the
 following:
 
+- automatic planar reflection is default-off and the Bistro workload opts in
+  exactly `BistroExterior.fbx` material `Pavement_Ground_Wet`; the Sponza
+  control has zero automatic-planar material opt-ins;
+
 - both model packages use the current format and match their computed Amazon
   Bistro import contracts;
 - cooked base-color and normal bindings resolve to full-chain BC7 and BC5 KTX2

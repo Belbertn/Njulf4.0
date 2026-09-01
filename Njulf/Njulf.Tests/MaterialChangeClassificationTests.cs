@@ -233,6 +233,31 @@ public sealed class MaterialChangeClassificationTests
             Is.EqualTo(RasterOnly));
     }
 
+    [Test]
+    public void AutomaticPlanarPolicy_IsCpuOnlyAndLeavesCompiledGpuPayloadUnchanged()
+    {
+        var disabled = new MaterialDefinition();
+        MaterialDefinition enabled = disabled with
+        {
+            AutomaticPlanarReflectionEnabled = true
+        };
+        MaterialCompilationContext context = CreateCompilationContext();
+        CompiledMaterialTransport before =
+            MaterialTransportCompiler.Compile(disabled, context);
+        CompiledMaterialTransport after =
+            MaterialTransportCompiler.Compile(enabled, context);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                MaterialTransportCompiler.ClassifyChanges(disabled, enabled),
+                Is.EqualTo(MaterialChangeMask.AutomaticPlanarReflection));
+            Assert.That(after.GpuMaterial, Is.EqualTo(before.GpuMaterial));
+            Assert.That(after.ExtensionData, Is.EqualTo(before.ExtensionData));
+            Assert.That(after.Metadata, Is.EqualTo(before.Metadata));
+        });
+    }
+
     private static IEnumerable<MaterialChangeCase> CreateDefinitionCases()
     {
         yield return Change(
@@ -320,6 +345,13 @@ public sealed class MaterialChangeClassificationTests
             nameof(MaterialDefinition.ReceivesShadows),
             definition => definition with { ReceivesShadows = false },
             RasterOnly);
+        yield return Change(
+            nameof(MaterialDefinition.AutomaticPlanarReflectionEnabled),
+            definition => definition with
+            {
+                AutomaticPlanarReflectionEnabled = true
+            },
+            MaterialChangeMask.AutomaticPlanarReflection);
         yield return Change(
             nameof(MaterialDefinition.RenderBlendModeOverride),
             definition => definition with

@@ -10,26 +10,44 @@ namespace Njulf.Tests;
 public sealed class AutomaticPlanarReflectionProductionTests
 {
     [Test]
-    public void PlanarEvidenceAndAdmission_AreDeterministicAndSemanticAware()
+    public void DefaultAndLegacyMaterialDefinitions_AreDisabled()
+    {
+        GPUMaterialData legacyGpu = MaterialManager.CreateDefaultMaterial();
+        MaterialDefinition legacy = MaterialDefinitionV1Adapter.FromGpuMaterial(
+            legacyGpu,
+            extension: null,
+            MaterialRenderMetadata.FromGpuMaterial(legacyGpu));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                MaterialDefinition.Default.AutomaticPlanarReflectionEnabled,
+                Is.False);
+            Assert.That(legacy.AutomaticPlanarReflectionEnabled, Is.False);
+        });
+    }
+
+    [Test]
+    public void PlanarEvidenceAndAdmission_RequiresExplicitMaterialOptIn()
     {
         GiPrimitivePlanarEvidence evidence = CreateEvidence();
-        AutomaticPlanarCandidateInput genericWithoutStatistics = Input(
-            evidence,
-            AutomaticPlanarMaterialSemantic.Generic,
-            statisticsComplete: false);
-        AutomaticPlanarCandidateInput waterWithoutStatistics = Input(
+        AutomaticPlanarCandidateInput disabledWater = Input(
             evidence,
             AutomaticPlanarMaterialSemantic.WaterSurface,
-            statisticsComplete: false);
+            materialOptInEnabled: false);
+        AutomaticPlanarCandidateInput enabledGeneric = Input(
+            evidence,
+            AutomaticPlanarMaterialSemantic.Generic,
+            materialOptInEnabled: true);
 
-        AutomaticPlanarCandidateAdmission generic =
+        AutomaticPlanarCandidateAdmission disabled =
             AutomaticPlanarCandidateAnalyzer.Analyze(
-                genericWithoutStatistics,
+                disabledWater,
                 1920,
                 1080);
-        AutomaticPlanarCandidateAdmission water =
+        AutomaticPlanarCandidateAdmission enabled =
             AutomaticPlanarCandidateAnalyzer.Analyze(
-                waterWithoutStatistics,
+                enabledGeneric,
                 1920,
                 1080);
 
@@ -37,14 +55,49 @@ public sealed class AutomaticPlanarReflectionProductionTests
         {
             Assert.That(evidence.IsValid, Is.True);
             Assert.That(evidence.Validate(), Is.Empty);
-            Assert.That(generic.Admitted, Is.False);
-            Assert.That(generic.RejectionReason, Is.EqualTo(
+            Assert.That(disabled.Admitted, Is.False);
+            Assert.That(disabled.RejectionReason, Is.EqualTo(
                 AutomaticPlanarCandidateRejectionReason
-                    .TextureStatisticsIncomplete));
-            Assert.That(water.Admitted, Is.True);
-            Assert.That(water.Candidate.WorldPlane.Y, Is.GreaterThan(0.999f));
-            Assert.That(water.Candidate.ProjectedPixels, Is.EqualTo(8_192f));
+                    .MaterialOptInDisabled));
+            Assert.That(enabled.Admitted, Is.True);
+            Assert.That(enabled.Candidate.WorldPlane.Y, Is.GreaterThan(0.999f));
+            Assert.That(enabled.Candidate.ProjectedPixels, Is.EqualTo(8_192f));
         });
+    }
+
+    [TestCase(AutomaticPlanarMaterialSemantic.Generic)]
+    [TestCase(AutomaticPlanarMaterialSemantic.Mirror)]
+    [TestCase(AutomaticPlanarMaterialSemantic.WaterSurface)]
+    public void DisabledMaterial_IsRejectedBeforeSemanticEligibility(
+        AutomaticPlanarMaterialSemantic semantic)
+    {
+        AutomaticPlanarCandidateAdmission admission =
+            AutomaticPlanarCandidateAnalyzer.Analyze(
+                Input(CreateEvidence(), semantic, materialOptInEnabled: false),
+                1920,
+                1080);
+
+        Assert.That(admission.RejectionReason, Is.EqualTo(
+            AutomaticPlanarCandidateRejectionReason.MaterialOptInDisabled));
+    }
+
+    [Test]
+    public void EnabledGenericMaterial_IsNotVetoedByTextureStatisticsOrReflectivity()
+    {
+        AutomaticPlanarCandidateInput input = Input(
+            CreateEvidence(),
+            AutomaticPlanarMaterialSemantic.Generic,
+            materialOptInEnabled: true) with
+        {
+            MeanRoughness = 1f,
+            MaximumF0 = 0f,
+            TextureStatisticsComplete = false
+        };
+
+        AutomaticPlanarCandidateAdmission admission =
+            AutomaticPlanarCandidateAnalyzer.Analyze(input, 1920, 1080);
+
+        Assert.That(admission.Admitted, Is.True, admission.Detail);
     }
 
     [Test]
@@ -216,17 +269,18 @@ public sealed class AutomaticPlanarReflectionProductionTests
     private static AutomaticPlanarCandidateInput Input(
         GiPrimitivePlanarEvidence evidence,
         AutomaticPlanarMaterialSemantic semantic,
-        bool statisticsComplete) => new(
+        bool materialOptInEnabled) => new(
         StableIdentity: 1,
         ObjectIndex: 2,
         ContentRevision: 3,
         ReceiverIdentity: 4,
         Evidence: evidence,
         WorldMatrix: Matrix4x4.Identity,
+        MaterialOptInEnabled: materialOptInEnabled,
         MaterialSemantic: semantic,
         MeanRoughness: 0.1f,
         MaximumF0: 0.04f,
-        TextureStatisticsComplete: statisticsComplete,
+        TextureStatisticsComplete: false,
         Visible: true,
         Deforming: false,
         ProjectedPixels: 8_192f,

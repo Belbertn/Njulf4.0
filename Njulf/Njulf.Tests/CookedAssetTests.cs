@@ -366,7 +366,8 @@ public sealed class CookedAssetTests
                     {
                         DdgiBaseColorTextureAverageLinear = expected,
                         FeatureFlags = 1u << 24,
-                        Ior = 2.25f
+                        Ior = 2.25f,
+                        AutomaticPlanarReflectionEnabled = true
                     }
                 ]),
             sourceHash: 1,
@@ -385,6 +386,7 @@ public sealed class CookedAssetTests
             Assert.That(material.FeatureFlags, Is.EqualTo(1u << 24));
             Assert.That(material.Ior, Is.EqualTo(2.25f));
             Assert.That(material.TransmissionFactor, Is.Zero);
+            Assert.That(material.AutomaticPlanarReflectionEnabled, Is.True);
         });
     }
 

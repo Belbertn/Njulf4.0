@@ -505,7 +505,21 @@ public static class MaterialTransportCompiler
         ArgumentNullException.ThrowIfNull(before.Extensions);
         ArgumentNullException.ThrowIfNull(after.Extensions);
 
+        bool automaticPlanarChanged =
+            before.AutomaticPlanarReflectionEnabled !=
+            after.AutomaticPlanarReflectionEnabled;
+        if (automaticPlanarChanged &&
+            before with
+            {
+                AutomaticPlanarReflectionEnabled =
+                    after.AutomaticPlanarReflectionEnabled
+            } == after)
+        {
+            return MaterialChangeMask.AutomaticPlanarReflection;
+        }
         MaterialChangeMask mask = MaterialChangeMask.RasterAppearance;
+        if (automaticPlanarChanged)
+            mask |= MaterialChangeMask.AutomaticPlanarReflection;
         if (CoreDiffuseInputsChanged(before, after) ||
             ExtensionDiffuseInputsChanged(before.Extensions, after.Extensions))
         {

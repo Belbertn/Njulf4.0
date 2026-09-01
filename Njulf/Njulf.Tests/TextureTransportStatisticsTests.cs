@@ -905,7 +905,7 @@ public sealed class TextureTransportStatisticsTests
         Assert.Multiple(() =>
         {
             Assert.That(CookedFormatVersions.Texture, Is.EqualTo(new CookedFormatVersion(1, 3)));
-            Assert.That(CookedFormatVersions.Material, Is.EqualTo(new CookedFormatVersion(1, 2)));
+            Assert.That(CookedFormatVersions.Material, Is.EqualTo(new CookedFormatVersion(1, 3)));
             Assert.That(CookedFormatVersions.Mesh, Is.EqualTo(new CookedFormatVersion(2, 0)));
         });
     }

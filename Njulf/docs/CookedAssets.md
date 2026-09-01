@@ -111,6 +111,10 @@ Cooked/
     reports/*.cook-report.json
 ```
 
+Material packages currently use format `1.3`. Readers continue to accept older
+`1.x` minors; a material written before `1.3` has no automatic-planar policy and
+therefore loads with that policy disabled.
+
 ## Explicit material classification
 
 Material names are not cook-time semantics. Use glTF material extras to opt a
@@ -126,6 +130,22 @@ material into foliage shading:
 shading only. Alpha-coverage-preserving mipmaps are controlled separately by
 standard glTF `alphaMode: "MASK"`; opaque foliage such as a tree trunk uses
 ordinary mipmaps.
+
+Automatic planar reflection is another explicit, independent material policy:
+
+```json
+"extras": {
+  "NJULF_automatic_planar_reflection": true
+}
+```
+
+The value must be a JSON boolean. It defaults to `false`, including for old
+cooked packages and materials with no extra. Opt-in only allows a rigid planar
+surface to compete for the bounded capture budget; it does not infer eligibility
+from names, roughness, metallic values, water, or mirror semantics. Amazon
+Bistro's FBX source cannot carry glTF extras, so its reviewed source-import
+policy opts in exactly `BistroExterior.fbx` material `Pavement_Ground_Wet`.
+No Sponza material is implicitly opted in.
 
 ## Offline foliage impostors
 

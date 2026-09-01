@@ -13,6 +13,36 @@ namespace Njulf.Tests;
 public sealed class SceneMaterialOverridePersistenceTests
 {
     [Test]
+    public void Schema11_RoundTripsAutomaticPlanarNullableStates()
+    {
+        bool?[] states = [null, false, true];
+        var source = new SceneDocument
+        {
+            Objects = states.Select((state, index) =>
+                new SceneObjectDocument
+                {
+                    Id = Guid.NewGuid(),
+                    Name = $"Policy {index}",
+                    Model = new SceneAssetReferenceDocument("policy.glb"),
+                    MaterialOverride = new SceneMaterialOverrideDocument
+                    {
+                        AutomaticPlanarReflectionEnabled = state
+                    }
+                }).ToList()
+        };
+
+        SceneDocument roundTrip = JsonSerializer.Deserialize<SceneDocument>(
+            SceneDocumentJson.Serialize(source),
+            SceneDocumentJson.Options)!;
+
+        Assert.That(roundTrip.SchemaVersion, Is.EqualTo(11));
+        Assert.That(
+            roundTrip.Objects.Select(candidate => candidate.MaterialOverride!
+                .AutomaticPlanarReflectionEnabled),
+            Is.EqualTo(states));
+    }
+
+    [Test]
     public void SchemaV3_PartialOverrideSerializesOnlySpecifiedFieldsAndRetainsExactHdrCutoff()
     {
         float cutoff = MathF.BitIncrement(1f);
@@ -304,6 +334,7 @@ public sealed class SceneMaterialOverridePersistenceTests
                     AlphaCutoff = cutoff,
                     DoubleSided = true,
                     ReceivesShadows = false,
+                    AutomaticPlanarReflectionEnabled = true,
                     RenderBlendModeOverride = MaterialBlendMode.PremultipliedAlpha,
                     ShadingModel = MaterialShadingModel.Foliage,
                     DiffuseGiParticipation = GiParticipationOverride.Default,
@@ -424,6 +455,9 @@ public sealed class SceneMaterialOverridePersistenceTests
                     Is.EqualTo(BitConverter.SingleToInt32Bits(cutoff)));
                 Assert.That(actual.DoubleSided, Is.True);
                 Assert.That(actual.ReceivesShadows, Is.False);
+                Assert.That(persisted.AutomaticPlanarReflectionEnabled,
+                    Is.True);
+                Assert.That(actual.AutomaticPlanarReflectionEnabled, Is.True);
                 Assert.That(
                     actual.RenderBlendModeOverride,
                     Is.EqualTo(MaterialBlendMode.PremultipliedAlpha));

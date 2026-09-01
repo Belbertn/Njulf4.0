@@ -1544,6 +1544,9 @@ namespace Njulf.Assets
                     AssimpMaterialTextureConvention.AmazonBistro)
                 {
                     AmazonBistroMaterialProfile.Apply(modelPath, imported);
+                    AmazonBistroAutomaticPlanarReflectionPolicy.Apply(
+                        modelPath,
+                        imported);
                 }
 
                 materials.Add(imported);
@@ -1711,7 +1714,10 @@ namespace Njulf.Assets
             target.GiTransmissionPolicy = material.GiTransmissionPolicy ?? target.GiTransmissionPolicy;
             target.GiCausticParticipation = material.GiCausticParticipation ?? target.GiCausticParticipation;
             target.GiCausticCasterPolicy = material.GiCausticCasterPolicy ??
-                                             target.GiCausticCasterPolicy;
+                                              target.GiCausticCasterPolicy;
+            target.AutomaticPlanarReflectionEnabled =
+                material.AutomaticPlanarReflectionEnabled ??
+                target.AutomaticPlanarReflectionEnabled;
             target.OpticalBoundaryKind = material.OpticalBoundaryKind ??
                                          target.OpticalBoundaryKind;
             target.ThinTransmissionTint = material.ThinTransmissionTint ?? target.ThinTransmissionTint;
@@ -2433,6 +2439,21 @@ namespace Njulf.Assets
             }
 
             if (extras.TryGetProperty(
+                    Gltf.SharpGltfModelMeshConverter.AutomaticPlanarReflectionExtra,
+                    out JsonElement automaticPlanar))
+            {
+                if (automaticPlanar.ValueKind is not JsonValueKind.True and
+                    not JsonValueKind.False)
+                {
+                    throw new InvalidDataException(
+                        $"glTF material extra '{Gltf.SharpGltfModelMeshConverter.AutomaticPlanarReflectionExtra}' must be a boolean.");
+                }
+
+                material.AutomaticPlanarReflectionEnabled =
+                    automaticPlanar.GetBoolean();
+            }
+
+            if (extras.TryGetProperty(
                     Gltf.SharpGltfModelMeshConverter.GeometryDecalExtra,
                     out JsonElement decal))
             {
@@ -3097,6 +3118,7 @@ namespace Njulf.Assets
         public ModelAlphaMode AlphaMode { get; set; } = ModelAlphaMode.Opaque;
         public float AlphaCutoff { get; set; } = 0.5f;
         public bool DoubleSided { get; set; }
+        public bool AutomaticPlanarReflectionEnabled { get; set; }
         public bool Unlit { get; set; }
         public bool IsGeometryDecal { get; set; }
         /// <summary>
@@ -3378,6 +3400,7 @@ namespace Njulf.Assets
         public ModelAlphaMode AlphaMode { get; set; } = ModelAlphaMode.Opaque;
         public float? AlphaCutoff { get; set; }
         public bool DoubleSided { get; set; }
+        public bool? AutomaticPlanarReflectionEnabled { get; set; }
         public bool? Unlit { get; set; }
         public bool IsGeometryDecal { get; set; }
         public int DecalLayer { get; set; }

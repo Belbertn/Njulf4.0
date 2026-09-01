@@ -38,6 +38,8 @@ namespace Njulf.Assets.Gltf;
 internal static class SharpGltfModelMeshConverter
 {
     internal const string FoliageExtra = "NJULF_foliage";
+    internal const string AutomaticPlanarReflectionExtra =
+        "NJULF_automatic_planar_reflection";
     internal const string GeometryDecalExtra = "NJULF_geometry_decal";
     internal const string DecalLayerExtra = "NJULF_decal_layer";
     internal const string DecalDepthBiasExtra = "NJULF_decal_depth_bias";
@@ -380,6 +382,24 @@ internal static class SharpGltfModelMeshConverter
                 imported.FeatureFlags |= ModelMaterialFeatureBits.Foliage;
             else
                 imported.FeatureFlags &= ~ModelMaterialFeatureBits.Foliage;
+        }
+
+        if (objectExtras.TryGetPropertyValue(
+                AutomaticPlanarReflectionExtra,
+                out JsonNode? automaticPlanarNode))
+        {
+            if (automaticPlanarNode is not JsonValue automaticPlanarValue ||
+                !automaticPlanarValue.TryGetValue(
+                    out bool automaticPlanarEnabled))
+            {
+                throw InvalidMaterialExtra(
+                    materialIndex,
+                    AutomaticPlanarReflectionExtra,
+                    "a boolean");
+            }
+
+            imported.AutomaticPlanarReflectionEnabled =
+                automaticPlanarEnabled;
         }
 
         if (objectExtras.TryGetPropertyValue(GeometryDecalExtra, out JsonNode? decalNode))

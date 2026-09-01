@@ -327,6 +327,72 @@ public sealed class ModelImporterFacadeTests
         });
     }
 
+    [TestCase(ModelImportBackend.SharpGltf, true)]
+    [TestCase(ModelImportBackend.SharpGltf, false)]
+    [TestCase(ModelImportBackend.Assimp, true)]
+    [TestCase(ModelImportBackend.Assimp, false)]
+    public void ImportDetailed_AutomaticPlanarExtraPreservesExplicitBoolean(
+        ModelImportBackend backend,
+        bool enabled)
+    {
+        string suffix = $"-{backend.ToString().ToLowerInvariant()}-automatic-planar-{enabled}";
+        string path = CreateMinimalExternalGltf(suffix);
+        string json = File.ReadAllText(path)
+            .Replace(
+                "\"mode\": 4",
+                "\"mode\": 4,\n                        \"material\": 0",
+                StringComparison.Ordinal)
+            .Replace(
+                "\"buffers\":",
+                $"\"materials\": [{{ \"name\": \"PlanarPolicy\", \"extras\": {{ \"NJULF_automatic_planar_reflection\": {enabled.ToString().ToLowerInvariant()} }} }}],\n                \"buffers\":",
+                StringComparison.Ordinal);
+        File.WriteAllText(path, json);
+        using var importer = new ModelImporter();
+
+        ModelImportResult result = importer.ImportDetailed(
+            path,
+            new ImporterOptions { Backend = backend });
+        ModelMaterial? material = result.Mesh?.Materials
+            .SingleOrDefault(candidate => candidate.Name == "PlanarPolicy");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ImportedSuccessfully, Is.True,
+                result.FailureMessage);
+            Assert.That(material, Is.Not.Null);
+            Assert.That(material!.AutomaticPlanarReflectionEnabled,
+                Is.EqualTo(enabled));
+        });
+    }
+
+    [TestCase(ModelImportBackend.SharpGltf)]
+    [TestCase(ModelImportBackend.Assimp)]
+    public void ImportDetailed_AutomaticPlanarExtraRejectsNonBoolean(
+        ModelImportBackend backend)
+    {
+        string path = CreateMinimalExternalGltf(
+            $"-{backend.ToString().ToLowerInvariant()}-invalid-automatic-planar");
+        string json = File.ReadAllText(path)
+            .Replace(
+                "\"mode\": 4",
+                "\"mode\": 4,\n                        \"material\": 0",
+                StringComparison.Ordinal)
+            .Replace(
+                "\"buffers\":",
+                "\"materials\": [{ \"name\": \"InvalidPlanarPolicy\", \"extras\": { \"NJULF_automatic_planar_reflection\": \"true\" } }],\n                \"buffers\":",
+                StringComparison.Ordinal);
+        File.WriteAllText(path, json);
+        using var importer = new ModelImporter();
+
+        ModelImportResult result = importer.ImportDetailed(
+            path,
+            new ImporterOptions { Backend = backend });
+
+        Assert.That(result.ImportedSuccessfully, Is.False);
+        Assert.That(result.FailureMessage,
+            Does.Contain("NJULF_automatic_planar_reflection"));
+    }
+
     [Test]
     public void ImportDetailed_MissingFileReturnsFailureResultWithoutThrowing()
     {

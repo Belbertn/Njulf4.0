@@ -2945,6 +2945,8 @@ namespace Njulf.Rendering.Resources
                 AlphaMode = alphaMode,
                 AlphaCutoff = material.AlphaCutoff,
                 DoubleSided = material.DoubleSided,
+                AutomaticPlanarReflectionEnabled =
+                    material.AutomaticPlanarReflectionEnabled,
                 ShadingModel = shadingModel,
                 FeatureFlags = flags,
                 Extensions = extensions,

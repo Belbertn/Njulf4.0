@@ -530,6 +530,8 @@ public sealed class EditorImGuiPanels
         float alphaCutoff = material.AlphaCutoff;
         bool doubleSided = material.DoubleSided;
         bool receivesShadows = material.ReceivesShadows;
+        bool automaticPlanarReflection =
+            material.AutomaticPlanarReflectionEnabled;
         MaterialBlendMode? blendOverride = material.RenderBlendModeOverride;
         MaterialShadingModel shadingModel = material.ShadingModel;
         GiParticipationOverride diffuseGi = material.DiffuseGiParticipation;
@@ -607,6 +609,15 @@ public sealed class EditorImGuiPanels
         ImGui.SameLine();
         changed |= ImGui.Checkbox("Receives shadows", ref receivesShadows);
         changed |= RenderOptionalBlendModeCombo("Blend policy", ref blendOverride);
+        changed |= ImGui.Checkbox(
+            "Automatic planar reflection",
+            ref automaticPlanarReflection);
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "Allows this material's rigid planar surfaces to compete for " +
+                "the automatic planar capture budget. Disabled by default.");
+        }
 
         ImGui.SeparatorText("GI participation");
         changed |= RenderEnumCombo("Diffuse GI", ref diffuseGi);
@@ -683,6 +694,7 @@ public sealed class EditorImGuiPanels
             AlphaCutoff = alphaCutoff,
             DoubleSided = doubleSided,
             ReceivesShadows = receivesShadows,
+            AutomaticPlanarReflectionEnabled = automaticPlanarReflection,
             RenderBlendModeOverride = blendOverride,
             ShadingModel = shadingModel,
             DiffuseGiParticipation = diffuseGi,

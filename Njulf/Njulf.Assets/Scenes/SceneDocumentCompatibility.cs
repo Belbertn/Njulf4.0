@@ -96,6 +96,8 @@ internal static class SceneDocumentCompatibility
             AlphaCutoff = source.AlphaCutoff ?? 0.5f,
             DoubleSided = source.DoubleSided,
             ReceivesShadows = source.ReceivesShadows,
+            AutomaticPlanarReflectionEnabled =
+                source.AutomaticPlanarReflectionEnabled,
             RenderBlendModeOverride = source.RenderBlendModeOverride,
             ShadingModel = source.ShadingModel,
             DiffuseGiParticipation = source.DiffuseGiParticipation,

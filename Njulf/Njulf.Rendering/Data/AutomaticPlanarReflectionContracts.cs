@@ -22,7 +22,8 @@ public enum AutomaticPlanarCandidateRejectionReason : uint
     InvalidTransform = 7,
     MemoryDenied = 8,
     CaptureLimit = 9,
-    Stale = 10
+    Stale = 10,
+    MaterialOptInDisabled = 11
 }
 
 public readonly record struct AutomaticPlanarCandidateInput(
@@ -32,6 +33,7 @@ public readonly record struct AutomaticPlanarCandidateInput(
     uint ReceiverIdentity,
     GiPrimitivePlanarEvidence Evidence,
     Matrix4x4 WorldMatrix,
+    bool MaterialOptInEnabled,
     AutomaticPlanarMaterialSemantic MaterialSemantic,
     float MeanRoughness,
     float MaximumF0,
@@ -96,6 +98,12 @@ public static class AutomaticPlanarCandidateAnalyzer
         uint outputWidth,
         uint outputHeight)
     {
+        if (!input.MaterialOptInEnabled)
+        {
+            return Reject(
+                AutomaticPlanarCandidateRejectionReason.MaterialOptInDisabled,
+                "The material has not opted in to automatic planar reflection.");
+        }
         if (!input.Visible)
             return Reject(AutomaticPlanarCandidateRejectionReason.Invisible,
                 "The rigid instance is not visible.");
@@ -108,26 +116,6 @@ public static class AutomaticPlanarCandidateAnalyzer
             return Reject(
                 AutomaticPlanarCandidateRejectionReason.InvalidEvidence,
                 input.Evidence?.Detail ?? "Planar evidence is unavailable.");
-        }
-
-        bool authoredSemantic = input.MaterialSemantic is
-            AutomaticPlanarMaterialSemantic.WaterSurface or
-            AutomaticPlanarMaterialSemantic.Mirror;
-        if (!authoredSemantic && !input.TextureStatisticsComplete)
-        {
-            return Reject(
-                AutomaticPlanarCandidateRejectionReason.TextureStatisticsIncomplete,
-                "Generic glossy planes require complete cooked texture statistics.");
-        }
-        if (!authoredSemantic &&
-            (!float.IsFinite(input.MeanRoughness) ||
-             !float.IsFinite(input.MaximumF0) ||
-             input.MeanRoughness > MaximumGenericRoughness ||
-             input.MaximumF0 < MinimumGenericF0))
-        {
-            return Reject(
-                AutomaticPlanarCandidateRejectionReason.MaterialNotEligible,
-                "Generic material is not a sufficiently glossy physical reflector.");
         }
 
         float minimumPixels = ResolveMinimumProjectedPixels(

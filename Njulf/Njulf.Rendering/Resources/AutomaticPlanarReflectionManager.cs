@@ -365,6 +365,18 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         ref AutomaticPlanarCandidateRejectionReason lastRejection,
         ref string lastDetail)
     {
+        MaterialDefinition definition =
+            _materialManager.GetMaterialDefinition(materialHandle);
+        if (!definition.AutomaticPlanarReflectionEnabled)
+        {
+            rejectedCount++;
+            lastRejection = AutomaticPlanarCandidateRejectionReason
+                .MaterialOptInDisabled;
+            lastDetail =
+                "The material has not opted in to automatic planar reflection.";
+            return;
+        }
+
         MeshTransportGeometry geometry;
         try
         {
@@ -398,8 +410,6 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
                 deforming || geometry.IsSkinned);
         }
 
-        MaterialDefinition definition =
-            _materialManager.GetMaterialDefinition(materialHandle);
         GiMaterialTransportProfile materialProfile =
             _materialManager.GetMaterialTransportProfile(materialHandle);
         GPUMaterialData gpuMaterial =
@@ -458,6 +468,7 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
                     receiverIdentity,
                     evidence,
                     worldMatrix,
+                    definition.AutomaticPlanarReflectionEnabled,
                     semantic,
                     meanRoughness,
                     maximumF0,

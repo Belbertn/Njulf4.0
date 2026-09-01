@@ -6,7 +6,7 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 10;
+    public const int CurrentSchemaVersion = 11;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -74,6 +74,7 @@ public sealed class SceneMaterialOverrideDocument
     public float? AlphaCutoff { get; init; }
     public bool? DoubleSided { get; init; }
     public bool? ReceivesShadows { get; init; }
+    public bool? AutomaticPlanarReflectionEnabled { get; init; }
     /// <summary>
     /// A renderer blend-mode name, or <see cref="AutomaticBlendMode"/> to
     /// explicitly clear a renderer-specific override.
