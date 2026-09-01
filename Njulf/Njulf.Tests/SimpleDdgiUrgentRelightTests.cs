@@ -164,16 +164,38 @@ public sealed class SimpleDdgiUrgentRelightTests
     }
 
     [Test]
+    public void CoherentPublication_KeepsTopologyFrozenUntilLiveBoundary()
+    {
+        static bool AwaitingLive(uint published, uint live, uint current) =>
+            SimpleDdgiVolumeManager
+                .IsPublishedRadiometricGenerationAwaitingLivePropagation(
+                    published,
+                    live,
+                    current);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AwaitingLive(2u, 0u, 2u), Is.True);
+            Assert.That(AwaitingLive(2u, 1u, 2u), Is.True);
+            Assert.That(AwaitingLive(2u, 2u, 2u), Is.False);
+            Assert.That(AwaitingLive(1u, 1u, 2u), Is.False);
+            Assert.That(AwaitingLive(0u, 0u, 0u), Is.False);
+        });
+    }
+
+    [Test]
     public void OverlappingCachedRelight_EscalatesOnlyBeforeCoherentPublication()
     {
         static bool Escalate(
             bool complete,
             bool coherentlyPublished,
+            bool livePropagationPublished,
             SimpleDdgiSourceRefreshMode current,
             SimpleDdgiSourceRefreshMode requested) =>
             SimpleDdgiVolumeManager.ShouldEscalateOverlappingCachedHitRelight(
                 complete,
                 coherentlyPublished,
+                livePropagationPublished,
                 current,
                 requested);
 
@@ -182,26 +204,37 @@ public sealed class SimpleDdgiUrgentRelightTests
             Assert.That(Escalate(
                 complete: false,
                 coherentlyPublished: false,
+                livePropagationPublished: false,
                 SimpleDdgiSourceRefreshMode.None,
                 SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.True);
             Assert.That(Escalate(
                 complete: false,
                 coherentlyPublished: true,
+                livePropagationPublished: true,
                 SimpleDdgiSourceRefreshMode.None,
                 SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.False);
             Assert.That(Escalate(
+                complete: false,
+                coherentlyPublished: true,
+                livePropagationPublished: false,
+                SimpleDdgiSourceRefreshMode.None,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.True);
+            Assert.That(Escalate(
                 complete: true,
                 coherentlyPublished: false,
+                livePropagationPublished: false,
                 SimpleDdgiSourceRefreshMode.CachedHitRelight,
                 SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.False);
             Assert.That(Escalate(
                 complete: false,
                 coherentlyPublished: false,
+                livePropagationPublished: false,
                 SimpleDdgiSourceRefreshMode.EnvironmentMissRelight,
                 SimpleDdgiSourceRefreshMode.FullTrace), Is.False);
             Assert.That(Escalate(
                 complete: false,
                 coherentlyPublished: false,
+                livePropagationPublished: false,
                 SimpleDdgiSourceRefreshMode.CachedHitRelight,
                 SimpleDdgiSourceRefreshMode.EnvironmentMissRelight), Is.True);
         });
@@ -402,6 +435,16 @@ public sealed class SimpleDdgiUrgentRelightTests
                 "SchedulerUpdateUsesRadiometricRelight(updateFlags)"));
             Assert.That(commit, Does.Contain(
                 "if (SchedulerGpuResident() && !deferredRadiometricPublication)"));
+            int sealedSourceCache = commit.IndexOf(
+                "if (sourceRefresh && !urgentRelight && !SealCommittedSourceCache(",
+                StringComparison.Ordinal);
+            int deferredRepairRetirement = commit.IndexOf(
+                "if (sourceRefresh && deferredRadiometricPublication)",
+                StringComparison.Ordinal);
+            Assert.That(sealedSourceCache, Is.GreaterThanOrEqualTo(0));
+            Assert.That(deferredRepairRetirement, Is.GreaterThan(sealedSourceCache));
+            Assert.That(commit, Does.Contain(
+                "~SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID"));
             Assert.That(feedback, Does.Contain(
                 "!SchedulerDefersRadiometricPublication()"));
             Assert.That(sampled, Does.Contain(

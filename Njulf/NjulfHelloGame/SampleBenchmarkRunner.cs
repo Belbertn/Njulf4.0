@@ -1321,9 +1321,9 @@ public sealed class SampleBenchmarkAnalyzer
             }
         }
 
-        var generationEdges = new List<int>(2);
-        uint previousGeneration = samples[0].SourceLightingGeneration;
-        if (previousGeneration == 0u)
+        var diagnosticGenerationEdges = new List<int>(2);
+        uint previousDiagnosticGeneration = samples[0].SourceLightingGeneration;
+        if (previousDiagnosticGeneration == 0u)
         {
             failures.Add(
                 "DDGI transient route frame 0 has no source-lighting generation.");
@@ -1336,21 +1336,21 @@ public sealed class SampleBenchmarkAnalyzer
                 failures.Add(
                     $"DDGI transient route frame {index} has no source-lighting generation.");
             }
-            if (generation != previousGeneration)
+            if (generation != previousDiagnosticGeneration)
             {
                 uint expectedGeneration = AdvanceNonZeroGeneration(
-                    previousGeneration);
+                    previousDiagnosticGeneration);
                 if (generation != expectedGeneration)
                 {
                     failures.Add(
-                        $"DDGI source-lighting generation changed from " +
-                        $"{previousGeneration} to {generation} at route frame " +
+                        $"DDGI diagnostic source-lighting generation changed from " +
+                        $"{previousDiagnosticGeneration} to {generation} at route frame " +
                         $"{index}; expected wrap-safe +1 generation " +
                         $"{expectedGeneration}.");
                 }
-                generationEdges.Add(index);
+                diagnosticGenerationEdges.Add(index);
             }
-            previousGeneration = generation;
+            previousDiagnosticGeneration = generation;
         }
 
         int[] authoredEvents =
@@ -1358,28 +1358,6 @@ public sealed class SampleBenchmarkAnalyzer
             SampleBistroQualityCaptureContract.LightingEventStartFrame,
             SampleBistroQualityCaptureContract.LightingEventEndFrame
         ];
-        if (generationEdges.Count != authoredEvents.Length)
-        {
-            failures.Add(
-                $"DDGI transient evidence expected exactly two source-lighting " +
-                $"generation edges, but observed {generationEdges.Count}: " +
-                $"{string.Join(",", generationEdges)}.");
-        }
-        else
-        {
-            for (int windowIndex = 0; windowIndex < authoredEvents.Length; windowIndex++)
-            {
-                int edge = generationEdges[windowIndex];
-                int authored = authoredEvents[windowIndex];
-                if (edge < authored || edge > authored + 1)
-                {
-                    failures.Add(
-                        $"DDGI source-lighting edge {windowIndex} occurred at route " +
-                        $"frame {edge}; expected [{authored},{authored + 1}].");
-                }
-            }
-        }
-
         var completedBySubmittedSerial =
             new Dictionary<ulong, (int CompletionIndex, SimpleDdgiCompletedFrameEvidence Evidence)>(
                 expectedFrameCount);
@@ -1451,6 +1429,177 @@ public sealed class SampleBenchmarkAnalyzer
         int completableOriginCount = Math.Max(
             0,
             expectedFrameCount - RenderingConstants.FramesInFlight);
+        var observedSubmittedGenerationEdges = new List<int>(2);
+        var submittedSourceGenerations = new uint[completableOriginCount];
+        uint previousSubmittedGeneration = 0u;
+        bool hasPreviousSubmittedGeneration = false;
+        for (int originIndex = 0;
+             originIndex < completableOriginCount;
+             originIndex++)
+        {
+            if (samples[originIndex].Active == 0)
+                continue;
+
+            ulong routeSerial = samples[originIndex].CaptureFrameSerial;
+            if (!completedBySubmittedSerial.TryGetValue(
+                    routeSerial,
+                    out (int CompletionIndex,
+                        SimpleDdgiCompletedFrameEvidence Evidence) joined))
+            {
+                continue;
+            }
+
+            uint generation = joined.Evidence.Submitted.SourceLightingGeneration;
+            submittedSourceGenerations[originIndex] = generation;
+            if (generation == 0u)
+            {
+                failures.Add(
+                    $"DDGI submitted route frame {originIndex} has no " +
+                    "source-lighting generation.");
+            }
+            if (hasPreviousSubmittedGeneration &&
+                generation != previousSubmittedGeneration)
+            {
+                uint expectedGeneration = AdvanceNonZeroGeneration(
+                    previousSubmittedGeneration);
+                if (generation != expectedGeneration)
+                {
+                    allRowCompletionFailures.Add(
+                        $"DDGI submitted source-lighting generation changed " +
+                        $"from {previousSubmittedGeneration} to {generation} " +
+                        $"at route frame {originIndex}; expected wrap-safe +1 " +
+                        $"generation {expectedGeneration}.");
+                }
+                observedSubmittedGenerationEdges.Add(originIndex);
+            }
+            previousSubmittedGeneration = generation;
+            hasPreviousSubmittedGeneration = true;
+        }
+
+        if (diagnosticGenerationEdges.Count != authoredEvents.Length)
+        {
+            failures.Add(
+                $"DDGI transient evidence expected exactly two diagnostic " +
+                $"source-lighting generation edges, but observed " +
+                $"{diagnosticGenerationEdges.Count}: " +
+                $"{string.Join(",", diagnosticGenerationEdges)}.");
+        }
+        var generationEdges = new List<int>(authoredEvents.Length);
+        if (diagnosticGenerationEdges.Count == authoredEvents.Length)
+        {
+            for (int windowIndex = 0;
+                 windowIndex < authoredEvents.Length;
+                 windowIndex++)
+            {
+                int diagnosticEdge = diagnosticGenerationEdges[windowIndex];
+                uint diagnosticGeneration =
+                    samples[diagnosticEdge].SourceLightingGeneration;
+                int edge = diagnosticEdge;
+                if (diagnosticEdge > 0 &&
+                    submittedSourceGenerations[diagnosticEdge - 1] ==
+                        diagnosticGeneration)
+                {
+                    edge = diagnosticEdge - 1;
+                }
+                if (edge > 0 &&
+                    submittedSourceGenerations[edge - 1] ==
+                        diagnosticGeneration)
+                {
+                    failures.Add(
+                        $"DDGI submitted source-lighting edge {windowIndex} " +
+                        $"leads diagnostic route frame {diagnosticEdge} by " +
+                        "more than one frame.");
+                }
+                if (submittedSourceGenerations[diagnosticEdge] !=
+                    diagnosticGeneration)
+                {
+                    failures.Add(
+                        $"DDGI diagnostic source-lighting edge {windowIndex} " +
+                        $"at route frame {diagnosticEdge} has no matching " +
+                        "exact submitted generation.");
+                }
+                generationEdges.Add(edge);
+
+                int authored = authoredEvents[windowIndex];
+                if (edge < authored || edge > authored + 1)
+                {
+                    failures.Add(
+                        $"DDGI submitted source-lighting edge {windowIndex} " +
+                        $"occurred at route frame {edge}; expected " +
+                        $"[{authored},{authored + 1}].");
+                }
+                if (diagnosticEdge < edge || diagnosticEdge > edge + 1)
+                {
+                    failures.Add(
+                        $"DDGI diagnostic source-lighting edge " +
+                        $"{windowIndex} occurred at route frame " +
+                        $"{diagnosticEdge}; expected exact submitted " +
+                        $"edge {edge} or its one-frame delayed feedback " +
+                        "sample.");
+                }
+            }
+
+            uint expectedSubmittedGeneration =
+                samples[0].SourceLightingGeneration;
+            for (int originIndex = 0;
+                 originIndex < completableOriginCount;
+                 originIndex++)
+            {
+                if (generationEdges.Contains(originIndex))
+                {
+                    expectedSubmittedGeneration = AdvanceNonZeroGeneration(
+                        expectedSubmittedGeneration);
+                }
+                uint submittedGeneration =
+                    submittedSourceGenerations[originIndex];
+                if (submittedGeneration != 0u &&
+                    submittedGeneration != expectedSubmittedGeneration)
+                {
+                    allRowCompletionFailures.Add(
+                        $"DDGI submitted route frame {originIndex} retained " +
+                        $"source generation {submittedGeneration}; " +
+                        $"authenticated route generation is " +
+                        $"{expectedSubmittedGeneration}.");
+                }
+                if (submittedGeneration == 0u ||
+                    samples[originIndex].SourceLightingGeneration ==
+                        submittedGeneration)
+                {
+                    continue;
+                }
+
+                int edgeIndex = generationEdges.IndexOf(originIndex);
+                bool exactDelayedFeedbackBoundary =
+                    edgeIndex >= 0 &&
+                    originIndex > 0 &&
+                    submittedSourceGenerations[originIndex - 1] != 0u &&
+                    samples[originIndex].SourceLightingGeneration ==
+                        submittedSourceGenerations[originIndex - 1] &&
+                    originIndex + 1 < samples.Count &&
+                    samples[originIndex + 1].SourceLightingGeneration ==
+                        submittedGeneration;
+                if (!exactDelayedFeedbackBoundary)
+                {
+                    allRowCompletionFailures.Add(
+                        $"DDGI diagnostic route frame {originIndex} retained " +
+                        $"source generation " +
+                        $"{samples[originIndex].SourceLightingGeneration}; " +
+                        $"exact submitted generation is " +
+                        $"{submittedGeneration}.");
+                }
+            }
+
+            if (!observedSubmittedGenerationEdges.SequenceEqual(
+                    generationEdges))
+            {
+                allRowCompletionFailures.Add(
+                    "DDGI submitted source-lighting transition sequence " +
+                    $"{string.Join(",", observedSubmittedGenerationEdges)} " +
+                    "does not match the two authenticated route edges " +
+                    $"{string.Join(",", generationEdges)}.");
+            }
+        }
+
         for (int originIndex = 0;
              originIndex < completableOriginCount;
              originIndex++)
@@ -1486,7 +1635,7 @@ public sealed class SampleBenchmarkAnalyzer
                 allRowCompletionFailures,
                 owningWindowIndex,
                 originIndex,
-                samples[originIndex].SourceLightingGeneration,
+                submitted.SourceLightingGeneration,
                 routeSerial,
                 feedbackSupersededBySourceChange:
                     samples[joined.CompletionIndex].SourceLightingGeneration !=
@@ -1540,9 +1689,9 @@ public sealed class SampleBenchmarkAnalyzer
                 ? generationEdges[windowIndex + 1]
                 : expectedFrameCount;
             uint sourceGeneration =
-                samples[edgeIndex].SourceLightingGeneration;
+                submittedSourceGenerations[edgeIndex];
             uint priorSourceGeneration =
-                samples[edgeIndex - 1].SourceLightingGeneration;
+                submittedSourceGenerations[edgeIndex - 1];
             var candidateFrames = new List<SampleBenchmarkDdgiTransientFrame>();
             int certificateIndex = -1;
             int firstLivePropagationIndex = -1;
@@ -1713,9 +1862,13 @@ public sealed class SampleBenchmarkAnalyzer
         }
         SimpleDdgiTailCertificateFrameEvidence tail =
             completed.Submitted.TailCertificate;
+        bool activeAuditIdentity = tail.Phase is
+            SimpleDdgiTransportPhase.AuditFrozen or
+            SimpleDdgiTransportPhase.Certified;
         if (!tail.Generations.IsInitialized ||
             tail.SolveEpoch != tail.Generations.Solve ||
-            tail.AuditEpoch != tail.Generations.Audit ||
+            (activeAuditIdentity &&
+             tail.AuditEpoch != tail.Generations.Audit) ||
             !tail.HasDurableSummary ||
             tail.Summary.Generations != tail.Generations ||
             tail.Generations.VolumeTable !=
@@ -1977,7 +2130,8 @@ public sealed class SampleBenchmarkAnalyzer
                     ? legacyMask
                     : SimpleDdgiGpuPassMask.None);
         SimpleDdgiGpuPassMask optionalPhasePasses =
-            SimpleDdgiGpuPassMask.UrgentRelight;
+            SimpleDdgiGpuPassMask.UrgentRelight |
+            SimpleDdgiGpuPassMask.DirectionalRadiance;
         if ((intended & expectedPhasePasses) != expectedPhasePasses ||
             (intended & ~(expectedPhasePasses | optionalPhasePasses)) != 0)
         {

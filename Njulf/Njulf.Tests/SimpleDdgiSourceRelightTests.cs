@@ -61,6 +61,32 @@ public sealed class SimpleDdgiSourceRelightTests
     }
 
     [Test]
+    public void PublishedLiveGeneration_ReopensCachedRelightAfterLocalRepair()
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveSourceRefreshModeForNewLightingCohort(
+                previousGenerationComplete: false,
+                previousRadiometricGenerationPublished: true,
+                previousLivePropagationGenerationPublished: true,
+                currentMode: SimpleDdgiSourceRefreshMode.FullTrace,
+                requestedMode: SimpleDdgiSourceRefreshMode.CachedHitRelight),
+            Is.EqualTo(SimpleDdgiSourceRefreshMode.CachedHitRelight));
+    }
+
+    [Test]
+    public void PublishedGenerationWithoutLiveBoundary_PreservesFullRepair()
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveSourceRefreshModeForNewLightingCohort(
+                previousGenerationComplete: false,
+                previousRadiometricGenerationPublished: true,
+                previousLivePropagationGenerationPublished: false,
+                currentMode: SimpleDdgiSourceRefreshMode.FullTrace,
+                requestedMode: SimpleDdgiSourceRefreshMode.CachedHitRelight),
+            Is.EqualTo(SimpleDdgiSourceRefreshMode.FullTrace));
+    }
+
+    [Test]
     public void UpdateFlags_RoundTripCachedHitModeWithoutAliasingRayCount()
     {
         uint mode = SimpleDdgiVolumeManager.EncodeSourceRefreshMode(

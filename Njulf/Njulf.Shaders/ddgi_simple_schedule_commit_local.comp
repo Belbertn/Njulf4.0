@@ -515,6 +515,21 @@ void main()
         return;
     }
 
+    if (sourceRefresh && deferredRadiometricPublication)
+    {
+        // Deferred publication keeps receiver-visible probe state unchanged
+        // while the replacement radiance field is assembled. Source-cache
+        // validity is private control-plane state, however: once the complete
+        // sequence above has been sealed, retaining an older public repair bit
+        // makes classification retrace this same probe forever and prevents the
+        // coherent field flip. Clear only that bit; atlas, geometry, receiver,
+        // and all other public-state publication remain behind the field fence.
+        atomicAnd(
+            BindlessStorageBuffers[nonuniformEXT(
+                pc.ProbeStateBufferIndex)].Words[publicStateBase + 4u],
+            ~SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID);
+    }
+
     uint receiverFlags = 0u;
     if ((proposedFlags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u)
         receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_FRESH;

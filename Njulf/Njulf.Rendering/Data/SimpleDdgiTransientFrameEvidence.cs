@@ -709,6 +709,13 @@ internal sealed class SimpleDdgiSubmittedFrameRing
 
 internal static class SimpleDdgiFrameEvidenceFactory
 {
+    internal static uint ResolveSubmittedSourceLightingGeneration(
+        uint projectedSourceLightingGeneration,
+        in SimpleDdgiTailCertificateFrameEvidence tailCertificate) =>
+        tailCertificate.Generations.SourceLighting != 0u
+            ? tailCertificate.Generations.SourceLighting
+            : projectedSourceLightingGeneration;
+
     public static SimpleDdgiSubmittedFrameEvidence CaptureSubmitted(
         int frameSlot,
         SceneRenderingData sceneData,
@@ -737,7 +744,9 @@ internal static class SimpleDdgiFrameEvidenceFactory
             AuditPhysicalProbeCount = Math.Max(0, auditPhysicalProbeCount),
             VolumeResourceGeneration = sceneData.SimpleDdgiVolumeResourceGeneration,
             TransportTopologyGeneration = sceneData.SimpleDdgiTransportTopologyGeneration,
-            SourceLightingGeneration = sceneData.SimpleDdgiSourceLightingGeneration,
+            SourceLightingGeneration = ResolveSubmittedSourceLightingGeneration(
+                sceneData.SimpleDdgiSourceLightingGeneration,
+                tailCertificate),
             AdmittedSourceCohortGeneration = sceneData.SimpleDdgiAdmittedSourceCohortGeneration,
             TransportGeneration = sceneData.SimpleDdgiTransportGeneration,
             PublishedPropagationGeneration = sceneData.SimpleDdgiPublishedPropagationGeneration,

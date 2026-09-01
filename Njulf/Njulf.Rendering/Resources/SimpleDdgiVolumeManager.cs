@@ -5581,9 +5581,19 @@ namespace Njulf.Rendering.Resources
                 int previousProbeCount = _probeCount;
                 int previousVolumeCount = _volumeCount;
                 CapturePreviousVolumes();
+                // Keep the exact cohort stable through its first authenticated
+                // propagation packet. Unfreezing at the coherent atlas copy
+                // lets moving-camera scroll repair continually add new source
+                // members before the live boundary can latch.
+                bool publishedRadiometricGenerationAwaitingLivePropagation =
+                    IsPublishedRadiometricGenerationAwaitingLivePropagation(
+                        _publishedRadiometricGeneration,
+                        _livePropagationSourceGeneration,
+                        _sourceLightingGeneration);
                 _freezeVolumeTopologyForRadiometricPublicationThisFrame =
                     ShouldFreezeVolumeTopologyForRadiometricPublication(
-                        RadiometricRelightPublicationPending,
+                        RadiometricRelightPublicationPending ||
+                            publishedRadiometricGenerationAwaitingLivePropagation,
                         _hasLightingSignature,
                         lightingSignature != _lastLightingSignature,
                         _schedulerMode,
@@ -8355,6 +8365,10 @@ namespace Njulf.Rendering.Resources
                     _publishedRadiometricGeneration != 0u &&
                     _publishedRadiometricGeneration ==
                         _sourceLightingGeneration;
+                bool previousLivePropagationGenerationPublished =
+                    HasCurrentLivePropagationBoundary(
+                        _livePropagationSourceGeneration,
+                        _sourceLightingGeneration);
                 _lastLightingSignature = lightingSignature;
                 AdvanceSourceLightingGenerationForNewCohort();
                 _livePropagationSourceGeneration = 0u;
@@ -8371,20 +8385,13 @@ namespace Njulf.Rendering.Resources
                 // Once that generation crossed the coherent field fence, later
                 // toroidal fresh-slot repair may keep the broad completion test
                 // false but cannot make the published baseline heterogeneous.
-                bool overlappingCachedHitRelight =
-                    ShouldEscalateOverlappingCachedHitRelight(
+                _sourceRefreshMode =
+                    ResolveSourceRefreshModeForNewLightingCohort(
                         previousGenerationComplete,
                         previousRadiometricGenerationPublished,
+                        previousLivePropagationGenerationPublished,
                         _sourceRefreshMode,
                         sanitizedMode);
-                _sourceRefreshMode = overlappingCachedHitRelight
-                    ? SimpleDdgiSourceRefreshMode.FullTrace
-                    : previousGenerationComplete ||
-                        _sourceRefreshMode == SimpleDdgiSourceRefreshMode.None
-                            ? sanitizedMode
-                            : CombineSourceRefreshModes(
-                                _sourceRefreshMode,
-                                sanitizedMode);
                 if (_sourceRefreshMode !=
                     SimpleDdgiSourceRefreshMode.CachedHitRelight)
                 {
@@ -8523,6 +8530,17 @@ namespace Njulf.Rendering.Resources
                  directionalMode,
                  directionalStorageAvailable));
 
+        internal static bool
+            IsPublishedRadiometricGenerationAwaitingLivePropagation(
+                uint publishedRadiometricGeneration,
+                uint livePropagationSourceGeneration,
+                uint currentSourceGeneration) =>
+            currentSourceGeneration != 0u &&
+            publishedRadiometricGeneration == currentSourceGeneration &&
+            !HasCurrentLivePropagationBoundary(
+                livePropagationSourceGeneration,
+                currentSourceGeneration);
+
         private bool HasDeferredRadiometricDirectionalStorage() =>
             DirectionalRadianceMode == SimpleDdgiDirectionalRadianceMode.Off ||
             (_directionalRadianceBuffer.IsValid &&
@@ -8547,12 +8565,49 @@ namespace Njulf.Rendering.Resources
         internal static bool ShouldEscalateOverlappingCachedHitRelight(
             bool previousGenerationComplete,
             bool previousRadiometricGenerationPublished,
+            bool previousLivePropagationGenerationPublished,
             SimpleDdgiSourceRefreshMode currentMode,
             SimpleDdgiSourceRefreshMode requestedMode) =>
             !previousGenerationComplete &&
-            !previousRadiometricGenerationPublished &&
+            (!previousRadiometricGenerationPublished ||
+             !previousLivePropagationGenerationPublished) &&
             (currentMode == SimpleDdgiSourceRefreshMode.CachedHitRelight ||
              requestedMode == SimpleDdgiSourceRefreshMode.CachedHitRelight);
+
+        internal static SimpleDdgiSourceRefreshMode
+            ResolveSourceRefreshModeForNewLightingCohort(
+                bool previousGenerationComplete,
+                bool previousRadiometricGenerationPublished,
+                bool previousLivePropagationGenerationPublished,
+                SimpleDdgiSourceRefreshMode currentMode,
+                SimpleDdgiSourceRefreshMode requestedMode)
+        {
+            SimpleDdgiSourceRefreshMode sanitizedRequested =
+                SanitizeSourceRefreshMode(requestedMode);
+            if (ShouldEscalateOverlappingCachedHitRelight(
+                    previousGenerationComplete,
+                    previousRadiometricGenerationPublished,
+                    previousLivePropagationGenerationPublished,
+                    currentMode,
+                    sanitizedRequested))
+            {
+                return SimpleDdgiSourceRefreshMode.FullTrace;
+            }
+
+            // Compatible scrolling can begin a local full-trace repair after a
+            // radiometric generation has already crossed both the coherent
+            // field fence and a live propagation boundary. That local work
+            // does not make the published baseline heterogeneous. Start the
+            // next authored edit from its requested mode; probes whose private
+            // cache is genuinely invalid still take the hard-source path.
+            bool reusablePublishedBaseline =
+                previousRadiometricGenerationPublished &&
+                previousLivePropagationGenerationPublished;
+            return previousGenerationComplete || reusablePublishedBaseline ||
+                   currentMode == SimpleDdgiSourceRefreshMode.None
+                ? sanitizedRequested
+                : CombineSourceRefreshModes(currentMode, sanitizedRequested);
+        }
 
         internal static SimpleDdgiSourceRefreshMode CombineSourceRefreshModes(
             SimpleDdgiSourceRefreshMode pending,

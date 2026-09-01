@@ -316,6 +316,47 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
     }
 
     [Test]
+    public void SubmittedSourceGenerationUsesCurrentTailWhenFeedbackProjectionLags()
+    {
+        SimpleDdgiTransportGenerations current = CreateGenerations(
+            sourceGeneration: 8u,
+            transportGeneration: 12u);
+        SimpleDdgiTailCertificateFrameEvidence tail =
+            CreateTailCertificate(current);
+        using var sceneData = new SceneRenderingData
+        {
+            DdgiFrameSerial = 77UL,
+            SimpleDdgiActive = 1,
+            SimpleDdgiSchedulerMode = SimpleDdgiSchedulerMode.GpuResident,
+            SimpleDdgiSourceLightingGeneration = 7u
+        };
+
+        SimpleDdgiSubmittedFrameEvidence submitted =
+            SimpleDdgiFrameEvidenceFactory.CaptureSubmitted(
+                frameSlot: 1,
+                sceneData,
+                gpuTimingRecorded: false,
+                schedulerFrameSerial: 78UL,
+                auditPhysicalProbeCount: 0,
+                intendedGpuPasses: SimpleDdgiGpuPassMask.None,
+                admittedGpuTimingPasses: SimpleDdgiGpuPassMask.None,
+                queueTransactionGeneration: current.Queue,
+                tail,
+                sourceCacheLayoutIdentity: 0UL);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(submitted.SourceLightingGeneration, Is.EqualTo(8u));
+            Assert.That(submitted.TailCertificate.Generations.SourceLighting,
+                Is.EqualTo(submitted.SourceLightingGeneration));
+            Assert.That(
+                SimpleDdgiFrameEvidenceFactory
+                    .ResolveSubmittedSourceLightingGeneration(7u, default),
+                Is.EqualTo(7u));
+        });
+    }
+
+    [Test]
     public void AuditCardinalityUsesPhysicalExtentAndActiveParticipants()
     {
         bool valid = SimpleDdgiAuditCardinalityContract.TryResolve(

@@ -6140,6 +6140,8 @@ namespace Njulf.Rendering
             if (_simpleDdgiVolumeManager is { } evidenceManager &&
                 sceneData.SimpleDdgiActive != 0)
             {
+                SimpleDdgiTailCertificateFrameEvidence tailCertificate =
+                    evidenceManager.CaptureTransportTailCertificateFrameEvidence();
                 pendingDdgiEvidence = new SimpleDdgiSubmittedFrameEvidence
                 {
                     Valid = true,
@@ -6159,7 +6161,10 @@ namespace Njulf.Rendering
                     TransportTopologyGeneration =
                         sceneData.SimpleDdgiTransportTopologyGeneration,
                     SourceLightingGeneration =
-                        sceneData.SimpleDdgiSourceLightingGeneration,
+                        SimpleDdgiFrameEvidenceFactory
+                            .ResolveSubmittedSourceLightingGeneration(
+                                sceneData.SimpleDdgiSourceLightingGeneration,
+                                tailCertificate),
                     AdmittedSourceCohortGeneration =
                         sceneData.SimpleDdgiAdmittedSourceCohortGeneration,
                     TransportGeneration =
@@ -6177,8 +6182,7 @@ namespace Njulf.Rendering
                         sceneData.SimpleDdgiTransportCachedSweepCount),
                     TailCertificationEnabled = sceneData
                         .SimpleDdgiTransportTailCertificationEnabled,
-                    TailCertificate = evidenceManager
-                        .CaptureTransportTailCertificateFrameEvidence(),
+                    TailCertificate = tailCertificate,
                     IntendedGpuPasses = _gpuTimestamps
                         .GetIntendedSimpleDdgiPasses(_currentFrame),
                     AdmittedGpuTimingPasses = _gpuTimestamps
