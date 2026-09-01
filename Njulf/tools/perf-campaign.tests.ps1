@@ -296,6 +296,7 @@ function Invoke-SyntheticQualityHealthBudgetCase {
             "Get-QualitySequenceRoleName",
             "Get-QualitySequenceRoleValue",
             "Assert-QualitySequenceCaptureRun",
+            "Assert-PretargetQualityReferenceHealth",
             "Assert-QualitySequenceHealthReport")) {
         $definition = @($driverAst.FindAll({
             param($node)
@@ -433,6 +434,50 @@ function Invoke-SyntheticQualityHealthBudgetCase {
     }
     if (-not $wrongHealthSourceFailedClosed) {
         throw "Quality health accepted a mismatched settings source identity."
+    }
+    $health.producerIdentity.sourceSettingsFingerprints = @($healthSettingsHash)
+    $health.status = "failed"
+    $health | Add-Member -NotePropertyName failure -NotePropertyValue (
+        "GI diagnostic GiBudgetOverrun reported an error for 'ddgi-storage': " +
+        "Live DDGI storage exceeds its configured hard tier budget.")
+    $health | Add-Member -NotePropertyName validationWarningCount -NotePropertyValue 0
+    $health | Add-Member -NotePropertyName validationErrorCount -NotePropertyValue 0
+    $health | Add-Member -NotePropertyName operations -NotePropertyValue @()
+    $health.diagnostics | Add-Member -NotePropertyName ValidationWarningMessageCount -NotePropertyValue 0
+    $health.diagnostics | Add-Member -NotePropertyName ValidationErrorMessageCount -NotePropertyValue 0
+    $health.diagnostics | Add-Member -NotePropertyName GiWarnings -NotePropertyValue @(
+        [pscustomobject]@{ Severity = "Error"; Code = "GiBudgetOverrun" })
+    Assert-QualitySequenceHealthReport `
+        $manifest $workload $health $report $build "Release" "canonical" `
+        $sequenceId $commit $reportPath $outputDirectory "" "" `
+        "Synthetic pre-target quality reference" $true
+
+    $strictQualityFailed = $false
+    try {
+        Assert-QualitySequenceHealthReport `
+            $manifest $workload $health $report $build "Release" "canonical" `
+            $sequenceId $commit $reportPath $outputDirectory "" "" `
+            "Synthetic strict candidate quality"
+    } catch {
+        $strictQualityFailed = $_.Exception.Message -match "quality health gate failed"
+    }
+    if (-not $strictQualityFailed) {
+        throw "Candidate quality admitted a pre-target reference exception."
+    }
+
+    $health.diagnostics.GiWarnings[0].Code = "NonFiniteTransport"
+    $unexpectedQualityGiFailed = $false
+    try {
+        Assert-QualitySequenceHealthReport `
+            $manifest $workload $health $report $build "Release" "canonical" `
+            $sequenceId $commit $reportPath $outputDirectory "" "" `
+            "Synthetic invalid pre-target quality" $true
+    } catch {
+        $unexpectedQualityGiFailed = $_.Exception.Message -match
+            "unexpected quality-reference GI error"
+    }
+    if (-not $unexpectedQualityGiFailed) {
+        throw "Quality reference admitted an unexpected GI error."
     }
     Write-Host "PASS synthetic-quality-health-budget-contract"
 }

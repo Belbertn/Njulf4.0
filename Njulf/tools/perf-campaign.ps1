@@ -4015,6 +4015,43 @@ function Assert-QualitySequenceReport {
     }
 }
 
+function Assert-PretargetQualityReferenceHealth {
+    param($Health, [string]$Label)
+    $failure = [string](Get-PropertyValue $Health "failure" "")
+    $giErrors = @((Get-PropertyValue $Health.diagnostics "GiWarnings" @()) |
+        Where-Object { [string]$_.Severity -ceq "Error" })
+    $unexpectedGiErrors = @($giErrors | Where-Object {
+            [string]$_.Code -cne "GiBudgetOverrun"
+        })
+    if ($unexpectedGiErrors.Count -ne 0 -or $giErrors.Count -gt 1) {
+        throw "$Label reported an unexpected quality-reference GI error: $(@($unexpectedGiErrors.Code) -join ', ')."
+    }
+    if ([int](Get-PropertyValue $Health "validationWarningCount" 0) -ne 0 -or
+        [int](Get-PropertyValue $Health "validationErrorCount" 0) -ne 0 -or
+        [int](Get-PropertyValue $Health.diagnostics "ValidationWarningMessageCount" 0) -ne 0 -or
+        [int](Get-PropertyValue $Health.diagnostics "ValidationErrorMessageCount" 0) -ne 0) {
+        throw "$Label emitted Vulkan validation messages."
+    }
+    $failedOperations = @((Get-PropertyValue $Health "operations" @()) |
+        Where-Object { [string]$_.status -ceq "failed" })
+    if ($failedOperations.Count -ne 0) {
+        throw "$Label reported a failed runtime operation: $(@($failedOperations.name) -join ', ')."
+    }
+    if ([string]$Health.status -ceq "passed") {
+        if (-not [string]::IsNullOrEmpty($failure) -or $giErrors.Count -ne 0) {
+            throw "$Label has inconsistent passing quality-reference health."
+        }
+        return
+    }
+    if ([string]$Health.status -cne "failed" -or
+        $giErrors.Count -ne 1 -or
+        -not $failure.StartsWith(
+            "GI diagnostic GiBudgetOverrun ",
+            [StringComparison]::Ordinal)) {
+        throw "$Label quality-reference health failed outside the admitted DDGI memory blocker: $failure"
+    }
+}
+
 function Assert-QualitySequenceHealthReport {
     param(
         $Manifest,
@@ -4030,17 +4067,22 @@ function Assert-QualitySequenceHealthReport {
         [string]$OutputDirectory,
         [string]$ReferenceContractPath,
         [string]$QualityContractPath,
-        [string]$Label)
+        [string]$Label,
+        [bool]$ReferenceInitialization = $false)
     $failure = [string](Get-PropertyValue $Health "failure" "")
     if ([string]$Health.kind -ne "renderer-health" -or
         [string]$Health.schema -ne "renderer-health/v3" -or
-        [string]$Health.status -ne "passed" -or
-        -not [string]::IsNullOrEmpty($failure) -or
         $null -eq $Health.options -or
         $null -eq $Health.options.BenchmarkQualitySequence -or
         $null -eq $Health.diagnostics -or
         $null -eq $Health.diagnostics.CaptureRun -or
         $null -eq $Health.producerIdentity) {
+        throw "$Label quality health gate failed: $failure"
+    }
+    if ($ReferenceInitialization) {
+        Assert-PretargetQualityReferenceHealth $Health $Label
+    } elseif ([string]$Health.status -ne "passed" -or
+              -not [string]::IsNullOrEmpty($failure)) {
         throw "$Label quality health gate failed: $failure"
     }
     $options = $Health.options.BenchmarkQualitySequence
@@ -4273,7 +4315,8 @@ function Invoke-QualitySequenceCapture {
         $VerifierBuildIdentity,
         $SpatialEnvelope,
         [string]$ExpectedCommit,
-        [string]$Label)
+        [string]$Label,
+        [bool]$ReferenceInitialization = $false)
     $healthPath = [System.IO.Path]::ChangeExtension(
         $ReportPath,
         ".health.json")
@@ -4306,9 +4349,11 @@ function Invoke-QualitySequenceCapture {
         $BuildIdentity $ReferenceContractPath `
         $ExpectedReferenceContractSha256 $QualityContractPath `
         $ExpectedQualityContractSha256 $Role "$Label pre-capture"
+    $allowedExitCodes = if ($ReferenceInitialization) { @(0, 1) } else { @(0) }
     Invoke-ProcessChecked `
         ([string]$BuildIdentity.ExecutablePath) `
-        $arguments $Label ([int]$Manifest.capture.benchmarkTimeoutSeconds)
+        $arguments $Label ([int]$Manifest.capture.benchmarkTimeoutSeconds) `
+        $script:SolutionRoot $allowedExitCodes
     Assert-QualitySequenceInputHashes `
         $BuildIdentity $ReferenceContractPath `
         $ExpectedReferenceContractSha256 $QualityContractPath `
@@ -4330,7 +4375,7 @@ function Invoke-QualitySequenceCapture {
     Assert-QualitySequenceHealthReport `
         $Manifest $Workload $health $report $BuildIdentity $Configuration `
         $Role $SequenceId $ExpectedCommit $ReportPath $OutputDirectory `
-        $ReferenceContractPath $QualityContractPath $Label
+        $ReferenceContractPath $QualityContractPath $Label $ReferenceInitialization
     $frozenVerifierEvidence = New-QualityFrozenVerifierEvidence `
         $Workload $report $Role $SequenceId $ReportPath `
         $VerifierBuildIdentity $Label
@@ -8963,7 +9008,8 @@ function Initialize-QualitySequenceReference {
         -VerifierBuildIdentity $ReferenceBuild `
         -SpatialEnvelope $null `
         -ExpectedCommit $BaselineCommit `
-        -Label "Initialize quality canonical $Configuration/$($Workload.id)"
+        -Label "Initialize quality canonical $Configuration/$($Workload.id)" `
+        -ReferenceInitialization $true
     if ((Get-Sha256 $QualityContractPath) -cne $QualityContractSha256) {
         throw "Canonical quality ROI source changed during capture."
     }
@@ -9000,7 +9046,8 @@ function Initialize-QualitySequenceReference {
             -VerifierBuildIdentity $ReferenceBuild `
             -SpatialEnvelope $null `
             -ExpectedCommit $BaselineCommit `
-            -Label "Initialize quality repeat $repeat $Configuration/$($Workload.id)"
+            -Label "Initialize quality repeat $repeat $Configuration/$($Workload.id)" `
+            -ReferenceInitialization $true
         $repeatEvidence += $evidence
         $repeatReports += Read-QualitySequenceReport ([string]$evidence.reportPath)
     }
@@ -9068,7 +9115,8 @@ function Assert-QualitySequenceStoredEvidence {
         $VerifierBuildIdentity,
         $SpatialEnvelope,
         [string]$ExpectedRoot,
-        [string]$Label)
+        [string]$Label,
+        [bool]$ReferenceInitialization = $false)
     Assert-ExactPropertyNames $Evidence `
         (Get-QualitySequenceEvidencePropertyNames) "$Label evidence"
     if ($null -eq $Evidence -or
@@ -9148,7 +9196,7 @@ function Assert-QualitySequenceStoredEvidence {
     Assert-QualitySequenceHealthReport `
         $Manifest $Workload $health $report $BuildIdentity $Configuration `
         $Role $SequenceId $ExpectedCommit $reportPath $outputDirectory `
-        $ReferenceContractPath $QualityContractPath $Label
+        $ReferenceContractPath $QualityContractPath $Label $ReferenceInitialization
     $null = Assert-QualityFrozenVerifierEvidence `
         $Workload $report $Role $SequenceId $reportPath `
         $Evidence.frozenVerifierEvidence $VerifierBuildIdentity $Label
@@ -9467,7 +9515,7 @@ function Assert-LockedQualitySequenceReference {
         $Configuration "canonical" $canonicalId $BaselineCommit `
         "" "" "" "" $null $ReferenceBuild $null `
         (Join-Path $root "canonical") `
-        "$Label canonical"
+        "$Label canonical" $true
     Assert-QualitySequenceReferenceContract `
         $Manifest $Workload $repeatContract $canonicalReport `
         ([string]$ReferenceEntry.qualityContractPath) `
@@ -9487,7 +9535,7 @@ function Assert-LockedQualitySequenceReference {
             ([string]$ReferenceEntry.qualityContractSha256) `
             $repeatContract $ReferenceBuild $null `
             (Join-Path $root ("repeat-{0:D2}" -f $repeat)) `
-            "$Label repeat $repeat"
+            "$Label repeat $repeat" $true
         $repeatReports += $repeatReport
         if ([string]@($quality.baselineRepeatReportSha256)[$repeat - 1] -cne
             [string]@($quality.repeats)[$repeat - 1].reportSha256) {
