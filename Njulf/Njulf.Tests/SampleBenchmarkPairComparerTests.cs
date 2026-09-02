@@ -668,7 +668,10 @@ public sealed class SampleBenchmarkPairComparerTests
             Is.False);
         Assert.That(
             settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark,
-            Is.True);
+            Is.False);
+        Assert.That(
+            settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+            Is.EqualTo(SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial));
 
         SampleBenchmarkCaptureVariant.Apply(
             settings,
@@ -693,7 +696,10 @@ public sealed class SampleBenchmarkPairComparerTests
             Is.False);
         Assert.That(
             settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark,
-            Is.True);
+            Is.False);
+        Assert.That(
+            settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
+            Is.EqualTo(SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial));
 
         settings = new RenderSettings();
         SampleBenchmarkCaptureVariant.Apply(

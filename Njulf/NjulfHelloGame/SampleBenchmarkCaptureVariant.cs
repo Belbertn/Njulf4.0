@@ -135,7 +135,13 @@ public static class SampleBenchmarkCaptureVariant
                     normalized == TailAccelerated;
                 return normalized;
             case ForwardGiEnabled:
-                settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark = true;
+                // The cross-scene enabled workload must select a production
+                // cache that preserves directional radiance. The legacy
+                // depth-only benchmark cannot publish the advanced MRT payload
+                // used by the Sponza hybrid receiver and correctly falls back
+                // to exact gathering there.
+                settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
+                    SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial;
                 return normalized;
             case ForwardGiExact:
                 settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
