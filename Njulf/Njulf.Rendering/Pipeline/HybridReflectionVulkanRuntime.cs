@@ -114,6 +114,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     private HybridReflectionHistoryRevision _currentRevision;
     private ReflectionHistoryResetReason _currentResetReasons;
     private ReflectionHistorySourceInvalidation _currentSourceInvalidations;
+    private int _preparedHistoryInputValid;
     private ulong _preparedFrameSerial = ulong.MaxValue;
     private uint _preparedTemporalSample = uint.MaxValue;
     private ulong _recordInitializedFrameSerial = ulong.MaxValue;
@@ -552,6 +553,11 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             {
                 _budgetController.Reset();
             }
+            _preparedHistoryInputValid =
+                _historyValid && _currentResetReasons ==
+                    ReflectionHistoryResetReason.None
+                    ? 1
+                    : 0;
         }
 
         sceneData.HybridReflectionPassEnabled = true;
@@ -562,11 +568,11 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             RayPipelineAvailable
                 ? _allocatedTaskCapacity
                 : 0u;
-        sceneData.HybridReflectionHistoryValid =
-            _historyValid && _currentResetReasons ==
-                ReflectionHistoryResetReason.None
-                ? 1
-                : 0;
+        // RecordTemporal publishes the output history before later graph stages
+        // ask PrepareFrame again. Keep the input-history decision latched for
+        // the whole submission instead of reporting that newly-written output
+        // as if it had been available to the same frame.
+        sceneData.HybridReflectionHistoryValid = _preparedHistoryInputValid;
         sceneData.HybridReflectionHistoryResetReason = _currentResetReasons;
         sceneData.HybridReflectionSourceInvalidation =
             _currentSourceInvalidations;
@@ -576,6 +582,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     public void InvalidateHistory()
     {
         _historyValid = false;
+        _preparedHistoryInputValid = 0;
         _preparedFrameSerial = ulong.MaxValue;
         _preparedTemporalSample = uint.MaxValue;
     }

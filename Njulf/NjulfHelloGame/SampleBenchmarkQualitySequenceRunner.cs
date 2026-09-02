@@ -748,7 +748,9 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                 diagnostics,
                 requireSynchronizedCapturePhase: false);
             SampleBenchmarkActivationFrameState? authoredActivation =
-                _routeObservations[^1].ActivationFrameState;
+                _routeObservations.Count == 0
+                    ? null
+                    : _routeObservations[^1].ActivationFrameState;
             if (authoredActivation != null)
             {
                 SampleBenchmarkActivationFrameState heldActivation =
