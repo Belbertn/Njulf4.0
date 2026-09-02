@@ -202,13 +202,13 @@ public sealed class AutomaticPlanarMetadataEncoderTests
     }
 
     [Test]
-    public void OverrideMode_IsStrictAndDefaultsToBitsetAuto()
+    public void OverrideMode_IsStrictAndDefaultsToSortedList()
     {
         Assert.Multiple(() =>
         {
             Assert.That(
                 AutomaticPlanarMetadataEncoder.ResolveMode(null),
-                Is.EqualTo(AutomaticPlanarExclusionEncodingMode.BitsetAuto));
+                Is.EqualTo(AutomaticPlanarExclusionEncodingMode.SortedList));
             Assert.That(
                 AutomaticPlanarMetadataEncoder.ResolveMode("SortedList"),
                 Is.EqualTo(AutomaticPlanarExclusionEncodingMode.SortedList));

@@ -52,16 +52,16 @@ internal static class AutomaticPlanarMetadataEncoder
     {
         if (string.IsNullOrWhiteSpace(configured) ||
             configured.Equals(
-                nameof(AutomaticPlanarExclusionEncodingMode.BitsetAuto),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return AutomaticPlanarExclusionEncodingMode.BitsetAuto;
-        }
-        if (configured.Equals(
                 nameof(AutomaticPlanarExclusionEncodingMode.SortedList),
                 StringComparison.OrdinalIgnoreCase))
         {
             return AutomaticPlanarExclusionEncodingMode.SortedList;
+        }
+        if (configured.Equals(
+                nameof(AutomaticPlanarExclusionEncodingMode.BitsetAuto),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return AutomaticPlanarExclusionEncodingMode.BitsetAuto;
         }
 
         throw new InvalidOperationException(

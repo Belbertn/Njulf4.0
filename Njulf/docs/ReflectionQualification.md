@@ -70,10 +70,11 @@ sorted-list fallback under capacity pressure; neither encoding truncates the
 set. Frame telemetry records the active encoding override, bitset and
 sorted-list-fallback capture counts, per-slot exclusion payload sizes, words
 used, the lifetime bank high-water mark, and capacity rejections. Production
-defaults to `BitsetAuto`. Performance A/B runs may set
-`NJULF_AUTOMATIC_PLANAR_EXCLUSION_ENCODING=SortedList` to select the exact
-baseline; the value is emitted in capture telemetry and is not a quality
-setting.
+defaults to `SortedList` because the qualified Bistro workload did not clear
+the one-millisecond whole-frame retention gate. Performance experiments may
+set `NJULF_AUTOMATIC_PLANAR_EXCLUSION_ENCODING=BitsetAuto` to exercise the
+exact bitset candidate; the value is emitted in capture telemetry and is not a
+quality setting.
 
 For material-level diagnosis, select the `RoughnessInputs` reflection debug
 view (or benchmark variant `reflection-roughness-inputs`). Red is physical BRDF
