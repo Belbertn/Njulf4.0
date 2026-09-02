@@ -5594,6 +5594,35 @@ function Copy-RuntimeCacheSeedDirectory {
     $null = Assert-NoLinkedPathComponents $Destination "$Label destination"
 }
 
+function Wait-RuntimeCacheFilePublication {
+    param(
+        [string]$Path,
+        [int]$TimeoutMilliseconds = 5000,
+        [int]$PollMilliseconds = 50)
+    if ($TimeoutMilliseconds -lt 0 -or $TimeoutMilliseconds -gt 30000 -or
+        $PollMilliseconds -lt 1 -or $PollMilliseconds -gt 1000) {
+        throw "Runtime cache publication wait bounds are invalid."
+    }
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+    do {
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            try {
+                $item = Get-Item -LiteralPath $Path -Force
+                if ($item.Length -gt 0) {
+                    return $true
+                }
+            } catch [System.IO.IOException] {
+                # The renderer publishes and replaces caches atomically during
+                # teardown, so the final path can be momentarily unavailable.
+            }
+        }
+        if ([DateTime]::UtcNow -ge $deadline) {
+            return $false
+        }
+        Start-Sleep -Milliseconds $PollMilliseconds
+    } while ($true)
+}
+
 function Assert-RuntimeCachePrimeCaptureEvidence {
     param(
         $Report,
@@ -5643,9 +5672,12 @@ function Assert-RuntimeCachePrimeCaptureEvidence {
     }
     $pipelineCachePath = [System.IO.Path]::GetFullPath(
         [string]$diagnostics.GiPipelineCachePath)
-    if (-not (Test-PathContainedBy $pipelineCachePath $ExpectedVulkanRoot) -or
-        -not (Test-Path -LiteralPath $pipelineCachePath -PathType Leaf)) {
-        throw "$Label runtime cache prime path is not the admitted writable cache."
+    $expectedRoot = [System.IO.Path]::GetFullPath($ExpectedVulkanRoot)
+    if (-not (Test-PathContainedBy $pipelineCachePath $expectedRoot)) {
+        throw "$Label runtime cache prime path escaped the admitted writable cache root (path='$pipelineCachePath', root='$expectedRoot')."
+    }
+    if (-not (Wait-RuntimeCacheFilePublication $pipelineCachePath)) {
+        throw "$Label runtime cache prime file did not stabilize after renderer teardown (path='$pipelineCachePath')."
     }
 }
 

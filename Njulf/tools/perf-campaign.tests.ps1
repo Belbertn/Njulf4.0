@@ -2020,6 +2020,7 @@ function Invoke-SyntheticRuntimeCacheIsolationCase {
             "Test-PathContainedBy", "Get-RuntimeCacheRoot",
             "Get-RuntimeCacheEnvironment", "Get-RuntimeCachePrimeRoot",
             "Get-RuntimeCaptureCacheRoot",
+            "Wait-RuntimeCacheFilePublication",
             "Assert-RuntimeCachePrimeCaptureEvidence",
             "Assert-RuntimeCacheCapture",
             "Stop-ProcessTreeAndDrain", "Invoke-ProcessChecked")) {
@@ -2171,6 +2172,16 @@ function Invoke-SyntheticRuntimeCacheIsolationCase {
         ([string]$releaseFirst.NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY) `
         "gi-000010de-00002560.njvkcache"
     [System.IO.File]::WriteAllBytes($syntheticVulkanCache, [byte[]]@(1))
+    if (-not (Wait-RuntimeCacheFilePublication `
+            $syntheticVulkanCache 0 1)) {
+        throw "An existing runtime cache did not pass publication stabilization."
+    }
+    $missingSyntheticCache = Join-Path `
+        ([string]$releaseFirst.NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY) `
+        "gi-000010de-00002561.njvkcache"
+    if (Wait-RuntimeCacheFilePublication $missingSyntheticCache 0 1) {
+        throw "A missing runtime cache passed publication stabilization."
+    }
     $syntheticBinaryStore = Join-Path `
         ([string]$releaseFirst.NJULF_PIPELINE_BINARY_CACHE_DIRECTORY) `
         "synthetic-global-key"
