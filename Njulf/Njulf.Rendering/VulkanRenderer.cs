@@ -3320,7 +3320,6 @@ namespace Njulf.Rendering
                 return BeginProgressiveFrame();
             }
             _productionFrameWasFullQuality = true;
-            ApplyDeterministicCapturePhaseSynchronization();
 
             if (_lifetime.SwapchainRecreationRequested)
             {
@@ -3567,6 +3566,12 @@ namespace Njulf.Rendering
                     sourceCacheObservation.SourceCacheLayoutIdentity,
                     sourceCacheObservation.FrameSerial);
             }
+
+            // Fence-completed reflection feedback above can publish history from
+            // submissions that predate a quality-route synchronization request.
+            // Apply the reset only after every completed-frame consumer has run,
+            // while still preceding preparation of the new scene submission.
+            ApplyDeterministicCapturePhaseSynchronization();
 
             // Process completed frame deletions
             _deleter.ProcessCompletedFrame(_sync.GetInFlightFence(_currentFrame));

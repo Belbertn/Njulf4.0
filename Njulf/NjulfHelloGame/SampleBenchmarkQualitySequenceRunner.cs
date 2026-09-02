@@ -420,7 +420,10 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                     throw new InvalidDataException(
                         "Quality route absolute frames are not consecutive from route zero.");
                 }
-                ValidateRenderedRouteFrame(expectedRouteFrame, diagnostics);
+                ValidateRenderedRouteFrame(
+                    expectedRouteFrame,
+                    diagnostics,
+                    requireSynchronizedCapturePhase: expectedRouteFrame == 0);
                 string settingsFingerprint = _preparedSettingsFingerprint ??
                     throw new InvalidDataException(
                         "Pre-Draw settings fingerprint evidence is absent.");
@@ -663,10 +666,17 @@ public sealed class SampleBenchmarkQualitySequenceRunner
 
     private void ValidateRenderedRouteFrame(
         int routeFrame,
-        RendererDiagnostics diagnostics)
+        RendererDiagnostics diagnostics,
+        bool requireSynchronizedCapturePhase)
     {
-        if (routeFrame == 0)
+        if (requireSynchronizedCapturePhase)
         {
+            if (routeFrame != 0)
+            {
+                throw new InvalidDataException(
+                    "Only authored route frame zero can attest the synchronized " +
+                    "capture phase.");
+            }
             if (diagnostics.TemporalSampleIndex != 0u)
             {
                 throw new InvalidDataException(
@@ -733,7 +743,10 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                 _preparedCamera,
                 _preparedBistroState);
             ValidatePreDrawActivationFrame(heldRouteFrame);
-            ValidateRenderedRouteFrame(heldRouteFrame, diagnostics);
+            ValidateRenderedRouteFrame(
+                heldRouteFrame,
+                diagnostics,
+                requireSynchronizedCapturePhase: false);
             SampleBenchmarkActivationFrameState? authoredActivation =
                 _routeObservations[^1].ActivationFrameState;
             if (authoredActivation != null)

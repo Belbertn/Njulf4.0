@@ -389,7 +389,15 @@ public sealed class SampleBenchmarkQualitySequenceTests
 
             SampleBenchmarkCameraPose pose = LivePose();
             runner.PrepareFrame(30, pose, null);
-            runner.OnFrameRendered(30, ReadyDiagnostics(30));
+            runner.OnFrameRendered(
+                30,
+                ReadyDiagnostics(
+                    30,
+                    temporalSampleIndex: 0,
+                    hybridReflectionPassEnabled: 1,
+                    hybridReflectionHistoryValid: 0,
+                    automaticPlanarReflectionActive: 1,
+                    automaticPlanarCaptureCount: 1));
 
             Assert.Multiple(() =>
             {
@@ -416,7 +424,15 @@ public sealed class SampleBenchmarkQualitySequenceTests
                 FrameSerial = 30
             };
             runner.PrepareFrame(31, pose, null);
-            runner.OnFrameRendered(31, ReadyDiagnostics(31));
+            runner.OnFrameRendered(
+                31,
+                ReadyDiagnostics(
+                    31,
+                    temporalSampleIndex: 1,
+                    hybridReflectionPassEnabled: 1,
+                    hybridReflectionHistoryValid: 1,
+                    automaticPlanarReflectionActive: 1,
+                    automaticPlanarCaptureCount: 0));
 
             Assert.Multiple(() =>
             {
@@ -743,7 +759,12 @@ public sealed class SampleBenchmarkQualitySequenceTests
         string sceneKind = "GlobalIlluminationTest",
         ulong sceneContentRevision = 1,
         ulong cameraCutSerial = 7,
-        string sceneStateHash = HashB)
+        string sceneStateHash = HashB,
+        uint temporalSampleIndex = 0,
+        int hybridReflectionPassEnabled = 0,
+        int hybridReflectionHistoryValid = 0,
+        int automaticPlanarReflectionActive = 0,
+        int automaticPlanarCaptureCount = 0)
     {
         SampleBenchmarkCameraPose resolvedPose = pose ?? LivePose();
         PerformanceCaptureCameraMetadata camera = new(
@@ -790,7 +811,12 @@ public sealed class SampleBenchmarkQualitySequenceTests
             CaptureSceneContentRevision = sceneContentRevision,
             CaptureGpuDeviceName = "Test GPU",
             CaptureGpuDriverVersion = "Test Driver 1",
-            ActiveBudgetProfile = RenderBudgetProfileKind.StressUnlimited
+            ActiveBudgetProfile = RenderBudgetProfileKind.StressUnlimited,
+            TemporalSampleIndex = temporalSampleIndex,
+            HybridReflectionPassEnabled = hybridReflectionPassEnabled,
+            HybridReflectionHistoryValid = hybridReflectionHistoryValid,
+            AutomaticPlanarReflectionActive = automaticPlanarReflectionActive,
+            AutomaticPlanarCaptureCount = automaticPlanarCaptureCount
         };
     }
 
