@@ -315,6 +315,7 @@ function Invoke-SyntheticQualityHealthBudgetCase {
             "Get-PropertyValue",
             "Test-WorkloadUsesSponzaAnimation",
             "Get-WorkloadSponzaFixtureValue",
+            "Get-WorkloadSponzaFixtureName",
             "Get-ExpectedQualityTier",
             "Test-Sha256Identity",
             "Test-CanonicalIdentityText",
@@ -389,7 +390,7 @@ function Invoke-SyntheticQualityHealthBudgetCase {
         HdrQualityContractPath = ""
         BudgetProfileOverride = "StressUnlimited"
         CaptureVariant = [string]$workload.captureVariant
-        SponzaFixtureMode = 0
+        SponzaFixtureMode = "Architecture"
         Activation = [string]$workload.activation
         ActivationFingerprint = $activationFingerprint
         SceneKind = "Bistro"
@@ -430,6 +431,22 @@ function Invoke-SyntheticQualityHealthBudgetCase {
         $manifest $workload $health $report $build "Release" "canonical" `
         $sequenceId $commit $reportPath $outputDirectory "" "" `
         "Synthetic quality health"
+
+    $qualityOptions.SponzaFixtureMode = "architecture"
+    $wrongFixtureNameFailedClosed = $false
+    try {
+        Assert-QualitySequenceHealthReport `
+            $manifest $workload $health $report $build "Release" "canonical" `
+            $sequenceId $commit $reportPath $outputDirectory "" "" `
+            "Synthetic quality health"
+    } catch {
+        $wrongFixtureNameFailedClosed = $_.Exception.Message -match
+            "health options differ"
+    }
+    if (-not $wrongFixtureNameFailedClosed) {
+        throw "Quality health accepted a noncanonical Sponza fixture enum name."
+    }
+    $qualityOptions.SponzaFixtureMode = "Architecture"
 
     $qualityOptions.BudgetProfileOverride = "Stress"
     $wrongBudgetFailedClosed = $false

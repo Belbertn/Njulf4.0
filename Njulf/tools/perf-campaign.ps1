@@ -2126,6 +2126,12 @@ function Get-WorkloadSponzaFixtureValue {
     return 0
 }
 
+function Get-WorkloadSponzaFixtureName {
+    param($Workload)
+    if (Test-WorkloadUsesSponzaAnimation $Workload) { return "AnimationDemo" }
+    return "Architecture"
+}
+
 function Assert-ResultReportIdentity {
     param($Result, [string]$ReportPath, [string]$ReportSha256, [string]$Label)
     Assert-PathIdentity ([string]$Result.reportPath) $ReportPath `
@@ -4132,8 +4138,8 @@ function Assert-QualitySequenceHealthReport {
         [string]$options.HdrQualityContractPath -cne $expectedRoiPath -or
         [string]$options.BudgetProfileOverride -cne $expectedBudgetProfile -or
         [string]$options.CaptureVariant -cne [string]$Workload.captureVariant -or
-        [int]$options.SponzaFixtureMode -ne
-            (Get-WorkloadSponzaFixtureValue $Workload) -or
+        [string]$options.SponzaFixtureMode -cne
+            (Get-WorkloadSponzaFixtureName $Workload) -or
         [string]$options.Activation -cne [string]$Workload.activation -or
         [string]$options.ActivationFingerprint -cne
             [string]$Report.ActivationFingerprint -or
