@@ -228,6 +228,10 @@ public sealed class DeferredReceiverPipelineStartupTests
                 Does.Contain("DestroySimpleDdgiReceiverPipelineBank(bank);"));
             Assert.That(preparation,
                 Does.Contain("_simpleDdgiReceiverPipelineBankDisposing"));
+            Assert.That(preparation,
+                Does.Contain("if (receiverFeedbackRequired)"));
+            Assert.That(preparation,
+                Does.Contain("if (requiresAdaptive)"));
             Assert.That(disposeGate, Is.GreaterThanOrEqualTo(0));
             Assert.That(unpublish, Is.GreaterThan(disposeGate));
             Assert.That(destroy, Is.GreaterThan(unpublish));

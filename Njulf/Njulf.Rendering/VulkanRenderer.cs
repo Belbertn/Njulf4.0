@@ -4478,6 +4478,16 @@ namespace Njulf.Rendering
                 : BuildScenePipelineManifest(scene);
             bool receiverFeedbackRequired =
                 _simpleDdgiReceiverFeedback?.GraphicsPipelinesRequested == true;
+            bool receiverCacheRequired =
+                _forwardPlusPass is not null &&
+                SimpleDdgiReceiverCachePolicy.ResolveRequestedMode(
+                        Settings.GlobalIllumination
+                            .SimpleDdgiReceiverCacheMode,
+                        Settings.Diagnostics
+                            .ForceForwardGiReceiverCacheForBenchmark,
+                        Settings.Diagnostics
+                            .ForceExactForwardGiGatherForBenchmark)
+                    .UsesCache();
             bool transparentRayVariantsRequired =
                 pipelineManifest.HasRealTransparentSurface &&
                 Settings.Transparency.Enabled &&
@@ -4649,6 +4659,7 @@ namespace Njulf.Rendering
                         transparencyMode,
                         partitioningEnabled,
                         receiverFeedbackRequired,
+                        receiverCacheRequired,
                         rayVariantsRequired,
                         decalReceiverCacheRequired,
                         foliageRequired,
@@ -4658,11 +4669,13 @@ namespace Njulf.Rendering
                 lock (_startupGate)
                     _postFirstPresentPipelinePreparation = preparation;
             }
-            else if (receiverFeedbackRequired)
+            else if (receiverFeedbackRequired || receiverCacheRequired)
             {
-                bool complete =
-                    (_forwardPlusPass?.SimpleDdgiReceiverPipelineBankReady ??
-                     false) &&
+                bool forwardReady = _forwardPlusPass?
+                    .PrepareSimpleDdgiReceiverPipelineBank(
+                        receiverFeedbackRequired) == true;
+                bool complete = receiverFeedbackRequired &&
+                    forwardReady &&
                     AreSceneReceiverFeedbackPipelinesReady(
                         pipelineManifest,
                         transparencyMode,
@@ -4670,11 +4683,14 @@ namespace Njulf.Rendering
                         foliageRequired,
                         particlePreparationRequired,
                         fogRequired);
-                _simpleDdgiReceiverFeedback!.PublishPipelineBank(
-                    complete,
-                    complete
-                        ? "receiver-feedback-pipeline-bank-ready"
-                        : "receiver-feedback-pipeline-bank-incomplete");
+                if (receiverFeedbackRequired)
+                {
+                    _simpleDdgiReceiverFeedback!.PublishPipelineBank(
+                        complete,
+                        complete
+                            ? "receiver-feedback-pipeline-bank-ready"
+                            : "receiver-feedback-pipeline-bank-incomplete");
+                }
             }
 
             if (!_initialScenePipelinesPrepared)
@@ -4688,6 +4704,7 @@ namespace Njulf.Rendering
             TransparencyMode transparencyMode,
             bool partitioningEnabled,
             bool receiverFeedbackRequired,
+            bool receiverCacheRequired,
             bool rayVariantsRequired,
             bool decalReceiverCacheRequired,
             bool foliageRequired,
@@ -4752,14 +4769,16 @@ namespace Njulf.Rendering
                         return true;
                     });
 
-            // Build the historically pathological B1/adaptive compute family
-            // last. Unrelated scene specializations are therefore usable even
-            // when a native driver spends minutes compiling this bank.
-            bool forwardReady = !receiverFeedbackRequired ||
+            // Build the requirement-complete receiver bank last. A cache-only
+            // isolation workload publishes its canonical gather without
+            // entering unrelated B1/adaptive native compilation.
+            bool forwardReady =
+                !receiverFeedbackRequired && !receiverCacheRequired ||
                 TryPreparePostFirstPresentFamily(
                     "Pipeline.Prepare.PostFirstPresentReceiverComputeBank",
                     () => _forwardPlusPass?
-                        .PrepareSimpleDdgiReceiverPipelineBank() == true);
+                        .PrepareSimpleDdgiReceiverPipelineBank(
+                            receiverFeedbackRequired) == true);
 
             bool complete = receiverFeedbackRequired &&
                 hybridReady && meshReady && foliageReady && particleReady && fogReady &&

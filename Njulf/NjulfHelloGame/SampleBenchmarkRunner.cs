@@ -48,6 +48,7 @@ public sealed class SampleBenchmarkRunner
     private bool _waitingForHdrCapture;
     private bool _completed;
     private int _additionalSettlingFrameCount;
+    private int _productionPathWaitFrameCount;
     private bool _settlingWaitTimedOut;
     private RendererDiagnostics? _lastPreMeasurementDiagnostics;
     private int _consecutiveReadyFrameCount;
@@ -233,22 +234,35 @@ public sealed class SampleBenchmarkRunner
             return;
         }
 
-        // Progressive startup can present thousands of inexpensive bootstrap
-        // or exact-fallback frames while production pipelines are prepared.
-        // Those are not convergence frames and must not consume the bounded
-        // settling window or contaminate benchmark observers. A real
-        // production diagnostic is identifiable by the authenticated
-        // build/shader identity populated during production-resource
-        // initialization. Production-required captures additionally wait for
-        // the requested receiver-cache path to generate and consume a frame;
-        // otherwise a slow deferred bank can be mislabeled as optimized timing.
+        // Progressive startup can present inexpensive bootstrap frames before
+        // production resources exist. Those frames have no authenticated
+        // build/shader identity and must not contaminate benchmark observers.
         if (_samplesCaptured == 0 &&
-            (!HasInitializedProductionIdentity(diagnostics) ||
-             _options.RequireProductionTiming &&
-             !HasEffectiveRequestedProductionPath(diagnostics)))
+            !HasInitializedProductionIdentity(diagnostics))
         {
             _lastPreMeasurementDiagnostics = diagnostics;
             return;
+        }
+
+        // A requested production path may remain on its exact fallback while
+        // a deferred pipeline bank is prepared. Keep that wait independent of
+        // the convergence window so a successful late publication still owns
+        // the full settling allowance, but fail closed after the same explicit
+        // bound. Proceeding then emits a rejected report instead of leaving the
+        // external campaign watchdog to terminate an otherwise healthy app.
+        if (_samplesCaptured == 0 &&
+            _options.RequireProductionTiming &&
+            !HasEffectiveRequestedProductionPath(diagnostics))
+        {
+            if (_productionPathWaitFrameCount <
+                _options.MaximumAdditionalSettlingFrameCount)
+            {
+                _productionPathWaitFrameCount++;
+                _lastPreMeasurementDiagnostics = diagnostics;
+                return;
+            }
+
+            _settlingWaitTimedOut = true;
         }
 
         _tailDdgiObserver.Observe(diagnostics);

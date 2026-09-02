@@ -139,9 +139,14 @@ public static class SampleBenchmarkCaptureVariant
                 // cache that preserves directional radiance. The legacy
                 // depth-only benchmark cannot publish the advanced MRT payload
                 // used by the Sponza hybrid receiver and correctly falls back
-                // to exact gathering there.
+                // to exact gathering there. Delayed receiver-contribution
+                // feedback is a separate DDGI scheduling experiment; disable
+                // it so this workload isolates the forward receiver path and
+                // does not compile or execute unrelated B1 producers.
                 settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
                     SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial;
+                settings.GlobalIllumination.SimpleDdgiReceiverFeedbackMode =
+                    SimpleDdgiReceiverFeedbackMode.Off;
                 return normalized;
             case ForwardGiExact:
                 settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =

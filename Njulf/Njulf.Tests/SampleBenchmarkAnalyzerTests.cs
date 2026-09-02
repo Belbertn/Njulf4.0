@@ -193,6 +193,89 @@ public sealed class SampleBenchmarkAnalyzerTests
     }
 
     [Test]
+    public void ProductionTiming_UnavailableRequestedPathFailsClosedAfterBound()
+    {
+        string reportPath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"benchmark-unavailable-production-path-{Guid.NewGuid():N}.json");
+        const string settingsFingerprint =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        bool exited = false;
+        var options = new SampleBenchmarkOptions(
+            Enabled: true,
+            WarmupFrameCount: 0,
+            MeasureFrameCount: 1,
+            ReportPath: reportPath)
+        {
+            RequireProductionTiming = true,
+            CapturePairId = "unavailable-production-path-test",
+            MaximumAdditionalSettlingFrameCount = 2
+        };
+        RendererDiagnostics exactFallback = RendererDiagnostics.Empty with
+        {
+            GpuTimingSupported = 1,
+            GpuTimingValid = 1,
+            GpuFrameMicroseconds = 1_000,
+            CaptureRun = PerformanceCaptureRunMetadata.Unknown with
+            {
+                Commit = "0123456789abcdef0123456789abcdef01234567",
+                ShaderBundleHash =
+                    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            CaptureFrame = PerformanceCaptureFrameMetadata.Unknown with
+            {
+                WarmupState = DdgiRuntimeWarmupState.SteadyState,
+                TransportConvergencePending = false
+            },
+            CaptureGpuDeviceName = "Synthetic benchmark GPU",
+            CaptureGpuDriverVersion = "1.0-test",
+            SimpleDdgiReceiverCache = SimpleDdgiReceiverCacheDiagnostics.Exact(
+                SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                SimpleDdgiReceiverCacheFallbackReason.DispatchUnavailable,
+                "receiver bank is permanently unavailable"),
+            ForwardGiExactGatherUsed = 1
+        };
+
+        try
+        {
+            var runner = new SampleBenchmarkRunner(
+                options,
+                SamplePerformanceScenario.Normal,
+                () => exited = true,
+                () => settingsFingerprint);
+
+            for (int frame = 0; frame < 5; frame++)
+            {
+                runner.OnFrameRendered(
+                    frame,
+                    exactFallback,
+                    RenderBudgetSnapshot.Empty);
+            }
+
+            SampleBenchmarkReport report = runner.Report ??
+                throw new AssertionException(
+                    "The unavailable production path did not fail closed.");
+            Assert.Multiple(() =>
+            {
+                Assert.That(exited, Is.True);
+                Assert.That(report.SettlingWaitTimedOut, Is.True);
+                Assert.That(
+                    report.AdditionalSettlingFrameCount,
+                    Is.EqualTo(2));
+                Assert.That(
+                    report.LastDiagnostics.ForwardGiExactGatherUsed,
+                    Is.EqualTo(1));
+                Assert.That(report.CaptureContract.Comparable, Is.False);
+            });
+        }
+        finally
+        {
+            if (File.Exists(reportPath))
+                File.Delete(reportPath);
+        }
+    }
+
+    [Test]
     public void ProductionTiming_WaitsForRequestedReceiverCachePublication()
     {
         string reportPath = Path.Combine(
@@ -258,7 +341,7 @@ public sealed class SampleBenchmarkAnalyzerTests
                 () => exited = true,
                 () => settingsFingerprint);
 
-            for (int frame = 0; frame < 100; frame++)
+            for (int frame = 0; frame < 10; frame++)
             {
                 runner.OnFrameRendered(
                     frame,
@@ -267,7 +350,7 @@ public sealed class SampleBenchmarkAnalyzerTests
             }
 
             Assert.That(exited, Is.False);
-            for (int frame = 100; frame < 130; frame++)
+            for (int frame = 10; frame < 40; frame++)
             {
                 runner.OnFrameRendered(
                     frame,

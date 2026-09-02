@@ -58,17 +58,21 @@ namespace Njulf.Rendering.Pipeline
             internal VkPipeline CompactMaskedFeedback;
 
             internal bool IsComplete(
+                bool requiresReceiverFeedback,
+                bool requiresAdaptive,
                 bool requiresLegacy,
                 bool requiresDiagnostics,
                 bool requiresCompactMaskedFeedback) =>
                 CanonicalGather.Handle != 0 &&
                 CanonicalResolve.Handle != 0 &&
-                ExactFeedbackGather.Handle != 0 &&
-                AdaptiveClassify.Handle != 0 &&
-                AdaptiveGather.Handle != 0 &&
-                AdaptiveFeedbackGather.Handle != 0 &&
-                AdaptiveMissingFeedbackGather.Handle != 0 &&
-                AdaptiveResolve.Handle != 0 &&
+                (!requiresReceiverFeedback ||
+                 ExactFeedbackGather.Handle != 0) &&
+                (!requiresAdaptive ||
+                 AdaptiveClassify.Handle != 0 &&
+                 AdaptiveGather.Handle != 0 &&
+                 AdaptiveFeedbackGather.Handle != 0 &&
+                 AdaptiveMissingFeedbackGather.Handle != 0 &&
+                 AdaptiveResolve.Handle != 0) &&
                 (!requiresCompactMaskedFeedback ||
                  CompactMaskedFeedback.Handle != 0) &&
                 (!requiresLegacy ||
@@ -714,17 +718,47 @@ namespace Njulf.Rendering.Pipeline
         }
 
         /// <summary>
-        /// Builds every receiver-cache and exact-feedback compute program into
-        /// local ownership. Command recording observes the bank only after the
-        /// final handle has been created successfully; failure permanently
-        /// retains the canonical fragment-gather path for this renderer.
+        /// Builds the receiver-cache compute programs required by the selected
+        /// immutable renderer mode into local ownership. Optional exact-
+        /// feedback and adaptive programs are included only when their owning
+        /// features request them. Command recording observes the bank only
+        /// after every required handle has been created successfully; failure
+        /// permanently retains the canonical fragment-gather path.
         /// </summary>
-        internal bool PrepareSimpleDdgiReceiverPipelineBank()
+        internal bool PrepareSimpleDdgiReceiverPipelineBank(
+            bool receiverFeedbackRequired = true)
         {
             lock (_simpleDdgiReceiverPipelineBankGate)
             {
-                if (Volatile.Read(ref _simpleDdgiReceiverPipelineBank) is not null)
-                    return true;
+                SimpleDdgiReceiverCacheMode requestedMode =
+                    SimpleDdgiReceiverCachePolicy.ResolveRequestedMode(
+                        _settings.GlobalIllumination
+                            .SimpleDdgiReceiverCacheMode,
+                        _settings.Diagnostics
+                            .ForceForwardGiReceiverCacheForBenchmark,
+                        _settings.Diagnostics
+                            .ForceExactForwardGiGatherForBenchmark);
+                bool requiresAdaptive = requestedMode ==
+                    SimpleDdgiReceiverCacheMode.TemporalAdaptive;
+                bool requiresLegacy = requestedMode ==
+                    SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark;
+                bool requiresDiagnostics = _settings.Diagnostics
+                    .DdgiForwardEstimateCountersEnabled;
+                bool requiresCompactMaskedFeedback =
+                    receiverFeedbackRequired &&
+                    _settings.IsPerformanceOptimizationEnabled(
+                        PerformanceOptimizationFeature.CompactMaskedFeedback);
+
+                if (Volatile.Read(
+                        ref _simpleDdgiReceiverPipelineBank) is { } published)
+                {
+                    return published.IsComplete(
+                        receiverFeedbackRequired,
+                        requiresAdaptive,
+                        requiresLegacy,
+                        requiresDiagnostics,
+                        requiresCompactMaskedFeedback);
+                }
                 if (_simpleDdgiReceiverPipelineBankPreparationAttempted ||
                     _simpleDdgiReceiverPipelineBankDisposing)
                 {
@@ -735,7 +769,7 @@ namespace Njulf.Rendering.Pipeline
                 var bank = new SimpleDdgiReceiverPipelineBank();
                 try
                 {
-                    if (!AdaptiveReceiverResourcesValid())
+                    if (requiresAdaptive && !AdaptiveReceiverResourcesValid())
                     {
                         throw new InvalidOperationException(
                             "Adaptive receiver resources were not initialized before pipeline compilation.");
@@ -746,19 +780,15 @@ namespace Njulf.Rendering.Pipeline
                     bank.CanonicalResolve = CreateSimpleDdgiReceiverCachePipeline(
                         "ddgi_simple_receiver_cache_resolve.comp.spv",
                         "Simple DDGI Receiver Cache Resolve Pipeline");
-                    bank.ExactFeedbackGather =
-                        CreateSimpleDdgiReceiverCachePipeline(
+                    if (receiverFeedbackRequired)
+                    {
+                        bank.ExactFeedbackGather =
+                            CreateSimpleDdgiReceiverCachePipeline(
                             "ddgi_simple_receiver_cache_b1.comp.spv",
                             "Simple DDGI Exact Receiver Feedback Gather Pipeline");
+                    }
 
-                    if (SimpleDdgiReceiverCachePolicy.ResolveRequestedMode(
-                            _settings.GlobalIllumination
-                                .SimpleDdgiReceiverCacheMode,
-                            _settings.Diagnostics
-                                .ForceForwardGiReceiverCacheForBenchmark,
-                            _settings.Diagnostics
-                                .ForceExactForwardGiGatherForBenchmark) ==
-                        SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark)
+                    if (requiresLegacy)
                     {
                         bank.LegacyGather =
                             CreateSimpleDdgiReceiverCachePipeline(
@@ -770,8 +800,7 @@ namespace Njulf.Rendering.Pipeline
                                 "Legacy Depth-Only DDGI Receiver Resolve Benchmark Pipeline");
                     }
 
-                    if (_settings.Diagnostics
-                        .DdgiForwardEstimateCountersEnabled)
+                    if (requiresDiagnostics)
                     {
                         bank.DiagnosticsResolve =
                             CreateSimpleDdgiReceiverCachePipeline(
@@ -779,29 +808,30 @@ namespace Njulf.Rendering.Pipeline
                                 "Simple DDGI Receiver Cache Diagnostic Resolve Pipeline");
                     }
 
-                    bank.AdaptiveClassify =
-                        CreateSimpleDdgiReceiverCacheAdaptivePipeline(
-                            "ddgi_simple_receiver_cache_classify.comp.spv",
-                            "Simple DDGI Receiver Cache Adaptive Classify Pipeline");
-                    bank.AdaptiveGather =
-                        CreateSimpleDdgiReceiverCacheAdaptivePipeline(
-                            "ddgi_simple_receiver_cache_adaptive.comp.spv",
-                            "Simple DDGI Receiver Cache Adaptive Gather Pipeline");
-                    bank.AdaptiveFeedbackGather =
-                        CreateSimpleDdgiReceiverCacheAdaptivePipeline(
-                            "ddgi_simple_receiver_cache_adaptive_b1.comp.spv",
-                            "Simple DDGI Receiver Cache Adaptive Exact Feedback Gather Pipeline");
-                    bank.AdaptiveMissingFeedbackGather =
-                        CreateSimpleDdgiReceiverCacheAdaptivePipeline(
-                            "ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv",
-                            "Simple DDGI Receiver Cache Adaptive Missing Feedback Gather Pipeline");
-                    bank.AdaptiveResolve =
-                        CreateSimpleDdgiReceiverCacheAdaptivePipeline(
-                            "ddgi_simple_receiver_cache_resolve_adaptive.comp.spv",
-                            "Simple DDGI Receiver Cache Adaptive Resolve Pipeline");
-                    if (_settings.IsPerformanceOptimizationEnabled(
-                            PerformanceOptimizationFeature
-                                .CompactMaskedFeedback))
+                    if (requiresAdaptive)
+                    {
+                        bank.AdaptiveClassify =
+                            CreateSimpleDdgiReceiverCacheAdaptivePipeline(
+                                "ddgi_simple_receiver_cache_classify.comp.spv",
+                                "Simple DDGI Receiver Cache Adaptive Classify Pipeline");
+                        bank.AdaptiveGather =
+                            CreateSimpleDdgiReceiverCacheAdaptivePipeline(
+                                "ddgi_simple_receiver_cache_adaptive.comp.spv",
+                                "Simple DDGI Receiver Cache Adaptive Gather Pipeline");
+                        bank.AdaptiveFeedbackGather =
+                            CreateSimpleDdgiReceiverCacheAdaptivePipeline(
+                                "ddgi_simple_receiver_cache_adaptive_b1.comp.spv",
+                                "Simple DDGI Receiver Cache Adaptive Exact Feedback Gather Pipeline");
+                        bank.AdaptiveMissingFeedbackGather =
+                            CreateSimpleDdgiReceiverCacheAdaptivePipeline(
+                                "ddgi_simple_receiver_cache_adaptive_b1_missing.comp.spv",
+                                "Simple DDGI Receiver Cache Adaptive Missing Feedback Gather Pipeline");
+                        bank.AdaptiveResolve =
+                            CreateSimpleDdgiReceiverCacheAdaptivePipeline(
+                                "ddgi_simple_receiver_cache_resolve_adaptive.comp.spv",
+                                "Simple DDGI Receiver Cache Adaptive Resolve Pipeline");
+                    }
+                    if (requiresCompactMaskedFeedback)
                     {
                         bank.CompactMaskedFeedback =
                             CreateSimpleDdgiReceiverCachePipeline(
@@ -810,22 +840,11 @@ namespace Njulf.Rendering.Pipeline
                     }
 
                     if (!bank.IsComplete(
-                            requiresLegacy:
-                                SimpleDdgiReceiverCachePolicy.ResolveRequestedMode(
-                                    _settings.GlobalIllumination
-                                        .SimpleDdgiReceiverCacheMode,
-                                    _settings.Diagnostics
-                                        .ForceForwardGiReceiverCacheForBenchmark,
-                                    _settings.Diagnostics
-                                        .ForceExactForwardGiGatherForBenchmark) ==
-                                SimpleDdgiReceiverCacheMode
-                                    .LegacyDepthOnlyBenchmark,
-                            requiresDiagnostics: _settings.Diagnostics
-                                .DdgiForwardEstimateCountersEnabled,
-                            requiresCompactMaskedFeedback:
-                                _settings.IsPerformanceOptimizationEnabled(
-                                    PerformanceOptimizationFeature
-                                        .CompactMaskedFeedback)))
+                            receiverFeedbackRequired,
+                            requiresAdaptive,
+                            requiresLegacy,
+                            requiresDiagnostics,
+                            requiresCompactMaskedFeedback))
                     {
                         throw new InvalidOperationException(
                             "The receiver pipeline bank is incomplete.");
@@ -842,8 +861,7 @@ namespace Njulf.Rendering.Pipeline
                     _simpleDdgiReceiverCacheResolveDiagnosticsPipeline =
                         bank.DiagnosticsResolve;
                     _simpleDdgiReceiverCacheResolveDiagnosticsPipelineCreationAttempted =
-                        _settings.Diagnostics
-                            .DdgiForwardEstimateCountersEnabled;
+                        requiresDiagnostics;
                     _adaptiveReceiverClassifyPipeline = bank.AdaptiveClassify;
                     _adaptiveReceiverGatherPipeline = bank.AdaptiveGather;
                     _adaptiveReceiverFeedbackGatherPipeline =
