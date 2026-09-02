@@ -319,7 +319,7 @@
       "bistroQualityVariant": "presentation",
       "captureVariant": "baseline",
       "activation": "none",
-      "warmupFrames": 600,
+      "warmupFrames": 480,
       "measureFrames": 240,
       "qualification": true,
       "qualityRois": [
@@ -431,7 +431,7 @@
       "bistroQualityVariant": "presentation",
       "captureVariant": "forward-gi-enabled",
       "activation": "none",
-      "warmupFrames": 600,
+      "warmupFrames": 480,
       "measureFrames": 240,
       "qualification": false,
       "targetPass": "ForwardPlusPass",

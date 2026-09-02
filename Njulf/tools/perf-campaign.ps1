@@ -1140,14 +1140,14 @@ function Assert-CampaignManifest {
         # scene, scenario, timing trajectory, quality trajectory, variant,
         # warmup, timing frames, qualification, Bistro variant, activation,
         # observed pass, isolation group, isolation role, Sponza fixture
-        "bistro-stationary" = @("Bistro", "Normal", "bistro-presentation", "bistro-presentation", "baseline", 600, 240, $true, "presentation", "none", "", "", "", "")
+        "bistro-stationary" = @("Bistro", "Normal", "bistro-presentation", "bistro-presentation", "baseline", 480, 240, $true, "presentation", "none", "", "", "", "")
         "bistro-motion" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "bistro-loop", "baseline", 480, 240, $true, "steady-motion", "none", "", "", "", "")
         "bistro-motion-relight" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "bistro-loop", "baseline", 480, 240, $true, "sun-scale-step", "none", "", "", "", "")
         "sponza-low-stationary" = @("Sponza", "GiSponzaRightWallStationary", "sponza-low", "sponza-low", "baseline", 2048, 240, $true, "", "none", "", "", "", "architecture")
         "sponza-high-stationary" = @("Sponza", "GiSponzaRightWallStationary", "sponza-high", "sponza-high", "baseline", 2688, 240, $true, "", "none", "", "", "", "architecture")
         "sponza-horizontal-motion" = @("Sponza", "GiSponzaRightWallStationary", "sponza-horizontal", "sponza-horizontal", "baseline", 2688, 300, $true, "", "none", "", "", "", "architecture")
         "sponza-vertical-motion" = @("Sponza", "GiSponzaRightWallStationary", "sponza-vertical", "sponza-vertical", "baseline", 2688, 960, $true, "", "none", "", "", "", "architecture")
-        "bistro-forward-gi-enabled" = @("Bistro", "Normal", "bistro-presentation", "bistro-presentation", "forward-gi-enabled", 600, 240, $false, "presentation", "none", "ForwardPlusPass", "bistro-forward-gi", "enabled", "")
+        "bistro-forward-gi-enabled" = @("Bistro", "Normal", "bistro-presentation", "bistro-presentation", "forward-gi-enabled", 480, 240, $false, "presentation", "none", "ForwardPlusPass", "bistro-forward-gi", "enabled", "")
         "sponza-forward-gi-enabled" = @("Sponza", "GiSponzaRightWallStationary", "sponza-horizontal", "sponza-horizontal", "forward-gi-enabled", 2688, 300, $false, "", "sponza-forward-gi", "ForwardPlusPass", "sponza-forward-gi", "enabled", "architecture")
     }
     $workloads = @($Manifest.workloads)
