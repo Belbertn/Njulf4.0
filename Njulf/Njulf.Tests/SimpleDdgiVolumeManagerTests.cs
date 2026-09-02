@@ -419,6 +419,31 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
+    [TestCase(3_072, 16_384, true, 128, true, true, 640)]
+    [TestCase(3_072, 16_384, true, 128, true, false, 128)]
+    [TestCase(3_072, 16_384, true, 128, false, true, 6_144)]
+    [TestCase(3_072, 4_000, true, 128, false, true, 4_000)]
+    [TestCase(-1, 16_384, true, 128, true, true, 0)]
+    public void ScrollPlanningRequestBudget_StaysWithinProvisionedSchedulerCapacity(
+        int baseBudget,
+        int probeCount,
+        bool lightingDirtyBoostEnabled,
+        int maximumFullRaysPerProbe,
+        bool transportV2Active,
+        bool acceleratedTailSolveEnabled,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveScrollPlanningRequestBudget(
+                baseBudget,
+                probeCount,
+                lightingDirtyBoostEnabled,
+                maximumFullRaysPerProbe,
+                transportV2Active,
+                acceleratedTailSolveEnabled),
+            Is.EqualTo(expected));
+    }
+
     [Test]
     public void BufferResizes_UseObservedCompletionTokensWithoutDeviceIdle()
     {

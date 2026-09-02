@@ -5516,12 +5516,17 @@ namespace Njulf.Rendering.Resources
                 UpdateSourceSweepFrameRateEstimate();
 
                 GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-                PrepareScrollPlanning(gi, cameraCutSerial);
                 TryCompleteGpuSchedulerFallbackExport();
                 UpdateGpuSchedulerReentry(
                     gi.SimpleDdgiSchedulerMode,
                     structuredGatherAvailable);
                 SetGpuSchedulerMode(gi.SimpleDdgiSchedulerMode);
+                // Scroll admission must use the resolved scheduler mode so its
+                // complete repair cohort fits the already-provisioned request
+                // arena. Planning against the authored dirty-response budget can
+                // otherwise grow the arena for one recenter frame and shrink it
+                // again on the next stable frame.
+                PrepareScrollPlanning(gi, cameraCutSerial);
                 // The manager receives the live per-frame capability result from
                 // VulkanRenderer. A resident arena may remain allocated while a
                 // frame lacks an active ray-query/structured-gather producer,
@@ -6898,10 +6903,16 @@ namespace Njulf.Rendering.Resources
                     settings.SimpleDdgiProbeUpdatesPerFrame,
                     0,
                     GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
-            _scrollPlanningRemainingRequests = ResolveConfiguredRequestBudget(
+            _scrollPlanningRemainingRequests = ResolveScrollPlanningRequestBudget(
                 baseRequestBudget,
                 GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount,
-                settings.SimpleDdgiLightingDirtyBoostEnabled);
+                settings.SimpleDdgiLightingDirtyBoostEnabled,
+                ResolveMaximumRingFullRays(settings),
+                settings.SimpleDdgiTransportV2Enabled,
+                ShouldProvisionAcceleratedTailSchedulerCapacity(
+                    settings.SimpleDdgiTransportTailCertificationEnabled,
+                    settings.SimpleDdgiTransportAccelerationEnabled,
+                    _schedulerMode));
             _scrollPlanningRemainingPrimaryRays = Math.Min(
                 (ulong)Math.Max(0, settings.DdgiProbeUpdatePrimaryRayBudget),
                 SimpleDdgiScrollPlanner.MaximumSpatialRecoveryPrimaryRays);
@@ -9786,6 +9797,30 @@ namespace Njulf.Rendering.Resources
 
             long boostedCapacity = (long)baseCapacity * 2L;
             return (int)Math.Min(layoutCapacity, boostedCapacity);
+        }
+
+        /// <summary>
+        /// Resolves the immutable request envelope available to atomic scroll
+        /// repair. A scroll may defer a later cascade, but it must never resize
+        /// the scheduler arena from measured-frame execution output.
+        /// </summary>
+        internal static int ResolveScrollPlanningRequestBudget(
+            int baseUpdateBudget,
+            int probeCount,
+            bool lightingDirtyBoostEnabled,
+            int maximumFullRaysPerProbe,
+            bool transportV2Active,
+            bool acceleratedTailSolveEnabled)
+        {
+            int configuredRequestBudget = ResolveConfiguredRequestBudget(
+                baseUpdateBudget,
+                probeCount,
+                lightingDirtyBoostEnabled);
+            return ResolveTransportV2SchedulerRequestCapacity(
+                configuredRequestBudget,
+                maximumFullRaysPerProbe,
+                transportV2Active,
+                acceleratedTailSolveEnabled);
         }
 
         /// <summary>
