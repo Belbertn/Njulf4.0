@@ -66,7 +66,7 @@ public sealed class HybridReflectionContractsTests
     }
 
     [Test]
-    public void SplitProgramSelector_DoesNotFragmentNativePipelineIdentity()
+    public void SplitProgramSelector_PreservesSceneDependentCombinedLane()
     {
         var settings = new RenderSettings();
         settings.PerformanceOptimizations.EnabledFeatures =
@@ -92,7 +92,7 @@ public sealed class HybridReflectionContractsTests
                 splitMask,
                 Is.EqualTo((uint)PerformanceOptimizationFeature
                     .HybridOwnershipProjectionElision));
-            Assert.That((splitFirst, splitLimit), Is.EqualTo((2, 4)));
+            Assert.That((splitFirst, splitLimit), Is.EqualTo((1, 4)));
             Assert.That((combinedFirst, combinedLimit), Is.EqualTo((1, 2)));
         });
     }
@@ -1426,9 +1426,9 @@ public sealed class HybridReflectionContractsTests
             Assert.That(performancePreparation, Does.Contain(
                 "range.ReceiverLaneLimit"));
             Assert.That(mesh, Does.Contain(
-                "? (HybridReflectionCacheAcceptedPipelineLane,"));
+                "return (HybridReflectionCacheCombinedPipelineLane,"));
             Assert.That(mesh, Does.Contain(
-                ": (HybridReflectionCacheCombinedPipelineLane,"));
+                "? HybridReflectionLaneCount"));
             Assert.That(mesh, Does.Contain(
                 "private const int HybridReflectionLaneCount = 4;"));
             Assert.That(mesh, Does.Contain(

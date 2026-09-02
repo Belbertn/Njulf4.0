@@ -105,12 +105,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 RenderSettings settings)
         {
             ArgumentNullException.ThrowIfNull(settings);
-            return settings.IsPerformanceOptimizationEnabled(
+            int receiverLaneLimit = settings.IsPerformanceOptimizationEnabled(
                     PerformanceOptimizationFeature.SplitHybridForwardPrograms)
-                ? (HybridReflectionCacheAcceptedPipelineLane,
-                    HybridReflectionLaneCount)
-                : (HybridReflectionCacheCombinedPipelineLane,
-                    HybridReflectionCacheAcceptedPipelineLane);
+                ? HybridReflectionLaneCount
+                : HybridReflectionCacheAcceptedPipelineLane;
+
+            // Split admission is scene dependent: masked geometry, bent-normal
+            // modes, and feedback requirements retain the combined cache lane.
+            // Keep that lane prepared even when the split lanes are enabled so
+            // a later scene cannot silently fall back to exact DDGI.
+            return (HybridReflectionCacheCombinedPipelineLane,
+                receiverLaneLimit);
         }
 
         internal static bool UsesForwardPerformanceSpecialization(
