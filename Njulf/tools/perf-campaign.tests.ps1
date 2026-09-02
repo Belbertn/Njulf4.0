@@ -2007,6 +2007,111 @@ function Invoke-SyntheticShaderCacheWiringCase {
     Write-Host "PASS synthetic-shader-cache-wiring"
 }
 
+function Invoke-SyntheticRuntimeCacheIsolationCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for the runtime cache isolation test."
+    }
+    foreach ($functionName in @(
+            "Get-PropertyValue", "Assert-NoLinkedPathComponents",
+            "Test-PathContainedBy", "Get-RuntimeCacheEnvironment",
+            "Stop-ProcessTreeAndDrain", "Invoke-ProcessChecked")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+
+    $caseRoot = Join-Path $testRoot "runtime-cache-isolation"
+    $script:RunRoot = Join-Path $caseRoot "run"
+    New-Item -ItemType Directory -Force -Path $script:RunRoot | Out-Null
+    $releaseBuild = [pscustomobject]@{
+        BundleFingerprint = "directory:sha256:" + ("a" * 64)
+    }
+    $candidateBuild = [pscustomobject]@{
+        BundleFingerprint = "directory:sha256:" + ("b" * 64)
+    }
+    $releaseFirst = Get-RuntimeCacheEnvironment $releaseBuild "Release"
+    $releaseRepeat = Get-RuntimeCacheEnvironment $releaseBuild "Release"
+    $shipping = Get-RuntimeCacheEnvironment `
+        $releaseBuild "ShippingPerformance"
+    $candidate = Get-RuntimeCacheEnvironment $candidateBuild "Release"
+    $expectedNames = @(
+        "NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY",
+        "NJULF_PIPELINE_BINARY_CACHE_DIRECTORY")
+    if ((@($releaseFirst.Keys) -join "`n") -cne
+        ($expectedNames -join "`n")) {
+        throw "Runtime cache environment variable topology differs."
+    }
+    foreach ($name in $expectedNames) {
+        $releasePath = [string]$releaseFirst[$name]
+        if ($releasePath -cne [string]$releaseRepeat[$name]) {
+            throw "Identical Release build captures do not reuse '$name'."
+        }
+        if ([string]::Equals(
+                $releasePath,
+                [string]$shipping[$name],
+                [StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals(
+                $releasePath,
+                [string]$candidate[$name],
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Runtime cache '$name' is shared across configuration or build identity."
+        }
+        if (-not (Test-PathContainedBy $releasePath $script:RunRoot) -or
+            -not (Test-Path -LiteralPath $releasePath -PathType Container)) {
+            throw "Runtime cache '$name' is not a materialized run-root child."
+        }
+    }
+
+    foreach ($invalidCase in @(
+            @($releaseBuild, "../Release"),
+            @([pscustomobject]@{
+                BundleFingerprint = "directory:sha256:forged"
+            }, "Release"))) {
+        $failedClosed = $false
+        try {
+            $null = Get-RuntimeCacheEnvironment $invalidCase[0] $invalidCase[1]
+        } catch {
+            $failedClosed = $true
+        }
+        if (-not $failedClosed) {
+            throw "Invalid runtime cache identity did not fail closed."
+        }
+    }
+
+    $probeScript = Join-Path $caseRoot "environment-probe.ps1"
+    $probeOutput = Join-Path $caseRoot "environment-probe.txt"
+    [System.IO.File]::WriteAllText(
+        $probeScript,
+        @'
+param([string]$OutputPath)
+[System.IO.File]::WriteAllText(
+    $OutputPath,
+    [Environment]::GetEnvironmentVariable(
+        "NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY"))
+'@,
+        [System.Text.UTF8Encoding]::new($false))
+    Invoke-ProcessChecked `
+        (Join-Path $PSHOME "pwsh.exe") `
+        @("-NoProfile", "-NonInteractive", "-File", $probeScript,
+            "-OutputPath", $probeOutput) `
+        "Synthetic runtime cache environment" 30 $caseRoot @(0) $releaseFirst
+    if ((Get-Content -LiteralPath $probeOutput -Raw) -cne
+        [string]$releaseFirst.NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY) {
+        throw "Runtime cache environment was not propagated to the child process."
+    }
+    Write-Host "PASS synthetic-runtime-cache-isolation"
+}
+
 function Invoke-QualityVerifierSmokeCase {
     $buildRoot = Join-Path $solutionRoot "NjulfHelloGame/bin/Release/net10.0"
     if (-not (Test-Path -LiteralPath (Join-Path $buildRoot "NjulfHelloGame.dll") -PathType Leaf)) {
@@ -2475,6 +2580,7 @@ try {
     Invoke-ProcessTimeoutContainmentCase
     Invoke-SyntheticBuildPathBudgetCase
     Invoke-SyntheticShaderCacheWiringCase
+    Invoke-SyntheticRuntimeCacheIsolationCase
     Invoke-QualityVerifierSmokeCase
     Invoke-ManifestCase "valid" {} $true
     Invoke-ManifestCase "abba-too-small" {

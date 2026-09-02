@@ -1644,7 +1644,8 @@ function Invoke-ProcessChecked {
         [string]$Label,
         [int]$TimeoutSeconds,
         [string]$WorkingDirectory = $script:SolutionRoot,
-        [int[]]$AllowedExitCodes = @(0)
+        [int[]]$AllowedExitCodes = @(0),
+        [System.Collections.IDictionary]$EnvironmentVariables = @{}
     )
     $info = [System.Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $FilePath
@@ -1655,6 +1656,17 @@ function Invoke-ProcessChecked {
     $info.CreateNoWindow = $true
     foreach ($argument in $Arguments) {
         [void]$info.ArgumentList.Add([string]$argument)
+    }
+    foreach ($entry in $EnvironmentVariables.GetEnumerator()) {
+        $name = [string]$entry.Key
+        $value = [string]$entry.Value
+        if ([string]::IsNullOrWhiteSpace($name) -or $name.Contains('=')) {
+            throw "$Label has an invalid process environment variable name."
+        }
+        if ($null -eq $entry.Value) {
+            throw "$Label process environment variable '$name' has a null value."
+        }
+        $info.Environment[$name] = $value
     }
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $info
@@ -2906,6 +2918,41 @@ function Test-PathContainedBy {
         $fullPath.StartsWith(
             $fullContainer + [System.IO.Path]::DirectorySeparatorChar,
             [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-RuntimeCacheEnvironment {
+    param($BuildIdentity, [string]$Configuration)
+    if ($Configuration -cnotin @("Release", "ShippingPerformance")) {
+        throw "Runtime cache configuration '$Configuration' is not admitted."
+    }
+    $bundleFingerprint = [string](Get-PropertyValue `
+        $BuildIdentity "BundleFingerprint" "")
+    if ($bundleFingerprint -cnotmatch
+            '^directory:sha256:[0-9a-f]{64}$') {
+        throw "Runtime cache build bundle fingerprint is invalid."
+    }
+    $bundleKey = $bundleFingerprint.Substring(
+        "directory:sha256:".Length)
+    $cacheRoot = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath((Join-Path $script:RunRoot (
+            "runtime-caches/{0}/{1}" -f $Configuration, $bundleKey)))) `
+        "Runtime cache root"
+    if (-not (Test-PathContainedBy $cacheRoot $script:RunRoot)) {
+        throw "Runtime cache root must remain inside the admitted campaign run root."
+    }
+    $vulkanCacheRoot = Join-Path $cacheRoot "vulkan"
+    $pipelineBinaryCacheRoot = Join-Path $cacheRoot "pipeline-binary"
+    foreach ($path in @($vulkanCacheRoot, $pipelineBinaryCacheRoot)) {
+        New-Item -ItemType Directory -Force -Path $path | Out-Null
+        $null = Assert-NoLinkedPathComponents $path "Runtime cache directory"
+        if (-not (Test-PathContainedBy $path $script:RunRoot)) {
+            throw "Runtime cache directory escaped the admitted campaign run root."
+        }
+    }
+    return [ordered]@{
+        NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY = $vulkanCacheRoot
+        NJULF_PIPELINE_BINARY_CACHE_DIRECTORY = $pipelineBinaryCacheRoot
+    }
 }
 
 function Assert-CampaignPathTopology {
@@ -4359,7 +4406,8 @@ function Invoke-QualitySequenceCapture {
     Invoke-ProcessChecked `
         ([string]$BuildIdentity.ExecutablePath) `
         $arguments $Label ([int]$Manifest.capture.benchmarkTimeoutSeconds) `
-        $script:SolutionRoot $allowedExitCodes
+        $script:SolutionRoot $allowedExitCodes `
+        (Get-RuntimeCacheEnvironment $BuildIdentity $Configuration)
     Assert-QualitySequenceInputHashes `
         $BuildIdentity $ReferenceContractPath `
         $ExpectedReferenceContractSha256 $QualityContractPath `
@@ -6051,7 +6099,8 @@ function Invoke-BenchmarkCapture {
         $Label `
         ([int]$Manifest.capture.benchmarkTimeoutSeconds) `
         $script:SolutionRoot `
-        $allowedExitCodes
+        $allowedExitCodes `
+        (Get-RuntimeCacheEnvironment $BuildIdentity $Configuration)
     Assert-CaptureInputHashes `
         $BuildIdentity `
         $QualityContractPath $ExpectedQualityContractSha256 `
