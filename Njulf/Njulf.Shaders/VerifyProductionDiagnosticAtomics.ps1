@@ -125,14 +125,16 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag.spv' = 23
     # Hybrid DdgiHigh is split into complementary native programs. Accepted
     # modules contain only admission/cache shading and therefore no functional
-    # receiver atomics. Exact-fallback modules preserve the canonical 14, while
-    # combined rollback modules preserve the prior 23-operation graph.
+    # receiver atomics. Exact-fallback modules also own exact masked-surface B1
+    # feedback. Their surface-only production recipe removes dormant helper
+    # graphs while retaining the combined rollback program's exact 23-site B1
+    # protocol; the two split lanes still have disjoint fragment ownership.
     'forward_opaque_ddgi_cache_required_hybrid_reflection.frag.spv' = 0
     'forward_opaque_simple_ddgi_cache_required_hybrid_reflection.frag.spv' = 0
     'forward_opaque_simple_full_input_ddgi_cache_required_hybrid_reflection.frag.spv' = 0
-    'forward_opaque_ddgi_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_ddgi_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_full_input_ddgi_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
     'forward_opaque_ddgi_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_simple_ddgi_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_simple_full_input_ddgi_cache_combined_hybrid_reflection.frag.spv' = 23
@@ -145,27 +147,27 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 0
     'forward_opaque_simple_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 0
     'forward_opaque_simple_full_input_ddgi_c4_cache_required_hybrid_reflection.frag.spv' = 0
-    'forward_opaque_ddgi_c4_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_ddgi_c4_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_full_input_ddgi_c4_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c4_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c4_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c4_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
     'forward_opaque_ddgi_c4_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_simple_ddgi_c4_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_simple_full_input_ddgi_c4_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 0
     'forward_opaque_simple_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 0
     'forward_opaque_simple_full_input_ddgi_c5_cache_required_hybrid_reflection.frag.spv' = 0
-    'forward_opaque_ddgi_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_ddgi_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_full_input_ddgi_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
     'forward_opaque_ddgi_c5_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_simple_ddgi_c5_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_simple_full_input_ddgi_c5_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 0
     'forward_opaque_simple_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 0
     'forward_opaque_simple_full_input_ddgi_c4_c5_cache_required_hybrid_reflection.frag.spv' = 0
-    'forward_opaque_ddgi_c4_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_ddgi_c4_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
-    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c4_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_ddgi_c4_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
+    'forward_opaque_simple_full_input_ddgi_c4_c5_cache_exact_fallback_hybrid_reflection.frag.spv' = 23
     'forward_opaque_ddgi_c4_c5_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_simple_ddgi_c4_c5_cache_combined_hybrid_reflection.frag.spv' = 23
     'forward_opaque_simple_full_input_ddgi_c4_c5_cache_combined_hybrid_reflection.frag.spv' = 23

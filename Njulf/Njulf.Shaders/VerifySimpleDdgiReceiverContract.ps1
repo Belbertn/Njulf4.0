@@ -416,13 +416,15 @@ foreach ($moduleName in @(
     # Cache-capable opaque programs retain both independent fail-closed lanes:
     # the canonical rejection gather and exact B1 ownership. The optimized
     # masked path adds three bounded list operations: candidate high-water,
-    # overflow fallback, and dense publication maximum. Overflow still executes
-    # the original exact gather in the same fragment.
+    # overflow fallback, and dense publication maximum. Exact-fallback split
+    # modules now own every masked survivor and therefore retain the complete
+    # B1 protocol. Their surface-only production recipe retains the complete
+    # 46-site protocol while accepted modules remain atomic-free.
     $expectedAtomicInstructions = if (
         $isOwnershipLockedAcceptedModule) {
         0
     } elseif ($isOwnershipLockedExactFallbackModule) {
-        29
+        46
     } elseif ($isCacheModule) {
         46
     } else {
