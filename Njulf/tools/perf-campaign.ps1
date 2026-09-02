@@ -2920,7 +2920,7 @@ function Test-PathContainedBy {
             [StringComparison]::OrdinalIgnoreCase)
 }
 
-function Get-RuntimeCacheEnvironment {
+function Get-RuntimeCacheRoot {
     param($BuildIdentity, [string]$Configuration)
     if ($Configuration -cnotin @("Release", "ShippingPerformance")) {
         throw "Runtime cache configuration '$Configuration' is not admitted."
@@ -2940,19 +2940,66 @@ function Get-RuntimeCacheEnvironment {
     if (-not (Test-PathContainedBy $cacheRoot $script:RunRoot)) {
         throw "Runtime cache root must remain inside the admitted campaign run root."
     }
+    return $cacheRoot
+}
+
+function Get-RuntimeCacheEnvironment {
+    param($BuildIdentity, [string]$Configuration)
+    $cacheRoot = Get-RuntimeCacheRoot $BuildIdentity $Configuration
     $vulkanCacheRoot = Join-Path $cacheRoot "vulkan"
     $pipelineBinaryCacheRoot = Join-Path $cacheRoot "pipeline-binary"
-    foreach ($path in @($vulkanCacheRoot, $pipelineBinaryCacheRoot)) {
+    $ddgiWarmCacheRoot = Join-Path $cacheRoot "ddgi-warm"
+    $environmentCacheRoot = Join-Path $cacheRoot "environment"
+    foreach ($path in @(
+            $vulkanCacheRoot, $pipelineBinaryCacheRoot,
+            $ddgiWarmCacheRoot, $environmentCacheRoot)) {
         New-Item -ItemType Directory -Force -Path $path | Out-Null
         $null = Assert-NoLinkedPathComponents $path "Runtime cache directory"
         if (-not (Test-PathContainedBy $path $script:RunRoot)) {
             throw "Runtime cache directory escaped the admitted campaign run root."
         }
     }
+    $buildRoot = [string](Get-PropertyValue $BuildIdentity "RootPath" "")
+    if ([string]::IsNullOrWhiteSpace($buildRoot)) {
+        throw "Runtime cache build root is invalid."
+    }
+    $vulkanSeedRoot = [System.IO.Path]::GetFullPath(
+        (Join-Path $buildRoot "PipelineCacheSeeds"))
+    $pipelineBinarySeedRoot = [System.IO.Path]::GetFullPath(
+        (Join-Path $buildRoot "PipelineBinarySeeds/v1"))
     return [ordered]@{
         NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY = $vulkanCacheRoot
+        NJULF_VULKAN_PIPELINE_CACHE_SEED_DIRECTORY = $vulkanSeedRoot
         NJULF_PIPELINE_BINARY_CACHE_DIRECTORY = $pipelineBinaryCacheRoot
+        NJULF_PIPELINE_BINARY_SEED_DIRECTORY = $pipelineBinarySeedRoot
+        NJULF_DDGI_WARM_CACHE_DIR = $ddgiWarmCacheRoot
+        NJULF_ENVIRONMENT_CACHE_DIR = $environmentCacheRoot
     }
+}
+
+function Get-RuntimeCachePrimeRoot {
+    param($BuildIdentity, [string]$Configuration, $Workload)
+    $workloadId = [string](Get-PropertyValue $Workload "id" "")
+    if ($workloadId -cnotmatch '^[a-z0-9][a-z0-9-]{0,63}$') {
+        throw "Runtime cache prime workload id '$workloadId' is invalid."
+    }
+    $root = [System.IO.Path]::GetFullPath((Join-Path (
+        Get-RuntimeCacheRoot $BuildIdentity $Configuration) (
+            "primes/{0}" -f $workloadId)))
+    if (-not (Test-PathContainedBy $root $script:RunRoot)) {
+        throw "Runtime cache prime root escaped the admitted campaign run root."
+    }
+    return $root
+}
+
+function Get-RuntimeCaptureCacheRoot {
+    param([string]$ReportPath)
+    $root = [System.IO.Path]::GetFullPath(
+        ([System.IO.Path]::GetFullPath($ReportPath) + ".runtime-cache"))
+    if (-not (Test-PathContainedBy $root $script:RunRoot)) {
+        throw "Runtime capture cache root escaped the admitted campaign run root."
+    }
+    return $root
 }
 
 function Assert-CampaignPathTopology {
@@ -4382,8 +4429,10 @@ function Invoke-QualitySequenceCapture {
     $animationSidecarPath =
         ([System.IO.Path]::GetFullPath($ReportPath)) +
             ".sponza-animation.bin"
+    $runtimeCaptureCacheRoot = Get-RuntimeCaptureCacheRoot $ReportPath
     $reservedOutputs = @(
-        $ReportPath, $healthPath, $OutputDirectory, $activationArtifactPath)
+        $ReportPath, $healthPath, $OutputDirectory, $activationArtifactPath,
+        $runtimeCaptureCacheRoot)
     if ($Role -ne "canonical") { $reservedOutputs += $metricArtifactPath }
     if (Test-WorkloadUsesSponzaAnimation $Workload) {
         $reservedOutputs += $animationSidecarPath
@@ -4402,12 +4451,17 @@ function Invoke-QualitySequenceCapture {
         $BuildIdentity $ReferenceContractPath `
         $ExpectedReferenceContractSha256 $QualityContractPath `
         $ExpectedQualityContractSha256 $Role "$Label pre-capture"
+    Initialize-RuntimeCachePrime `
+        $Manifest $Workload $BuildIdentity $Configuration `
+        $QualityContractPath $ExpectedCommit $Label
+    $runtimeEnvironment = New-RuntimeCaptureCacheEnvironment `
+        $BuildIdentity $Configuration $Workload $ReportPath $Label
     $allowedExitCodes = if ($ReferenceInitialization) { @(0, 1) } else { @(0) }
     Invoke-ProcessChecked `
         ([string]$BuildIdentity.ExecutablePath) `
         $arguments $Label ([int]$Manifest.capture.benchmarkTimeoutSeconds) `
         $script:SolutionRoot $allowedExitCodes `
-        (Get-RuntimeCacheEnvironment $BuildIdentity $Configuration)
+        $runtimeEnvironment
     Assert-QualitySequenceInputHashes `
         $BuildIdentity $ReferenceContractPath `
         $ExpectedReferenceContractSha256 $QualityContractPath `
@@ -4430,6 +4484,7 @@ function Invoke-QualitySequenceCapture {
         $Manifest $Workload $health $report $BuildIdentity $Configuration `
         $Role $SequenceId $ExpectedCommit $ReportPath $OutputDirectory `
         $ReferenceContractPath $QualityContractPath $Label $ReferenceInitialization
+    Assert-RuntimeCacheCapture $health $runtimeEnvironment $Label
     $frozenVerifierEvidence = New-QualityFrozenVerifierEvidence `
         $Workload $report $Role $SequenceId $ReportPath `
         $VerifierBuildIdentity $Label
@@ -5438,6 +5493,322 @@ function Get-BenchmarkArguments {
     return $arguments
 }
 
+function Assert-RuntimeCachePrime {
+    param(
+        $BuildIdentity,
+        [string]$Configuration,
+        $Workload,
+        [string]$Label)
+    $primeRoot = Get-RuntimeCachePrimeRoot `
+        $BuildIdentity $Configuration $Workload
+    $markerPath = Join-Path $primeRoot "complete.json"
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+        throw "$Label runtime cache prime is missing: $markerPath"
+    }
+    $record = (Read-StrictJsonFile `
+        $markerPath 1MB "$Label runtime cache prime").Value
+    Assert-ExactPropertyNames $record @(
+        "schema", "configuration", "workloadId",
+        "buildBundleFingerprint", "runtimeExecutableBundleHash",
+        "buildCommit", "reportPath", "reportSha256", "healthPath",
+        "healthSha256", "vulkanSeedDirectory",
+        "pipelineBinarySeedDirectory", "ddgiWarmSeedDirectory",
+        "environmentCacheDirectory") "$Label runtime cache prime"
+    $expectedSeedRoot = Join-Path $primeRoot "seed"
+    $expectedVulkan = Join-Path $expectedSeedRoot "vulkan"
+    $expectedPipelineBinary = Join-Path `
+        $expectedSeedRoot "pipeline-binary"
+    $expectedDdgiWarm = Join-Path $expectedSeedRoot "ddgi-warm"
+    $expectedEnvironment = Join-Path (
+        Get-RuntimeCacheRoot $BuildIdentity $Configuration) "environment"
+    if ([string]$record.schema -cne "njulf-perf-runtime-cache-prime/v1" -or
+        [string]$record.configuration -cne $Configuration -or
+        [string]$record.workloadId -cne [string]$Workload.id -or
+        [string]$record.buildBundleFingerprint -cne
+            [string]$BuildIdentity.BundleFingerprint -or
+        [string]$record.runtimeExecutableBundleHash -cne
+            [string]$BuildIdentity.RuntimeExecutableBundleHash -or
+        [string]$record.buildCommit -cne [string]$BuildIdentity.BuildCommit) {
+        throw "$Label runtime cache prime identity differs."
+    }
+    foreach ($pathIdentity in @(
+            @([string]$record.vulkanSeedDirectory, $expectedVulkan,
+                "Vulkan seed"),
+            @([string]$record.pipelineBinarySeedDirectory,
+                $expectedPipelineBinary, "pipeline-binary seed"),
+            @([string]$record.ddgiWarmSeedDirectory, $expectedDdgiWarm,
+                "DDGI warm seed"),
+            @([string]$record.environmentCacheDirectory,
+                $expectedEnvironment, "environment cache"))) {
+        if (-not [string]::Equals(
+                [System.IO.Path]::GetFullPath([string]$pathIdentity[0]),
+                [System.IO.Path]::GetFullPath([string]$pathIdentity[1]),
+                [StringComparison]::OrdinalIgnoreCase) -or
+            -not (Test-Path -LiteralPath ([string]$pathIdentity[0]) `
+                -PathType Container)) {
+            throw "$Label runtime cache prime $($pathIdentity[2]) differs."
+        }
+    }
+    foreach ($artifact in @(
+            @([string]$record.reportPath, [string]$record.reportSha256,
+                "report"),
+            @([string]$record.healthPath, [string]$record.healthSha256,
+                "health"))) {
+        $path = [System.IO.Path]::GetFullPath([string]$artifact[0])
+        if (-not (Test-PathContainedBy $path $primeRoot) -or
+            -not (Test-Path -LiteralPath $path -PathType Leaf) -or
+            [string]$artifact[1] -cnotmatch '^[0-9a-f]{64}$' -or
+            (Get-Sha256 $path) -cne [string]$artifact[1]) {
+            throw "$Label runtime cache prime $($artifact[2]) differs."
+        }
+    }
+    $vulkanCaches = @(
+        Get-ChildItem -LiteralPath $expectedVulkan -File -Force |
+            Where-Object { $_.Name -match '^gi-[0-9a-f]{8}-[0-9a-f]{8}\.njvkcache$' })
+    if ($vulkanCaches.Count -ne 1 -or
+        $vulkanCaches[0].Length -le 0 -or
+        $vulkanCaches[0].Length -gt 512MB) {
+        throw "$Label runtime cache prime lacks one bounded Vulkan cache."
+    }
+    return $record
+}
+
+function Copy-RuntimeCacheSeedDirectory {
+    param(
+        [string]$Source,
+        [string]$Destination,
+        [bool]$Required,
+        [string]$Label)
+    if (Test-Path -LiteralPath $Destination) {
+        throw "$Label destination already exists: $Destination"
+    }
+    if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
+        if ($Required) {
+            throw "$Label source is missing: $Source"
+        }
+        New-Item -ItemType Directory -Path $Destination | Out-Null
+        return
+    }
+    $null = Assert-NoLinkedPathComponents $Source "$Label source"
+    Copy-Item -LiteralPath $Source -Destination $Destination -Recurse
+    $null = Assert-NoLinkedPathComponents $Destination "$Label destination"
+}
+
+function Initialize-RuntimeCachePrime {
+    param(
+        $Manifest,
+        $Workload,
+        $BuildIdentity,
+        [string]$Configuration,
+        [string]$QualityContractPath,
+        [string]$ExpectedCommit,
+        [string]$Label)
+    $primeRoot = Get-RuntimeCachePrimeRoot `
+        $BuildIdentity $Configuration $Workload
+    $markerPath = Join-Path $primeRoot "complete.json"
+    if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+        $null = Assert-RuntimeCachePrime `
+            $BuildIdentity $Configuration $Workload $Label
+        return
+    }
+    if (Test-Path -LiteralPath $primeRoot) {
+        throw "$Label has an incomplete runtime cache prime; use a fresh campaign run directory: $primeRoot"
+    }
+    Assert-BuildIdentity $BuildIdentity "$Label runtime cache prime"
+    New-Item -ItemType Directory -Path $primeRoot | Out-Null
+    $bootstrapReportPath = Join-Path $primeRoot "bootstrap.json"
+    $bootstrapHealthPath = Join-Path $primeRoot "bootstrap.health.json"
+    $bootstrapHdrPath = Join-Path $primeRoot "bootstrap.hdr.pfm"
+    $reportPath = Join-Path $primeRoot "prime.json"
+    $healthPath = Join-Path $primeRoot "prime.health.json"
+    $primeWorkload = $Workload.PSObject.Copy()
+    $primeWorkload.warmupFrames = 0
+    $runtimeEnvironment = Get-RuntimeCacheEnvironment `
+        $BuildIdentity $Configuration
+    $bootstrapPairId =
+        "runtime-cache-prime-bootstrap-$Configuration-$([string]$Workload.id)"
+    $bootstrapArguments = @(Get-BenchmarkArguments `
+        $Manifest $primeWorkload $bootstrapReportPath $bootstrapHealthPath `
+        $bootstrapPairId "" $bootstrapHdrPath $true)
+    Invoke-ProcessChecked `
+        ([string]$BuildIdentity.ExecutablePath) `
+        $bootstrapArguments `
+        "$Label runtime cache bootstrap" `
+        ([int]$Manifest.capture.benchmarkTimeoutSeconds) `
+        $script:SolutionRoot `
+        @(0, 1) `
+        $runtimeEnvironment
+    if (-not (Test-Path -LiteralPath $bootstrapReportPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $bootstrapHealthPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $bootstrapHdrPath -PathType Leaf)) {
+        throw "$Label runtime cache bootstrap did not publish complete evidence."
+    }
+    Assert-LinearHdrPfm `
+        $bootstrapHdrPath 1920 1080 "$Label runtime cache bootstrap"
+    $pairId =
+        "runtime-cache-prime-production-$Configuration-$([string]$Workload.id)"
+    $arguments = @(Get-BenchmarkArguments `
+        $Manifest $primeWorkload $reportPath $healthPath $pairId `
+        $QualityContractPath $bootstrapHdrPath $false |
+            Where-Object { $_ -cne "--benchmark-require-1080p60" })
+    Invoke-ProcessChecked `
+        ([string]$BuildIdentity.ExecutablePath) `
+        $arguments `
+        "$Label runtime cache production prime" `
+        ([int]$Manifest.capture.benchmarkTimeoutSeconds) `
+        $script:SolutionRoot `
+        @(0, 1) `
+        $runtimeEnvironment
+    Assert-BuildIdentity $BuildIdentity "$Label runtime cache prime completed"
+    if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $healthPath -PathType Leaf)) {
+        throw "$Label runtime cache prime did not publish report and health evidence."
+    }
+    $report = Read-BenchmarkReport $reportPath
+    $health = Get-Content -LiteralPath $healthPath -Raw |
+        ConvertFrom-Json -DateKind String
+    $diagnostics = $health.diagnostics
+    $pipelineCachePath = [System.IO.Path]::GetFullPath(
+        [string]$diagnostics.GiPipelineCachePath)
+    $expectedVulkanRoot = [string]
+        $runtimeEnvironment.NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY
+    if ([string]$report.Kind -cne "njulf-renderer-benchmark" -or
+        [string]$report.Schema -cne "njulf-renderer-benchmark/v5" -or
+        [int]$report.MeasurementFrameCount -ne [int]$Workload.measureFrames -or
+        [string]$report.LastDiagnostics.CaptureRun.Commit -cne
+            $ExpectedCommit -or
+        [string]$report.LastDiagnostics.CaptureRun.ExecutableHash -cne
+            [string]$BuildIdentity.RuntimeExecutableBundleHash -or
+        [string]$health.kind -cne "renderer-health" -or
+        [string]$health.schema -cne "renderer-health/v3" -or
+        [int]$diagnostics.GiPipelineCacheLoaded -ne 1 -or
+        [int]$diagnostics.GiPipelineCacheRejected -ne 0 -or
+        [ulong]$diagnostics.GiPipelineCacheLoadedPayloadBytes -eq 0 -or
+        [int]$diagnostics.GiPipelineCacheSaved -notin @(0, 1) -or
+        ([int]$diagnostics.GiPipelineCacheSaved -eq 0 -and
+            [ulong]$diagnostics.GiPipelineCacheSavedPayloadBytes -ne 0) -or
+        ([int]$diagnostics.GiPipelineCacheSaved -eq 1 -and
+            [ulong]$diagnostics.GiPipelineCacheSavedPayloadBytes -eq 0) -or
+        [string]$diagnostics.GiPipelineCacheStatus -cnotin @(
+            "Writable pipeline cache: Compatible cache loaded.",
+            "Compatible cache loaded and refreshed.") -or
+        -not (Test-PathContainedBy $pipelineCachePath $expectedVulkanRoot) -or
+        -not (Test-Path -LiteralPath $pipelineCachePath -PathType Leaf)) {
+        throw "$Label runtime cache prime did not publish a current-build cache."
+    }
+
+    $seedRoot = Join-Path $primeRoot "seed"
+    New-Item -ItemType Directory -Path $seedRoot | Out-Null
+    $vulkanSeed = Join-Path $seedRoot "vulkan"
+    $pipelineBinarySeed = Join-Path $seedRoot "pipeline-binary"
+    $ddgiWarmSeed = Join-Path $seedRoot "ddgi-warm"
+    Copy-RuntimeCacheSeedDirectory `
+        ([string]$runtimeEnvironment.NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY) `
+        $vulkanSeed $true "$Label Vulkan cache snapshot"
+    Copy-RuntimeCacheSeedDirectory `
+        ([string]$runtimeEnvironment.NJULF_PIPELINE_BINARY_CACHE_DIRECTORY) `
+        $pipelineBinarySeed $false "$Label pipeline-binary snapshot"
+    Copy-RuntimeCacheSeedDirectory `
+        ([string]$runtimeEnvironment.NJULF_DDGI_WARM_CACHE_DIR) `
+        $ddgiWarmSeed $false "$Label DDGI warm snapshot"
+    $record = [ordered]@{
+        schema = "njulf-perf-runtime-cache-prime/v1"
+        configuration = $Configuration
+        workloadId = [string]$Workload.id
+        buildBundleFingerprint = [string]$BuildIdentity.BundleFingerprint
+        runtimeExecutableBundleHash =
+            [string]$BuildIdentity.RuntimeExecutableBundleHash
+        buildCommit = [string]$BuildIdentity.BuildCommit
+        reportPath = [System.IO.Path]::GetFullPath($reportPath)
+        reportSha256 = Get-Sha256 $reportPath
+        healthPath = [System.IO.Path]::GetFullPath($healthPath)
+        healthSha256 = Get-Sha256 $healthPath
+        vulkanSeedDirectory = [System.IO.Path]::GetFullPath($vulkanSeed)
+        pipelineBinarySeedDirectory =
+            [System.IO.Path]::GetFullPath($pipelineBinarySeed)
+        ddgiWarmSeedDirectory = [System.IO.Path]::GetFullPath($ddgiWarmSeed)
+        environmentCacheDirectory = [System.IO.Path]::GetFullPath(
+            [string]$runtimeEnvironment.NJULF_ENVIRONMENT_CACHE_DIR)
+    }
+    Write-JsonArtifact $markerPath $record
+    $null = Assert-RuntimeCachePrime `
+        $BuildIdentity $Configuration $Workload $Label
+}
+
+function New-RuntimeCaptureCacheEnvironment {
+    param(
+        $BuildIdentity,
+        [string]$Configuration,
+        $Workload,
+        [string]$ReportPath,
+        [string]$Label)
+    $prime = Assert-RuntimeCachePrime `
+        $BuildIdentity $Configuration $Workload $Label
+    $captureRoot = Get-RuntimeCaptureCacheRoot $ReportPath
+    if (Test-Path -LiteralPath $captureRoot) {
+        throw "$Label runtime capture cache already exists: $captureRoot"
+    }
+    New-Item -ItemType Directory -Path $captureRoot | Out-Null
+    $vulkanWritable = Join-Path $captureRoot "vulkan"
+    $pipelineBinaryWritable = Join-Path $captureRoot "pipeline-binary"
+    $ddgiWarmWritable = Join-Path $captureRoot "ddgi-warm"
+    foreach ($path in @($vulkanWritable, $pipelineBinaryWritable)) {
+        New-Item -ItemType Directory -Path $path | Out-Null
+    }
+    Copy-RuntimeCacheSeedDirectory `
+        ([string]$prime.ddgiWarmSeedDirectory) `
+        $ddgiWarmWritable $false "$Label DDGI warm capture cache"
+    return [ordered]@{
+        NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY = $vulkanWritable
+        NJULF_VULKAN_PIPELINE_CACHE_SEED_DIRECTORY =
+            [string]$prime.vulkanSeedDirectory
+        NJULF_PIPELINE_BINARY_CACHE_DIRECTORY = $pipelineBinaryWritable
+        NJULF_PIPELINE_BINARY_SEED_DIRECTORY =
+            [string]$prime.pipelineBinarySeedDirectory
+        NJULF_DDGI_WARM_CACHE_DIR = $ddgiWarmWritable
+        NJULF_ENVIRONMENT_CACHE_DIR =
+            [string]$prime.environmentCacheDirectory
+    }
+}
+
+function Assert-RuntimeCacheCapture {
+    param(
+        $Health,
+        [System.Collections.IDictionary]$RuntimeEnvironment,
+        [string]$Label)
+    $diagnostics = $Health.diagnostics
+    $cachePath = [System.IO.Path]::GetFullPath(
+        [string]$diagnostics.GiPipelineCachePath)
+    $vulkanRoot = [System.IO.Path]::GetFullPath(
+        [string]$RuntimeEnvironment.NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY)
+    $binaryPath = [string]$diagnostics.GiPipelineBinaryStorePath
+    $status = [string]$diagnostics.GiPipelineCacheStatus
+    $saved = [int]$diagnostics.GiPipelineCacheSaved
+    $loadedFromFrozenSeed = $status -ceq
+        "Read-only pipeline cache seed: Compatible cache loaded."
+    $refreshedWritableCache = $status -ceq
+        "Compatible cache loaded and refreshed."
+    if ([int]$diagnostics.GiPipelineCacheLoaded -ne 1 -or
+        [int]$diagnostics.GiPipelineCacheRejected -ne 0 -or
+        [ulong]$diagnostics.GiPipelineCacheLoadedPayloadBytes -eq 0 -or
+        (-not $loadedFromFrozenSeed -and -not $refreshedWritableCache) -or
+        ($loadedFromFrozenSeed -and ($saved -ne 0 -or
+            [ulong]$diagnostics.GiPipelineCacheSavedPayloadBytes -ne 0)) -or
+        ($refreshedWritableCache -and ($saved -ne 1 -or
+            [ulong]$diagnostics.GiPipelineCacheSavedPayloadBytes -eq 0)) -or
+        -not (Test-PathContainedBy $cachePath $vulkanRoot) -or
+        ($refreshedWritableCache -and
+            -not (Test-Path -LiteralPath $cachePath -PathType Leaf))) {
+        throw "$Label did not use a current, isolated Vulkan pipeline cache (status='$status')."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($binaryPath) -and
+        -not (Test-PathContainedBy `
+            ([System.IO.Path]::GetFullPath($binaryPath)) `
+            ([string]$RuntimeEnvironment.NJULF_PIPELINE_BINARY_CACHE_DIRECTORY))) {
+        throw "$Label pipeline-binary writable store is not isolated."
+    }
+}
+
 function Read-BenchmarkReport {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -6067,8 +6438,10 @@ function Invoke-BenchmarkCapture {
         $ReportPath, ".activation-verification.json")
     $ddgiArtifactPath = [System.IO.Path]::ChangeExtension(
         $ReportPath, ".ddgi-transient-verification.json")
+    $runtimeCaptureCacheRoot = Get-RuntimeCaptureCacheRoot $ReportPath
     $reservedOutputs = @(
-        $ReportPath, $healthPath, $activationArtifactPath, $ddgiArtifactPath)
+        $ReportPath, $healthPath, $activationArtifactPath, $ddgiArtifactPath,
+        $runtimeCaptureCacheRoot)
     if ($ReferenceInitialization) {
         $reservedOutputs += $ReferencePath
     } else {
@@ -6092,6 +6465,11 @@ function Invoke-BenchmarkCapture {
         $QualityContractPath $ExpectedQualityContractSha256 `
         $ReferencePath $ExpectedReferenceSha256 `
         $ReferenceInitialization "$Label pre-capture"
+    Initialize-RuntimeCachePrime `
+        $Manifest $Workload $BuildIdentity $Configuration `
+        $QualityContractPath $ExpectedCommit $Label
+    $runtimeEnvironment = New-RuntimeCaptureCacheEnvironment `
+        $BuildIdentity $Configuration $Workload $ReportPath $Label
     $allowedExitCodes = if ($ReferenceInitialization) { @(0, 1) } else { @(0) }
     Invoke-ProcessChecked `
         ([string]$BuildIdentity.ExecutablePath) `
@@ -6100,7 +6478,7 @@ function Invoke-BenchmarkCapture {
         ([int]$Manifest.capture.benchmarkTimeoutSeconds) `
         $script:SolutionRoot `
         $allowedExitCodes `
-        (Get-RuntimeCacheEnvironment $BuildIdentity $Configuration)
+        $runtimeEnvironment
     Assert-CaptureInputHashes `
         $BuildIdentity `
         $QualityContractPath $ExpectedQualityContractSha256 `
@@ -6118,6 +6496,7 @@ function Invoke-BenchmarkCapture {
     Assert-HealthReport `
         $Manifest $Workload $health $report $BuildIdentity `
         $ExpectedCommit $PairId $Label $ReferenceInitialization
+    Assert-RuntimeCacheCapture $health $runtimeEnvironment $Label
     $admittedOutputs = [ordered]@{
         ([System.IO.Path]::GetFullPath($ReportPath)) = Get-Sha256 $ReportPath
         ([System.IO.Path]::GetFullPath($healthPath)) = Get-Sha256 $healthPath

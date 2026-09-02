@@ -2017,7 +2017,9 @@ function Invoke-SyntheticRuntimeCacheIsolationCase {
     }
     foreach ($functionName in @(
             "Get-PropertyValue", "Assert-NoLinkedPathComponents",
-            "Test-PathContainedBy", "Get-RuntimeCacheEnvironment",
+            "Test-PathContainedBy", "Get-RuntimeCacheRoot",
+            "Get-RuntimeCacheEnvironment", "Get-RuntimeCachePrimeRoot",
+            "Get-RuntimeCaptureCacheRoot", "Assert-RuntimeCacheCapture",
             "Stop-ProcessTreeAndDrain", "Invoke-ProcessChecked")) {
         $definition = @($driverAst.FindAll({
             param($node)
@@ -2029,24 +2031,68 @@ function Invoke-SyntheticRuntimeCacheIsolationCase {
         }
         . ([scriptblock]::Create($definition.Extent.Text))
     }
+    foreach ($captureFunctionName in @(
+            "Invoke-BenchmarkCapture", "Invoke-QualitySequenceCapture")) {
+        $captureDefinition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $captureFunctionName
+        }, $true))[0]
+        $captureSource = $captureDefinition.Extent.Text
+        if ($captureSource -notmatch 'Initialize-RuntimeCachePrime' -or
+            $captureSource -notmatch 'New-RuntimeCaptureCacheEnvironment' -or
+            $captureSource -notmatch 'Assert-RuntimeCacheCapture') {
+            throw "$captureFunctionName does not enforce the prime/clone/cache gate."
+        }
+    }
+    $primeDefinition = @($driverAst.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq "Initialize-RuntimeCachePrime"
+    }, $true))[0]
+    $primeSource = $primeDefinition.Extent.Text
+    if (($primeSource | Select-String -Pattern 'Get-BenchmarkArguments' -AllMatches).
+            Matches.Count -ne 2 -or
+        $primeSource -notmatch '\$bootstrapHdrPath\s+\$true' -or
+        $primeSource -notmatch '\$QualityContractPath\s+\$bootstrapHdrPath\s+\$false' -or
+        $primeSource -notmatch 'Where-Object\s+\{\s*\$_\s+-cne\s+"--benchmark-require-1080p60"' -or
+        $primeSource -match 'primeWorkload\.measureFrames\s*=') {
+        throw "Runtime cache prime does not preserve the two-phase production contract."
+    }
 
     $caseRoot = Join-Path $testRoot "runtime-cache-isolation"
     $script:RunRoot = Join-Path $caseRoot "run"
     New-Item -ItemType Directory -Force -Path $script:RunRoot | Out-Null
     $releaseBuild = [pscustomobject]@{
         BundleFingerprint = "directory:sha256:" + ("a" * 64)
+        RootPath = Join-Path $script:RunRoot "builds/release"
+        RuntimeExecutableBundleHash = "sha256:" + ("c" * 64)
+        BuildCommit = "d" * 40
+    }
+    $shippingBuild = [pscustomobject]@{
+        BundleFingerprint = "directory:sha256:" + ("a" * 64)
+        RootPath = Join-Path $script:RunRoot "builds/shipping"
+        RuntimeExecutableBundleHash = "sha256:" + ("c" * 64)
+        BuildCommit = "d" * 40
     }
     $candidateBuild = [pscustomobject]@{
         BundleFingerprint = "directory:sha256:" + ("b" * 64)
+        RootPath = Join-Path $script:RunRoot "builds/candidate"
+        RuntimeExecutableBundleHash = "sha256:" + ("e" * 64)
+        BuildCommit = "f" * 40
     }
     $releaseFirst = Get-RuntimeCacheEnvironment $releaseBuild "Release"
     $releaseRepeat = Get-RuntimeCacheEnvironment $releaseBuild "Release"
     $shipping = Get-RuntimeCacheEnvironment `
-        $releaseBuild "ShippingPerformance"
+        $shippingBuild "ShippingPerformance"
     $candidate = Get-RuntimeCacheEnvironment $candidateBuild "Release"
     $expectedNames = @(
         "NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY",
-        "NJULF_PIPELINE_BINARY_CACHE_DIRECTORY")
+        "NJULF_VULKAN_PIPELINE_CACHE_SEED_DIRECTORY",
+        "NJULF_PIPELINE_BINARY_CACHE_DIRECTORY",
+        "NJULF_PIPELINE_BINARY_SEED_DIRECTORY",
+        "NJULF_DDGI_WARM_CACHE_DIR",
+        "NJULF_ENVIRONMENT_CACHE_DIR")
     if ((@($releaseFirst.Keys) -join "`n") -cne
         ($expectedNames -join "`n")) {
         throw "Runtime cache environment variable topology differs."
@@ -2066,16 +2112,32 @@ function Invoke-SyntheticRuntimeCacheIsolationCase {
                 [StringComparison]::OrdinalIgnoreCase)) {
             throw "Runtime cache '$name' is shared across configuration or build identity."
         }
-        if (-not (Test-PathContainedBy $releasePath $script:RunRoot) -or
-            -not (Test-Path -LiteralPath $releasePath -PathType Container)) {
-            throw "Runtime cache '$name' is not a materialized run-root child."
+        if (-not (Test-PathContainedBy $releasePath $script:RunRoot)) {
+            throw "Runtime cache '$name' is not a run-root child."
         }
+        if ($name -notmatch 'SEED_DIRECTORY$' -and
+            -not (Test-Path -LiteralPath $releasePath -PathType Container)) {
+            throw "Runtime writable cache '$name' was not materialized."
+        }
+    }
+
+    $workload = [pscustomobject]@{ id = "bistro-stationary" }
+    $primeRoot = Get-RuntimeCachePrimeRoot `
+        $releaseBuild "Release" $workload
+    $reportPath = Join-Path $script:RunRoot "captures/reference.json"
+    $captureRoot = Get-RuntimeCaptureCacheRoot $reportPath
+    if (-not (Test-PathContainedBy $primeRoot $script:RunRoot) -or
+        -not (Test-PathContainedBy $captureRoot $script:RunRoot) -or
+        [System.IO.Path]::GetFileName($captureRoot) -cne
+            "reference.json.runtime-cache") {
+        throw "Runtime prime or per-capture cache path is not deterministic."
     }
 
     foreach ($invalidCase in @(
             @($releaseBuild, "../Release"),
             @([pscustomobject]@{
                 BundleFingerprint = "directory:sha256:forged"
+                RootPath = $script:RunRoot
             }, "Release"))) {
         $failedClosed = $false
         try {
@@ -2086,6 +2148,66 @@ function Invoke-SyntheticRuntimeCacheIsolationCase {
         if (-not $failedClosed) {
             throw "Invalid runtime cache identity did not fail closed."
         }
+    }
+    foreach ($invalidPathCase in @(
+            { Get-RuntimeCachePrimeRoot $releaseBuild "Release" `
+                ([pscustomobject]@{ id = "../forged" }) },
+            { Get-RuntimeCaptureCacheRoot `
+                (Join-Path (Split-Path -Parent $script:RunRoot) "outside.json") })) {
+        $failedClosed = $false
+        try {
+            $null = & $invalidPathCase
+        } catch {
+            $failedClosed = $true
+        }
+        if (-not $failedClosed) {
+            throw "Invalid runtime cache path did not fail closed."
+        }
+    }
+
+    $syntheticVulkanCache = Join-Path `
+        ([string]$releaseFirst.NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY) `
+        "gi-000010de-00002560.njvkcache"
+    [System.IO.File]::WriteAllBytes($syntheticVulkanCache, [byte[]]@(1))
+    $syntheticBinaryStore = Join-Path `
+        ([string]$releaseFirst.NJULF_PIPELINE_BINARY_CACHE_DIRECTORY) `
+        "synthetic-global-key"
+    New-Item -ItemType Directory -Path $syntheticBinaryStore | Out-Null
+    $syntheticHealth = [pscustomobject]@{
+        diagnostics = [pscustomobject]@{
+            GiPipelineCacheLoaded = 1
+            GiPipelineCacheRejected = 0
+            GiPipelineCacheSaved = 1
+            GiPipelineCacheLoadedPayloadBytes = 1
+            GiPipelineCacheSavedPayloadBytes = 1
+            GiPipelineCachePath = $syntheticVulkanCache
+            GiPipelineBinaryStorePath = $syntheticBinaryStore
+            GiPipelineCacheStatus =
+                "Compatible cache loaded and refreshed."
+        }
+    }
+    Assert-RuntimeCacheCapture `
+        $syntheticHealth $releaseFirst "Synthetic current cache"
+    $syntheticHealth.diagnostics.GiPipelineCacheSaved = 0
+    $syntheticHealth.diagnostics.GiPipelineCacheSavedPayloadBytes = 0
+    $syntheticHealth.diagnostics.GiPipelineCachePath = Join-Path `
+        ([string]$releaseFirst.NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY) `
+        "gi-000010de-00002561.njvkcache"
+    $syntheticHealth.diagnostics.GiPipelineCacheStatus =
+        "Read-only pipeline cache seed: Compatible cache loaded."
+    Assert-RuntimeCacheCapture `
+        $syntheticHealth $releaseFirst "Synthetic frozen seed cache"
+    $syntheticHealth.diagnostics.GiPipelineCacheStatus =
+        "Compatible cache with stale or legacy provenance loaded and refreshed."
+    $staleFailedClosed = $false
+    try {
+        Assert-RuntimeCacheCapture `
+            $syntheticHealth $releaseFirst "Synthetic stale cache"
+    } catch {
+        $staleFailedClosed = $true
+    }
+    if (-not $staleFailedClosed) {
+        throw "A measured capture admitted stale cache provenance."
     }
 
     $probeScript = Join-Path $caseRoot "environment-probe.ps1"
