@@ -2804,6 +2804,14 @@ namespace Njulf.Rendering.Resources
             (visitedParticipantCount == participantCount ||
              publishedCount != 0u);
 
+        internal static bool CanEstablishLivePropagationAtCoherentRadiometricPublication(
+            uint publishedRadiometricGeneration,
+            uint admittedSourceCohortGeneration,
+            uint currentSourceLightingGeneration) =>
+            currentSourceLightingGeneration != 0u &&
+            publishedRadiometricGeneration == currentSourceLightingGeneration &&
+            admittedSourceCohortGeneration == currentSourceLightingGeneration;
+
         internal static bool ShouldAdvanceResidentSourceEpoch(
             uint admittedSourceProbeCount,
             uint activeParticipantSourceMutationCount) =>
@@ -19358,6 +19366,20 @@ namespace Njulf.Rendering.Resources
             // the command-recorded whole-field publication boundary instead.
             _transportGeneration = AdvanceSourceLightingGeneration(
                 _transportGeneration);
+            if (CanEstablishLivePropagationAtCoherentRadiometricPublication(
+                    _publishedRadiometricGeneration,
+                    _admittedSourceCohortGeneration,
+                    _sourceLightingGeneration))
+            {
+                // The feedback that armed this copy is fence-complete for the
+                // exact current-source cohort. The command-recorded whole-field
+                // flip is therefore a stronger usable-publication witness than
+                // waiting for an unrelated scroll-exposed or relocation retry
+                // to leave SourceRepair. Keep those local repairs as strict tail
+                // blockers, but do not let them hide the coherent field from
+                // receivers or hold the topology freeze indefinitely.
+                MarkTransportLivePropagationBoundary();
+            }
             _coherentRadiometricPublicationCount = SaturatingAdd(
                 _coherentRadiometricPublicationCount,
                 1UL);

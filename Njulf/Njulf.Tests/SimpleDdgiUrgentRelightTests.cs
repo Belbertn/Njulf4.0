@@ -463,6 +463,27 @@ public sealed class SimpleDdgiUrgentRelightTests
                 "_sampledAtlas?.MarkFullSyncRequired();"));
             Assert.That(manager, Does.Contain(
                 "_gpuSchedulerLaneCursorResetPending = true;"));
+            int coherentPublication = manager.IndexOf(
+                "private unsafe void PublishDeferredRadiometricGenerationIfReady(",
+                StringComparison.Ordinal);
+            int nextManagerMethod = manager.IndexOf(
+                "private unsafe void CopyCoherentPublicationBuffer(",
+                coherentPublication,
+                StringComparison.Ordinal);
+            Assert.That(coherentPublication, Is.GreaterThanOrEqualTo(0));
+            Assert.That(nextManagerMethod, Is.GreaterThan(coherentPublication));
+            string coherentPublicationBody = manager.Substring(
+                coherentPublication,
+                nextManagerMethod - coherentPublication);
+            int transportGenerationAdvance = coherentPublicationBody.IndexOf(
+                "_transportGeneration = AdvanceSourceLightingGeneration(",
+                StringComparison.Ordinal);
+            int liveBoundary = coherentPublicationBody.IndexOf(
+                "MarkTransportLivePropagationBoundary();",
+                StringComparison.Ordinal);
+            Assert.That(transportGenerationAdvance, Is.GreaterThanOrEqualTo(0));
+            Assert.That(liveBoundary, Is.GreaterThan(transportGenerationAdvance),
+                "the coherent publication must latch the transport generation it just exposed");
             Assert.That(accelerated, Does.Contain(
                 "if (!deferredRadiometricPublication)"));
             Assert.That(accelerated, Does.Contain(

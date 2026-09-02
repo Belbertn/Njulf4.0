@@ -2006,6 +2006,29 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
+    public void CoherentRadiometricPublication_LatchesOnlyExactCurrentSourceCohort()
+    {
+        static bool CanLatch(uint published, uint admitted, uint current) =>
+            SimpleDdgiVolumeManager
+                .CanEstablishLivePropagationAtCoherentRadiometricPublication(
+                    published,
+                    admitted,
+                    current);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CanLatch(9u, 9u, 9u), Is.True);
+            Assert.That(CanLatch(0u, 0u, 0u), Is.False);
+            Assert.That(CanLatch(8u, 9u, 9u), Is.False,
+                "an older public field cannot authorize the current source generation");
+            Assert.That(CanLatch(9u, 8u, 9u), Is.False,
+                "a source cohort must be admitted before its whole-field copy is live");
+            Assert.That(CanLatch(9u, 9u, 10u), Is.False,
+                "a newer lighting event must retire the preceding publication proof");
+        });
+    }
+
+    [Test]
     public void ViewForwardPlacement_MatchesFlaxCardinalCoverageBias()
     {
         Vector3 direction =
