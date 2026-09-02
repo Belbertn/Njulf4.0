@@ -5594,6 +5594,61 @@ function Copy-RuntimeCacheSeedDirectory {
     $null = Assert-NoLinkedPathComponents $Destination "$Label destination"
 }
 
+function Assert-RuntimeCachePrimeCaptureEvidence {
+    param(
+        $Report,
+        $Health,
+        $Workload,
+        $BuildIdentity,
+        [string]$ExpectedCommit,
+        [string]$ExpectedVulkanRoot,
+        [string]$Label)
+    if ([string]$Report.Kind -cne "njulf-renderer-benchmark" -or
+        [string]$Report.Schema -cne "njulf-renderer-benchmark/v5") {
+        throw "$Label runtime cache prime report kind/schema differs."
+    }
+    if ([int]$Report.MeasurementFrameCount -ne [int]$Workload.measureFrames) {
+        throw "$Label runtime cache prime measurement cardinality differs."
+    }
+    if ([string]$Report.LastDiagnostics.CaptureRun.Commit -cne
+            $ExpectedCommit) {
+        throw "$Label runtime cache prime commit differs."
+    }
+    if ([string]$Report.LastDiagnostics.CaptureRun.ExecutableHash -cne
+            [string]$BuildIdentity.RuntimeExecutableBundleHash) {
+        throw "$Label runtime cache prime executable identity differs."
+    }
+    if ([string]$Health.kind -cne "renderer-health" -or
+        [string]$Health.schema -cne "renderer-health/v3") {
+        throw "$Label runtime cache prime health kind/schema differs."
+    }
+    $diagnostics = $Health.diagnostics
+    if ([int]$diagnostics.GiPipelineCacheLoaded -ne 1 -or
+        [int]$diagnostics.GiPipelineCacheRejected -ne 0 -or
+        [ulong]$diagnostics.GiPipelineCacheLoadedPayloadBytes -eq 0) {
+        throw "$Label runtime cache prime did not load a compatible non-empty cache."
+    }
+    $saved = [int]$diagnostics.GiPipelineCacheSaved
+    $savedBytes = [ulong]$diagnostics.GiPipelineCacheSavedPayloadBytes
+    if ($saved -notin @(0, 1) -or
+        ($saved -eq 0 -and $savedBytes -ne 0) -or
+        ($saved -eq 1 -and $savedBytes -eq 0)) {
+        throw "$Label runtime cache prime save telemetry is incoherent."
+    }
+    $status = [string]$diagnostics.GiPipelineCacheStatus
+    if ($status -cnotin @(
+            "Writable pipeline cache: Compatible cache loaded.",
+            "Compatible cache loaded and refreshed.")) {
+        throw "$Label runtime cache prime provenance is not current (status='$status')."
+    }
+    $pipelineCachePath = [System.IO.Path]::GetFullPath(
+        [string]$diagnostics.GiPipelineCachePath)
+    if (-not (Test-PathContainedBy $pipelineCachePath $ExpectedVulkanRoot) -or
+        -not (Test-Path -LiteralPath $pipelineCachePath -PathType Leaf)) {
+        throw "$Label runtime cache prime path is not the admitted writable cache."
+    }
+}
+
 function Initialize-RuntimeCachePrime {
     param(
         $Manifest,
@@ -5667,35 +5722,11 @@ function Initialize-RuntimeCachePrime {
     $report = Read-BenchmarkReport $reportPath
     $health = Get-Content -LiteralPath $healthPath -Raw |
         ConvertFrom-Json -DateKind String
-    $diagnostics = $health.diagnostics
-    $pipelineCachePath = [System.IO.Path]::GetFullPath(
-        [string]$diagnostics.GiPipelineCachePath)
     $expectedVulkanRoot = [string]
         $runtimeEnvironment.NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY
-    if ([string]$report.Kind -cne "njulf-renderer-benchmark" -or
-        [string]$report.Schema -cne "njulf-renderer-benchmark/v5" -or
-        [int]$report.MeasurementFrameCount -ne [int]$Workload.measureFrames -or
-        [string]$report.LastDiagnostics.CaptureRun.Commit -cne
-            $ExpectedCommit -or
-        [string]$report.LastDiagnostics.CaptureRun.ExecutableHash -cne
-            [string]$BuildIdentity.RuntimeExecutableBundleHash -or
-        [string]$health.kind -cne "renderer-health" -or
-        [string]$health.schema -cne "renderer-health/v3" -or
-        [int]$diagnostics.GiPipelineCacheLoaded -ne 1 -or
-        [int]$diagnostics.GiPipelineCacheRejected -ne 0 -or
-        [ulong]$diagnostics.GiPipelineCacheLoadedPayloadBytes -eq 0 -or
-        [int]$diagnostics.GiPipelineCacheSaved -notin @(0, 1) -or
-        ([int]$diagnostics.GiPipelineCacheSaved -eq 0 -and
-            [ulong]$diagnostics.GiPipelineCacheSavedPayloadBytes -ne 0) -or
-        ([int]$diagnostics.GiPipelineCacheSaved -eq 1 -and
-            [ulong]$diagnostics.GiPipelineCacheSavedPayloadBytes -eq 0) -or
-        [string]$diagnostics.GiPipelineCacheStatus -cnotin @(
-            "Writable pipeline cache: Compatible cache loaded.",
-            "Compatible cache loaded and refreshed.") -or
-        -not (Test-PathContainedBy $pipelineCachePath $expectedVulkanRoot) -or
-        -not (Test-Path -LiteralPath $pipelineCachePath -PathType Leaf)) {
-        throw "$Label runtime cache prime did not publish a current-build cache."
-    }
+    Assert-RuntimeCachePrimeCaptureEvidence `
+        $report $health $Workload $BuildIdentity $ExpectedCommit `
+        $expectedVulkanRoot $Label
 
     $seedRoot = Join-Path $primeRoot "seed"
     New-Item -ItemType Directory -Path $seedRoot | Out-Null

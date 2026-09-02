@@ -2019,7 +2019,9 @@ function Invoke-SyntheticRuntimeCacheIsolationCase {
             "Get-PropertyValue", "Assert-NoLinkedPathComponents",
             "Test-PathContainedBy", "Get-RuntimeCacheRoot",
             "Get-RuntimeCacheEnvironment", "Get-RuntimeCachePrimeRoot",
-            "Get-RuntimeCaptureCacheRoot", "Assert-RuntimeCacheCapture",
+            "Get-RuntimeCaptureCacheRoot",
+            "Assert-RuntimeCachePrimeCaptureEvidence",
+            "Assert-RuntimeCacheCapture",
             "Stop-ProcessTreeAndDrain", "Invoke-ProcessChecked")) {
         $definition = @($driverAst.FindAll({
             param($node)
@@ -2188,6 +2190,29 @@ function Invoke-SyntheticRuntimeCacheIsolationCase {
     }
     Assert-RuntimeCacheCapture `
         $syntheticHealth $releaseFirst "Synthetic current cache"
+    $syntheticPrimeReport = [pscustomobject]@{
+        Kind = "njulf-renderer-benchmark"
+        Schema = "njulf-renderer-benchmark/v5"
+        MeasurementFrameCount = 240
+        LastDiagnostics = [pscustomobject]@{
+            CaptureRun = [pscustomobject]@{
+                Commit = [string]$releaseBuild.BuildCommit
+                ExecutableHash =
+                    [string]$releaseBuild.RuntimeExecutableBundleHash
+            }
+        }
+    }
+    $syntheticPrimeHealth = [pscustomobject]@{
+        kind = "renderer-health"
+        schema = "renderer-health/v3"
+        diagnostics = $syntheticHealth.diagnostics
+    }
+    Assert-RuntimeCachePrimeCaptureEvidence `
+        $syntheticPrimeReport $syntheticPrimeHealth `
+        ([pscustomobject]@{ measureFrames = 240 }) $releaseBuild `
+        ([string]$releaseBuild.BuildCommit) `
+        ([string]$releaseFirst.NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY) `
+        "Synthetic prime evidence"
     $syntheticHealth.diagnostics.GiPipelineCacheSaved = 0
     $syntheticHealth.diagnostics.GiPipelineCacheSavedPayloadBytes = 0
     $syntheticHealth.diagnostics.GiPipelineCachePath = Join-Path `
