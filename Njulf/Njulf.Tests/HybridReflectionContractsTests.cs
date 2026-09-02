@@ -976,51 +976,6 @@ public sealed class HybridReflectionContractsTests
     }
 
     [Test]
-    public void HybridReceiverCacheSplit_MaskedSurvivorsRemainExactFeedbackOwned()
-    {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag")
-            .ReplaceLineEndings("\n");
-        string pass = ReadRepoText("Njulf.Rendering", "Pipeline",
-            "ForwardPlusPass.cs").ReplaceLineEndings("\n");
-        string shaderProject = ReadRepoText(
-            "Njulf.Shaders", "Njulf.Shaders.csproj");
-        int admissionStart = pass.IndexOf(
-            "private bool ShouldUseHybridReflectionReceiverCacheSplit(",
-            StringComparison.Ordinal);
-        int admissionEnd = pass.IndexOf(
-            "private bool ShouldUseProductionForwardGiDisabledPipeline(",
-            admissionStart,
-            StringComparison.Ordinal);
-        Assert.That(admissionStart, Is.GreaterThanOrEqualTo(0));
-        Assert.That(admissionEnd, Is.GreaterThan(admissionStart));
-        string admission = pass[admissionStart..admissionEnd];
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(forward, Does.Contain(
-                "if (!receiverCacheAccepted || receiverCacheExactSurface)\n" +
-                "        discard;"));
-            Assert.That(forward, Does.Contain(
-                "if (receiverCacheAccepted && !receiverCacheExactSurface)\n" +
-                "        discard;"));
-            Assert.That(forward, Does.Contain(
-                "NjulfReceiverCacheExactFallbackLane() ||\n" +
-                "            !receiverCacheAccepted ||"));
-            Assert.That(shaderProject, Does.Contain(
-                "-DFORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY=1 " +
-                "-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1"));
-            Assert.That(shaderProject, Does.Not.Contain(
-                "-DFORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY=1 " +
-                "-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=0"));
-            Assert.That(admission, Does.Not.Contain("MaskedMeshletCount"));
-            Assert.That(admission, Does.Not.Contain(
-                "_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView"));
-            Assert.That(admission, Does.Contain(
-                "_simpleDdgiReflectionFeedbackRequiredForCurrentView"));
-        });
-    }
-
-    [Test]
     public void ShaderSources_ContainStrictFallbackShadingAndDebugContracts()
     {
         string ssr = ReadRepoText("Njulf.Shaders",

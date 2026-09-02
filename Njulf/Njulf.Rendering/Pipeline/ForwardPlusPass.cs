@@ -3994,11 +3994,12 @@ namespace Njulf.Rendering.Pipeline
             Data.SceneRenderingData sceneData,
             in ForwardOpaquePipelineKey pipelineKey)
         {
-            // Masked survivors are routed exclusively to the exact split lane,
-            // which retains their B1 attribution. Ordinary opaque fragments can
-            // therefore keep complementary cache/exact ownership even when the
-            // scene contains masked geometry. Bent-normal and reflection-capture
-            // feedback still require the combined quality path.
+            // Alpha-mask attribution and every bent-normal mode can require
+            // exact normal-dependent work on a cache-accepted fragment, so
+            // they retain the combined quality path. A fully opaque,
+            // bent-normal-off hybrid receiver has complementary cache/exact
+            // ownership and can use two lower-pressure native programs whose
+            // bent-normal mode specializes to zero.
             return _settings.IsPerformanceOptimizationEnabled(
                        PerformanceOptimizationFeature
                            .SplitHybridForwardPrograms) &&
@@ -4006,8 +4007,10 @@ namespace Njulf.Rendering.Pipeline
                        ForwardOpaquePipelineFeatures.ReceiverCache) &&
                    pipelineKey.Has(
                        ForwardOpaquePipelineFeatures.HybridReflectionReceiver) &&
+                   sceneData.MaskedMeshletCount <= 0 &&
                    sceneData.AmbientOcclusionBentNormalMode ==
                        AmbientOcclusionBentNormalMode.Off &&
+                   !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                    !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                    _simpleDdgiReceiverCacheEffectiveMode !=
                        SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark &&

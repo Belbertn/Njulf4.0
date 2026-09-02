@@ -5943,9 +5943,6 @@ void main()
     // Resolve the complementary split before normal and material-extension
     // shading. Coverage and sidedness have already matched the depth-prepass
     // survivor, so discarding here cannot create a coverage disagreement.
-    // Masked survivors stay on the exact lane: that lane owns their exact B1
-    // attribution while the accepted-only program remains free of the
-    // register-heavy structured gather graph.
     ForwardDdgiReceiverCacheAdmission receiverCacheAdmission =
         EvaluateForwardDdgiReceiverCacheAdmission(
             ForwardScreenPixel(),
@@ -5955,23 +5952,19 @@ void main()
             pc.Push);
     bool receiverCacheAccepted =
         ForwardDdgiReceiverCacheAdmissionAccepted(receiverCacheAdmission);
-    bool receiverCacheExactSurface =
-        alphaMode > 0.5 && alphaMode < 1.5;
     RecordForwardDdgiReceiverCacheAdmission(
         pc.Push.CurrentFrameIndex,
         receiverCacheAdmission.Reason);
 #if FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
-    if (!receiverCacheAccepted || receiverCacheExactSurface)
+    if (!receiverCacheAccepted)
         discard;
 #elif FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY
-    if (receiverCacheAccepted && !receiverCacheExactSurface)
+    if (receiverCacheAccepted)
         discard;
 #else
-    if (NjulfReceiverCacheAcceptedLane() &&
-        (!receiverCacheAccepted || receiverCacheExactSurface))
+    if (NjulfReceiverCacheAcceptedLane() && !receiverCacheAccepted)
         discard;
-    if (NjulfReceiverCacheExactFallbackLane() && receiverCacheAccepted &&
-        !receiverCacheExactSurface)
+    if (NjulfReceiverCacheExactFallbackLane() && receiverCacheAccepted)
         discard;
 #endif
 #endif
@@ -6681,7 +6674,6 @@ void main()
             }
         }
         bool exactGatherRequired =
-            NjulfReceiverCacheExactFallbackLane() ||
             !receiverCacheAccepted ||
             !receiverCompactDirectionalResolved ||
             (ForwardAmbientOcclusionBentNormalMode() == 2u &&
@@ -7108,8 +7100,7 @@ void main()
 
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE && \
     !FORWARD_DDGI_RECEIVER_CACHE_ACCEPTED_ONLY
-    if ((NjulfReceiverCacheExactFallbackLane() ||
-         !receiverCacheAccepted ||
+    if ((!receiverCacheAccepted ||
          (ForwardAmbientOcclusionBentNormalMode() != 0u &&
           bentNormalValid)) &&
         environment.Enabled != 0u)

@@ -951,13 +951,9 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain(
                     "NJULF_PERFORMANCE_SPLIT_HYBRID_FORWARD"));
                 Assert.That(forward, Does.Contain(
-                    "if (NjulfReceiverCacheAcceptedLane() &&"));
+                    "if (NjulfReceiverCacheAcceptedLane() && !receiverCacheAccepted)"));
                 Assert.That(forward, Does.Contain(
-                    "(!receiverCacheAccepted || receiverCacheExactSurface))"));
-                Assert.That(forward, Does.Contain(
-                    "if (NjulfReceiverCacheExactFallbackLane() && receiverCacheAccepted &&"));
-                Assert.That(forward, Does.Contain(
-                    "!receiverCacheExactSurface)"));
+                    "if (NjulfReceiverCacheExactFallbackLane() && receiverCacheAccepted)"));
                 Assert.That(forward, Does.Contain(
                     "if (!NjulfReceiverCacheAcceptedLane())"));
                 Assert.That(forward, Does.Contain(

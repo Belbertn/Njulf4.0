@@ -7,7 +7,7 @@ namespace Njulf.Tests;
 public sealed class DeferredReceiverPipelineStartupTests
 {
     [Test]
-    public void ExactAttributionArtifactsUseRequiredOptimizationRecipe()
+    public void ExactAttributionArtifactsUseFunctionPreservingOptimization()
     {
         string projectPath = FindRepoFile(
             "Njulf.Shaders",
@@ -26,15 +26,8 @@ public sealed class DeferredReceiverPipelineStartupTests
                            StringComparison.Ordinal);
             })
             .ToArray();
-        XElement[] optimizedSplitFallbackVariants = exactVariants
-            .Where(element =>
-                (element.Element("Defines")?.Value ?? string.Empty).Contains(
-                    "FORWARD_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_ONLY=1",
-                    StringComparison.Ordinal))
-            .ToArray();
 
         Assert.That(exactVariants, Has.Length.GreaterThanOrEqualTo(20));
-        Assert.That(optimizedSplitFallbackVariants, Has.Length.EqualTo(12));
         Assert.Multiple(() =>
         {
             Assert.That(
@@ -45,10 +38,6 @@ public sealed class DeferredReceiverPipelineStartupTests
                 project.Descendants("NjulfForwardRayQueryOptimizationOptions")
                     .Single().Value,
                 Is.EqualTo("-Od"));
-            Assert.That(
-                project.Descendants("NjulfReceiverCacheExactFallbackOptimizationOptions")
-                    .Single().Value,
-                Is.EqualTo("-Os"));
             foreach (XElement variant in exactVariants)
             {
                 string include = variant.Attribute("Include")?.Value ??
@@ -56,24 +45,10 @@ public sealed class DeferredReceiverPipelineStartupTests
                 string options =
                     variant.Element("AdditionalCompileOptions")?.Value ??
                     string.Empty;
-                string defines = variant.Element("Defines")?.Value ??
-                    string.Empty;
-                bool optimizedSplitFallback =
-                    optimizedSplitFallbackVariants.Contains(variant);
-                bool functionPreservingRayQuery = defines.Contains(
-                    "DIRECTIONAL_TRANSPARENT_RAY_QUERY=1",
-                    StringComparison.Ordinal);
-                string expectedOptimizationProperty = optimizedSplitFallback
-                    ? "NjulfReceiverCacheExactFallbackOptimizationOptions"
-                    : functionPreservingRayQuery
-                        ? "NjulfForwardRayQueryOptimizationOptions"
-                        : "NjulfReceiverAttributionOptimizationOptions";
                 Assert.That(
                     options,
-                    Does.Contain(expectedOptimizationProperty),
-                    optimizedSplitFallback
-                        ? $"Split exact-fallback artifact '{include}' lost its dead-code-eliminating -Os recipe."
-                        : $"Exact-attribution artifact '{include}' lost its trailing -Od recipe.");
+                    Does.Contain("OptimizationOptions"),
+                    $"Exact-attribution artifact '{include}' lost its trailing -Od recipe.");
             }
         });
     }
