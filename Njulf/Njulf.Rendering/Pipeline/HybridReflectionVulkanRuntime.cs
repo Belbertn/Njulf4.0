@@ -63,6 +63,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     private readonly object _initializationGate = new();
     private readonly HybridReflectionBudgetController _budgetController =
         new();
+    private int _completedBudgetSamplesToSkip;
 
     private nint _entryPointName;
     private DescriptorSetLayout _localSetLayout;
@@ -232,8 +233,15 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         _budgetController.Current;
 
     public HybridReflectionBudgetDecision ObserveCompletedBudgetSample(
-        in HybridReflectionBudgetSample sample) =>
-        _budgetController.Observe(sample);
+        in HybridReflectionBudgetSample sample)
+    {
+        if (_completedBudgetSamplesToSkip > 0)
+        {
+            _completedBudgetSamplesToSkip--;
+            return _budgetController.Current;
+        }
+        return _budgetController.Observe(sample);
+    }
 
     public void Initialize()
     {
@@ -570,6 +578,15 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         _historyValid = false;
         _preparedFrameSerial = ulong.MaxValue;
         _preparedTemporalSample = uint.MaxValue;
+    }
+
+    public void SynchronizeDeterministicCapturePhase()
+    {
+        InvalidateHistory();
+        _budgetController.Reset();
+        // Completed timestamp/counter samples lag the current frame. Do not
+        // seed the canonical quality route with pre-synchronization feedback.
+        _completedBudgetSamplesToSkip = RenderingConstants.FramesInFlight;
     }
 
     public bool ShouldTraceRays(SceneRenderingData sceneData) =>

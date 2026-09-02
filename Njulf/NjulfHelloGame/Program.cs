@@ -1195,6 +1195,7 @@ internal sealed class HelloGame : Game
                     _smokeOptions.BenchmarkQualitySequence,
                     _smokeOptions.PerformanceScenario,
                     Exit,
+                    renderer.RequestDeterministicCapturePhaseSynchronization,
                     () => SampleRenderSettingsFingerprint.Capture(
                         renderer.Settings),
                     (outputPath, captureToken) =>

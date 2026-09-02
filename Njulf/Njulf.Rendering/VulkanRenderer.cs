@@ -345,6 +345,7 @@ namespace Njulf.Rendering
         private uint _allocatorFrameIndex;
         private uint _temporalSampleIndex;
         private ulong _ddgiFrameSerial;
+        private bool _deterministicCapturePhaseSynchronizationPending;
 
         private readonly ulong[] _submittedGraphicsFrameFenceValues =
             new ulong[FramesInFlight];
@@ -1062,6 +1063,16 @@ namespace Njulf.Rendering
         {
             _lifetime.ThrowIfDisposalStarted();
             return _linearHdrCaptureService.GetResult(outputPath);
+        }
+
+        /// <summary>
+        /// Queues a quality-tooling-only synchronization for the next successful
+        /// full-quality frame. The current submission is left untouched.
+        /// </summary>
+        public void RequestDeterministicCapturePhaseSynchronization()
+        {
+            _lifetime.ThrowIfDisposalStarted();
+            _deterministicCapturePhaseSynchronizationPending = true;
         }
 
         /// <summary>
@@ -3309,6 +3320,7 @@ namespace Njulf.Rendering
                 return BeginProgressiveFrame();
             }
             _productionFrameWasFullQuality = true;
+            ApplyDeterministicCapturePhaseSynchronization();
 
             if (_lifetime.SwapchainRecreationRequested)
             {
@@ -3618,6 +3630,18 @@ namespace Njulf.Rendering
                 gpuTimingRequested);
 
             return true;
+        }
+
+        private void ApplyDeterministicCapturePhaseSynchronization()
+        {
+            if (!_deterministicCapturePhaseSynchronizationPending)
+                return;
+
+            _deterministicCapturePhaseSynchronizationPending = false;
+            _temporalSampleIndex = 0u;
+            _hybridReflectionRuntime?.SynchronizeDeterministicCapturePhase();
+            _automaticPlanarReflectionManager?
+                .RequestDeterministicCapturePhaseReset();
         }
 
         void IRendererFramePacingDiagnostics.ReportFramePacing(

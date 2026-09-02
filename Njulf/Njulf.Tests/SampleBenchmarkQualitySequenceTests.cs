@@ -304,6 +304,7 @@ public sealed class SampleBenchmarkQualitySequenceTests
     public void ClosedRouteWarmup_ArmsAtExactLastWarmupFrame()
     {
         string directory = CreateTemporaryDirectory();
+        int capturePhaseSynchronizations = 0;
         try
         {
             SampleBenchmarkQualitySequenceOptions options = CreateOptions(
@@ -314,6 +315,7 @@ public sealed class SampleBenchmarkQualitySequenceTests
                 options,
                 SamplePerformanceScenario.Normal,
                 () => { },
+                () => capturePhaseSynchronizations++,
                 () => HashA,
                 (_, _) => true,
                 path => new LinearHdrCaptureResult(
@@ -331,6 +333,7 @@ public sealed class SampleBenchmarkQualitySequenceTests
             Assert.Multiple(() =>
             {
                 Assert.That(runner.RouteStarted, Is.True);
+                Assert.That(capturePhaseSynchronizations, Is.EqualTo(1));
                 Assert.That(
                     runner.ResolveTrajectoryFrameIndexForNextRender(
                         SampleBistroQualityCaptureContract.LoopFrameCount),
@@ -361,6 +364,7 @@ public sealed class SampleBenchmarkQualitySequenceTests
                 options,
                 SamplePerformanceScenario.Normal,
                 () => exits++,
+                () => { },
                 () => HashA,
                 (path, token) =>
                 {
@@ -449,6 +453,7 @@ public sealed class SampleBenchmarkQualitySequenceTests
                 options,
                 SamplePerformanceScenario.Normal,
                 () => { },
+                () => { },
                 () => HashA,
                 (path, token) =>
                 {
@@ -502,6 +507,7 @@ public sealed class SampleBenchmarkQualitySequenceTests
             var runner = new SampleBenchmarkQualitySequenceRunner(
                 options,
                 SamplePerformanceScenario.Normal,
+                () => { },
                 () => { },
                 () => settingsFingerprint,
                 (path, token) =>
@@ -572,6 +578,7 @@ public sealed class SampleBenchmarkQualitySequenceTests
                 options,
                 SamplePerformanceScenario.Normal,
                 () => exits++,
+                () => { },
                 () => HashA,
                 (path, token) =>
                 {

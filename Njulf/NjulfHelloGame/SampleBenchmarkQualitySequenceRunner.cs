@@ -44,6 +44,7 @@ public sealed class SampleBenchmarkQualitySequenceRunner
     private readonly SampleBenchmarkQualitySequenceOptions _options;
     private readonly SamplePerformanceScenario _scenario;
     private readonly Action _exit;
+    private readonly Action _synchronizeCapturePhase;
     private readonly Func<string> _getSettingsFingerprint;
     private readonly Func<string, string, bool> _requestLinearHdrCapture;
     private readonly Func<string, LinearHdrCaptureResult> _getLinearHdrCaptureResult;
@@ -76,6 +77,7 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         SampleBenchmarkQualitySequenceOptions options,
         SamplePerformanceScenario scenario,
         Action exit,
+        Action synchronizeCapturePhase,
         Func<string> getSettingsFingerprint,
         Func<string, string, bool> requestLinearHdrCapture,
         Func<string, LinearHdrCaptureResult> getLinearHdrCaptureResult)
@@ -83,6 +85,8 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _scenario = scenario;
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
+        _synchronizeCapturePhase = synchronizeCapturePhase ??
+            throw new ArgumentNullException(nameof(synchronizeCapturePhase));
         _getSettingsFingerprint = getSettingsFingerprint ??
             throw new ArgumentNullException(nameof(getSettingsFingerprint));
         _requestLinearHdrCapture = requestLinearHdrCapture ??
@@ -575,6 +579,18 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                 "frozen stationary camera");
             _frozenStationaryCamera = diagnostics.CaptureCamera;
         }
+        try
+        {
+            _synchronizeCapturePhase();
+        }
+        catch (Exception exception)
+        {
+            RecordFailure(
+                "Quality capture-phase synchronization failed: " +
+                $"{exception.GetType().Name}: {exception.Message}");
+            Finish();
+            return;
+        }
         _activationObserver.BeginMeasurement(diagnostics);
         _routeStarted = true;
     }
@@ -649,6 +665,28 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         int routeFrame,
         RendererDiagnostics diagnostics)
     {
+        if (routeFrame == 0)
+        {
+            if (diagnostics.TemporalSampleIndex != 0u)
+            {
+                throw new InvalidDataException(
+                    "Quality route frame zero did not start at temporal sample zero.");
+            }
+            if (diagnostics.AutomaticPlanarReflectionActive != 0 &&
+                diagnostics.AutomaticPlanarCaptureCount <= 0)
+            {
+                throw new InvalidDataException(
+                    "Quality route frame zero reused an automatic planar capture " +
+                    "instead of publishing the synchronized bank-zero capture.");
+            }
+            if (diagnostics.HybridReflectionPassEnabled != 0 &&
+                diagnostics.HybridReflectionHistoryValid != 0)
+            {
+                throw new InvalidDataException(
+                    "Quality route frame zero retained pre-synchronization hybrid " +
+                    "reflection history.");
+            }
+        }
         if (_options.Trajectory == SampleBenchmarkTrajectoryKind.Stationary)
         {
             RequireCameraEqual(

@@ -85,6 +85,7 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
     private ulong _lastSceneMutationSerial;
     private uint _captureGeneration;
     private int _metadataBankHighWaterMark;
+    private bool _deterministicCapturePhaseResetPending;
     private bool _disposed;
 
     public AutomaticPlanarReflectionManager(
@@ -152,6 +153,17 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         _resources.Aggregate(
             _bufferManager.GetBufferAllocationSize(_metadataBuffer),
             static (total, resource) => total + resource.AllocationBytes));
+
+    /// <summary>
+    /// Canonicalizes the next prepared capture without touching resources that
+    /// may still be referenced by the current submission. Quality tooling calls
+    /// this after Draw; the reset is consumed by the following frame.
+    /// </summary>
+    public void RequestDeterministicCapturePhaseReset()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _deterministicCapturePhaseResetPending = true;
+    }
 
     /// <summary>
     /// Consumes the workload previously submitted through this frame slot
@@ -254,6 +266,15 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentNullException.ThrowIfNull(sceneData);
         _prepared.Clear();
+        if (_deterministicCapturePhaseResetPending)
+        {
+            // Invalidating the CPU publication state forces a complete capture
+            // into bank zero. The old images remain alive until overwritten by
+            // the next command buffer, so in-flight readers are unaffected.
+            Array.Clear(_slotStates);
+            _lastSelectionSignature = 0UL;
+            _deterministicCapturePhaseResetPending = false;
+        }
 
         bool requested = sceneData.EffectiveReflectionMode is
             ReflectionMode.StaticProbesAndPlanar or
