@@ -347,6 +347,83 @@ public sealed class SampleBenchmarkQualitySequenceTests
     }
 
     [Test]
+    public void MovingWarmup_HoldsFrameZeroUntilPersistentPriorIsApplied()
+    {
+        string directory = CreateTemporaryDirectory();
+        int capturePhaseSynchronizations = 0;
+        try
+        {
+            SampleBenchmarkQualitySequenceOptions options = CreateOptions(
+                directory,
+                SampleBenchmarkTrajectoryKind.BistroLoop,
+                SampleBistroQualityCaptureContract.LoopFrameCount);
+            var runner = new SampleBenchmarkQualitySequenceRunner(
+                options,
+                SamplePerformanceScenario.Normal,
+                () => { },
+                () => capturePhaseSynchronizations++,
+                () => HashA,
+                (_, _) => true,
+                path => new LinearHdrCaptureResult(
+                    path,
+                    LinearHdrCaptureState.Queued,
+                    string.Empty));
+            SimpleDdgiWarmStartTelemetry pending = WarmStartTelemetry(
+                loadPending: true,
+                priorActive: false);
+            SimpleDdgiWarmStartTelemetry applied = WarmStartTelemetry(
+                loadPending: false,
+                priorActive: true);
+
+            for (int frame = 0; frame < 3; frame++)
+            {
+                Assert.That(
+                    runner.ResolveTrajectoryFrameIndexForNextRender(frame),
+                    Is.Zero);
+                runner.OnFrameRendered(
+                    frame,
+                    ReadyDiagnostics(frame, warmStart: pending));
+            }
+
+            Assert.That(
+                runner.ResolveTrajectoryFrameIndexForNextRender(3),
+                Is.Zero);
+            runner.OnFrameRendered(
+                3,
+                ReadyDiagnostics(3, warmStart: applied));
+
+            int lastWarmupFrame = 3 +
+                SampleBistroQualityCaptureContract.LoopFrameCount - 1;
+            for (int absoluteFrame = 4;
+                 absoluteFrame <= lastWarmupFrame;
+                 absoluteFrame++)
+            {
+                Assert.That(
+                    runner.ResolveTrajectoryFrameIndexForNextRender(
+                        absoluteFrame),
+                    Is.EqualTo(absoluteFrame - 3));
+                runner.OnFrameRendered(
+                    absoluteFrame,
+                    ReadyDiagnostics(absoluteFrame, warmStart: applied));
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(runner.RouteStarted, Is.True);
+                Assert.That(capturePhaseSynchronizations, Is.EqualTo(1));
+                Assert.That(
+                    runner.ResolveTrajectoryFrameIndexForNextRender(
+                        lastWarmupFrame + 1),
+                    Is.Zero);
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
     public void StationarySequence_AllowsOwningFrameQueuedThenCompletesOnHeldFrame()
     {
         string directory = CreateTemporaryDirectory();
@@ -764,7 +841,8 @@ public sealed class SampleBenchmarkQualitySequenceTests
         int hybridReflectionPassEnabled = 0,
         int hybridReflectionHistoryValid = 0,
         int automaticPlanarReflectionActive = 0,
-        int automaticPlanarCaptureCount = 0)
+        int automaticPlanarCaptureCount = 0,
+        SimpleDdgiWarmStartTelemetry? warmStart = null)
     {
         SampleBenchmarkCameraPose resolvedPose = pose ?? LivePose();
         PerformanceCaptureCameraMetadata camera = new(
@@ -816,9 +894,35 @@ public sealed class SampleBenchmarkQualitySequenceTests
             HybridReflectionPassEnabled = hybridReflectionPassEnabled,
             HybridReflectionHistoryValid = hybridReflectionHistoryValid,
             AutomaticPlanarReflectionActive = automaticPlanarReflectionActive,
-            AutomaticPlanarCaptureCount = automaticPlanarCaptureCount
+            AutomaticPlanarCaptureCount = automaticPlanarCaptureCount,
+            SimpleDdgiWarmStart = warmStart ??
+                SimpleDdgiWarmStartTelemetry.Disabled("test")
         };
     }
+
+    private static SimpleDdgiWarmStartTelemetry WarmStartTelemetry(
+        bool loadPending,
+        bool priorActive) => new(
+        Enabled: true,
+        Eligible: true,
+        LoadPending: loadPending,
+        CacheFound: !loadPending,
+        CacheAccepted: !loadPending,
+        PriorActive: priorActive,
+        ReadbackPending: false,
+        SavePending: false,
+        CachedVolumeCount: loadPending ? 0 : 2,
+        CachedProbeCount: loadPending ? 0 : 4_392,
+        AppliedProbeCount: priorActive ? 3_616 : 0,
+        LoadedFileBytes: loadPending ? 0UL : 4_430_455UL,
+        SavedFileBytes: 0UL,
+        ReadbackBytes: 0UL,
+        LoadCount: loadPending ? 0UL : 1UL,
+        RejectCount: 0UL,
+        ApplyCount: priorActive ? 1UL : 0UL,
+        SaveCount: 0UL,
+        CachePath: "test.njwarm",
+        Status: loadPending ? "loading" : "applied");
 
     private static SampleBenchmarkCameraPose LivePose() => new(
         "test-live",

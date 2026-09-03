@@ -66,6 +66,7 @@ public sealed class SampleBenchmarkQualitySequenceRunner
     private PerformanceCaptureCameraMetadata? _frozenStationaryCamera;
     private int _additionalSettlingFrameCount;
     private int _consecutiveReadyFrameCount;
+    private int _movingWarmupFirstAbsoluteFrameIndex = -1;
     private int _readbackDrainFrameCount;
     private bool _routeStarted;
     private bool _settlingWaitTimedOut;
@@ -277,9 +278,19 @@ public sealed class SampleBenchmarkQualitySequenceRunner
     {
         if (!_routeStarted)
         {
+            int warmupFrameIndex =
+                SampleBenchmarkTrajectory.IsMoving(_options.Trajectory) &&
+                _movingWarmupFirstAbsoluteFrameIndex >= 0
+                    ? Math.Max(
+                        0,
+                        absoluteFrameIndex -
+                        _movingWarmupFirstAbsoluteFrameIndex)
+                    : SampleBenchmarkTrajectory.IsMoving(_options.Trajectory)
+                        ? 0
+                        : absoluteFrameIndex;
             return SampleBenchmarkTrajectory.GetWarmupFrameIndex(
                 _options.Trajectory,
-                absoluteFrameIndex);
+                warmupFrameIndex);
         }
         return Math.Min(
             _routeFramesRendered,
@@ -513,21 +524,57 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         int absoluteFrameIndex,
         RendererDiagnostics diagnostics)
     {
-        _consecutiveReadyFrameCount =
-            SampleBenchmarkRunner.IsReadyForMeasurement(
-                    diagnostics,
-                    _options.Trajectory)
+        bool rendererReady = SampleBenchmarkRunner.IsReadyForMeasurement(
+            diagnostics,
+            _options.Trajectory);
+        if (SampleBenchmarkTrajectory.IsMoving(_options.Trajectory) &&
+            _movingWarmupFirstAbsoluteFrameIndex < 0)
+        {
+            if (!rendererReady ||
+                !IsWarmStartReadyForDeterministicMovingWarmup(diagnostics))
+            {
+                _consecutiveReadyFrameCount = 0;
+                if (_additionalSettlingFrameCount <
+                    _options.MaximumAdditionalSettlingFrameCount)
+                {
+                    _additionalSettlingFrameCount++;
+                    return;
+                }
+
+                _settlingWaitTimedOut = true;
+                RecordFailure(
+                    "Quality sequence did not reach a deterministic moving " +
+                    "warmup boundary within " +
+                    $"{_options.MaximumAdditionalSettlingFrameCount} additional frames.");
+                Finish();
+                return;
+            }
+
+            // The frame whose post-Draw diagnostics first prove that the
+            // renderer and persistent DDGI prior are ready was rendered at
+            // authored route frame zero. Count it as warmup frame zero, then
+            // run the complete requested warmup from this deterministic
+            // boundary. This prevents asynchronous cache-load timing from
+            // selecting a different camera-relative probe overlap per process.
+            _movingWarmupFirstAbsoluteFrameIndex = absoluteFrameIndex;
+        }
+
+        _consecutiveReadyFrameCount = rendererReady
                 ? Math.Min(
                     RequiredConsecutiveReadyFrameCount,
                     _consecutiveReadyFrameCount + 1)
                 : 0;
-        if (absoluteFrameIndex < _options.WarmupFrameCount)
+        int warmupFrameIndex =
+            SampleBenchmarkTrajectory.IsMoving(_options.Trajectory)
+                ? absoluteFrameIndex - _movingWarmupFirstAbsoluteFrameIndex
+                : absoluteFrameIndex;
+        if (warmupFrameIndex < _options.WarmupFrameCount)
         {
-            if (absoluteFrameIndex == _options.WarmupFrameCount - 1 &&
+            if (warmupFrameIndex == _options.WarmupFrameCount - 1 &&
                 _consecutiveReadyFrameCount >= RequiredConsecutiveReadyFrameCount &&
                 SampleBenchmarkTrajectory.CanStartMeasurementAfterFrame(
                     _options.Trajectory,
-                    absoluteFrameIndex))
+                    warmupFrameIndex))
             {
                 ArmRoute(diagnostics);
             }
@@ -552,7 +599,7 @@ public sealed class SampleBenchmarkQualitySequenceRunner
 
         if (!SampleBenchmarkTrajectory.CanStartMeasurementAfterFrame(
                 _options.Trajectory,
-                absoluteFrameIndex))
+                warmupFrameIndex))
         {
             if (_additionalSettlingFrameCount <
                 _options.MaximumAdditionalSettlingFrameCount)
@@ -571,6 +618,25 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         // Arm route frame zero for the next Update. No readback is requested
         // from this warmup/alignment frame.
         ArmRoute(diagnostics);
+    }
+
+    private static bool IsWarmStartReadyForDeterministicMovingWarmup(
+        RendererDiagnostics diagnostics)
+    {
+        SimpleDdgiWarmStartTelemetry warmStart =
+            diagnostics.SimpleDdgiWarmStart;
+        if (!warmStart.Enabled)
+            return true;
+
+        if (!warmStart.Eligible || warmStart.LoadPending)
+            return false;
+
+        // A missing or rejected prior deterministically falls back to live
+        // convergence. An accepted prior must already own the current volume
+        // generation before the moving camera is allowed to leave frame zero.
+        return !warmStart.CacheFound ||
+            !warmStart.CacheAccepted ||
+            (warmStart.PriorActive && warmStart.ApplyCount > 0UL);
     }
 
     private void ArmRoute(RendererDiagnostics diagnostics)
