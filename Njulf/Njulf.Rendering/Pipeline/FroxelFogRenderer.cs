@@ -28,6 +28,8 @@ namespace Njulf.Rendering.Pipeline;
 internal sealed unsafe class FroxelFogRenderer : IDisposable
 {
     private const ulong L2RecordBytes = 64UL;
+    private const int SourceCullPipelineIndex = 1;
+    private const int SourceDispatchPipelineIndex = 12;
     private static readonly ulong DiagnosticBytes = checked(
         (ulong)Marshal.SizeOf<GPUVolumetricFogDiagnostics>());
     private const string EntryPoint = "main";
@@ -45,7 +47,8 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
         "froxel_temporal.comp.spv",
         "froxel_integrate.comp.spv",
         "froxel_resolve.comp.spv",
-        "froxel_composite.comp.spv"
+        "froxel_composite.comp.spv",
+        "froxel_source_dispatch.comp.spv"
     ];
     private static readonly string[] StageTimingNames =
     [
@@ -60,7 +63,8 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
         "Fog.Temporal",
         "Fog.Integrate",
         "Fog.Resolve",
-        "Fog.Composite"
+        "Fog.Composite",
+        "Fog.SourceDispatch"
     ];
     // Fine-grained bottom-of-pipe timestamp writes can serialize this many compute dispatches on
     // some Vulkan drivers. Keep the scopes available for focused diagnostics, while RenderDoc
@@ -323,8 +327,8 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
             _previousDdgiOwnershipGeneration = _ddgi.PhysicalOwnershipGeneration;
         }
 
-        Record(commandBuffer, frameIndex, sceneData, localVolumeCount,
-            multipleScatteringIterations, flags, timestamps,
+        Record(commandBuffer, frameIndex, multipleScatteringIterations,
+            flags, timestamps,
             timestampComputeQueue);
 
         _previousViewProjection = sceneData.ViewProjectionMatrix;
@@ -414,7 +418,8 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
         ulong volumeBytes = checked(Math.Max(1UL,
             (ulong)profile.MaximumLocalVolumes *
             (ulong)Marshal.SizeOf<GPUVolumetricDensityVolume>()));
-        ulong countBytes = checked((layout.ClusterCount + 1UL) * sizeof(uint));
+        ulong countBytes = FroxelSourceDispatchLayout.BufferByteSize(
+            layout.ClusterCount);
         ulong referenceBytes = checked(layout.ClusterCount *
             profile.ClusterReferenceCapacity * sizeof(uint));
         for (int frame = 0; frame < RenderingConstants.FramesInFlight; frame++)
@@ -424,7 +429,7 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
             _volumeBuffers[frame] = CreateMappedBuffer(volumeBytes,
                 $"Froxel Local Volumes {frame}");
             _clusterCountBuffers[frame] = CreateDeviceBuffer(countBytes,
-                $"Froxel Cluster Counts {frame}");
+                $"Froxel Cluster Counts {frame}", indirect: true);
             _clusterReferenceBuffers[frame] = CreateDeviceBuffer(referenceBytes,
                 $"Froxel Cluster References {frame}");
             _diagnosticBuffers[frame] = CreateDeviceBuffer(DiagnosticBytes,
@@ -520,12 +525,14 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
     private BufferHandle CreateDeviceBuffer(
         ulong bytes,
         string name,
-        bool transferSource = false) =>
+        bool transferSource = false,
+        bool indirect = false) =>
         _bufferManager.CreateBuffer(
             bytes,
             BufferUsageFlags.StorageBufferBit |
                 BufferUsageFlags.TransferDstBit |
-                (transferSource ? BufferUsageFlags.TransferSrcBit : 0),
+                (transferSource ? BufferUsageFlags.TransferSrcBit : 0) |
+                (indirect ? BufferUsageFlags.IndirectBufferBit : 0),
             MemoryUsage.AutoPreferDevice,
             default,
             name,
@@ -708,8 +715,6 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
     private void Record(
         CommandBuffer commandBuffer,
         int frameIndex,
-        SceneRenderingData sceneData,
-        int localVolumeCount,
         int multipleScatteringIterations,
         uint flags,
         GpuTimestampRecorder? timestamps,
@@ -757,17 +762,16 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
             _noiseInitialized = true;
         }
 
-        ResolveParticleSourceCounts(sceneData, _profile,
-            out uint cpuParticles, out uint gpuCapacity);
-        uint sourceCount = checked((uint)localVolumeCount + cpuParticles + gpuCapacity);
-        if (sourceCount > 0u)
-        {
-            uint sourceGroupX = Math.Min(sourceCount, 65_535u);
-            uint sourceGroupY = DivideRoundUp(sourceCount, sourceGroupX);
-            Dispatch(commandBuffer, 1, sourceGroupX, sourceGroupY, 1u,
-                frameIndex, flags);
-            RecordComputeBarrier(commandBuffer);
-        }
+        Dispatch(commandBuffer, SourceDispatchPipelineIndex,
+            1u, 1u, 1u, frameIndex, flags);
+        RecordSourceDispatchBarrier(commandBuffer, frameIndex);
+        DispatchIndirect(commandBuffer, SourceCullPipelineIndex,
+            _bufferManager.GetBuffer(_clusterCountBuffers[frameIndex]),
+            FroxelSourceDispatchLayout.CommandOffsetBytes(
+                _layout.ClusterCount),
+            frameIndex,
+            flags);
+        RecordComputeBarrier(commandBuffer);
 
         DispatchGrid(commandBuffer, 2, 4u, 4u, 4u, frameIndex, flags);
         RecordComputeBarrier(commandBuffer);
@@ -1051,6 +1055,55 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
                 checked((uint)Marshal.SizeOf<GPUVolumetricFogPushConstants>()),
                 &push);
             _context.Api.CmdDispatch(commandBuffer, groupX, groupY, groupZ);
+        }
+        finally
+        {
+            _context.EndDebugLabel(commandBuffer);
+            if (timestampStarted)
+                _activeTimestamps!.EndPass(
+                    commandBuffer, _activeTimestampFrameIndex);
+        }
+    }
+
+    private void DispatchIndirect(
+        CommandBuffer commandBuffer,
+        int pipelineIndex,
+        VkBuffer indirectBuffer,
+        ulong indirectOffset,
+        int frameIndex,
+        uint flags)
+    {
+        string timingName = StageTimingNames[pipelineIndex];
+        bool timestampStarted = StageGpuTimestampsEnabled &&
+            _activeTimestamps is not null;
+        if (timestampStarted)
+        {
+            if (_activeTimestampComputeQueue)
+                _activeTimestamps!.BeginComputePass(
+                    commandBuffer, _activeTimestampFrameIndex, timingName);
+            else
+                _activeTimestamps!.BeginPass(
+                    commandBuffer, _activeTimestampFrameIndex, timingName);
+        }
+        _context.BeginDebugLabel(commandBuffer, timingName);
+        try
+        {
+            _context.Api.CmdBindPipeline(commandBuffer,
+                PipelineBindPoint.Compute, _pipelines[pipelineIndex]);
+            var push = new GPUVolumetricFogPushConstants
+            {
+                FrameIndex = checked((uint)frameIndex),
+                Stage = checked((uint)pipelineIndex),
+                HistoryReadBank = checked((uint)(1 - frameIndex)),
+                HistoryWriteBank = checked((uint)frameIndex),
+                Flags = flags
+            };
+            _context.Api.CmdPushConstants(commandBuffer, _pipelineLayout,
+                ShaderStageFlags.ComputeBit, 0u,
+                checked((uint)Marshal.SizeOf<GPUVolumetricFogPushConstants>()),
+                &push);
+            _context.Api.CmdDispatchIndirect(
+                commandBuffer, indirectBuffer, indirectOffset);
         }
         finally
         {
@@ -1506,6 +1559,22 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
             PMemoryBarriers = &barrier
         };
         _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
+    }
+
+    private void RecordSourceDispatchBarrier(
+        CommandBuffer commandBuffer,
+        int frameIndex)
+    {
+        BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
+            _bufferManager.GetBuffer(_clusterCountBuffers[frameIndex]),
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.DrawIndirectBit,
+            AccessFlags2.IndirectCommandReadBit,
+            FroxelSourceDispatchLayout.CommandOffsetBytes(
+                _layout.ClusterCount),
+            FroxelSourceDispatchLayout.DispatchCommandByteSize);
+        RecordBufferBarrier(commandBuffer, barrier);
     }
 
     private static uint DivideRoundUp(uint value, uint divisor) =>

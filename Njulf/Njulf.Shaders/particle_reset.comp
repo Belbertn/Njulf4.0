@@ -41,6 +41,42 @@ void ResetDrawCommand(uint drawBufferIndex, uint drawIndex)
     WriteStorageWord(drawBufferIndex, baseWord + 3u, 0u);
 }
 
+void ResetDispatchCommand(uint indirectBufferIndex, uint baseWord)
+{
+    WriteStorageWord(indirectBufferIndex, baseWord + 0u, 0u);
+    WriteStorageWord(indirectBufferIndex, baseWord + 1u, 1u);
+    WriteStorageWord(indirectBufferIndex, baseWord + 2u, 1u);
+    WriteStorageWord(indirectBufferIndex, baseWord + 3u, 0u);
+}
+
+void ResetIndirectState(uint indirectBufferIndex)
+{
+    for (uint word = GPU_PARTICLE_INDIRECT_ACTIVE_LIST_WORD;
+         word < GPU_PARTICLE_INDIRECT_TOTAL_WORD_COUNT;
+         ++word)
+    {
+        WriteStorageWord(indirectBufferIndex, word, 0u);
+    }
+
+    ResetDispatchCommand(
+        indirectBufferIndex,
+        GPU_PARTICLE_INDIRECT_UPDATE_DISPATCH_WORD);
+    ResetDispatchCommand(
+        indirectBufferIndex,
+        GPU_PARTICLE_INDIRECT_EMIT_DISPATCH_WORD);
+    for (uint ordinal = 0u; ordinal < 3u; ++ordinal)
+    {
+        ResetDispatchCommand(
+            indirectBufferIndex,
+            GPU_PARTICLE_INDIRECT_SORT_WORK_BASE_WORD +
+                ordinal * GPU_PARTICLE_INDIRECT_DISPATCH_WORD_STRIDE);
+        ResetDispatchCommand(
+            indirectBufferIndex,
+            GPU_PARTICLE_INDIRECT_SORT_PREFIX_BASE_WORD +
+                ordinal * GPU_PARTICLE_INDIRECT_DISPATCH_WORD_STRIDE);
+    }
+}
+
 void ResetCounters(uint counterBufferIndex)
 {
     WriteStorageWord(counterBufferIndex, 0u, 0u);
@@ -81,16 +117,21 @@ void main()
     uint sortKeyBufferIndex = uint(GPU_PARTICLE_SORT_KEY_BUFFER_BASE_INDEX) + frameIndex;
 
     if (id == 0u)
+    {
         ResetCounters(counterBufferIndex);
+        ResetIndirectState(indirectDrawBufferIndex);
+    }
 
     if (id < pc.Push.ParticleCapacity)
     {
         WriteStorageWord(deadIndexBufferIndex, id, pc.Push.ParticleCapacity - 1u - id);
-        WriteStorageWord(aliveIndexBufferIndex, id, 0u);
         ClearParticleState(stateBufferIndex, id);
         ClearParticleInstance(unsortedInstanceBufferIndex, id);
         ClearParticleInstance(renderInstanceBufferIndex, id);
     }
+
+    if (id < pc.Push.ParticleCapacity * 2u)
+        WriteStorageWord(aliveIndexBufferIndex, id, 0u);
 
     if (id < pc.Push.ParticleCapacity * GPU_PARTICLE_BLEND_BUCKET_COUNT)
         ClearParticleSortKey(sortKeyBufferIndex, id);

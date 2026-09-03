@@ -21,6 +21,21 @@ const uint PARTICLE_SIMULATE_MODE_PREFIX = 2u;
 const uint PARTICLE_SIMULATE_MODE_EMIT = 3u;
 const float PI = 3.14159265358979323846;
 
+uint DivideRoundUp(uint value, uint divisor)
+{
+    return value == 0u ? 0u : 1u + (value - 1u) / divisor;
+}
+
+bool IsTransparentSortedBucket(uint bucket)
+{
+    return bucket == 0u || bucket == 1u || bucket == 4u;
+}
+
+uint SortedBucketOrdinal(uint bucket)
+{
+    return bucket < 2u ? bucket : 2u;
+}
+
 uint Hash(uint value)
 {
     value ^= value >> 16u;
@@ -213,6 +228,49 @@ void WriteDrawCommand(uint indirectDrawBufferIndex, uint bucket, uint instanceCo
     WriteStorageWord(indirectDrawBufferIndex, baseWord + 3u, firstInstance);
 }
 
+void WriteDispatchCommand(
+    uint indirectBufferIndex,
+    uint baseWord,
+    uint groupCountX)
+{
+    WriteStorageWord(indirectBufferIndex, baseWord + 0u, groupCountX);
+    WriteStorageWord(indirectBufferIndex, baseWord + 1u, 1u);
+    WriteStorageWord(indirectBufferIndex, baseWord + 2u, 1u);
+}
+
+uint ReadActiveListSelector(uint indirectBufferIndex)
+{
+    return ReadStorageWord(
+        indirectBufferIndex,
+        GPU_PARTICLE_INDIRECT_ACTIVE_LIST_WORD) & 1u;
+}
+
+bool AppendNextAlive(
+    uint aliveIndexBufferIndex,
+    uint indirectBufferIndex,
+    uint particleIndex)
+{
+    uint nextOrdinal = atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(indirectBufferIndex)].Words[
+            GPU_PARTICLE_INDIRECT_NEXT_ALIVE_COUNT_WORD],
+        1u);
+    if (nextOrdinal >= pc.Push.ParticleCapacity)
+    {
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(indirectBufferIndex)].Words[
+                GPU_PARTICLE_INDIRECT_NEXT_ALIVE_COUNT_WORD],
+            0xffffffffu);
+        return false;
+    }
+
+    uint nextSelector = ReadActiveListSelector(indirectBufferIndex) ^ 1u;
+    WriteStorageWord(
+        aliveIndexBufferIndex,
+        nextSelector * pc.Push.ParticleCapacity + nextOrdinal,
+        particleIndex);
+    return true;
+}
+
 bool ComputeEmitterPhase(GPUParticleEmitter emitter, out float previousPhase, out float currentPhase, out bool wrapped)
 {
     float startDelay = max(emitter.TimingParams.z, 0.0);
@@ -336,11 +394,37 @@ void EmitRenderInstance(uint frameIndex, uint counterBufferIndex, GPUParticleSta
         emitter.VolumetricAlbedoAndExtinction;
     particle.VolumetricRadiusAnisotropyAndFlags =
         emitter.VolumetricRadiusAnisotropyAndFlags;
-    WriteParticleInstance(frameIndex, renderIndex, particle);
+    uint outputBufferBaseIndex = IsTransparentSortedBucket(bucket)
+        ? uint(GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_BASE_INDEX)
+        : uint(GPU_PARTICLE_RENDER_INSTANCE_BUFFER_BASE_INDEX);
+    WriteParticleInstance(
+        outputBufferBaseIndex,
+        frameIndex,
+        renderIndex,
+        particle);
 }
 
-void UpdateParticle(uint particleIndex, uint frameIndex, uint counterBufferIndex, uint deadIndexBufferIndex)
+void UpdateParticle(
+    uint liveOrdinal,
+    uint frameIndex,
+    uint counterBufferIndex,
+    uint deadIndexBufferIndex,
+    uint aliveIndexBufferIndex,
+    uint indirectBufferIndex)
 {
+    uint liveCount = ReadStorageWord(
+        indirectBufferIndex,
+        GPU_PARTICLE_INDIRECT_CURRENT_ALIVE_COUNT_WORD);
+    if (liveOrdinal >= liveCount)
+        return;
+
+    uint activeSelector = ReadActiveListSelector(indirectBufferIndex);
+    uint particleIndex = ReadStorageWord(
+        aliveIndexBufferIndex,
+        activeSelector * pc.Push.ParticleCapacity + liveOrdinal);
+    if (particleIndex >= pc.Push.ParticleCapacity)
+        return;
+
     GPUParticleState state = ReadParticleState(frameIndex, particleIndex);
     if ((state.Flags & PARTICLE_STATE_FLAG_ALIVE) == 0u)
         return;
@@ -370,10 +454,28 @@ void UpdateParticle(uint particleIndex, uint frameIndex, uint counterBufferIndex
     state.SizeRotation.x = curveSample.Properties.x;
     state.SizeRotation.y += state.SizeRotation.z * pc.Push.DeltaSeconds;
     WriteParticleState(frameIndex, particleIndex, state);
+    if (!AppendNextAlive(
+            aliveIndexBufferIndex,
+            indirectBufferIndex,
+            particleIndex))
+    {
+        state.Flags &= ~PARTICLE_STATE_FLAG_ALIVE;
+        WriteParticleState(frameIndex, particleIndex, state);
+        ReleaseParticle(counterBufferIndex, deadIndexBufferIndex, particleIndex);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[0], 0xffffffffu);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[3], 1u);
+        return;
+    }
     CountParticleRenderBucket(counterBufferIndex, emitter);
 }
 
-void SpawnParticle(uint spawnIndex, uint frameIndex, uint counterBufferIndex, uint deadIndexBufferIndex, uint aliveIndexBufferIndex)
+void SpawnParticle(
+    uint spawnIndex,
+    uint frameIndex,
+    uint counterBufferIndex,
+    uint deadIndexBufferIndex,
+    uint aliveIndexBufferIndex,
+    uint indirectBufferIndex)
 {
     if (pc.Push.MaxSpawnPerEmitter == 0u)
         return;
@@ -427,14 +529,52 @@ void SpawnParticle(uint spawnIndex, uint frameIndex, uint counterBufferIndex, ui
     state.Flags = PARTICLE_STATE_FLAG_ALIVE;
     WriteParticleState(frameIndex, particleIndex, state);
 
-    uint aliveIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[0], 1u);
-    if (aliveIndex < pc.Push.ParticleCapacity)
-        WriteStorageWord(aliveIndexBufferIndex, aliveIndex, particleIndex);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[0], 1u);
+    if (!AppendNextAlive(
+            aliveIndexBufferIndex,
+            indirectBufferIndex,
+            particleIndex))
+    {
+        state.Flags &= ~PARTICLE_STATE_FLAG_ALIVE;
+        WriteParticleState(frameIndex, particleIndex, state);
+        ReleaseParticle(counterBufferIndex, deadIndexBufferIndex, particleIndex);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[0], 0xffffffffu);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[6], 1u);
+        return;
+    }
     CountParticleRenderBucket(counterBufferIndex, emitter);
 }
 
 void PrefixParticleBuckets(uint counterBufferIndex, uint indirectDrawBufferIndex)
 {
+    uint nextAliveCount = min(
+        ReadStorageWord(
+            indirectDrawBufferIndex,
+            GPU_PARTICLE_INDIRECT_NEXT_ALIVE_COUNT_WORD),
+        pc.Push.ParticleCapacity);
+    uint nextSelector = ReadActiveListSelector(indirectDrawBufferIndex) ^ 1u;
+    WriteStorageWord(
+        indirectDrawBufferIndex,
+        GPU_PARTICLE_INDIRECT_ACTIVE_LIST_WORD,
+        nextSelector);
+    WriteStorageWord(
+        indirectDrawBufferIndex,
+        GPU_PARTICLE_INDIRECT_CURRENT_ALIVE_COUNT_WORD,
+        nextAliveCount);
+    WriteStorageWord(counterBufferIndex, 0u, nextAliveCount);
+
+    uint liveGroupCount = DivideRoundUp(
+        nextAliveCount,
+        GPU_PARTICLE_WORKGROUP_SIZE);
+    WriteDispatchCommand(
+        indirectDrawBufferIndex,
+        GPU_PARTICLE_INDIRECT_UPDATE_DISPATCH_WORD,
+        liveGroupCount);
+    WriteDispatchCommand(
+        indirectDrawBufferIndex,
+        GPU_PARTICLE_INDIRECT_EMIT_DISPATCH_WORD,
+        liveGroupCount);
+
     uint firstInstance = 0u;
     for (uint bucket = 0u; bucket < GPU_PARTICLE_BLEND_BUCKET_COUNT; bucket++)
     {
@@ -445,12 +585,46 @@ void PrefixParticleBuckets(uint counterBufferIndex, uint indirectDrawBufferIndex
         SetBucketOffset(counterBufferIndex, bucket, firstInstance);
         SetBucketWriteCursor(counterBufferIndex, bucket, 0u);
         WriteDrawCommand(indirectDrawBufferIndex, bucket, count, firstInstance);
+        if (IsTransparentSortedBucket(bucket))
+        {
+            uint ordinal = SortedBucketOrdinal(bucket);
+            uint workBase = GPU_PARTICLE_INDIRECT_SORT_WORK_BASE_WORD +
+                ordinal * GPU_PARTICLE_INDIRECT_DISPATCH_WORD_STRIDE;
+            uint prefixBase = GPU_PARTICLE_INDIRECT_SORT_PREFIX_BASE_WORD +
+                ordinal * GPU_PARTICLE_INDIRECT_DISPATCH_WORD_STRIDE;
+            WriteDispatchCommand(
+                indirectDrawBufferIndex,
+                workBase,
+                DivideRoundUp(count, GPU_PARTICLE_WORKGROUP_SIZE));
+            WriteDispatchCommand(
+                indirectDrawBufferIndex,
+                prefixBase,
+                count > 0u ? 1u : 0u);
+        }
         firstInstance += count;
     }
 }
 
-void EmitLiveParticle(uint particleIndex, uint frameIndex, uint counterBufferIndex)
+void EmitLiveParticle(
+    uint liveOrdinal,
+    uint frameIndex,
+    uint counterBufferIndex,
+    uint aliveIndexBufferIndex,
+    uint indirectBufferIndex)
 {
+    uint liveCount = ReadStorageWord(
+        indirectBufferIndex,
+        GPU_PARTICLE_INDIRECT_CURRENT_ALIVE_COUNT_WORD);
+    if (liveOrdinal >= liveCount)
+        return;
+
+    uint activeSelector = ReadActiveListSelector(indirectBufferIndex);
+    uint particleIndex = ReadStorageWord(
+        aliveIndexBufferIndex,
+        activeSelector * pc.Push.ParticleCapacity + liveOrdinal);
+    if (particleIndex >= pc.Push.ParticleCapacity)
+        return;
+
     GPUParticleState state = ReadParticleState(frameIndex, particleIndex);
     if ((state.Flags & PARTICLE_STATE_FLAG_ALIVE) == 0u)
         return;
@@ -468,27 +642,46 @@ void main()
     uint counterBufferIndex = uint(GPU_PARTICLE_COUNTER_BUFFER_BASE_INDEX) + frameIndex;
     uint deadIndexBufferIndex = uint(GPU_PARTICLE_DEAD_INDEX_BUFFER_INDEX);
     uint aliveIndexBufferIndex = uint(GPU_PARTICLE_ALIVE_INDEX_BUFFER_BASE_INDEX) + frameIndex;
+    uint indirectBufferIndex = uint(GPU_PARTICLE_INDIRECT_DRAW_BUFFER_BASE_INDEX) + frameIndex;
 
     if (pc.Push.Flags == PARTICLE_SIMULATE_MODE_UPDATE)
     {
-        if (id < pc.Push.ParticleCapacity)
-            UpdateParticle(id, frameIndex, counterBufferIndex, deadIndexBufferIndex);
+        UpdateParticle(
+            id,
+            frameIndex,
+            counterBufferIndex,
+            deadIndexBufferIndex,
+            aliveIndexBufferIndex,
+            indirectBufferIndex);
         return;
     }
 
     if (pc.Push.Flags == PARTICLE_SIMULATE_MODE_SPAWN)
     {
-        SpawnParticle(id, frameIndex, counterBufferIndex, deadIndexBufferIndex, aliveIndexBufferIndex);
+        SpawnParticle(
+            id,
+            frameIndex,
+            counterBufferIndex,
+            deadIndexBufferIndex,
+            aliveIndexBufferIndex,
+            indirectBufferIndex);
         return;
     }
 
     if (pc.Push.Flags == PARTICLE_SIMULATE_MODE_PREFIX)
     {
         if (id == 0u)
-            PrefixParticleBuckets(counterBufferIndex, uint(GPU_PARTICLE_INDIRECT_DRAW_BUFFER_BASE_INDEX) + frameIndex);
+            PrefixParticleBuckets(counterBufferIndex, indirectBufferIndex);
         return;
     }
 
-    if (pc.Push.Flags == PARTICLE_SIMULATE_MODE_EMIT && id < pc.Push.ParticleCapacity)
-        EmitLiveParticle(id, frameIndex, counterBufferIndex);
+    if (pc.Push.Flags == PARTICLE_SIMULATE_MODE_EMIT)
+    {
+        EmitLiveParticle(
+            id,
+            frameIndex,
+            counterBufferIndex,
+            aliveIndexBufferIndex,
+            indirectBufferIndex);
+    }
 }

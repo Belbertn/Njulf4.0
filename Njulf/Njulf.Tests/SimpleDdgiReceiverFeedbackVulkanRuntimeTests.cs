@@ -671,6 +671,9 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
         string forwardShader = ReadRepoText(
             "Njulf.Shaders",
             "forward.frag");
+        string forwardReceiverGather = ReadRepoText(
+            "Njulf.Shaders",
+            "forward_ddgi_receiver_gather.glsl");
         string foliageShader = ReadRepoText(
             "Njulf.Shaders",
             "foliage_forward.frag");
@@ -712,7 +715,7 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
                 Does.Contain("materialCoverage.Alpha"));
             Assert.That(forwardShader,
                 Does.Contain("defined(FORWARD_DDGI_RECEIVER_CACHE_REQUIRED)"));
-            Assert.That(forwardShader,
+            Assert.That(forwardReceiverGather,
                 Does.Contain("exactGatherRequired = exactGatherRequired ||"));
             Assert.That(foliageShader,
                 Does.Contain("FoliageCoverageSurvives"));
@@ -921,7 +924,7 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
         {
             string candidate = Path.Combine([directory.FullName, .. segments]);
             if (File.Exists(candidate))
-                return File.ReadAllText(candidate);
+                return File.ReadAllText(candidate).ReplaceLineEndings("\n");
             directory = directory.Parent;
         }
 

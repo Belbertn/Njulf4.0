@@ -2,8 +2,22 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
+#define NJULF_HYBRID_DDGI_PROGRAM_COHORT 1
+#define NJULF_HYBRID_DDGI_PROGRAM_RECONSTRUCT 2
+#define NJULF_HYBRID_DDGI_PROGRAM_EXACT_MISS 3
+
+#ifndef NJULF_HYBRID_DDGI_PROGRAM
+#error "NJULF_HYBRID_DDGI_PROGRAM must select one specialized DDGI program"
+#endif
+
+#if NJULF_HYBRID_DDGI_PROGRAM < NJULF_HYBRID_DDGI_PROGRAM_COHORT || \
+    NJULF_HYBRID_DDGI_PROGRAM > NJULF_HYBRID_DDGI_PROGRAM_EXACT_MISS
+#error "NJULF_HYBRID_DDGI_PROGRAM has an unsupported value"
+#endif
+
 #include "common.glsl"
 
+#if NJULF_HYBRID_DDGI_PROGRAM != NJULF_HYBRID_DDGI_PROGRAM_RECONSTRUCT
 // This pass is a read-only receiver. It never mutates sparse residency or
 // contributes a second ownership stream; the depth-driven DDGI receiver cache
 // remains the sole owner of those requests.
@@ -21,6 +35,7 @@
 // SSR/ray query layer high-frequency scene detail above it during resolve.
 #define SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER 1
 #include "ddgi_simple_shared.glsl"
+#endif
 #include "hybrid_reflection_compute.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -37,7 +52,7 @@ layout(push_constant) uniform HybridReflectionDdgiPushBlock
     float NormalDotThreshold;
     float MinimumWorldDepthTolerance;
     float RelativeWorldDepthTolerance;
-    uint ReconstructionPass;
+    uint Reserved;
     uint ForceExactReconstruction;
 } pc;
 
@@ -52,12 +67,16 @@ const uint HYBRID_DDGI_SHARED_MAXIMUM_RECORDS =
     HYBRID_DDGI_SHARED_MAXIMUM_TILE_AXIS *
     HYBRID_DDGI_MAXIMUM_COHORTS;
 
+#if NJULF_HYBRID_DDGI_PROGRAM == NJULF_HYBRID_DDGI_PROGRAM_RECONSTRUCT
 shared vec4 HybridDdgiSharedRadianceConfidence[
     HYBRID_DDGI_SHARED_MAXIMUM_RECORDS];
 shared vec4 HybridDdgiSharedReferenceNormalRoughness[
     HYBRID_DDGI_SHARED_MAXIMUM_RECORDS];
 shared uvec2 HybridDdgiSharedReferenceIdentityDistance[
     HYBRID_DDGI_SHARED_MAXIMUM_RECORDS];
+shared uint HybridDdgiMissMaskLow;
+shared uint HybridDdgiMissMaskHigh;
+#endif
 
 ivec2 HybridDdgiTilePixel(ivec2 origin, uint lane, uint scale)
 {
@@ -94,6 +113,7 @@ bool HybridDdgiReceiver(
         depth);
 }
 
+#if NJULF_HYBRID_DDGI_PROGRAM != NJULF_HYBRID_DDGI_PROGRAM_RECONSTRUCT
 bool HybridEvaluateDdgiReflection(
     uvec4 payload,
     vec3 worldPosition,
@@ -152,7 +172,9 @@ bool HybridEvaluateDdgiReflection(
     return HybridFinite(radiance) && HybridFinite(confidence) &&
         confidence >= pc.MinimumConfidence;
 }
+#endif
 
+#if NJULF_HYBRID_DDGI_PROGRAM == NJULF_HYBRID_DDGI_PROGRAM_COHORT
 bool HybridDdgiSameSurface(
     uvec4 referencePayload,
     vec3 referenceWorldPosition,
@@ -207,7 +229,9 @@ vec4 HybridPackDdgiCohort(
         min(clamp(confidence, 0.0, 1.0), 0.998) * 0.5;
     return vec4(max(radiance, vec3(0.0)), packedLaneConfidence);
 }
+#endif
 
+#if NJULF_HYBRID_DDGI_PROGRAM == NJULF_HYBRID_DDGI_PROGRAM_RECONSTRUCT
 bool HybridUnpackDdgiCohort(
     vec4 record,
     uint laneCount,
@@ -229,7 +253,9 @@ bool HybridUnpackDdgiCohort(
     radiance = max(record.rgb, vec3(0.0));
     return confidence >= pc.MinimumConfidence;
 }
+#endif
 
+#if NJULF_HYBRID_DDGI_PROGRAM == NJULF_HYBRID_DDGI_PROGRAM_COHORT
 void HybridProduceDdgiCohorts()
 {
     uint scale = clamp(pc.ReceiverScale, 1u, 4u);
@@ -345,7 +371,9 @@ void HybridProduceDdgiCohorts()
         }
     }
 }
+#endif
 
+#if NJULF_HYBRID_DDGI_PROGRAM == NJULF_HYBRID_DDGI_PROGRAM_RECONSTRUCT
 void HybridDdgiSharedTileRange(
     uint scale,
     out ivec2 firstTileIndex,
@@ -650,34 +678,117 @@ void HybridReconstructDdgiBase()
         pixel, payload, worldPosition, radiance, confidence);
     if (!valid)
     {
-        // This is the correctness backstop: every valid receiver omitted by
-        // the bounded cohort producer evaluates DDGI for itself. A zero output
-        // now means genuine lack of DDGI support, never a sampling hole.
-        valid = HybridEvaluateDdgiReflection(
-            payload, worldPosition, radiance, confidence);
+        uint lane = gl_LocalInvocationIndex;
+        if (lane < 32u)
+            atomicOr(HybridDdgiMissMaskLow, 1u << lane);
+        else
+            atomicOr(HybridDdgiMissMaskHigh, 1u << (lane - 32u));
+        return;
     }
 
     imageStore(HybridHistoryCurrent, pixel,
+        vec4(max(radiance, vec3(0.0)), confidence));
+}
+
+void HybridPublishDdgiMissTile()
+{
+    memoryBarrierShared();
+    barrier();
+    if (gl_LocalInvocationIndex != 0u ||
+        (HybridDdgiMissMaskLow | HybridDdgiMissMaskHigh) == 0u)
+    {
+        return;
+    }
+
+    uint tileIndex = atomicAdd(HybridTileCount, 1u);
+    if (tileIndex < HybridTileCapacity)
+    {
+        HybridTiles[tileIndex] = uvec4(
+            gl_WorkGroupID.xy,
+            HybridDdgiMissMaskLow,
+            HybridDdgiMissMaskHigh);
+        atomicMax(HybridDdgiExactIndirectGroupCountX, tileIndex + 1u);
+        return;
+    }
+
+    // Capacity equals the number of full-resolution reconstruction
+    // workgroups, and each workgroup appends at most once. Reaching this path
+    // therefore exposes a CPU/GPU dispatch-contract failure rather than a
+    // quality fallback that may silently leave a hole.
+    atomicAdd(HybridTileOverflow, 1u);
+    atomicAdd(HybridCounters[
+        HYBRID_REFLECTION_COUNTER_TILE_OVERFLOWS], 1u);
+}
+
+void HybridRunCachedDdgiReconstruction()
+{
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        HybridDdgiMissMaskLow = 0u;
+        HybridDdgiMissMaskHigh = 0u;
+    }
+    memoryBarrierShared();
+    barrier();
+
+    uint scale = clamp(pc.ReceiverScale, 1u, 4u);
+    if (pc.ForceExactReconstruction == 0u && scale > 1u)
+    {
+        uint laneCount = scale * scale;
+        uint maximumGroups = min(
+            clamp(pc.MaximumSurfaceGroupsPerTile, 1u, laneCount),
+            HYBRID_DDGI_MAXIMUM_COHORTS);
+        HybridPrepareDdgiSharedCohorts(scale, maximumGroups);
+    }
+    HybridReconstructDdgiBase();
+    HybridPublishDdgiMissTile();
+}
+#endif
+
+#if NJULF_HYBRID_DDGI_PROGRAM == NJULF_HYBRID_DDGI_PROGRAM_EXACT_MISS
+void HybridExecuteExactDdgiMiss()
+{
+    uint tileIndex = gl_WorkGroupID.x;
+    if (tileIndex >= HybridTileCount)
+        return;
+
+    uvec4 miss = HybridTiles[tileIndex];
+    uint lane = gl_LocalInvocationIndex;
+    uint laneMask = lane < 32u ? miss.z : miss.w;
+    uint laneBit = 1u << (lane & 31u);
+    if ((laneMask & laneBit) == 0u)
+        return;
+
+    ivec2 pixel = ivec2(miss.xy * uvec2(8u)) +
+        ivec2(int(lane & 7u), int(lane >> 3u));
+    uvec4 payload;
+    vec3 worldPosition;
+    float depth;
+    if (!HybridDdgiReceiver(pixel, payload, worldPosition, depth))
+    {
+        if (HybridDdgiPixelInBounds(pixel))
+            imageStore(HybridHistoryCurrent, pixel, vec4(0.0));
+        return;
+    }
+
+    vec3 radiance;
+    float confidence;
+    bool valid = HybridEvaluateDdgiReflection(
+        payload, worldPosition, radiance, confidence);
+    // This compact dispatch is the correctness backstop: every valid receiver
+    // omitted by the bounded cohort cache evaluates DDGI for itself. A zero
+    // output means genuine lack of DDGI support, never a sampling hole.
+    imageStore(HybridHistoryCurrent, pixel,
         valid ? vec4(max(radiance, vec3(0.0)), confidence) : vec4(0.0));
 }
+#endif
 
 void main()
 {
-    if (pc.ReconstructionPass == 0u)
-    {
-        HybridProduceDdgiCohorts();
-    }
-    else
-    {
-        uint scale = clamp(pc.ReceiverScale, 1u, 4u);
-        if (pc.ForceExactReconstruction == 0u && scale > 1u)
-        {
-            uint laneCount = scale * scale;
-            uint maximumGroups = min(
-                clamp(pc.MaximumSurfaceGroupsPerTile, 1u, laneCount),
-                HYBRID_DDGI_MAXIMUM_COHORTS);
-            HybridPrepareDdgiSharedCohorts(scale, maximumGroups);
-        }
-        HybridReconstructDdgiBase();
-    }
+#if NJULF_HYBRID_DDGI_PROGRAM == NJULF_HYBRID_DDGI_PROGRAM_COHORT
+    HybridProduceDdgiCohorts();
+#elif NJULF_HYBRID_DDGI_PROGRAM == NJULF_HYBRID_DDGI_PROGRAM_RECONSTRUCT
+    HybridRunCachedDdgiReconstruction();
+#else
+    HybridExecuteExactDdgiMiss();
+#endif
 }

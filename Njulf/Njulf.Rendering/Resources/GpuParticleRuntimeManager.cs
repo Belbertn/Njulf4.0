@@ -32,7 +32,6 @@ namespace Njulf.Rendering.Resources
         private static readonly ulong CurveSampleStride = (ulong)Marshal.SizeOf<GPUParticleCurveSample>();
         private static readonly ulong CounterStride = (ulong)Marshal.SizeOf<GPUParticleCounters>();
         private static readonly ulong RenderInstanceStride = (ulong)Marshal.SizeOf<GPUParticleInstance>();
-        private static readonly ulong IndirectDrawStride = (ulong)Marshal.SizeOf<GPUParticleDrawCommand>();
         private static readonly ulong SortKeyStride = (ulong)Marshal.SizeOf<GPUParticleSortKey>();
 
         private readonly VulkanContext _context;
@@ -150,21 +149,21 @@ namespace Njulf.Rendering.Resources
                     for (int i = 0; i < FramesInFlight; i++)
                     {
                         EnsureCapacity(ref _stateBuffers[i], particleCapacity, StateStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit, $"GpuParticles.StateBuffer.Frame{i}");
-                        EnsureCapacity(ref _aliveIndexBuffers[i], particleCapacity, AliveIndexStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit, $"GpuParticles.AliveIndexBuffer.Frame{i}");
+                        EnsureCapacity(ref _aliveIndexBuffers[i], GpuParticleDispatchLayout.AliveIndexElementCount(particleCapacity), AliveIndexStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit, $"GpuParticles.AliveIndexBuffer.Frame{i}");
                         EnsureCapacity(ref _emitterBuffers[i], emitterCapacity, EmitterStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit, $"GpuParticles.EmitterBuffer.Frame{i}");
                         EnsureCapacity(ref _curveSampleBuffers[i], checked(emitterCapacity * CurveSamplesPerEmitter), CurveSampleStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit, $"GpuParticles.CurveSampleBuffer.Frame{i}");
                         EnsureCapacity(ref _counterBuffers[i], 1, CounterStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit, $"GpuParticles.CounterBuffer.Frame{i}");
                         EnsureCapacity(ref _unsortedRenderInstanceBuffers[i], particleCapacity, RenderInstanceStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit, $"GpuParticles.UnsortedRenderInstanceBuffer.Frame{i}");
                         EnsureCapacity(ref _renderInstanceBuffers[i], particleCapacity, RenderInstanceStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit, $"GpuParticles.RenderInstanceBuffer.Frame{i}");
-                        EnsureCapacity(ref _indirectDrawBuffers[i], drawCapacity, IndirectDrawStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit | BufferUsageFlags.IndirectBufferBit, $"GpuParticles.IndirectDrawBuffer.Frame{i}");
-                        EnsureCapacity(ref _sortKeyBuffers[i], checked(particleCapacity * BlendBucketCount), SortKeyStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit, $"GpuParticles.SortKeyBuffer.Frame{i}");
+                        EnsureCapacity(ref _indirectDrawBuffers[i], GpuParticleDispatchLayout.TotalWordCount, sizeof(uint), BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit | BufferUsageFlags.IndirectBufferBit, $"GpuParticles.IndirectDrawBuffer.Frame{i}");
+                        EnsureCapacity(ref _sortKeyBuffers[i], GpuParticleDispatchLayout.SortKeyElementCount(particleCapacity), SortKeyStride, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferSrcBit, $"GpuParticles.SortKeyBuffer.Frame{i}");
                         EnsureCounterReadbackBuffer(i);
                     }
 
                     UpdateRegisteredBindlessBuffers();
                     _particleCapacity = _stateBuffers[0].ElementCapacity;
                     _emitterCapacity = _emitterBuffers[0].ElementCapacity;
-                    _drawCapacity = _indirectDrawBuffers[0].ElementCapacity;
+                    _drawCapacity = InitialDrawCapacity;
                     if (!_wasGpuEnabled || capacityChanged)
                         _resetRequired = true;
 

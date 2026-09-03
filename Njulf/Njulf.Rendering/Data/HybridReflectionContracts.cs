@@ -513,6 +513,7 @@ public static class HybridReflectionHiZPolicy
 /// <summary>GPU ABI shared by classification, ray-query, resolve, and debug passes.</summary>
 public static class HybridReflectionGpuContract
 {
+    public const uint ScreenTileSize = 8;
     public const uint ReceiverPayloadWords = 4;
     public const uint ReceiverIdentityBits = 22;
     public const uint ReceiverIdentityMask = (1u << 22) - 1u;
@@ -525,12 +526,24 @@ public static class HybridReflectionGpuContract
     public const uint HistoryMetadataWords = 2;
     public const uint TaskWords = 8;
     public const uint CounterWords = 16;
-    public const uint IndirectArgumentWords = 6;
+    public const uint IndirectCommandWords = 3;
+    public const uint ExactMissIndirectWordOffset = 6;
+    public const uint IndirectArgumentWords =
+        ExactMissIndirectWordOffset + IndirectCommandWords;
+    public const uint ExactMissTileRecordWords = 4;
     public const float NormalHistoryDotThreshold = 0.9f;
     public const float MinimumHistoryDepthToleranceMeters = 0.02f;
     public const float RelativeHistoryDepthTolerance = 0.01f;
     public const float SsrToRayQueryHistoryWeightScale = 0.35f;
     public const int MaximumPushConstantBytes = 128;
+
+    public static uint CalculateScreenTileCapacity(uint width, uint height)
+    {
+        ulong tileSize = ScreenTileSize;
+        ulong tileCountX = ((ulong)width + tileSize - 1UL) / tileSize;
+        ulong tileCountY = ((ulong)height + tileSize - 1UL) / tileSize;
+        return checked((uint)(tileCountX * tileCountY));
+    }
 }
 
 public enum ReflectionSparseHistoryState : uint
@@ -844,7 +857,7 @@ public struct GPUHybridReflectionDdgiPushConstants
     public float NormalDotThreshold;
     public float MinimumWorldDepthTolerance;
     public float RelativeWorldDepthTolerance;
-    public uint ReconstructionPass;
+    public uint Reserved;
     public uint ForceExactReconstruction;
 }
 

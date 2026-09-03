@@ -47,6 +47,9 @@ layout(std430, set = 3, binding = 15) buffer HybridReflectionIndirectBuffer
     uint HybridSsrIndirectGroupCountX;
     uint HybridSsrIndirectGroupCountY;
     uint HybridSsrIndirectGroupCountZ;
+    uint HybridDdgiExactIndirectGroupCountX;
+    uint HybridDdgiExactIndirectGroupCountY;
+    uint HybridDdgiExactIndirectGroupCountZ;
 };
 
 // Sparse records written at the first two pixels of each DDGI receiver tile.

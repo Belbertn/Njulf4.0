@@ -17,7 +17,9 @@ public sealed class ShaderBuildTests
         "gtao_spatial.comp",
         "hybrid_reflection_ssr.comp",
         "hybrid_reflection_ray_query.comp",
-        "hybrid_reflection_ddgi_base.comp",
+        "hybrid_reflection_ddgi_cohort.comp",
+        "hybrid_reflection_ddgi_reconstruct.comp",
+        "hybrid_reflection_ddgi_exact_miss.comp",
         "hybrid_reflection_resolve.comp",
         "hybrid_reflection_temporal.comp",
         "hybrid_reflection_spatial.comp",
@@ -119,6 +121,11 @@ public sealed class ShaderBuildTests
                 shaderResourceNames,
                 Does.Not.Contain("Njulf.Shaders.ddgi_simple_trace.comp"),
                 "The trace template must not be emitted as an unspecialized runtime artifact.");
+            Assert.That(
+                shaderResourceNames,
+                Does.Not.Contain(
+                    "Njulf.Shaders.hybrid_reflection_ddgi_base.comp"),
+                "The runtime-branched DDGI template must not be emitted as an unspecialized artifact.");
         });
 
         foreach (string shaderName in RequiredShaders)
@@ -166,6 +173,62 @@ public sealed class ShaderBuildTests
                     $"'{resourceName}' does not contain a Workgroup OpVariable.");
             });
         }
+    }
+
+    [Test]
+    public void HybridDdgiSpecializationsEmbedDistinctBoundedComputePrograms()
+    {
+        byte[] cohort = LoadEmbeddedShader(
+            "hybrid_reflection_ddgi_cohort.comp");
+        byte[] reconstruct = LoadEmbeddedShader(
+            "hybrid_reflection_ddgi_reconstruct.comp");
+        byte[] exactMiss = LoadEmbeddedShader(
+            "hybrid_reflection_ddgi_exact_miss.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reconstruct, Is.Not.EqualTo(cohort));
+            Assert.That(reconstruct, Is.Not.EqualTo(exactMiss));
+            Assert.That(cohort, Is.Not.EqualTo(exactMiss));
+            Assert.That(GetSpirvLocalSize(cohort),
+                Is.EqualTo((8u, 8u, 1u)));
+            Assert.That(GetSpirvLocalSize(reconstruct),
+                Is.EqualTo((8u, 8u, 1u)));
+            Assert.That(GetSpirvLocalSize(exactMiss),
+                Is.EqualTo((8u, 8u, 1u)));
+            Assert.That(GetSpirvDescriptorSets(reconstruct),
+                Is.EquivalentTo(new[] { 3u }),
+                "Cached reconstruction must exclude the bindless exact-DDGI include graph.");
+            Assert.That(GetSpirvDescriptorSets(cohort),
+                Does.Contain(0u).And.Contain(1u).And.Contain(3u));
+            Assert.That(GetSpirvDescriptorSets(exactMiss),
+                Does.Contain(0u).And.Contain(1u).And.Contain(3u));
+            Assert.That(
+                GetSpirvMemberOffsets(reconstruct,
+                    "HybridReflectionIndirectBuffer"),
+                Is.EqualTo(new uint[]
+                {
+                    0u, 4u, 8u,
+                    12u, 16u, 20u,
+                    24u, 28u, 32u
+                }),
+                "The three indirect commands must remain tightly packed at byte offsets 0, 12, and 24.");
+            Assert.That(
+                GetSpirvMemberOffsets(reconstruct,
+                    "HybridReflectionDdgiPushBlock"),
+                Is.EqualTo(new uint[]
+                {
+                    0u, 64u,
+                    80u, 84u, 88u, 92u,
+                    96u, 100u, 104u, 108u,
+                    112u, 116u
+                }),
+                "The split programs must retain the frozen 120-byte push ABI.");
+            Assert.That(ContainsSpirvOpcode(reconstruct, 224), Is.True,
+                "Miss-mask publication requires a workgroup control barrier.");
+            Assert.That(ContainsSpirvWorkgroupVariable(reconstruct), Is.True,
+                "Cached reconstruction must retain its bounded workgroup cache and miss masks.");
+        });
     }
 
     [Test]
@@ -326,6 +389,118 @@ public sealed class ShaderBuildTests
         }
 
         return false;
+    }
+
+    private static byte[] LoadEmbeddedShader(string shaderName)
+    {
+        string resourceName = $"Njulf.Shaders.{shaderName}";
+        using Stream stream = typeof(ShaderLibrary).Assembly
+            .GetManifestResourceStream(resourceName)
+            ?? throw new AssertionException(
+                $"Missing shader resource '{resourceName}'.");
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        return memory.ToArray();
+    }
+
+    private static HashSet<uint> GetSpirvDescriptorSets(byte[] spirv)
+    {
+        const ushort opDecorate = 71;
+        const uint descriptorSetDecoration = 34;
+        var descriptorSets = new HashSet<uint>();
+        foreach ((ushort opcode, int wordOffset, int wordCount) in
+                 EnumerateSpirvInstructions(spirv))
+        {
+            if (opcode == opDecorate &&
+                wordCount >= 4 &&
+                ReadSpirvWord(spirv, wordOffset + 2) == descriptorSetDecoration)
+            {
+                descriptorSets.Add(ReadSpirvWord(spirv, wordOffset + 3));
+            }
+        }
+
+        return descriptorSets;
+    }
+
+    private static (uint X, uint Y, uint Z) GetSpirvLocalSize(byte[] spirv)
+    {
+        const ushort opExecutionMode = 16;
+        const uint localSizeExecutionMode = 17;
+        foreach ((ushort opcode, int wordOffset, int wordCount) in
+                 EnumerateSpirvInstructions(spirv))
+        {
+            if (opcode == opExecutionMode &&
+                wordCount >= 6 &&
+                ReadSpirvWord(spirv, wordOffset + 2) == localSizeExecutionMode)
+            {
+                return (
+                    ReadSpirvWord(spirv, wordOffset + 3),
+                    ReadSpirvWord(spirv, wordOffset + 4),
+                    ReadSpirvWord(spirv, wordOffset + 5));
+            }
+        }
+
+        throw new AssertionException(
+            "SPIR-V module does not declare a literal LocalSize execution mode.");
+    }
+
+    private static uint[] GetSpirvMemberOffsets(
+        byte[] spirv,
+        string structureName)
+    {
+        const ushort opName = 5;
+        const ushort opMemberDecorate = 72;
+        const uint offsetDecoration = 35;
+        uint? structureId = null;
+        foreach ((ushort opcode, int wordOffset, int wordCount) in
+                 EnumerateSpirvInstructions(spirv))
+        {
+            if (opcode == opName &&
+                wordCount >= 3 &&
+                ReadSpirvString(spirv, wordOffset + 2, wordCount - 2) ==
+                    structureName)
+            {
+                structureId = ReadSpirvWord(spirv, wordOffset + 1);
+                break;
+            }
+        }
+
+        if (structureId == null)
+        {
+            throw new AssertionException(
+                $"SPIR-V module does not name structure '{structureName}'.");
+        }
+
+        var offsets = new SortedDictionary<uint, uint>();
+        foreach ((ushort opcode, int wordOffset, int wordCount) in
+                 EnumerateSpirvInstructions(spirv))
+        {
+            if (opcode == opMemberDecorate &&
+                wordCount >= 5 &&
+                ReadSpirvWord(spirv, wordOffset + 1) == structureId.Value &&
+                ReadSpirvWord(spirv, wordOffset + 3) == offsetDecoration)
+            {
+                offsets.Add(
+                    ReadSpirvWord(spirv, wordOffset + 2),
+                    ReadSpirvWord(spirv, wordOffset + 4));
+            }
+        }
+
+        return offsets.Values.ToArray();
+    }
+
+    private static string ReadSpirvString(
+        byte[] spirv,
+        int wordOffset,
+        int wordCount)
+    {
+        ReadOnlySpan<byte> bytes = spirv.AsSpan(
+            checked(wordOffset * sizeof(uint)),
+            checked(wordCount * sizeof(uint)));
+        int terminator = bytes.IndexOf((byte)0);
+        if (terminator < 0)
+            terminator = bytes.Length;
+        return System.Text.Encoding.UTF8.GetString(bytes[..terminator]);
     }
 
     private static bool ContainsSpirvWorkgroupVariable(byte[] spirv)

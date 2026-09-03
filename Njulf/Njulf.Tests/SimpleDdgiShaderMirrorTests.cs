@@ -759,6 +759,9 @@ namespace Njulf.Tests
                 "Njulf.Shaders",
                 "ddgi_receiver_surface.glsl");
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string receiverGather = ReadRepoText(
+                "Njulf.Shaders",
+                "forward_ddgi_receiver_gather.glsl");
             string pass = ReadRepoText(
                 "Njulf.Rendering",
                 "Pipeline",
@@ -954,7 +957,7 @@ namespace Njulf.Tests
                     "if (NjulfReceiverCacheAcceptedLane() && !receiverCacheAccepted)"));
                 Assert.That(forward, Does.Contain(
                     "if (NjulfReceiverCacheExactFallbackLane() && receiverCacheAccepted)"));
-                Assert.That(forward, Does.Contain(
+                Assert.That(receiverGather, Does.Contain(
                     "if (!NjulfReceiverCacheAcceptedLane())"));
                 Assert.That(forward, Does.Contain(
                     "ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *"));
@@ -962,7 +965,7 @@ namespace Njulf.Tests
                     "EvaluateForwardDdgiReceiverCacheAdmission("));
                 Assert.That(forward, Does.Contain(
                     "!receiverCacheAccepted ||"));
-                Assert.That(forward, Does.Contain(
+                Assert.That(receiverGather, Does.Contain(
                     "precomputedSimpleDdgiGather = SampleSimpleDdgiGather("));
                 Assert.That(forward, Does.Contain(
                     "cachedGather = LoadForwardDdgiReceiverCache("));
@@ -1036,9 +1039,9 @@ namespace Njulf.Tests
                     "!gl_HelperInvocation"));
                 Assert.That(cacheSampling, Does.Contain(
                     "ReadForwardDdgiDirectionalWord("));
-                Assert.That(forward, Does.Contain(
+                Assert.That(receiverGather, Does.Contain(
                     "receiverCompactDirectionalResolved ="));
-                Assert.That(forward, Does.Contain(
+                Assert.That(receiverGather, Does.Contain(
                     "!receiverCompactDirectionalResolved"));
                 Assert.That(resolve, Does.Contain(
                     "RECEIVER_GATHER_ENTRY_WORDS = 20u"));
@@ -1976,6 +1979,9 @@ namespace Njulf.Tests
             string relocate = ReadRepoText("Njulf.Shaders", "ddgi_simple_relocate_classify.comp");
             string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string receiverGather = ReadRepoText(
+                "Njulf.Shaders",
+                "forward_ddgi_receiver_gather.glsl");
             string simplePasses = ReadRepoText("Njulf.Rendering", "Pipeline", "SimpleDdgiPasses.cs");
             string simpleManager = ReadRepoText("Njulf.Rendering", "Resources", "SimpleDdgiVolumeManager.cs");
             string sampledAtlas = ReadRepoText("Njulf.Rendering", "Resources", "SimpleDdgiSampledAtlas.cs");
@@ -2021,7 +2027,8 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("float SimpleDdgiRoughIndirectSpecularVisibility("));
                 Assert.That(shared, Does.Contain("1.0 - ownership * (1.0 - transportVisibility)"));
                 Assert.That(shared, Does.Contain("mix(1.0, visibilityConfidence, p.thinWallLeakClampStrength)"));
-                Assert.That(forward, Does.Contain("SimpleDdgiRoughIndirectSpecularVisibility("));
+                Assert.That(receiverGather,
+                    Does.Contain("SimpleDdgiRoughIndirectSpecularVisibility("));
                 Assert.That(forward, Does.Contain("SampleForwardDdgiReceiverCacheRoughSpecularVisibility("));
                 Assert.That(shared, Does.Contain("p.thinWallLeakClampStrength = clamp(biasLimits.z, 0.0, 1.0);"));
                 Assert.That(shared, Does.Contain("vec3 contributingVolumeColor;"));
@@ -2506,16 +2513,23 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain("else if (simpleDdgiActive)"));
                 Assert.That(forward,
                     Does.Contain("finalDiffuseIndirect = diffuseIbl * simpleDisabledFallbackWeight * indirectAo;"));
-                Assert.That(forward, Does.Contain("precomputedSimpleDdgiGather = SampleSimpleDdgiGather("));
+                Assert.That(receiverGather,
+                    Does.Contain("precomputedSimpleDdgiGather = SampleSimpleDdgiGather("));
                 Assert.That(forward, Does.Contain(
                     "ForwardTerminalDdgiSample ForwardSampleSimpleDdgiTerminalReadOnly("));
                 Assert.That(forward, Does.Contain(
                     "no residency demand, diagnostic, or contribution feedback is emitted"));
                 Assert.That(forward, Does.Contain("simpleGather = precomputedSimpleDdgiGather;"));
                 Assert.That(
-                    forward.Split("SampleSimpleDdgiGather(", StringSplitOptions.None),
+                    receiverGather.Split("SampleSimpleDdgiGather(", StringSplitOptions.None),
                     Has.Length.EqualTo(2),
                     "Each forward program retains one feedback-producing receiver gather.");
+                Assert.That(
+                    forward.Split(
+                        "#include \"forward_ddgi_receiver_gather.glsl\"",
+                        StringSplitOptions.None),
+                    Has.Length.EqualTo(3),
+                    "The cache-required and exact-only programs must each include the shared gather block once.");
                 Assert.That(forward, Does.Contain("simpleDdgiParams,"));
                 Assert.That(forward, Does.Contain("simpleDdgiSecondaryContributionWeight"));
                 Assert.That(forward, Does.Contain("simpleDdgiSecondVolumeUsed"));

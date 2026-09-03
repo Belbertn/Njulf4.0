@@ -1416,7 +1416,7 @@ namespace Njulf.Tests
             {
                 var candidate = Path.Combine(directory.FullName, "Njulf.Shaders", fileName);
                 if (File.Exists(candidate))
-                    return File.ReadAllText(candidate);
+                    return File.ReadAllText(candidate).ReplaceLineEndings("\n");
 
                 directory = directory.Parent;
             }

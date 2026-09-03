@@ -16,11 +16,12 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class GpuParticleSortPass : IDisposable
     {
         private const string EntryPoint = "main";
-        private const uint WorkgroupSize = 256;
-        private const uint BlendBucketCount = 5;
         private const uint ModeBuildKeys = 0;
-        private const uint ModeBitonic = 1;
-        private const uint ModeReorder = 2;
+        private const uint ModeRadixHistogram = 1;
+        private const uint ModeRadixPrefix = 2;
+        private const uint ModeRadixScatter = 3;
+        private const uint ModeReorder = 4;
+        private const uint RadixPassCount = 4;
 
         private static readonly uint[] SortedBuckets = { 0u, 1u, 4u };
 
@@ -75,25 +76,87 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindDescriptorSets(commandBuffer, PipelineBindPoint.Compute, _layout, 1, 1, &textureSet, 0, null);
 
             uint particleCapacity = checked((uint)sceneData.GpuParticleCapacity);
-            Dispatch(commandBuffer, CreatePushConstants(frameIndex, particleCapacity, ModeBuildKeys), checked(particleCapacity * BlendBucketCount));
-            RecordSortKeyBarrier(commandBuffer, buffers);
-
-            foreach (uint bucket in SortedBuckets)
+            Silk.NET.Vulkan.Buffer indirectBuffer =
+                _bufferManager.GetBuffer(buffers.IndirectDrawBuffer);
+            for (uint bucketOrdinal = 0u;
+                 bucketOrdinal < (uint)SortedBuckets.Length;
+                 ++bucketOrdinal)
             {
-                for (uint level = 2u; level <= particleCapacity; level <<= 1)
+                uint bucket = SortedBuckets[checked((int)bucketOrdinal)];
+                ulong workOffset = GpuParticleDispatchLayout.ByteOffset(
+                    GpuParticleDispatchLayout.SortWorkDispatchWord(
+                        bucketOrdinal));
+                ulong prefixOffset = GpuParticleDispatchLayout.ByteOffset(
+                    GpuParticleDispatchLayout.SortPrefixDispatchWord(
+                        bucketOrdinal));
+
+                DispatchIndirect(
+                    commandBuffer,
+                    CreatePushConstants(
+                        frameIndex,
+                        particleCapacity,
+                        ModeBuildKeys,
+                        bucket),
+                    indirectBuffer,
+                    workOffset);
+                RecordSortKeyBarrier(commandBuffer, buffers);
+
+                for (uint radixPass = 0u;
+                     radixPass < RadixPassCount;
+                     ++radixPass)
                 {
-                    for (uint stage = level >> 1; stage > 0u; stage >>= 1)
-                    {
-                        Dispatch(commandBuffer, CreatePushConstants(frameIndex, particleCapacity, ModeBitonic, bucket, level, stage), particleCapacity);
-                        RecordSortKeyBarrier(commandBuffer, buffers);
-                    }
+                    uint radixByteShift = radixPass * 8u;
+                    DispatchIndirect(
+                        commandBuffer,
+                        CreatePushConstants(
+                            frameIndex,
+                            particleCapacity,
+                            ModeRadixHistogram,
+                            bucket,
+                            radixByteShift,
+                            radixPass),
+                        indirectBuffer,
+                        workOffset);
+                    RecordSortKeyBarrier(commandBuffer, buffers);
 
-                    if (level == particleCapacity)
-                        break;
+                    DispatchIndirect(
+                        commandBuffer,
+                        CreatePushConstants(
+                            frameIndex,
+                            particleCapacity,
+                            ModeRadixPrefix,
+                            bucket,
+                            radixByteShift,
+                            radixPass),
+                        indirectBuffer,
+                        prefixOffset);
+                    RecordSortKeyBarrier(commandBuffer, buffers);
+
+                    DispatchIndirect(
+                        commandBuffer,
+                        CreatePushConstants(
+                            frameIndex,
+                            particleCapacity,
+                            ModeRadixScatter,
+                            bucket,
+                            radixByteShift,
+                            radixPass),
+                        indirectBuffer,
+                        workOffset);
+                    RecordSortKeyBarrier(commandBuffer, buffers);
                 }
-            }
 
-            Dispatch(commandBuffer, CreatePushConstants(frameIndex, particleCapacity, ModeReorder), checked(particleCapacity * BlendBucketCount));
+                DispatchIndirect(
+                    commandBuffer,
+                    CreatePushConstants(
+                        frameIndex,
+                        particleCapacity,
+                        ModeReorder,
+                        bucket),
+                    indirectBuffer,
+                    workOffset);
+                RecordSortKeyBarrier(commandBuffer, buffers);
+            }
             RecordFinalBarriers(commandBuffer, buffers, isComputeQueue);
         }
 
@@ -102,8 +165,8 @@ namespace Njulf.Rendering.Pipeline
             uint particleCapacity,
             uint mode,
             uint bucket = 0,
-            uint sortLevel = 0,
-            uint sortStage = 0)
+            uint radixByteShift = 0,
+            uint radixPass = 0)
         {
             return new GPUParticleSortPushConstants
             {
@@ -111,18 +174,19 @@ namespace Njulf.Rendering.Pipeline
                 ParticleCapacity = particleCapacity,
                 Mode = mode,
                 Bucket = bucket,
-                SortLevel = sortLevel,
-                SortStage = sortStage,
+                SortLevel = radixByteShift,
+                SortStage = radixPass,
                 Padding0 = 0,
                 Padding1 = 0
             };
         }
 
-        private void Dispatch(CommandBuffer commandBuffer, GPUParticleSortPushConstants pushConstants, uint dispatchCount)
+        private void DispatchIndirect(
+            CommandBuffer commandBuffer,
+            GPUParticleSortPushConstants pushConstants,
+            Silk.NET.Vulkan.Buffer indirectBuffer,
+            ulong indirectOffset)
         {
-            if (dispatchCount == 0)
-                return;
-
             _context.Api.CmdPushConstants(
                 commandBuffer,
                 _layout,
@@ -131,8 +195,10 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUParticleSortPushConstants>(),
                 &pushConstants);
 
-            uint groupCountX = Math.Max(1u, (dispatchCount + WorkgroupSize - 1u) / WorkgroupSize);
-            _context.Api.CmdDispatch(commandBuffer, groupCountX, 1, 1);
+            _context.Api.CmdDispatchIndirect(
+                commandBuffer,
+                indirectBuffer,
+                indirectOffset);
         }
 
         private void RecordSortKeyBarrier(CommandBuffer commandBuffer, GpuParticleRuntimeBuffers buffers)

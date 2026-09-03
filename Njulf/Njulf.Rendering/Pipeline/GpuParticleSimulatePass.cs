@@ -18,7 +18,6 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class GpuParticleSimulatePass : IDisposable
     {
         private const string EntryPoint = "main";
-        private const uint WorkgroupSize = 256;
         private const uint BlendBucketCount = 5;
         private const uint ModeUpdate = 0;
         private const uint ModeSpawn = 1;
@@ -98,7 +97,14 @@ namespace Njulf.Rendering.Pipeline
 
             var pushConstants = CreatePushConstants(frameIndex, sceneData);
 
-            DispatchMode(commandBuffer, pushConstants, ModeUpdate, pushConstants.ParticleCapacity);
+            VkBuffer indirectBuffer = _bufferManager.GetBuffer(buffers.IndirectDrawBuffer);
+            DispatchModeIndirect(
+                commandBuffer,
+                pushConstants,
+                ModeUpdate,
+                indirectBuffer,
+                GpuParticleDispatchLayout.ByteOffset(
+                    GpuParticleDispatchLayout.UpdateDispatchWord));
             RecordComputeToComputeBarriers(commandBuffer, buffers);
 
             DispatchMode(
@@ -111,7 +117,13 @@ namespace Njulf.Rendering.Pipeline
             DispatchMode(commandBuffer, pushConstants, ModePrefix, 1u);
             RecordPrefixBarriers(commandBuffer, buffers);
 
-            DispatchMode(commandBuffer, pushConstants, ModeEmit, pushConstants.ParticleCapacity);
+            DispatchModeIndirect(
+                commandBuffer,
+                pushConstants,
+                ModeEmit,
+                indirectBuffer,
+                GpuParticleDispatchLayout.ByteOffset(
+                    GpuParticleDispatchLayout.EmitDispatchWord));
             RecordSimulationBarriers(commandBuffer, buffers);
             sceneData.CpuGpuParticleSimulateRecordMicroseconds = Stopwatch.GetElapsedTime(start).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }
@@ -153,8 +165,31 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUParticleSimulatePushConstants>(),
                 &pushConstants);
 
-            uint groupCountX = Math.Max(1u, (dispatchCount + WorkgroupSize - 1u) / WorkgroupSize);
+            uint groupCountX = Math.Max(
+                1u,
+                GpuParticleDispatchLayout.GroupCount(dispatchCount));
             _context.Api.CmdDispatch(commandBuffer, groupCountX, 1, 1);
+        }
+
+        private void DispatchModeIndirect(
+            CommandBuffer commandBuffer,
+            GPUParticleSimulatePushConstants pushConstants,
+            uint mode,
+            VkBuffer indirectBuffer,
+            ulong indirectOffset)
+        {
+            pushConstants.Flags = mode;
+            _context.Api.CmdPushConstants(
+                commandBuffer,
+                _layout,
+                ShaderStageFlags.ComputeBit,
+                0,
+                (uint)Marshal.SizeOf<GPUParticleSimulatePushConstants>(),
+                &pushConstants);
+            _context.Api.CmdDispatchIndirect(
+                commandBuffer,
+                indirectBuffer,
+                indirectOffset);
         }
 
         private void ResetFrameRenderCounters(CommandBuffer commandBuffer, GpuParticleRuntimeBuffers buffers)
@@ -164,6 +199,13 @@ namespace Njulf.Rendering.Pipeline
 
             _context.Api.CmdFillBuffer(commandBuffer, counterBuffer, 5u * sizeof(uint), sizeof(uint), 0);
             _context.Api.CmdFillBuffer(commandBuffer, counterBuffer, 7u * sizeof(uint), BlendBucketCount * 3u * sizeof(uint), 0);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                indirectBuffer,
+                GpuParticleDispatchLayout.ByteOffset(
+                    GpuParticleDispatchLayout.NextAliveCountWord),
+                sizeof(uint),
+                0);
             for (uint bucket = 0; bucket < BlendBucketCount; bucket++)
             {
                 ulong instanceCountOffset = bucket * (ulong)Marshal.SizeOf<GPUParticleDrawCommand>() + sizeof(uint);
@@ -181,22 +223,26 @@ namespace Njulf.Rendering.Pipeline
                 indirectBuffer,
                 PipelineStageFlags2.TransferBit,
                 AccessFlags2.TransferWriteBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit);
+                PipelineStageFlags2.ComputeShaderBit |
+                    PipelineStageFlags2.DrawIndirectBit,
+                AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.ShaderStorageWriteBit |
+                    AccessFlags2.IndirectCommandReadBit);
 
             ExecuteBufferBarriers(commandBuffer, barriers);
         }
 
         private void RecordSimulationBarriers(CommandBuffer commandBuffer, GpuParticleRuntimeBuffers buffers)
         {
-            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[6];
+            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[7];
             int count = 0;
             AddBarrier(barriers, ref count, buffers.StateBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
             AddBarrier(barriers, ref count, buffers.AliveIndexBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
             AddBarrier(barriers, ref count, buffers.DeadIndexBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
             AddBarrier(barriers, ref count, buffers.CounterBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
             AddBarrier(barriers, ref count, buffers.UnsortedRenderInstanceBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit);
-            AddBarrier(barriers, ref count, buffers.IndirectDrawBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit);
+            AddBarrier(barriers, ref count, buffers.RenderInstanceBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            AddBarrier(barriers, ref count, buffers.IndirectDrawBuffer, PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.DrawIndirectBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.IndirectCommandReadBit);
 
             if (count > 0)
                 ExecuteBufferBarriers(commandBuffer, barriers[..count]);
@@ -204,12 +250,13 @@ namespace Njulf.Rendering.Pipeline
 
         private void RecordComputeToComputeBarriers(CommandBuffer commandBuffer, GpuParticleRuntimeBuffers buffers)
         {
-            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[4];
+            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[5];
             int count = 0;
             AddBarrier(barriers, ref count, buffers.StateBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
             AddBarrier(barriers, ref count, buffers.AliveIndexBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
             AddBarrier(barriers, ref count, buffers.DeadIndexBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
             AddBarrier(barriers, ref count, buffers.CounterBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            AddBarrier(barriers, ref count, buffers.IndirectDrawBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
 
             if (count > 0)
                 ExecuteBufferBarriers(commandBuffer, barriers[..count]);
@@ -220,7 +267,7 @@ namespace Njulf.Rendering.Pipeline
             Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[2];
             int count = 0;
             AddBarrier(barriers, ref count, buffers.CounterBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
-            AddBarrier(barriers, ref count, buffers.IndirectDrawBuffer, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            AddBarrier(barriers, ref count, buffers.IndirectDrawBuffer, PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.DrawIndirectBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit | AccessFlags2.IndirectCommandReadBit);
 
             if (count > 0)
                 ExecuteBufferBarriers(commandBuffer, barriers[..count]);

@@ -1,0 +1,35 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "froxel_common.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+uint DivideRoundUp(uint value, uint divisor)
+{
+    return value == 0u ? 0u : 1u + (value - 1u) / divisor;
+}
+
+void main()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
+    uint localCount = uint(max(round(FroxelFrame.CountsAndDebug.x), 0.0));
+    uint cpuParticleCount =
+        uint(max(round(FroxelFrame.CountsAndDebug.y), 0.0));
+    uint gpuParticleBudget =
+        uint(max(round(FroxelFrame.CountsAndDebug.z), 0.0));
+    uint gpuParticleCount = gpuParticleBudget > 0u
+        ? min(FroxelGpuParticleRenderedCount(), gpuParticleBudget)
+        : 0u;
+    uint sourceCount = localCount + cpuParticleCount + gpuParticleCount;
+    uint groupCountX = min(sourceCount, 65535u);
+    uint groupCountY = groupCountX == 0u
+        ? 1u
+        : DivideRoundUp(sourceCount, groupCountX);
+    uint commandWord = FroxelClusterCount() + 1u;
+    FroxelClusterCounts[commandWord + 0u] = groupCountX;
+    FroxelClusterCounts[commandWord + 1u] = groupCountY;
+    FroxelClusterCounts[commandWord + 2u] = 1u;
+}

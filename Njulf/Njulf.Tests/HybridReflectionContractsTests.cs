@@ -612,9 +612,55 @@ public sealed class HybridReflectionContractsTests
                 HybridReflectionGpuContract.MaximumPushConstantBytes));
             Assert.That(sizes[6], Is.EqualTo(120));
             Assert.That(HybridReflectionGpuContract.CounterWords, Is.EqualTo(16u));
+            Assert.That(HybridReflectionGpuContract.IndirectArgumentWords,
+                Is.EqualTo(9u));
+            Assert.That(HybridReflectionGpuContract.ExactMissIndirectWordOffset,
+                Is.EqualTo(6u));
+            Assert.That(HybridReflectionGpuContract.ExactMissTileRecordWords,
+                Is.EqualTo(4u));
+            Assert.That(HybridReflectionGpuContract
+                .CalculateScreenTileCapacity(1920u, 1080u),
+                Is.EqualTo(32_400u));
+            Assert.That(HybridReflectionGpuContract
+                .CalculateScreenTileCapacity(9u, 9u), Is.EqualTo(4u));
+            Assert.That(HybridReflectionGpuContract
+                .CalculateScreenTileCapacity(0u, 1080u), Is.Zero);
+            Assert.That(Marshal.OffsetOf<GPUHybridReflectionDdgiPushConstants>(
+                    nameof(GPUHybridReflectionDdgiPushConstants.Reserved))
+                .ToInt32(), Is.EqualTo(112));
+            Assert.That(Marshal.OffsetOf<GPUHybridReflectionDdgiPushConstants>(
+                    nameof(GPUHybridReflectionDdgiPushConstants
+                        .ForceExactReconstruction)).ToInt32(),
+                Is.EqualTo(116));
             Assert.That(HybridReflectionGpuContract.HistoryMetadataWords,
                 Is.EqualTo(2u));
         });
+    }
+
+    [TestCase(0u, 0u, 0u)]
+    [TestCase(0u, 1080u, 0u)]
+    [TestCase(1u, 1u, 1u)]
+    [TestCase(8u, 8u, 1u)]
+    [TestCase(9u, 8u, 2u)]
+    [TestCase(9u, 9u, 4u)]
+    [TestCase(1920u, 1080u, 32_400u)]
+    [TestCase(3840u, 2160u, 129_600u)]
+    public void ExactMissTileCapacity_CoversEveryReconstructionWorkgroup(
+        uint width,
+        uint height,
+        uint expected)
+    {
+        Assert.That(HybridReflectionGpuContract.CalculateScreenTileCapacity(
+            width, height), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ExactMissTileCapacity_RejectsAnUnrepresentableAllocation()
+    {
+        Assert.That(
+            () => HybridReflectionGpuContract.CalculateScreenTileCapacity(
+                uint.MaxValue, uint.MaxValue),
+            Throws.TypeOf<OverflowException>());
     }
 
     [Test]
@@ -659,6 +705,26 @@ public sealed class HybridReflectionContractsTests
             declarations["HybridReflectionRayQueryPass"].Usages.Single(
                 usage => usage.Resource ==
                     RenderGraphResourceId.HybridReflectionIndirectArguments);
+        RenderGraphResourceUsage ddgiIndirect =
+            declarations["HybridReflectionDdgiBasePass"].Usages.Single(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.HybridReflectionIndirectArguments);
+        RenderGraphResourceUsage ddgiTiles =
+            declarations["HybridReflectionDdgiBasePass"].Usages.Single(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.HybridReflectionTileScheduler);
+        RenderGraphResourceUsage ddgiRawMetadata =
+            declarations["HybridReflectionDdgiBasePass"].Usages.Single(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.HybridReflectionRawMetadata);
+        RenderGraphResourceUsage ddgiCohorts =
+            declarations["HybridReflectionDdgiBasePass"].Usages.Single(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.HybridReflectionDdgiCohorts);
+        RenderGraphResourceUsage ddgiCounters =
+            declarations["HybridReflectionDdgiBasePass"].Usages.Single(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.HybridReflectionCounters);
         RenderGraphResourceUsage spatialHistory =
             declarations["HybridReflectionSpatialPass"].Usages.Single(
                 usage => usage.Resource ==
@@ -693,6 +759,36 @@ public sealed class HybridReflectionContractsTests
                 Is.Not.Zero);
             Assert.That(indirectRead.AccessMask & AccessFlags2.IndirectCommandReadBit,
                 Is.Not.Zero);
+            Assert.That(ddgiIndirect.Access,
+                Is.EqualTo(RenderGraphResourceAccess.ReadWrite));
+            Assert.That(ddgiIndirect.StageMask &
+                (PipelineStageFlags2.TransferBit |
+                 PipelineStageFlags2.ComputeShaderBit |
+                 PipelineStageFlags2.DrawIndirectBit),
+                Is.EqualTo(PipelineStageFlags2.TransferBit |
+                    PipelineStageFlags2.ComputeShaderBit |
+                    PipelineStageFlags2.DrawIndirectBit));
+            Assert.That(ddgiIndirect.AccessMask &
+                AccessFlags2.IndirectCommandReadBit, Is.Not.Zero);
+            Assert.That(ddgiTiles.Access,
+                Is.EqualTo(RenderGraphResourceAccess.ReadWrite));
+            Assert.That(ddgiTiles.AccessMask & AccessFlags2.TransferWriteBit,
+                Is.Not.Zero);
+            Assert.That(ddgiRawMetadata.Access,
+                Is.EqualTo(RenderGraphResourceAccess.Read));
+            Assert.That(ddgiRawMetadata.AccessMask &
+                AccessFlags2.ShaderStorageReadBit, Is.Not.Zero);
+            Assert.That(ddgiCohorts.Access,
+                Is.EqualTo(RenderGraphResourceAccess.ReadWrite));
+            Assert.That(ddgiCohorts.AccessMask &
+                (AccessFlags2.ShaderStorageReadBit |
+                 AccessFlags2.ShaderStorageWriteBit),
+                Is.EqualTo(AccessFlags2.ShaderStorageReadBit |
+                    AccessFlags2.ShaderStorageWriteBit));
+            Assert.That(ddgiCounters.Access,
+                Is.EqualTo(RenderGraphResourceAccess.ReadWrite));
+            Assert.That(ddgiCounters.AccessMask &
+                AccessFlags2.ShaderStorageWriteBit, Is.Not.Zero);
             Assert.That(spatialHistory.Access,
                 Is.EqualTo(RenderGraphResourceAccess.Read));
             Assert.That(spatialHistory.HistoryBinding,
@@ -705,7 +801,7 @@ public sealed class HybridReflectionContractsTests
             Assert.That(declarations["HybridReflectionDdgiBasePass"].Usages.Any(
                 usage => usage.Resource ==
                     RenderGraphResourceId.HybridReflectionDdgiCohorts &&
-                    usage.Access == RenderGraphResourceAccess.Write), Is.True);
+                    usage.Access == RenderGraphResourceAccess.ReadWrite), Is.True);
             Assert.That(declarations["HybridReflectionCompositePass"].Usages.Any(
                 usage => usage.Resource == RenderGraphResourceId.SceneColor &&
                     usage.Access == RenderGraphResourceAccess.ReadWrite), Is.True);
@@ -872,6 +968,54 @@ public sealed class HybridReflectionContractsTests
     }
 
     [Test]
+    public void DdgiBase_EmitsThreeBoundedProgramsWithoutRuntimeStageBranch()
+    {
+        string shaderProject = ReadRepoText(
+            "Njulf.Shaders", "Njulf.Shaders.csproj");
+        string shader = ReadRepoText(
+            "Njulf.Shaders", "hybrid_reflection_ddgi_base.comp");
+        string compute = ReadRepoText(
+            "Njulf.Shaders", "hybrid_reflection_compute.glsl");
+        string runtime = ReadRepoText(
+            "Njulf.Rendering", "Pipeline",
+            "HybridReflectionVulkanRuntime.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shaderProject, Does.Contain(
+                "<ShaderSource Remove=\"hybrid_reflection_ddgi_base.comp\" />"));
+            Assert.That(shaderProject, Does.Contain(
+                "hybrid_reflection_ddgi_cohort.comp"));
+            Assert.That(shaderProject, Does.Contain(
+                "hybrid_reflection_ddgi_reconstruct.comp"));
+            Assert.That(shaderProject, Does.Contain(
+                "hybrid_reflection_ddgi_exact_miss.comp"));
+            Assert.That(shaderProject, Does.Contain(
+                "-DNJULF_HYBRID_DDGI_PROGRAM="));
+            Assert.That(shader, Does.Not.Contain("uint ReconstructionPass"));
+            Assert.That(shader, Does.Contain(
+                "NJULF_HYBRID_DDGI_PROGRAM != " +
+                "NJULF_HYBRID_DDGI_PROGRAM_RECONSTRUCT"));
+            Assert.That(shader, Does.Contain(
+                "shared uint HybridDdgiMissMaskLow"));
+            Assert.That(shader, Does.Contain(
+                "uint tileIndex = atomicAdd(HybridTileCount, 1u)"));
+            Assert.That(shader, Does.Contain(
+                "HybridTiles[tileIndex] = uvec4("));
+            Assert.That(shader, Does.Contain(
+                "uint tileIndex = gl_WorkGroupID.x"));
+            Assert.That(compute, Does.Contain(
+                "HybridDdgiExactIndirectGroupCountX"));
+            Assert.That(runtime, Does.Contain(
+                "DdgiExactMissIndirectOffset"));
+            Assert.That(runtime, Does.Contain(
+                "ResetTileSchedulerAfterDdgi(commandBuffer, bank)"));
+            Assert.That(runtime, Does.Not.Contain(
+                "hybrid_reflection_ddgi_base.comp.spv"));
+        });
+    }
+
+    [Test]
     public void HybridReceiverShader_SpecializesOnlyRejectedForwardDebugViews()
     {
         string forward = ReadRepoText("Njulf.Shaders", "forward.frag")
@@ -1004,6 +1148,8 @@ public sealed class HybridReflectionContractsTests
             "HybridReflectionVulkanRuntime.cs");
         string normalizedForward = forward.Replace("\r\n", "\n",
             StringComparison.Ordinal);
+        string normalizedRuntime = runtime.Replace("\r\n", "\n",
+            StringComparison.Ordinal);
         string resolveMain = resolve[resolve.IndexOf("void main()",
             StringComparison.Ordinal)..];
         int probeFallback = resolve.IndexOf("HybridSampleLocalProbe",
@@ -1073,8 +1219,10 @@ public sealed class HybridReflectionContractsTests
                 "HybridPackDdgiCohort"));
             Assert.That(ddgiBase, Does.Contain(
                 "HybridDdgiCohorts"));
+            Assert.That(ddgiBase, Does.Not.Contain(
+                "uint ReconstructionPass"));
             Assert.That(ddgiBase, Does.Contain(
-                "ReconstructionPass"));
+                "NJULF_HYBRID_DDGI_PROGRAM_RECONSTRUCT"));
             Assert.That(ddgiBase, Does.Contain(
                 "HybridFindDdgiCohort"));
             Assert.That(ddgiBase, Does.Contain(
@@ -1094,7 +1242,11 @@ public sealed class HybridReflectionContractsTests
             Assert.That(ddgiBase, Does.Contain(
                 "if (!valid)"));
             Assert.That(ddgiBase, Does.Contain(
-                "valid = HybridEvaluateDdgiReflection("));
+                "atomicOr(HybridDdgiMissMaskLow"));
+            Assert.That(ddgiBase, Does.Contain(
+                "HybridExecuteExactDdgiMiss"));
+            Assert.That(ddgiBase, Does.Contain(
+                "HybridDdgiExactIndirectGroupCountX"));
             Assert.That(ddgiBase, Does.Contain(
                 "never a sampling hole"));
             Assert.That(ddgiBase, Does.Contain(
@@ -1287,7 +1439,7 @@ public sealed class HybridReflectionContractsTests
                 "RecordCounterReadback(commandBuffer, bank)"));
             Assert.That(runtime, Does.Contain(
                 "private void SynchronizePreviousHybridFrame"));
-            Assert.That(runtime, Does.Contain(
+            Assert.That(normalizedRuntime, Does.Contain(
                 "SrcAccessMask = AccessFlags2.ShaderStorageReadBit |\n" +
                 "                AccessFlags2.ShaderStorageWriteBit |\n" +
                 "                AccessFlags2.ShaderSampledReadBit"));

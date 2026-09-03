@@ -24,7 +24,7 @@ namespace Njulf.Rendering.Pipeline;
 /// </summary>
 internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
 {
-    private const uint WorkgroupSize = 8u;
+    private const uint WorkgroupSize = HybridReflectionGpuContract.ScreenTileSize;
     private const ulong TaskHeaderBytes = 16UL;
     private const ulong TaskBytes =
         HybridReflectionGpuContract.TaskWords * sizeof(uint);
@@ -32,9 +32,12 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     private const ulong TileBytes = 16UL;
     private const ulong CounterBytes =
         HybridReflectionGpuContract.CounterWords * sizeof(uint);
-    private const ulong IndirectBytes = 6UL * sizeof(uint);
+    private const ulong IndirectBytes =
+        HybridReflectionGpuContract.IndirectArgumentWords * sizeof(uint);
     private const ulong RayIndirectOffset = 0UL;
     private const ulong SsrIndirectOffset = 3UL * sizeof(uint);
+    private const ulong DdgiExactMissIndirectOffset =
+        HybridReflectionGpuContract.ExactMissIndirectWordOffset * sizeof(uint);
 
     private readonly VulkanContext _context;
     private readonly BindlessHeap _bindlessHeap;
@@ -82,7 +85,9 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     private VkPipeline _ssrPipeline;
     private VkPipeline _classifyPipeline;
     private VkPipeline _rayPipeline;
-    private VkPipeline _ddgiBasePipeline;
+    private VkPipeline _ddgiCohortPipeline;
+    private VkPipeline _ddgiReconstructPipeline;
+    private VkPipeline _ddgiExactMissPipeline;
     private VkPipeline _resolvePipeline;
     private VkPipeline _temporalPipeline;
     private VkPipeline _spatialPipeline;
@@ -417,8 +422,12 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                     : "hybrid_reflection_ssr.comp.spv");
             _classifyPipeline = CreatePipeline(
                 "hybrid_reflection_classify.comp.spv");
-            _ddgiBasePipeline = CreatePipeline(
-                "hybrid_reflection_ddgi_base.comp.spv");
+            _ddgiCohortPipeline = CreatePipeline(
+                "hybrid_reflection_ddgi_cohort.comp.spv");
+            _ddgiReconstructPipeline = CreatePipeline(
+                "hybrid_reflection_ddgi_reconstruct.comp.spv");
+            _ddgiExactMissPipeline = CreatePipeline(
+                "hybrid_reflection_ddgi_exact_miss.comp.spv");
             _resolvePipeline = CreatePipeline(
                 "hybrid_reflection_resolve.comp.spv");
             _temporalPipeline = CreatePipeline(
@@ -780,8 +789,6 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             return;
         int bank = ValidateFrameIndex(frameIndex);
         BeginFrameWork(commandBuffer, bank, sceneData);
-        BindPipelineAndDescriptors(commandBuffer, _ddgiBasePipeline, bank,
-            bindRayScene: false);
         Required(_renderTargets.HybridReflectionDdgiCohorts,
                 "DDGI cohorts")
             .TransitionToStorageReadWrite(commandBuffer);
@@ -813,26 +820,76 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 .MinimumHistoryDepthToleranceMeters,
             RelativeWorldDepthTolerance = HybridReflectionGpuContract
                 .RelativeHistoryDepthTolerance,
-            ReconstructionPass = 0u,
+            Reserved = 0u,
             ForceExactReconstruction = fullResolutionOracle ||
                 sceneData.HybridReflectionHistoryValid == 0
                     ? 1u
                     : 0u
         };
-        if (!fullResolutionOracle)
+        if (push.ForceExactReconstruction == 0u)
         {
-            Push(commandBuffer, push);
-            DispatchScreen(commandBuffer, receiverScale);
+            _context.BeginDebugLabel(
+                commandBuffer, "Hybrid DDGI Cohort Production");
+            try
+            {
+                BindPipelineAndDescriptors(
+                    commandBuffer,
+                    _ddgiCohortPipeline,
+                    bank,
+                    bindRayScene: false);
+                Push(commandBuffer, push);
+                DispatchScreen(commandBuffer, receiverScale);
+            }
+            finally
+            {
+                _context.EndDebugLabel(commandBuffer);
+            }
             PublishComputeWrites(commandBuffer);
         }
 
-        // Reconstruction is deliberately a separate dispatch. It can consume
-        // only fully published cohort records and writes every receiver in the
-        // final DDGI base, with exact gather as the no-hole backstop.
-        push.ReconstructionPass = 1u;
-        Push(commandBuffer, push);
-        DispatchScreen(commandBuffer);
+        _context.BeginDebugLabel(
+            commandBuffer, "Hybrid DDGI Cached Reconstruction");
+        try
+        {
+            BindPipelineAndDescriptors(
+                commandBuffer,
+                _ddgiReconstructPipeline,
+                bank,
+                bindRayScene: false);
+            Push(commandBuffer, push);
+            DispatchScreen(commandBuffer);
+        }
+        finally
+        {
+            _context.EndDebugLabel(commandBuffer);
+        }
         PublishComputeWrites(commandBuffer);
+
+        _context.BeginDebugLabel(
+            commandBuffer, "Hybrid DDGI Exact Misses");
+        try
+        {
+            BindPipelineAndDescriptors(
+                commandBuffer,
+                _ddgiExactMissPipeline,
+                bank,
+                bindRayScene: false);
+            Push(commandBuffer, push);
+            _context.Api.CmdDispatchIndirect(
+                commandBuffer,
+                _bufferManager.GetBuffer(_indirectBuffers[bank]),
+                DdgiExactMissIndirectOffset);
+        }
+        finally
+        {
+            _context.EndDebugLabel(commandBuffer);
+        }
+        PublishComputeWrites(commandBuffer);
+
+        // DDGI runs before SSR and borrows the full-capacity scheduler only
+        // within this pass. Preserve the payload bytes but restore the header
+        // so SSR observes an empty list with the original capacity.
+        ResetTileSchedulerAfterDdgi(commandBuffer, bank);
     }
 
     public void RecordResolve(
@@ -1058,9 +1115,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         uint height = receiver.Extent.Height;
         uint capacity = HybridReflectionBudgetPlanner.ResolveRayQueryCapacity(
             _settings.Reflections, width, height);
-        uint tileCapacity = checked(
-            ((width + WorkgroupSize - 1u) / WorkgroupSize) *
-            ((height + WorkgroupSize - 1u) / WorkgroupSize));
+        uint tileCapacity = HybridReflectionGpuContract
+            .CalculateScreenTileCapacity(width, height);
         ulong signature = ComputeDescriptorSignature();
         bool buffersValid = AllBuffersValid();
         if (width == _allocatedWidth && height == _allocatedHeight &&
@@ -1288,8 +1344,11 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         _context.Api.CmdUpdateBuffer(commandBuffer, task, 0UL, taskHeader);
         _context.Api.CmdFillBuffer(commandBuffer, counters, 0UL,
             CounterBytes, 0u);
-        Span<uint> indirectHeader = stackalloc uint[6]
+        Span<uint> indirectHeader = stackalloc uint[]
         {
+            0u,
+            1u,
+            1u,
             0u,
             1u,
             1u,
@@ -1378,6 +1437,51 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         _context.Api.CmdBindDescriptorSets(commandBuffer,
             PipelineBindPoint.Compute, _pipelineLayout,
             3u, 1u, &local, 0u, null);
+    }
+
+    private void ResetTileSchedulerAfterDdgi(
+        CommandBuffer commandBuffer,
+        int bank)
+    {
+        VkBuffer tiles = _bufferManager.GetBuffer(_tileBuffers[bank]);
+        Span<BufferMemoryBarrier2> beforeReset =
+            stackalloc BufferMemoryBarrier2[1];
+        beforeReset[0] = BarrierBuilder.BufferBarrier(
+            tiles,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.CopyBit,
+            AccessFlags2.TransferWriteBit,
+            0UL,
+            TileHeaderBytes);
+        ExecuteBufferBarriers(commandBuffer, beforeReset);
+
+        Span<uint> tileHeader = stackalloc uint[4]
+        {
+            0u,
+            _allocatedTileCapacity,
+            0u,
+            0u
+        };
+        _context.Api.CmdUpdateBuffer(
+            commandBuffer,
+            tiles,
+            0UL,
+            tileHeader);
+
+        Span<BufferMemoryBarrier2> afterReset =
+            stackalloc BufferMemoryBarrier2[1];
+        afterReset[0] = BarrierBuilder.BufferBarrier(
+            tiles,
+            PipelineStageFlags2.CopyBit,
+            AccessFlags2.TransferWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+            0UL,
+            TileHeaderBytes);
+        ExecuteBufferBarriers(commandBuffer, afterReset);
     }
 
     private void RecordColorMipTail(
@@ -2350,7 +2454,9 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         DestroyPipeline(ref _ssrPipeline);
         DestroyPipeline(ref _classifyPipeline);
         DestroyPipeline(ref _rayPipeline);
-        DestroyPipeline(ref _ddgiBasePipeline);
+        DestroyPipeline(ref _ddgiCohortPipeline);
+        DestroyPipeline(ref _ddgiReconstructPipeline);
+        DestroyPipeline(ref _ddgiExactMissPipeline);
         DestroyPipeline(ref _resolvePipeline);
         DestroyPipeline(ref _temporalPipeline);
         DestroyPipeline(ref _spatialPipeline);

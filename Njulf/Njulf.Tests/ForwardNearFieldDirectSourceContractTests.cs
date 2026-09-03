@@ -205,11 +205,15 @@ public sealed class ForwardNearFieldDirectSourceContractTests
     public void CacheRequiredHybridVariants_LockExclusiveOpaqueGiOwnership()
     {
         string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string receiverGather = ReadRepoText(
+            "Njulf.Shaders", "forward_ddgi_receiver_gather.glsl");
         string shaderProject = ReadRepoText(
             "Njulf.Shaders", "Njulf.Shaders.csproj");
         string spirvVerification = ReadRepoText(
             "Njulf.Shaders", "VerifySimpleDdgiReceiverContract.ps1");
         string normalizedForward = Regex.Replace(forward, @"\s+", " ");
+        string normalizedReceiverGather = Regex.Replace(
+            receiverGather, @"\s+", " ");
 
         Assert.Multiple(() =>
         {
@@ -251,9 +255,9 @@ public sealed class ForwardNearFieldDirectSourceContractTests
                 Is.EqualTo(12));
             Assert.That(forward, Does.Contain(
                 "#if FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED"));
-            Assert.That(normalizedForward, Does.Contain(
+            Assert.That(normalizedReceiverGather, Does.Contain(
                 "receiverCompactDirectionalResolved || receiverCacheAccepted"));
-            Assert.That(normalizedForward, Does.Contain(
+            Assert.That(normalizedReceiverGather, Does.Contain(
                 "!receiverCacheAccepted || !receiverCompactDirectionalResolved"));
             Assert.That(spirvVerification, Does.Contain(
                 "$ownershipLockedReceiverCacheFragmentModuleNames"));

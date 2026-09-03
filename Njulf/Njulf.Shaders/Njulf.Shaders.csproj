@@ -20,6 +20,18 @@
            declared below. Runtime never loads the unspecialized artifact, so
            keep the source without emitting or embedding ddgi_simple_trace.comp.spv. -->
       <ShaderSource Remove="ddgi_simple_trace.comp" />
+      <!-- Hybrid DDGI uses three bounded native programs. The reconstruction
+           variant deliberately excludes the exact-gather include graph. -->
+      <ShaderSource Remove="hybrid_reflection_ddgi_base.comp" />
+      <HybridReflectionDdgiShaderVariant Include="hybrid_reflection_ddgi_cohort.comp">
+        <Program>1</Program>
+      </HybridReflectionDdgiShaderVariant>
+      <HybridReflectionDdgiShaderVariant Include="hybrid_reflection_ddgi_reconstruct.comp">
+        <Program>2</Program>
+      </HybridReflectionDdgiShaderVariant>
+      <HybridReflectionDdgiShaderVariant Include="hybrid_reflection_ddgi_exact_miss.comp">
+        <Program>3</Program>
+      </HybridReflectionDdgiShaderVariant>
       <!-- C3's directional staging kernel is storage-specialized below. The
            dynamic union is intentionally not emitted or embedded. -->
       <ShaderSource Remove="ddgi_simple_directional_stage.comp" />
@@ -1028,6 +1040,10 @@
           <Source>%(ShaderSource.FullPath)</Source>
           <Defines></Defines>
           <AdditionalCompileOptions>%(ShaderSource.AdditionalCompileOptions)</AdditionalCompileOptions>
+        </NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="@(HybridReflectionDdgiShaderVariant)">
+          <Source>$(MSBuildProjectDirectory)\hybrid_reflection_ddgi_base.comp</Source>
+          <Defines>-DNJULF_HYBRID_DDGI_PROGRAM=%(HybridReflectionDdgiShaderVariant.Program)</Defines>
         </NjulfShaderArtifact>
         <NjulfShaderArtifact Include="@(SimpleDdgiTraceShaderVariant)">
           <Source>$(MSBuildProjectDirectory)\%(SimpleDdgiTraceShaderVariant.Source)</Source>

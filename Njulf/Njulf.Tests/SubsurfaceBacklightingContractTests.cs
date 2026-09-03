@@ -301,6 +301,9 @@ public sealed class SubsurfaceBacklightingContractTests
         string receiverCache = ReadRepoText(
             "Njulf.Shaders",
             "forward_ddgi_receiver_cache.glsl");
+        string receiverGather = ReadRepoText(
+            "Njulf.Shaders",
+            "forward_ddgi_receiver_gather.glsl");
         int oppositeEnvironment = forward.IndexOf(
             "vec3 subsurfaceBackEnvironmentIrradiance =",
             StringComparison.Ordinal);
@@ -325,7 +328,7 @@ public sealed class SubsurfaceBacklightingContractTests
             Assert.That(finalSplit, Is.GreaterThan(oppositeEnvironment));
             Assert.That(finalDebug, Is.GreaterThan(finalSplit));
             Assert.That(CountOccurrences(
-                    forward,
+                    receiverGather,
                     "SampleSimpleDdgiGather("),
                 Is.EqualTo(1));
             Assert.That(receiverCache, Does.Contain("uvec4 Entries[];"));
@@ -446,7 +449,7 @@ public sealed class SubsurfaceBacklightingContractTests
             string candidate = Path.Combine(
                 [directory.FullName, .. segments]);
             if (File.Exists(candidate))
-                return File.ReadAllText(candidate);
+                return File.ReadAllText(candidate).ReplaceLineEndings("\n");
             directory = directory.Parent;
         }
 

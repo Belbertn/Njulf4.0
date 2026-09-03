@@ -695,6 +695,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadComputeSampled(
                     RenderGraphResourceId.HybridReflectionReceiverPayload),
                 ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+                ReadComputeStorage(
+                    RenderGraphResourceId.HybridReflectionRawMetadata),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
@@ -702,12 +704,18 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
                 ReadComputeBuffer(
                     RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
-                WriteComputeStorage(
+                ReadWriteComputeStorage(
                     RenderGraphResourceId.HybridReflectionDdgiCohorts),
                 WriteComputeStorage(
                     RenderGraphResourceId.HybridReflectionHistory,
                     historyBinding:
-                        RenderGraphHistoryBindingSelection.Current)),
+                        RenderGraphHistoryBindingSelection.Current),
+                ReadWriteTransferComputeIndirectBuffer(
+                    RenderGraphResourceId.HybridReflectionIndirectArguments),
+                ReadWriteComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionCounters),
+                ReadWriteComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionTileScheduler)),
             Pass("HybridReflectionResolvePass",
                 ReadComputeSampled(
                     RenderGraphResourceId.HybridReflectionReceiverPayload),
@@ -2273,6 +2281,23 @@ internal sealed class ProductionRenderPipelineDeclaration
             resource,
             RenderGraphResourceAccess.ReadWrite,
             PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.DrawIndirectBit,
+            AccessFlags2.ShaderStorageReadBit |
+            AccessFlags2.ShaderStorageWriteBit |
+            AccessFlags2.IndirectCommandReadBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Compute);
+    }
+
+    private static RenderGraphResourceUsage
+        ReadWriteTransferComputeIndirectBuffer(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.ReadWrite,
+            PipelineStageFlags2.TransferBit |
+            PipelineStageFlags2.ComputeShaderBit |
+            PipelineStageFlags2.DrawIndirectBit,
+            AccessFlags2.TransferWriteBit |
             AccessFlags2.ShaderStorageReadBit |
             AccessFlags2.ShaderStorageWriteBit |
             AccessFlags2.IndirectCommandReadBit,
