@@ -501,7 +501,7 @@ public sealed unsafe class AccelerationStructureManagerTests
     }
 
     [Test]
-    public void SharedInstanceMask_ExcludesNonBlockingLayeredGeometryFromDirectionalQueries()
+    public void SharedInstanceMask_AssignsIndependentDirectionalAndReflectionConsumers()
     {
         var opaque = new AccelerationStructureManager.StaticOpaqueInstance(
             new MeshHandle(1, 1),
@@ -525,30 +525,106 @@ public sealed unsafe class AccelerationStructureManagerTests
             GeometryClass = DdgiRayGeometryClass.DecalOverlay,
             GeometryFlags = DdgiRayGeometryFlags.DecalOverlay
         };
+        var volume = opaque with
+        {
+            GeometryClass = DdgiRayGeometryClass.VolumeTransmission,
+            GeometryFlags = DdgiRayGeometryFlags.VolumeTransmission
+        };
+        var water = opaque with
+        {
+            GeometryClass = DdgiRayGeometryClass.WaterSurface,
+            GeometryFlags = DdgiRayGeometryFlags.WaterSurface
+        };
+        var blendedThin = opaque with
+        {
+            GeometryClass = DdgiRayGeometryClass.ThinTransmission,
+            GeometryFlags = DdgiRayGeometryFlags.ThinTransmission |
+                DdgiRayGeometryFlags.AlphaBlend
+        };
+        var mismatchedWaterFlag = opaque with
+        {
+            GeometryFlags = DdgiRayGeometryFlags.WaterSurface
+        };
+        var mismatchedWaterClass = opaque with
+        {
+            GeometryClass = DdgiRayGeometryClass.WaterSurface
+        };
 
         Assert.Multiple(() =>
         {
-            Assert.That(AccelerationStructureManager.ResolveSharedInstanceMask(opaque),
-                Is.EqualTo(AccelerationStructureManager.SharedLightingInstanceMask));
-            Assert.That(AccelerationStructureManager.ResolveSharedInstanceMask(alphaMask),
-                Is.EqualTo(AccelerationStructureManager.SharedLightingInstanceMask));
-            Assert.That(AccelerationStructureManager.ResolveSharedInstanceMask(thin),
+            Assert.That(
+                AccelerationStructureManager.ResolveSharedInstanceMask(opaque),
+                Is.EqualTo(
+                    AccelerationStructureManager.SharedRaySceneInstanceMask));
+            Assert.That(
+                AccelerationStructureManager.ResolveSharedInstanceMask(alphaMask),
+                Is.EqualTo(
+                    AccelerationStructureManager.SharedRaySceneInstanceMask));
+            Assert.That(
+                AccelerationStructureManager.ResolveSharedInstanceMask(thin),
+                Is.EqualTo(
+                    AccelerationStructureManager.StaticOpaqueInstanceMask |
+                    AccelerationStructureManager
+                        .TransparentReflectionInstanceMask));
+            Assert.That(
+                AccelerationStructureManager.ResolveSharedInstanceMask(blend),
+                Is.EqualTo(
+                    AccelerationStructureManager.StaticOpaqueInstanceMask |
+                    AccelerationStructureManager
+                        .TransparentReflectionInstanceMask));
+            Assert.That(
+                AccelerationStructureManager.ResolveSharedInstanceMask(decal),
                 Is.EqualTo(AccelerationStructureManager.StaticOpaqueInstanceMask));
-            Assert.That(AccelerationStructureManager.ResolveSharedInstanceMask(blend),
+            Assert.That(
+                AccelerationStructureManager.ResolveSharedInstanceMask(volume),
                 Is.EqualTo(AccelerationStructureManager.StaticOpaqueInstanceMask));
-            Assert.That(AccelerationStructureManager.ResolveSharedInstanceMask(decal),
+            Assert.That(
+                AccelerationStructureManager.ResolveSharedInstanceMask(water),
                 Is.EqualTo(AccelerationStructureManager.StaticOpaqueInstanceMask));
+            Assert.That(
+                AccelerationStructureManager.ResolveSharedInstanceMask(
+                    blendedThin),
+                Is.EqualTo(
+                    AccelerationStructureManager.StaticOpaqueInstanceMask |
+                    AccelerationStructureManager
+                        .TransparentReflectionInstanceMask));
+            Assert.That(
+                AccelerationStructureManager.ResolveSharedInstanceMask(
+                    mismatchedWaterFlag),
+                Is.EqualTo(AccelerationStructureManager.StaticOpaqueInstanceMask));
+            Assert.That(
+                AccelerationStructureManager.ResolveSharedInstanceMask(
+                    mismatchedWaterClass),
+                Is.EqualTo(
+                    AccelerationStructureManager.SharedLightingInstanceMask));
         });
     }
 
     [Test]
-    public void SharedLightingInstanceMask_IsAStableUnionOfGiAndDirectionalConsumers()
+    public void SharedInstanceMaskBits_AreStableDisjointAndUnioned()
     {
         Assert.Multiple(() =>
         {
             Assert.That(
+                AccelerationStructureManager.StaticOpaqueInstanceMask,
+                Is.EqualTo(0x01));
+            Assert.That(
+                AccelerationStructureManager.DirectionalShadowInstanceMask,
+                Is.EqualTo(0x02));
+            Assert.That(
+                AccelerationStructureManager.TransparentReflectionInstanceMask,
+                Is.EqualTo(0x04));
+            Assert.That(
                 AccelerationStructureManager.StaticOpaqueInstanceMask &
                 AccelerationStructureManager.DirectionalShadowInstanceMask,
+                Is.Zero);
+            Assert.That(
+                AccelerationStructureManager.StaticOpaqueInstanceMask &
+                AccelerationStructureManager.TransparentReflectionInstanceMask,
+                Is.Zero);
+            Assert.That(
+                AccelerationStructureManager.DirectionalShadowInstanceMask &
+                AccelerationStructureManager.TransparentReflectionInstanceMask,
                 Is.Zero);
             Assert.That(
                 AccelerationStructureManager.SharedLightingInstanceMask,
@@ -556,6 +632,12 @@ public sealed unsafe class AccelerationStructureManagerTests
                     AccelerationStructureManager.StaticOpaqueInstanceMask |
                     AccelerationStructureManager
                         .DirectionalShadowInstanceMask));
+            Assert.That(
+                AccelerationStructureManager.SharedRaySceneInstanceMask,
+                Is.EqualTo(
+                    AccelerationStructureManager.SharedLightingInstanceMask |
+                    AccelerationStructureManager
+                        .TransparentReflectionInstanceMask));
         });
     }
 

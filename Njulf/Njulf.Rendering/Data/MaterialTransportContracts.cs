@@ -293,7 +293,8 @@ public sealed record MaterialDefinition
     public bool ReceivesShadows { get; init; } = true;
     /// <summary>
     /// Allows rigid planar surfaces using this material to compete for the
-    /// automatic planar-capture budget. Explicit authoring is required.
+    /// automatic planar-capture budget. Explicit authoring is required;
+    /// non-water, non-mirror materials are treated as wet-ground surfaces.
     /// </summary>
     public bool AutomaticPlanarReflectionEnabled { get; init; }
     /// <summary>

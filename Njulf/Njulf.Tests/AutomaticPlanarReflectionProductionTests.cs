@@ -35,9 +35,9 @@ public sealed class AutomaticPlanarReflectionProductionTests
             evidence,
             AutomaticPlanarMaterialSemantic.WaterSurface,
             materialOptInEnabled: false);
-        AutomaticPlanarCandidateInput enabledGeneric = Input(
+        AutomaticPlanarCandidateInput enabledWetGround = Input(
             evidence,
-            AutomaticPlanarMaterialSemantic.Generic,
+            AutomaticPlanarMaterialSemantic.WetGround,
             materialOptInEnabled: true);
 
         AutomaticPlanarCandidateAdmission disabled =
@@ -47,7 +47,7 @@ public sealed class AutomaticPlanarReflectionProductionTests
                 1080);
         AutomaticPlanarCandidateAdmission enabled =
             AutomaticPlanarCandidateAnalyzer.Analyze(
-                enabledGeneric,
+                enabledWetGround,
                 1920,
                 1080);
 
@@ -68,6 +68,7 @@ public sealed class AutomaticPlanarReflectionProductionTests
     [TestCase(AutomaticPlanarMaterialSemantic.Generic)]
     [TestCase(AutomaticPlanarMaterialSemantic.Mirror)]
     [TestCase(AutomaticPlanarMaterialSemantic.WaterSurface)]
+    [TestCase(AutomaticPlanarMaterialSemantic.WetGround)]
     public void DisabledMaterial_IsRejectedBeforeSemanticEligibility(
         AutomaticPlanarMaterialSemantic semantic)
     {
@@ -82,7 +83,7 @@ public sealed class AutomaticPlanarReflectionProductionTests
     }
 
     [Test]
-    public void EnabledGenericMaterial_IsNotVetoedByTextureStatisticsOrReflectivity()
+    public void EnabledGenericMaterial_IsRejectedWithoutAnExplicitSemantic()
     {
         AutomaticPlanarCandidateInput input = Input(
             CreateEvidence(),
@@ -97,7 +98,23 @@ public sealed class AutomaticPlanarReflectionProductionTests
         AutomaticPlanarCandidateAdmission admission =
             AutomaticPlanarCandidateAnalyzer.Analyze(input, 1920, 1080);
 
-        Assert.That(admission.Admitted, Is.True, admission.Detail);
+        Assert.Multiple(() =>
+        {
+            Assert.That(admission.Admitted, Is.False);
+            Assert.That(admission.RejectionReason, Is.EqualTo(
+                AutomaticPlanarCandidateRejectionReason.MaterialNotEligible));
+        });
+
+        AutomaticPlanarCandidateAdmission wetGround =
+            AutomaticPlanarCandidateAnalyzer.Analyze(
+                input with
+                {
+                    MaterialSemantic =
+                        AutomaticPlanarMaterialSemantic.WetGround
+                },
+                1920,
+                1080);
+        Assert.That(wetGround.Admitted, Is.True, wetGround.Detail);
     }
 
     [Test]
@@ -116,7 +133,7 @@ public sealed class AutomaticPlanarReflectionProductionTests
         AutomaticPlanarCandidate separate = Candidate(
             identity: 30,
             receiver: 300,
-            semantic: AutomaticPlanarMaterialSemantic.Generic,
+            semantic: AutomaticPlanarMaterialSemantic.WetGround,
             planeOffset: 0.25f);
 
         IReadOnlyList<AutomaticPlanarCluster> clusters =

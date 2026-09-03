@@ -122,6 +122,10 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         new bool[RenderingConstants.FramesInFlight];
     private readonly ulong[] _feedbackSubmittedFrameSerial =
         new ulong[RenderingConstants.FramesInFlight];
+    private readonly ulong[] _feedbackSubmittedMutationGeneration =
+        new ulong[RenderingConstants.FramesInFlight];
+    private readonly uint[] _feedbackSubmittedMutationFrame =
+        new uint[RenderingConstants.FramesInFlight];
     private readonly uint[] _feedbackSubmittedResourceGeneration =
         new uint[RenderingConstants.FramesInFlight];
     private readonly BufferHandle[] _auditReadbackBuffers =
@@ -637,7 +641,12 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     /// <see cref="TryReadCompletedFeedback"/> only after the frame fence has
     /// completed; no same-frame feedback path exists here.
     /// </summary>
-    public bool RecordFeedbackReadback(CommandBuffer commandBuffer, int frameIndex, ulong frameSerial)
+    public bool RecordFeedbackReadback(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        ulong frameSerial,
+        ulong mutationGeneration,
+        uint mutationFrame)
     {
         RenderingConstants.ValidateFrameIndex(frameIndex);
         if (commandBuffer.Handle == 0)
@@ -685,6 +694,9 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
 
             _feedbackRecorded[frameIndex] = true;
             _feedbackSubmittedFrameSerial[frameIndex] = frameSerial;
+            _feedbackSubmittedMutationGeneration[frameIndex] =
+                mutationGeneration;
+            _feedbackSubmittedMutationFrame[frameIndex] = mutationFrame;
             _feedbackSubmittedResourceGeneration[frameIndex] = _resourceGeneration;
             return true;
         }
@@ -1040,13 +1052,17 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     public bool TryReadCompletedFeedback(
         int frameIndex,
         ulong completedFrameSerial,
-        out GPUSimpleDdgiSchedulerFeedback feedback)
+        out GPUSimpleDdgiSchedulerFeedback feedback,
+        out ulong submittedMutationGeneration,
+        out uint submittedMutationFrame)
     {
         RenderingConstants.ValidateFrameIndex(frameIndex);
         lock (_lock)
         {
             ThrowIfDisposed();
             feedback = default;
+            submittedMutationGeneration = 0UL;
+            submittedMutationFrame = 0u;
             if (!_feedbackRecorded[frameIndex] ||
                 !_feedbackReadbackBuffers[frameIndex].IsValid ||
                 completedFrameSerial <= _feedbackSubmittedFrameSerial[frameIndex])
@@ -1076,6 +1092,9 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 _resourceGeneration;
             bool serialMatches = feedback.FrameSerialLow == expectedLow &&
                 feedback.FrameSerialHigh == expectedHigh;
+            ulong mutationGeneration =
+                _feedbackSubmittedMutationGeneration[frameIndex];
+            uint mutationFrame = _feedbackSubmittedMutationFrame[frameIndex];
             _feedbackRecorded[frameIndex] = false;
             if (!generationMatches || !serialMatches)
             {
@@ -1083,6 +1102,9 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 feedback = default;
                 return false;
             }
+
+            submittedMutationGeneration = mutationGeneration;
+            submittedMutationFrame = mutationFrame;
 
             int failureBase =
                 SimpleDdgiSchedulerAbi.FeedbackCommitFailureOffsetWords;
@@ -1282,6 +1304,8 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                     _bufferManager.DestroyBuffer(_feedbackReadbackBuffers[i]);
                 _feedbackReadbackBuffers[i] = BufferHandle.Invalid;
                 _feedbackRecorded[i] = false;
+                _feedbackSubmittedMutationGeneration[i] = 0UL;
+                _feedbackSubmittedMutationFrame[i] = 0u;
             }
             for (int i = 0; i < _auditReadbackBuffers.Length; i++)
             {
@@ -1486,6 +1510,8 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
             _feedbackReadbackBuffers[frameIndex] = BufferHandle.Invalid;
             _feedbackRecorded[frameIndex] = false;
             _feedbackSubmittedFrameSerial[frameIndex] = 0;
+            _feedbackSubmittedMutationGeneration[frameIndex] = 0UL;
+            _feedbackSubmittedMutationFrame[frameIndex] = 0u;
             _feedbackSubmittedResourceGeneration[frameIndex] = 0;
             if (!readback.IsValid)
                 continue;

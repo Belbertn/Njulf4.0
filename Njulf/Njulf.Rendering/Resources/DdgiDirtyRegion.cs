@@ -41,6 +41,12 @@ namespace Njulf.Rendering.Resources
         public ulong SourceRevision { get; init; }
         /// <summary>Stable source identifier; zero is valid when the source is anonymous.</summary>
         public ulong SourceIdentifier { get; init; }
+        /// <summary>
+        /// True only for the one scene-attachment enumeration. Mixed bootstrap
+        /// and runtime regions are runtime work so qualification percentiles
+        /// cannot be satisfied by startup samples.
+        /// </summary>
+        public bool IsBootstrap { get; init; }
     }
 
     /// <summary>
@@ -158,7 +164,8 @@ namespace Njulf.Rendering.Resources
                 SourceRevision = Math.Max(
                     previous.SourceRevision,
                     current.SourceRevision),
-                SourceIdentifier = previous.SourceIdentifier
+                SourceIdentifier = previous.SourceIdentifier,
+                IsBootstrap = previous.IsBootstrap && current.IsBootstrap
             };
         }
 

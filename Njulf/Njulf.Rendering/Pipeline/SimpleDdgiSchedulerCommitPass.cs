@@ -131,7 +131,12 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         PushConstants(cmd, pushConstants);
         _context.Api.CmdDispatch(cmd, 1, 1, 1);
         InsertStorageBarrier(cmd);
-        _ = scheduler.RecordFeedbackReadback(cmd, frameIndex, _volumeManager.FrameSerial);
+        _ = scheduler.RecordFeedbackReadback(
+            cmd,
+            frameIndex,
+            _volumeManager.FrameSerial,
+            _volumeManager.MutationGeneration,
+            _volumeManager.LastPreparedFrameIndex);
     }
 
     internal static uint CalculateFeedbackPartialGroupCount(int probeCount)

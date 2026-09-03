@@ -610,7 +610,11 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
                 : definition.Extensions.CausticCasterPolicy ==
                     GiCausticCasterPolicy.Mirror
                     ? AutomaticPlanarMaterialSemantic.Mirror
-                    : AutomaticPlanarMaterialSemantic.Generic;
+                    // The opt-in is the explicit authoring signal for a
+                    // non-water/non-mirror planar material. Treat that narrow
+                    // case as wet ground; arbitrary generic materials are not
+                    // admitted by the analyzer.
+                    : AutomaticPlanarMaterialSemantic.WetGround;
         float projectedPixels = ResolveProjectedPixels(
             evidence,
             worldMatrix,

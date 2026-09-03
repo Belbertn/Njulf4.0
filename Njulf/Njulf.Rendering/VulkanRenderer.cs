@@ -2516,6 +2516,9 @@ namespace Njulf.Rendering
             HybridReflectionVulkanRuntime hybridReflectionRuntime =
                 _hybridReflectionRuntime ?? throw new InvalidOperationException(
                     "The hybrid reflection graph requires its shared runtime.");
+            AddPassInstance(new HybridReflectionClassifyPass(
+                _context, _swapchain, _bindlessHeap,
+                hybridReflectionRuntime));
             AddPassInstance(new HybridReflectionDdgiBasePass(
                 _context, _swapchain, _bindlessHeap,
                 hybridReflectionRuntime));
@@ -9786,6 +9789,11 @@ namespace Njulf.Rendering
                         "AutomaticPlanarReflectionPass")
                     : 0;
             sceneData.GpuHybridReflectionSsrMicroseconds =
+                // Preserve the historical classifier+SSR telemetry bucket so
+                // performance captures remain comparable after classification
+                // became an explicit pre-DDGI graph pass.
+                timings.GetGpuMicrosecondsOrZero(
+                    "HybridReflectionClassifyPass") +
                 timings.GetGpuMicrosecondsOrZero("HybridReflectionSsrPass");
             sceneData.GpuHybridReflectionRayQueryMicroseconds =
                 timings.GetGpuMicrosecondsOrZero(
@@ -13869,6 +13877,10 @@ namespace Njulf.Rendering
                     "progressive-startup-drain",
                     () =>
                     {
+                        // Stop work that has not entered the Vulkan driver before
+                        // waiting for startup producers and active native calls.
+                        _giPipelineCacheService?.CompilationScheduler
+                            .CancelPending();
                         try
                         {
                             _productionInitializationTask?.GetAwaiter()

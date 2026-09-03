@@ -37,8 +37,11 @@ namespace Njulf.Rendering.Resources
             "foliage uses clustered alpha geometry and requires explicit DDGI proxy cards or clusters";
         internal const byte StaticOpaqueInstanceMask = 0x01;
         internal const byte DirectionalShadowInstanceMask = 0x02;
+        internal const byte TransparentReflectionInstanceMask = 0x04;
         internal const byte SharedLightingInstanceMask =
             StaticOpaqueInstanceMask | DirectionalShadowInstanceMask;
+        internal const byte SharedRaySceneInstanceMask =
+            SharedLightingInstanceMask | TransparentReflectionInstanceMask;
         private const ulong MinResourceBufferSize = 16;
         private const ulong IndexStride = sizeof(uint);
         private const int MaxBlasCompactionQueriesPerFrame = 4096;
@@ -5045,9 +5048,23 @@ namespace Njulf.Rendering.Resources
                      DdgiRayGeometryFlags.VolumeTransmission |
                      DdgiRayGeometryFlags.WaterSurface |
                      DdgiRayGeometryFlags.DecalOverlay)) == 0;
-            return directionalBlocker
-                ? SharedLightingInstanceMask
-                : StaticOpaqueInstanceMask;
+            bool transparentReflectionBlocker =
+                instance.GeometryClass !=
+                    DdgiRayGeometryClass.DecalOverlay &&
+                instance.GeometryClass !=
+                    DdgiRayGeometryClass.VolumeTransmission &&
+                instance.GeometryClass != DdgiRayGeometryClass.WaterSurface &&
+                (instance.GeometryFlags &
+                    (DdgiRayGeometryFlags.VolumeTransmission |
+                     DdgiRayGeometryFlags.WaterSurface |
+                     DdgiRayGeometryFlags.DecalOverlay)) == 0;
+
+            byte mask = StaticOpaqueInstanceMask;
+            if (directionalBlocker)
+                mask |= DirectionalShadowInstanceMask;
+            if (transparentReflectionBlocker)
+                mask |= TransparentReflectionInstanceMask;
+            return mask;
         }
 
         private static ulong NextNonZero(ulong value) =>

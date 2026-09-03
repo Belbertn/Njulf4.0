@@ -1133,9 +1133,8 @@ namespace Njulf.Rendering.Resources
         private void SelectActiveProbes(IReadOnlyList<ReflectionProbe> authoredProbes)
         {
             _selectedActiveProbes.Clear();
-            if (!_settings.Reflections.Enabled ||
-                _settings.Reflections.Mode is ReflectionMode.Disabled or ReflectionMode.GlobalEnvironmentOnly ||
-                _settings.Reflections.MaxProbes == 0)
+            if (!ManualReflectionProbePolicy.IsCompatibilityMode(
+                    _settings.Reflections))
                 return;
 
             _selectionScratch.Clear();

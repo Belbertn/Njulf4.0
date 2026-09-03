@@ -209,7 +209,7 @@ public sealed class TransparentPipelinePartitioningTests
     }
 
     [Test]
-    public void Planner_LayeredPoliciesSkipMaterialsThatDoNotReceiveShadows()
+    public void Planner_RayReasonsRequireMatchingMaterialCapabilities()
     {
         var nonReceiver = new TransparentDrawClassification(
             TransparentMaterialClass.OrdinaryBlend,
@@ -223,9 +223,28 @@ public sealed class TransparentPipelinePartitioningTests
         {
             MaterialClass = TransparentMaterialClass.ThickTransmission
         };
+        TransparentPipelineKey nonReceiverReflectionKey =
+            TransparentDrawRunPlanner.CreatePipelineKey(
+                nonReceiver,
+                DefaultOptions(reflectionRay: true));
+        TransparentPipelineKey reflectionReceiverKey =
+            TransparentDrawRunPlanner.CreatePipelineKey(
+                reflectionReceiver,
+                DefaultOptions(reflectionRay: true));
 
         Assert.Multiple(() =>
         {
+            Assert.That(nonReceiverReflectionKey.RaySceneRequired, Is.False);
+            Assert.That(reflectionReceiverKey.RaySceneRequired, Is.True);
+            Assert.That(
+                MeshPipeline.ResolveTransparentPartitionFragmentShader(
+                    nonReceiverReflectionKey),
+                Is.EqualTo("forward_transparent_ordinary.frag.spv"));
+            Assert.That(
+                MeshPipeline.ResolveTransparentPartitionFragmentShader(
+                    reflectionReceiverKey),
+                Is.EqualTo(
+                    "forward_transparent_ordinary_ray.frag.spv"));
             Assert.That(
                 TransparentDrawRunPlanner.CreatePipelineKey(
                     nonReceiver,
@@ -234,18 +253,51 @@ public sealed class TransparentPipelinePartitioningTests
                 Is.False);
             Assert.That(
                 TransparentDrawRunPlanner.CreatePipelineKey(
-                    reflectionReceiver,
-                    DefaultOptions(
-                        transparentLayeredRay: true,
-                        reflectionRay: true)).RaySceneRequired,
-                Is.True);
-            Assert.That(
-                TransparentDrawRunPlanner.CreatePipelineKey(
                     thickTransmission,
                     DefaultOptions(
                         transparentLayeredRay: true,
                         thickRay: true)).RaySceneRequired,
                 Is.True);
+        });
+    }
+
+    [Test]
+    public void ShaderContract_TransparentReflectionUsesDedicatedTlasMask()
+    {
+        string fragment = ReadRepoText("Njulf.Shaders", "forward.frag");
+        int candidateStart = fragment.IndexOf(
+            "bool ForwardTransparentReflectionCandidatePasses",
+            StringComparison.Ordinal);
+        int traceStart = fragment.IndexOf(
+            "bool ForwardTraceTransparentReflectionNearest",
+            candidateStart,
+            StringComparison.Ordinal);
+        int shadeStart = fragment.IndexOf(
+            "vec3 ForwardShadeTransparentReflectionHit",
+            traceStart,
+            StringComparison.Ordinal);
+        string candidate = fragment[candidateStart..traceStart];
+        string trace = fragment[traceStart..shadeStart];
+        string compactTrace = string.Concat(
+            trace.Where(character => !char.IsWhiteSpace(character)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fragment, Does.Contain(
+                "const uint FORWARD_TRANSPARENT_REFLECTION_INSTANCE_MASK = 0x04u;"));
+            Assert.That(compactTrace, Does.Contain(
+                "rayQueryInitializeEXT(query,SceneTlas,gl_RayFlagsNoneEXT," +
+                "FORWARD_TRANSPARENT_REFLECTION_INSTANCE_MASK,"));
+            Assert.That(candidate, Does.Contain(
+                "GiCausticCandidatePassesOpacity("));
+            Assert.That(candidate, Does.Not.Contain(
+                "GiCausticRayGeometryIsDecal"));
+            Assert.That(candidate, Does.Not.Contain(
+                "DDGI_RAY_GEOMETRY_VOLUME_TRANSMISSION"));
+            Assert.That(candidate, Does.Not.Contain(
+                "DDGI_RAY_GEOMETRY_WATER_SURFACE"));
+            Assert.That(trace, Does.Contain("candidates > 64u"));
+            Assert.That(trace, Does.Contain("rayQueryTerminateEXT(query)"));
         });
     }
 

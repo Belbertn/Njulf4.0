@@ -329,23 +329,59 @@ namespace Njulf.Rendering.Diagnostics
                      diagnostics.SimpleDdgiMutationLatency.Enumerate())
             {
                 bool active = diagnostics.SimpleDdgiActive != 0;
+                int fullFieldDeadlineFrames = Math.Max(
+                    1,
+                    diagnostics.SimpleDdgiTransportConvergence
+                        .TailConvergenceDeadlineFrames);
                 metrics.Add(CreateHardLimitMetric(
                     $"DDGI {latency.MutationClass} first-visible latency",
                     latency.FirstVisibleResponse.P95Frames,
                     1,
                     "frames",
-                    !active || latency.FirstVisibleResponse.SampleCount <= 0
+                    !active || latency.FirstVisibleResponse.SampleCount <
+                        SimpleDdgiMutationLatencyTracker.MinimumP95SampleCount
+                        ? RenderBudgetStatus.Unavailable
+                        : null));
+                metrics.Add(CreateHardLimitMetric(
+                    $"DDGI {latency.MutationClass} affected-region latency",
+                    latency.AffectedRegionConvergence.P95Frames,
+                    8,
+                    "frames",
+                    !active || latency.AffectedRegionConvergence.SampleCount <
+                        SimpleDdgiMutationLatencyTracker.MinimumP95SampleCount
                         ? RenderBudgetStatus.Unavailable
                         : null));
                 metrics.Add(CreateHardLimitMetric(
                     $"DDGI {latency.MutationClass} certified latency",
                     latency.CertifiedConvergence.P95Frames,
-                    8,
+                    fullFieldDeadlineFrames,
                     "frames",
-                    !active || latency.CertifiedConvergence.SampleCount <= 0
+                    !active ||
+                    diagnostics.SimpleDdgiTransportConvergence
+                        .TailConvergenceDeadlineFrames <= 0 ||
+                    latency.CertifiedConvergence.SampleCount <
+                        SimpleDdgiMutationLatencyTracker.MinimumP95SampleCount
                         ? RenderBudgetStatus.Unavailable
                         : null));
             }
+
+            SimpleDdgiColdStartLatencySnapshot coldStart =
+                diagnostics.SimpleDdgiMutationLatency.ColdStart;
+            int coldStartDeadlineFrames = Math.Max(
+                1,
+                diagnostics.SimpleDdgiTransportConvergence
+                    .TailConvergenceDeadlineFrames);
+            metrics.Add(CreateHardLimitMetric(
+                "DDGI cold-start certified latency",
+                coldStart.CertifiedConvergence.P95Frames,
+                coldStartDeadlineFrames,
+                "frames",
+                diagnostics.SimpleDdgiActive == 0 ||
+                diagnostics.SimpleDdgiTransportConvergence
+                    .TailConvergenceDeadlineFrames <= 0 ||
+                coldStart.CertifiedConvergence.SampleCount <= 0
+                    ? RenderBudgetStatus.Unavailable
+                    : null));
 
             if (hasActualGpuMemoryBudget)
                 metrics.Add(CreateMetric(TrackedGpuMemoryMetricName, memory.TotalTrackedBytes, profile.GpuMemoryBudgetBytes, "bytes"));

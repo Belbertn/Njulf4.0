@@ -591,7 +591,8 @@ namespace Njulf.Core
         private void OnWindowClosing()
         {
             _isRunning = false;
-            Shutdown(disposeWindow: false);
+            // Run() owns teardown in its finally block. Keep the window callback
+            // responsive while renderer-owned native work drains there.
         }
 
         private void Shutdown(bool disposeWindow)

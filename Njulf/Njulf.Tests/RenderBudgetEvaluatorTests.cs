@@ -61,6 +61,77 @@ public sealed class RenderBudgetEvaluatorTests
     }
 
     [Test]
+    public void Evaluation_SplitsInteractiveAndScaledCertificationDeadlines()
+    {
+        RenderBudgetProfile profile = RenderBudgetProfile.Development;
+        var samples = new SimpleDdgiLatencyDistribution(
+            SimpleDdgiMutationLatencyTracker.MinimumP95SampleCount,
+            1,
+            1,
+            1,
+            1,
+            0);
+        SimpleDdgiMutationLatencySnapshot light =
+            SimpleDdgiMutationLatencyTelemetry.Empty.Light with
+            {
+                FirstVisibleResponse = samples,
+                AffectedRegionConvergence = samples with
+                {
+                    P50Frames = 8,
+                    P95Frames = 8,
+                    P99Frames = 8,
+                    MaximumFrames = 8
+                },
+                CertifiedConvergence = samples with
+                {
+                    P50Frames = 72,
+                    P95Frames = 72,
+                    P99Frames = 72,
+                    MaximumFrames = 72
+                }
+            };
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationDdgiActive = 1,
+            SimpleDdgiActive = 1,
+            DdgiProbeCount = 32,
+            SimpleDdgiMutationLatency =
+                SimpleDdgiMutationLatencyTelemetry.Empty with { Light = light },
+            SimpleDdgiTransportConvergence =
+                SimpleDdgiTransportConvergenceTelemetry.Empty with
+                {
+                    TailConvergenceDeadlineFrames = 96
+                }
+        };
+
+        RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+            profile,
+            diagnostics,
+            MemoryBudgetSnapshot.Empty,
+            new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0,
+                [], RenderBudgetStatus.WithinBudget),
+            new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+        BudgetMetric first = snapshot.Metrics.Single(metric =>
+            metric.Name == "DDGI Light first-visible latency");
+        BudgetMetric affected = snapshot.Metrics.Single(metric =>
+            metric.Name == "DDGI Light affected-region latency");
+        BudgetMetric certified = snapshot.Metrics.Single(metric =>
+            metric.Name == "DDGI Light certified latency");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.FailureThreshold, Is.EqualTo(1));
+            Assert.That(first.Status, Is.EqualTo(RenderBudgetStatus.WithinBudget));
+            Assert.That(affected.FailureThreshold, Is.EqualTo(8));
+            Assert.That(affected.Status, Is.EqualTo(RenderBudgetStatus.WithinBudget));
+            Assert.That(certified.FailureThreshold, Is.EqualTo(96));
+            Assert.That(certified.Status, Is.EqualTo(RenderBudgetStatus.WithinBudget));
+        });
+    }
+
+    [Test]
     public void Evaluation_SumsExplicitPackedResourcesAndActualMirrorAllocation()
     {
         RenderBudgetProfile profile = RenderBudgetProfile.Development;

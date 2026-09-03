@@ -111,17 +111,24 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             "DDGI dirty first-update latency",
             "DDGI dirty convergence latency",
             "DDGI Environment first-visible latency",
+            "DDGI Environment affected-region latency",
             "DDGI Environment certified latency",
             "DDGI Light first-visible latency",
+            "DDGI Light affected-region latency",
             "DDGI Light certified latency",
             "DDGI Emissive first-visible latency",
+            "DDGI Emissive affected-region latency",
             "DDGI Emissive certified latency",
             "DDGI Material first-visible latency",
+            "DDGI Material affected-region latency",
             "DDGI Material certified latency",
             "DDGI Transform first-visible latency",
+            "DDGI Transform affected-region latency",
             "DDGI Transform certified latency",
             "DDGI Topology first-visible latency",
+            "DDGI Topology affected-region latency",
             "DDGI Topology certified latency",
+            "DDGI cold-start certified latency",
             "GI memory",
             "DDGI probes updated"
         };
@@ -1379,13 +1386,21 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
         out double failure,
         out double warning)
     {
-        if (TryClassifyDdgiMutationLatencyMetric(
-                name,
-                out bool firstVisibleLatency))
+        if (TryClassifyDdgiMutationLatencyMetric(name, out int fixedDeadline))
         {
-            failure = firstVisibleLatency ? 1.0 : 8.0;
-            warning = failure;
-            return true;
+            if (fixedDeadline > 0)
+            {
+                failure = fixedDeadline;
+                warning = failure;
+                return true;
+            }
+
+            // Mathematical certification uses the producer's probe-count and
+            // scheduler-budget-scaled deadline. It remains a hard gate, but it
+            // cannot be reconstructed from the quality tier alone here.
+            failure = double.NaN;
+            warning = double.NaN;
+            return false;
         }
 
         bool hardLimit = false;
@@ -1524,25 +1539,37 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
 
     private static bool TryClassifyDdgiMutationLatencyMetric(
         string name,
-        out bool firstVisibleLatency)
+        out int fixedDeadlineFrames)
     {
-        firstVisibleLatency = name switch
+        fixedDeadlineFrames = name switch
         {
             "DDGI Environment first-visible latency" or
             "DDGI Light first-visible latency" or
             "DDGI Emissive first-visible latency" or
             "DDGI Material first-visible latency" or
             "DDGI Transform first-visible latency" or
-            "DDGI Topology first-visible latency" => true,
-            _ => false
+            "DDGI Topology first-visible latency" => 1,
+            "DDGI Environment affected-region latency" or
+            "DDGI Light affected-region latency" or
+            "DDGI Emissive affected-region latency" or
+            "DDGI Material affected-region latency" or
+            "DDGI Transform affected-region latency" or
+            "DDGI Topology affected-region latency" => 8,
+            _ => 0
         };
-        return firstVisibleLatency || name is
+        if (fixedDeadlineFrames != 0)
+            return true;
+        bool scaledCertification = name is
             "DDGI Environment certified latency" or
             "DDGI Light certified latency" or
             "DDGI Emissive certified latency" or
             "DDGI Material certified latency" or
             "DDGI Transform certified latency" or
-            "DDGI Topology certified latency";
+            "DDGI Topology certified latency" or
+            "DDGI cold-start certified latency";
+        if (scaledCertification)
+            fixedDeadlineFrames = -1;
+        return scaledCertification;
     }
 
     private static void ValidateDdgiProductionGate(JsonElement gate)

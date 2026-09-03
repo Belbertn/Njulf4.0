@@ -97,6 +97,7 @@ internal sealed class PipelineCompilationScheduler : IDisposable
     private readonly ConcurrentDictionary<PipelineArtifactId, Task> _jobs = new();
     private readonly SemaphoreSlim _workerSlots;
     private readonly CancellationTokenSource _shutdown = new();
+    private int _shutdownRequested;
     private int _disposed;
 
     internal PipelineCompilationScheduler(int? workerCount = null)
@@ -161,6 +162,12 @@ internal sealed class PipelineCompilationScheduler : IDisposable
         Task.WhenAll(jobs).GetAwaiter().GetResult();
     }
 
+    internal void CancelPending()
+    {
+        if (Interlocked.Exchange(ref _shutdownRequested, 1) == 0)
+            _shutdown.Cancel();
+    }
+
     internal static int ResolveWorkerCount(
         string? configuredValue,
         int processorCount)
@@ -188,7 +195,7 @@ internal sealed class PipelineCompilationScheduler : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        _shutdown.Cancel();
+        CancelPending();
         try
         {
             WaitForAll();

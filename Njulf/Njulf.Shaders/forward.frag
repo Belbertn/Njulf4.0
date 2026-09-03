@@ -3573,23 +3573,12 @@ bool ForwardTraceTransparentSsr(
 }
 
 #if DIRECTIONAL_TRANSPARENT_RAY_QUERY
+const uint FORWARD_TRANSPARENT_REFLECTION_INSTANCE_MASK = 0x04u;
+
 bool ForwardTransparentReflectionCandidatePasses(rayQueryEXT query)
 {
     uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(
         query, false);
-    GPUDdgiRayQueryInstance instance =
-        GiCausticReadRayQueryInstance(instanceIndex);
-    if (!GiCausticRayInstanceValid(instance))
-        return true;
-    if (GiCausticRayGeometryIsDecal(instance) ||
-        instance.GeometryClass == DDGI_RAY_GEOMETRY_VOLUME_TRANSMISSION ||
-        instance.GeometryClass == DDGI_RAY_GEOMETRY_WATER_SURFACE ||
-        (instance.GeometryFlags &
-            (DDGI_RAY_GEOMETRY_FLAG_VOLUME_TRANSMISSION |
-             DDGI_RAY_GEOMETRY_FLAG_WATER_SURFACE)) != 0u)
-    {
-        return false;
-    }
     return GiCausticCandidatePassesOpacity(
         instanceIndex,
         rayQueryGetIntersectionPrimitiveIndexEXT(query, false),
@@ -3604,7 +3593,8 @@ bool ForwardTraceTransparentReflectionNearest(
     out RayQuerySurfaceHit hit)
 {
     rayQueryEXT query;
-    rayQueryInitializeEXT(query, SceneTlas, gl_RayFlagsNoneEXT, 0xff,
+    rayQueryInitializeEXT(query, SceneTlas, gl_RayFlagsNoneEXT,
+        FORWARD_TRANSPARENT_REFLECTION_INSTANCE_MASK,
         origin, 0.002, direction, maximumDistance);
     uint candidates = 0u;
     bool exceeded = false;

@@ -43,7 +43,7 @@ namespace Njulf.Rendering.Pipeline
                 "DirectionalShadowPass" or "DirectionalRayShadowPass" or
                     "AreaRayShadowPass" or "SpotShadowPass" or
                     "PointShadowPass" => AllowsShadows(mode),
-                "HybridReflectionSsrPass" or "HybridReflectionRayQueryPass" or "HybridReflectionDdgiBasePass" or "HybridReflectionResolvePass" or "HybridReflectionTemporalPass" or "HybridReflectionSpatialPass" or "HybridReflectionCompositePass" or "OpaqueSceneColorSnapshotPass" => AllowsReflections(mode),
+                "HybridReflectionClassifyPass" or "HybridReflectionSsrPass" or "HybridReflectionRayQueryPass" or "HybridReflectionDdgiBasePass" or "HybridReflectionResolvePass" or "HybridReflectionTemporalPass" or "HybridReflectionSpatialPass" or "HybridReflectionCompositePass" or "OpaqueSceneColorSnapshotPass" => AllowsReflections(mode),
                 "GtaoPass" or "GtaoTemporalPass" or "GtaoSpatialPass" =>
                     AllowsPostProcessing(mode),
                 "AmbientOcclusionPass" or "AmbientOcclusionBlurPass" or "FarFieldClipmapBakePass" or "SimpleDdgiLightTreePass" or "SimpleDdgiUrgentRelightPass" or "SimpleDdgiPageDemandPass" or "SimpleDdgiPageResidencyPass" or "SimpleDdgiSchedulePass" or "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiDirectionalRadiancePass" or "SimpleDdgiAcceleratedSolvePass" or "SimpleDdgiTransportPass" or "SimpleDdgiBlendPass" or "SimpleDdgiPublishPass" or "SimpleDdgiTransportAuditPass" or "SimpleDdgiSchedulerCommitPass" or "SimpleDdgiPageFeedbackPass" or "FogPass" or "AutoExposurePass" or "BloomPass" => AllowsPostProcessing(mode),

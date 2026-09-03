@@ -611,6 +611,15 @@ void main()
 
     ivec2 pixel = ivec2(invocation);
     uvec4 payload = texelFetch(HybridReceiverPayload, pixel, 0);
+    if (adaptiveDispatch && HybridReflectionPayloadValid(payload) &&
+        HybridHistoryMetadataValid(
+            imageLoad(HybridMetadataCurrent, pixel).xy))
+    {
+        // Classification already copied a validated, fully shaded history
+        // value. DDGI preserves this marker while borrowing the same compact
+        // tile record for exact-miss masks.
+        return;
+    }
 #if !NJULF_HYBRID_REFLECTION_SPARSE_LOBE_INPUT
     uvec2 lobeExtension = imageLoad(HybridRawMetadata, pixel).xy;
 #endif

@@ -424,8 +424,8 @@ namespace Njulf.Rendering.Diagnostics
             init;
         }
         /// <summary>
-        /// Mutation-to-first-visible and mutation-to-certified latency for all
-        /// six production edit classes.
+        /// Publication, affected-region, and full-field certification latency
+        /// for all six runtime edit classes plus separate cold-start evidence.
         /// </summary>
         public SimpleDdgiMutationLatencyTelemetry SimpleDdgiMutationLatency
         {
@@ -876,20 +876,49 @@ namespace Njulf.Rendering.Diagnostics
             foreach (SimpleDdgiMutationLatencySnapshot latency in
                      diagnostics.SimpleDdgiMutationLatency.Enumerate())
             {
-                if (latency.FirstVisibleResponse.SampleCount > 0 &&
+                if (latency.FirstVisibleResponse.SampleCount >=
+                        SimpleDdgiMutationLatencyTracker.MinimumP95SampleCount &&
                     latency.FirstVisibleResponse.P95Frames > 1)
                 {
                     warnings.Add(
                         $"Simple DDGI {latency.MutationClass} mutation-to-first-visible P95 " +
                         "exceeds the one-frame target.");
                 }
-                if (latency.CertifiedConvergence.SampleCount > 0 &&
-                    latency.CertifiedConvergence.P95Frames > 8)
+                if (latency.AffectedRegionConvergence.SampleCount >=
+                        SimpleDdgiMutationLatencyTracker.MinimumP95SampleCount &&
+                    latency.AffectedRegionConvergence.P95Frames > 8)
+                {
+                    warnings.Add(
+                        $"Simple DDGI {latency.MutationClass} affected-region P95 " +
+                        "exceeds the eight-frame target.");
+                }
+                int certificationDeadline = diagnostics
+                    .SimpleDdgiTransportConvergence
+                    .TailConvergenceDeadlineFrames;
+                if (certificationDeadline > 0 &&
+                    latency.CertifiedConvergence.SampleCount >=
+                        SimpleDdgiMutationLatencyTracker.MinimumP95SampleCount &&
+                    latency.CertifiedConvergence.P95Frames >
+                        certificationDeadline)
                 {
                     warnings.Add(
                         $"Simple DDGI {latency.MutationClass} mutation-to-certified P95 " +
-                        "exceeds the eight-frame target.");
+                        $"exceeds its {certificationDeadline}-frame scaled deadline.");
                 }
+            }
+            SimpleDdgiColdStartLatencySnapshot coldStart =
+                diagnostics.SimpleDdgiMutationLatency.ColdStart;
+            int coldStartCertificationDeadline = diagnostics
+                .SimpleDdgiTransportConvergence
+                .TailConvergenceDeadlineFrames;
+            if (coldStartCertificationDeadline > 0 &&
+                coldStart.CertifiedConvergence.SampleCount > 0 &&
+                coldStart.CertifiedConvergence.P95Frames >
+                    coldStartCertificationDeadline)
+            {
+                warnings.Add(
+                    "Simple DDGI cold-start certification exceeds its " +
+                    $"{coldStartCertificationDeadline}-frame scaled deadline.");
             }
             if (diagnostics.StreamedGiAccelerationStructuresFeatureEnabled != 0 &&
                 diagnostics.AccelerationStructureMemoryBudgetBytes > 0UL &&

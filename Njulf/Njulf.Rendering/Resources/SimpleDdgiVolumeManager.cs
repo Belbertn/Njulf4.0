@@ -933,6 +933,7 @@ namespace Njulf.Rendering.Resources
         // generation whose irradiance remains staged in the transport atlas.
         private uint _deferredRadiometricPublicationGeneration;
         private bool _deferredRadiometricPublicationReady;
+        private ulong _deferredRadiometricMutationGeneration;
         // A deferred generation must read one immutable receiver-visible
         // lattice. Keep physical ring/refinement ownership fixed until the
         // whole-field publication fence; smooth ring influence still follows
@@ -1031,6 +1032,7 @@ namespace Njulf.Rendering.Resources
         private uint _transportAuditSolveFeedbackParticipantCount;
         private ulong _transportAuditFirstFrameSerial;
         private SimpleDdgiTransportGenerations _transportAuditGenerations;
+        private ulong _transportAuditMutationGeneration;
         private int _transportAuditExpectedParticipantCount;
         private int _transportAuditExpectedTexelCount;
         private uint _transportAuditWitnessProbeIndex = uint.MaxValue;
@@ -1305,6 +1307,9 @@ namespace Njulf.Rendering.Resources
                 : _updateTransactionSerial;
         public ulong FrameSerial => _frameSerial;
         public uint FrameIndex => _frameIndex;
+        public uint LastPreparedFrameIndex => unchecked(_frameIndex - 1u);
+        public ulong MutationGeneration =>
+            _mutationLatencyTracker.LatestGeneration;
         public SimpleDdgiGpuScheduler GpuScheduler => _gpuScheduler;
 
         public void SetPublishedDirectionalGuidingSourceCache(
@@ -2555,7 +2560,9 @@ namespace Njulf.Rendering.Resources
             if (!_gpuScheduler.TryReadCompletedFeedback(
                     frameIndex,
                     completedFrameSerial,
-                    out GPUSimpleDdgiSchedulerFeedback feedback))
+                    out GPUSimpleDdgiSchedulerFeedback feedback,
+                    out ulong submittedMutationGeneration,
+                    out uint submittedMutationFrame))
             {
                 return false;
             }
@@ -2641,6 +2648,25 @@ namespace Njulf.Rendering.Resources
                     _receiverPublicationGeneration =
                         AdvanceSourceLightingGeneration(
                             _receiverPublicationGeneration);
+                    if (HasReceiverVisibleMutationPublication(
+                            feedback,
+                            _gpuScheduler.LastActiveCanonicalMutationCount,
+                            _gpuScheduler.LastActiveSourceMutationCount))
+                    {
+                        _mutationLatencyTracker.RecordFirstVisibleResponse(
+                            submittedMutationGeneration,
+                            submittedMutationFrame);
+                    }
+                }
+
+                if (HasAffectedRegionConvergenceEvidence(
+                        feedback,
+                        _gpuScheduler.LastActiveCanonicalMutationCount,
+                        _gpuScheduler.LastActiveSourceMutationCount))
+                {
+                    _mutationLatencyTracker.RecordAffectedRegionConvergence(
+                        submittedMutationGeneration,
+                        submittedMutationFrame);
                 }
             }
 
@@ -2823,6 +2849,29 @@ namespace Njulf.Rendering.Resources
             uint activeParticipantCanonicalMutationCount) =>
             publishedProbeCount != 0u &&
             activeParticipantCanonicalMutationCount != 0u;
+
+        internal static bool HasReceiverVisibleMutationPublication(
+            GPUSimpleDdgiSchedulerFeedback feedback,
+            uint activeCanonicalMutationCount,
+            uint activeSourceMutationCount) =>
+            feedback.StatusFlags == 0u &&
+            feedback.PublishedCount != 0u &&
+            (activeCanonicalMutationCount != 0u ||
+             activeSourceMutationCount != 0u);
+
+        internal static bool HasAffectedRegionConvergenceEvidence(
+            GPUSimpleDdgiSchedulerFeedback feedback,
+            uint activeCanonicalMutationCount,
+            uint activeSourceMutationCount) =>
+            feedback.StatusFlags == 0u &&
+            feedback.FailedCommitCount == 0u &&
+            feedback.PendingFreshCount == 0u &&
+            feedback.PendingExposedCount == 0u &&
+            feedback.PendingRelocationCount == 0u &&
+            feedback.PendingSourceCount == 0u &&
+            feedback.PendingSolverCount == 0u &&
+            activeCanonicalMutationCount == 0u &&
+            activeSourceMutationCount == 0u;
 
         internal static bool ShouldRetireResidentAtlasFresh(
             SimpleDdgiSchedulerMode schedulerMode,
@@ -3665,6 +3714,8 @@ namespace Njulf.Rendering.Resources
             // delayed readback acceptance; keeping the pre-increment tuple
             // would make a valid audit reject its own summary.
             _transportAuditGenerations = _transportSolveController.FrozenGenerations;
+            _transportAuditMutationGeneration =
+                _mutationLatencyTracker.LatestGeneration;
             _transportAuditProbeCursor = 0;
             _transportAuditChunkCount = checked((uint)Math.Max(
                 1,
@@ -4039,7 +4090,9 @@ namespace Njulf.Rendering.Resources
             if (accepted)
             {
                 _mutationLatencyTracker.RecordCertifiedConvergence(
+                    _transportAuditMutationGeneration,
                     _frameIndex);
+                _transportAuditMutationGeneration = 0UL;
                 _transportGlobalConvergencePending = false;
                 _transportGlobalSourceRepairPhasePending = false;
                 _publishedPropagationGeneration = _transportGeneration;
@@ -4051,6 +4104,7 @@ namespace Njulf.Rendering.Resources
             }
             else
             {
+                _transportAuditMutationGeneration = 0UL;
                 _transportGlobalConvergencePending = true;
                 if (completedSolveMadeProgress)
                 {
@@ -4088,6 +4142,7 @@ namespace Njulf.Rendering.Resources
             _transportAuditTriggerFeedbackFrameSerial = 0UL;
             _transportAuditSolveFeedbackParticipantCount = 0u;
             _transportAuditFinalSubmissionFrameSerial = 0UL;
+            _transportAuditMutationGeneration = 0UL;
             if (!preserveLivePropagationBoundary ||
                 !HasCurrentLivePropagationBoundary(
                     _livePropagationSourceGeneration,
@@ -5567,13 +5622,6 @@ namespace Njulf.Rendering.Resources
                         DdgiSkinnedGeometryMode.CurrentPose &&
                     _transportSolveController.Phase ==
                         SimpleDdgiTransportPhase.AuditFrozen;
-                SimpleDdgiMutationClass mutationClasses =
-                    ResolveMutationClasses(
-                        dirtyRegions,
-                        dirtyReasonFlags,
-                        sourceRefreshMode);
-                if (mutationClasses != SimpleDdgiMutationClass.None)
-                    _mutationLatencyTracker.Begin(mutationClasses, _frameIndex);
                 dirtyRegions = _frozenTailInvalidationBuffer.Resolve(
                     mayDeferAnimatedTransformInvalidation,
                     dirtyRegions,
@@ -5585,6 +5633,20 @@ namespace Njulf.Rendering.Resources
                     CancelTransportTailAudit(
                         SimpleDdgiTransportCertificationReason
                             .GenerationsChanged);
+                }
+                SimpleDdgiMutationClass mutationClasses =
+                    ResolveMutationClasses(
+                        dirtyRegions,
+                        dirtyReasonFlags,
+                        sourceRefreshMode);
+                if (mutationClasses != SimpleDdgiMutationClass.None)
+                {
+                    _mutationLatencyTracker.Begin(
+                        mutationClasses,
+                        _frameIndex,
+                        coldStart: sourceRefreshMode ==
+                            SimpleDdgiSourceRefreshMode.FullTrace &&
+                            ContainsOnlyBootstrapRegions(dirtyRegions));
                 }
                 bool deferredAnimatedTransformInvalidation =
                     _frozenTailInvalidationBuffer.DeferredCurrentFrame;
@@ -6678,6 +6740,7 @@ namespace Njulf.Rendering.Resources
                         }
                         RecordDirtyFirstCompletedUpdate(probeIndex, completedFrame);
                         _mutationLatencyTracker.RecordFirstVisibleResponse(
+                            _mutationLatencyTracker.LatestGeneration,
                             completedFrame);
                         MarkProbeSchedulerDirty(probeIndex);
                         MarkProbeVisibilityDirty(probeIndex);
@@ -8514,6 +8577,8 @@ namespace Njulf.Rendering.Resources
             _deferredRadiometricPublicationGeneration =
                 _sourceLightingGeneration;
             _deferredRadiometricPublicationReady = false;
+            _deferredRadiometricMutationGeneration =
+                _mutationLatencyTracker.LatestGeneration;
         }
 
         internal static bool ShouldDeferRadiometricPublication(
@@ -8571,6 +8636,7 @@ namespace Njulf.Rendering.Resources
         {
             _deferredRadiometricPublicationGeneration = 0u;
             _deferredRadiometricPublicationReady = false;
+            _deferredRadiometricMutationGeneration = 0UL;
         }
 
         internal static SimpleDdgiSourceRefreshMode SanitizeSourceRefreshMode(
@@ -9626,6 +9692,19 @@ namespace Njulf.Rendering.Resources
                 classes |= SimpleDdgiMutationClass.Topology;
             }
             return classes;
+        }
+
+        internal static bool ContainsOnlyBootstrapRegions(
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions)
+        {
+            if (dirtyRegions == null || dirtyRegions.Count == 0)
+                return false;
+            for (int index = 0; index < dirtyRegions.Count; index++)
+            {
+                if (!dirtyRegions[index].IsBootstrap)
+                    return false;
+            }
+            return true;
         }
 
         internal static bool ContainsRegionalRadiometricChange(
@@ -12309,6 +12388,12 @@ namespace Njulf.Rendering.Resources
                 ref _dirtyConvergenceLatencyMaxFrames,
                 elapsedFrames);
             ClearProbeDirtyLatency(probeIndex);
+            if (_dirtyLatencyOutstandingEventCount == 0u)
+            {
+                _mutationLatencyTracker.RecordAffectedRegionConvergence(
+                    _mutationLatencyTracker.LatestGeneration,
+                    observedFrame);
+            }
         }
 
         private static void RecordLatencySample(
@@ -19361,6 +19446,9 @@ namespace Njulf.Rendering.Resources
             _receiverPublicationGeneration =
                 AdvanceSourceLightingGeneration(
                     _receiverPublicationGeneration);
+            _mutationLatencyTracker.RecordFirstVisibleResponse(
+                _deferredRadiometricMutationGeneration,
+                _frameIndex);
             // Deferred feedback deliberately suppresses the ordinary
             // per-frame canonical mutation witness. Advance exactly once at
             // the command-recorded whole-field publication boundary instead.
@@ -21437,6 +21525,7 @@ namespace Njulf.Rendering.Resources
                 if (completedThisReadback)
                 {
                     _mutationLatencyTracker.RecordFirstVisibleResponse(
+                        _mutationLatencyTracker.LatestGeneration,
                         _frameIndex);
                     RecordDirtyConvergenceIfStable(probeIndex, _frameIndex);
                 }

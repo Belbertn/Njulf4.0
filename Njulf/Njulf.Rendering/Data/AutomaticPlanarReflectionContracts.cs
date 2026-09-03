@@ -7,7 +7,8 @@ public enum AutomaticPlanarMaterialSemantic : uint
 {
     Generic = 0,
     Mirror = 1,
-    WaterSurface = 2
+    WaterSurface = 2,
+    WetGround = 3
 }
 
 public enum AutomaticPlanarCandidateRejectionReason : uint
@@ -122,6 +123,15 @@ public static class AutomaticPlanarCandidateAnalyzer
             return Reject(
                 AutomaticPlanarCandidateRejectionReason.MaterialOptInDisabled,
                 "The material has not opted in to automatic planar reflection.");
+        }
+        if (input.MaterialSemantic is not
+            AutomaticPlanarMaterialSemantic.Mirror and not
+            AutomaticPlanarMaterialSemantic.WaterSurface and not
+            AutomaticPlanarMaterialSemantic.WetGround)
+        {
+            return Reject(
+                AutomaticPlanarCandidateRejectionReason.MaterialNotEligible,
+                "Automatic planar reflection requires an explicit mirror, water, or wet-ground semantic.");
         }
         if (!input.Visible)
             return Reject(AutomaticPlanarCandidateRejectionReason.Invisible,
@@ -469,8 +479,9 @@ public static class AutomaticPlanarClusterer
     private static int SemanticPriority(
         AutomaticPlanarMaterialSemantic semantic) => semantic switch
         {
-            AutomaticPlanarMaterialSemantic.WaterSurface => 2,
-            AutomaticPlanarMaterialSemantic.Mirror => 1,
+            AutomaticPlanarMaterialSemantic.WaterSurface => 3,
+            AutomaticPlanarMaterialSemantic.Mirror => 2,
+            AutomaticPlanarMaterialSemantic.WetGround => 1,
             _ => 0
         };
 }

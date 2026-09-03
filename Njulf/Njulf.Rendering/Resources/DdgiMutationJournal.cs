@@ -63,6 +63,7 @@ public sealed class DdgiMutationJournal : IDisposable
 
     private readonly object _gate = new();
     private readonly SceneMutation[] _events;
+    private readonly bool[] _eventBootstrap;
     private readonly List<DdgiDirtyRegion> _output;
     private readonly Dictionary<CoalescingKey, int> _coalesced;
     private readonly Dictionary<MaterialHandle, HashSet<RenderObject>>
@@ -75,6 +76,7 @@ public sealed class DdgiMutationJournal : IDisposable
     private Scene? _scene;
     private int _eventCount;
     private bool _overflowed;
+    private bool _pendingHasRuntimeEvent;
     private bool _disposed;
     private ulong _syntheticSerial;
     private ulong _lastConsumedSerial;
@@ -111,6 +113,7 @@ public sealed class DdgiMutationJournal : IDisposable
             throw new ArgumentOutOfRangeException(nameof(coalescingBrickSize));
 
         _events = new SceneMutation[eventCapacity];
+        _eventBootstrap = new bool[eventCapacity];
         _outputCapacity = outputCapacity;
         _brickSize = coalescingBrickSize;
         _output = new List<DdgiDirtyRegion>(outputCapacity);
@@ -172,7 +175,7 @@ public sealed class DdgiMutationJournal : IDisposable
                     SceneMutationKind.Added | SceneMutationKind.Geometry,
                     null,
                     bounds,
-                    renderObject.Revision));
+                    renderObject.Revision), bootstrap: true);
                 _sceneAttachObjectCount = SaturatingIncrement(
                     _sceneAttachObjectCount);
             }
@@ -186,7 +189,7 @@ public sealed class DdgiMutationJournal : IDisposable
                     SceneMutationKind.Added | SceneMutationKind.ParticleState,
                     null,
                     null,
-                    particle.Version));
+                    particle.Version), bootstrap: true);
             }
 
             foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
@@ -198,7 +201,7 @@ public sealed class DdgiMutationJournal : IDisposable
                     SceneMutationKind.Added | SceneMutationKind.StaticInstances,
                     null,
                     null,
-                    batch.Revision));
+                    batch.Revision), bootstrap: true);
             }
 
             foreach (Njulf.Core.Foliage.FoliagePatch patch in scene.FoliagePatches)
@@ -210,7 +213,7 @@ public sealed class DdgiMutationJournal : IDisposable
                     SceneMutationKind.Added | SceneMutationKind.Foliage,
                     null,
                     patch.Bounds,
-                    patch.ContentRevision));
+                    patch.ContentRevision), bootstrap: true);
             }
         }
     }
@@ -234,10 +237,13 @@ public sealed class DdgiMutationJournal : IDisposable
             _output.Clear();
             _coalesced.Clear();
             _overflowedLastDrain = _overflowed;
+            bool bootstrapOnly = _eventCount > 0 && !_pendingHasRuntimeEvent;
 
             if (_overflowed)
             {
-                AddConservativeFallbackLocked(conservativeSceneBounds);
+                AddConservativeFallbackLocked(
+                    conservativeSceneBounds,
+                    bootstrapOnly);
                 ResetPendingLocked();
                 return _output;
             }
@@ -245,6 +251,7 @@ public sealed class DdgiMutationJournal : IDisposable
             for (int eventIndex = 0; eventIndex < _eventCount; eventIndex++)
             {
                 SceneMutation mutation = _events[eventIndex];
+                bool bootstrap = _eventBootstrap[eventIndex];
                 _lastConsumedSerial = Math.Max(
                     _lastConsumedSerial,
                     mutation.Serial);
@@ -285,7 +292,9 @@ public sealed class DdgiMutationJournal : IDisposable
                 {
                     if (mutation.Kind.HasFlag(SceneMutationKind.Global))
                         _lastKnownBounds.Clear();
-                    AddConservativeFallbackLocked(conservativeSceneBounds);
+                    AddConservativeFallbackLocked(
+                        conservativeSceneBounds,
+                        bootstrapOnly);
                     ResetPendingLocked();
                     return _output;
                 }
@@ -320,14 +329,17 @@ public sealed class DdgiMutationJournal : IDisposable
                     ReasonFlags = 1u << (int)resolution.Reason,
                     Priority = resolution.Priority,
                     SourceRevision = mutation.ContentRevision,
-                    SourceIdentifier = StableIdentifier(mutation.ProducerId)
+                    SourceIdentifier = StableIdentifier(mutation.ProducerId),
+                    IsBootstrap = bootstrap
                 };
 
                 if (!TryCoalesceLocked(region))
                 {
                     _overflowCount = SaturatingIncrement(_overflowCount);
                     _overflowedLastDrain = true;
-                    AddConservativeFallbackLocked(conservativeSceneBounds);
+                    AddConservativeFallbackLocked(
+                        conservativeSceneBounds,
+                        bootstrapOnly);
                     ResetPendingLocked();
                     return _output;
                 }
@@ -446,8 +458,10 @@ public sealed class DdgiMutationJournal : IDisposable
         }
     }
 
-    private void EnqueueLocked(SceneMutation mutation)
+    private void EnqueueLocked(SceneMutation mutation, bool bootstrap = false)
     {
+        if (!bootstrap)
+            _pendingHasRuntimeEvent = true;
         if (_overflowed)
             return;
         if (_eventCount >= _events.Length)
@@ -456,7 +470,9 @@ public sealed class DdgiMutationJournal : IDisposable
             _overflowCount = SaturatingIncrement(_overflowCount);
             return;
         }
-        _events[_eventCount++] = mutation;
+        _events[_eventCount] = mutation;
+        _eventBootstrap[_eventCount] = bootstrap;
+        _eventCount++;
         _enqueuedEventCount = SaturatingIncrement(_enqueuedEventCount);
     }
 
@@ -477,7 +493,8 @@ public sealed class DdgiMutationJournal : IDisposable
                 SourceRevision = Math.Max(existing.SourceRevision, region.SourceRevision),
                 SourceIdentifier = existing.SourceIdentifier == region.SourceIdentifier
                     ? existing.SourceIdentifier
-                    : 0UL
+                    : 0UL,
+                IsBootstrap = existing.IsBootstrap && region.IsBootstrap
             };
             _coalescedEventCount = SaturatingIncrement(_coalescedEventCount);
             return true;
@@ -512,7 +529,9 @@ public sealed class DdgiMutationJournal : IDisposable
                 : (int)brick;
     }
 
-    private void AddConservativeFallbackLocked(CoreBoundingBox sceneBounds)
+    private void AddConservativeFallbackLocked(
+        CoreBoundingBox sceneBounds,
+        bool bootstrap = false)
     {
         _output.Clear();
         _coalesced.Clear();
@@ -523,7 +542,8 @@ public sealed class DdgiMutationJournal : IDisposable
             InfluenceBounds = sceneBounds,
             ReasonFlags = uint.MaxValue,
             Priority = uint.MaxValue,
-            SourceRevision = _lastConsumedSerial
+            SourceRevision = _lastConsumedSerial,
+            IsBootstrap = bootstrap
         });
         _conservativeFallbackCount = SaturatingIncrement(
             _conservativeFallbackCount);
@@ -533,8 +553,10 @@ public sealed class DdgiMutationJournal : IDisposable
     private void ResetPendingLocked()
     {
         Array.Clear(_events, 0, _eventCount);
+        Array.Clear(_eventBootstrap, 0, _eventCount);
         _eventCount = 0;
         _overflowed = false;
+        _pendingHasRuntimeEvent = false;
     }
 
     private static DdgiMutationResolution ResolveDefault(SceneMutation mutation)

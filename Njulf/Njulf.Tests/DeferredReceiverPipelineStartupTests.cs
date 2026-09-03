@@ -208,6 +208,9 @@ public sealed class DeferredReceiverPipelineStartupTests
             "CleanupSimpleDdgiReceiverCacheAdaptive(",
             unpublish,
             StringComparison.Ordinal);
+        int cancel = disposal.IndexOf(
+            ".CancelPending();",
+            StringComparison.Ordinal);
         int drain = disposal.IndexOf(
             "CompilationScheduler\n                                .WaitForAll();",
             StringComparison.Ordinal);
@@ -239,6 +242,8 @@ public sealed class DeferredReceiverPipelineStartupTests
                 Does.Contain("Volatile.Read(ref _simpleDdgiReceiverPipelineBank)"));
             Assert.That(execute,
                 Does.Contain("receiverPipelineBank is not null"));
+            Assert.That(cancel, Is.GreaterThanOrEqualTo(0));
+            Assert.That(drain, Is.GreaterThan(cancel));
             Assert.That(drain, Is.GreaterThanOrEqualTo(0));
             Assert.That(deviceIdle, Is.GreaterThan(drain));
         });

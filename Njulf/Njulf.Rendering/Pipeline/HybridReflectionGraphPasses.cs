@@ -53,6 +53,29 @@ internal abstract class HybridReflectionGraphPass : RenderPassBase
     }
 }
 
+/// <summary>
+/// Establishes the frame transaction and compacts visible reflection
+/// receivers before any DDGI or sharp-detail work is submitted.
+/// </summary>
+internal sealed class HybridReflectionClassifyPass : HybridReflectionGraphPass
+{
+    public HybridReflectionClassifyPass(
+        VulkanContext context,
+        SwapchainManager swapchain,
+        BindlessHeap bindlessHeap,
+        HybridReflectionVulkanRuntime runtime)
+        : base("HybridReflectionClassifyPass", context, swapchain,
+            bindlessHeap, runtime, ownsTargetNotification: true)
+    {
+    }
+
+    public override void Execute(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        SceneRenderingData sceneData) =>
+        Runtime.RecordClassify(commandBuffer, frameIndex, sceneData);
+}
+
 internal sealed class HybridReflectionSsrPass : HybridReflectionGraphPass
 {
     public HybridReflectionSsrPass(
@@ -61,7 +84,7 @@ internal sealed class HybridReflectionSsrPass : HybridReflectionGraphPass
         BindlessHeap bindlessHeap,
         HybridReflectionVulkanRuntime runtime)
         : base("HybridReflectionSsrPass", context, swapchain, bindlessHeap,
-            runtime, ownsTargetNotification: true)
+            runtime)
     {
     }
 

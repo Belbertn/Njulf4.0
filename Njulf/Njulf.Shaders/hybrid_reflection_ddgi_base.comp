@@ -52,7 +52,7 @@ layout(push_constant) uniform HybridReflectionDdgiPushBlock
     float NormalDotThreshold;
     float MinimumWorldDepthTolerance;
     float RelativeWorldDepthTolerance;
-    uint Reserved;
+    uint UseActiveTileList;
     uint ForceExactReconstruction;
 } pc;
 
@@ -379,8 +379,11 @@ void HybridDdgiSharedTileRange(
     out ivec2 firstTileIndex,
     out uvec2 tileCount)
 {
+    uvec2 workgroupTile = pc.UseActiveTileList != 0u
+        ? HybridTiles[gl_WorkGroupID.x].xy
+        : gl_WorkGroupID.xy;
     ivec2 workgroupOrigin = ivec2(
-        gl_WorkGroupID.xy * gl_WorkGroupSize.xy);
+        workgroupTile * gl_WorkGroupSize.xy);
     ivec2 workgroupLast = workgroupOrigin +
         ivec2(gl_WorkGroupSize.xy) - ivec2(1);
     float inverseScale = 1.0 / float(scale);
@@ -653,9 +656,20 @@ bool HybridFindDdgiCohort(
 
 void HybridReconstructDdgiBase()
 {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 pixel = ivec2(HybridReflectionTileInvocation(
+        pc.UseActiveTileList != 0u));
     if (!HybridDdgiPixelInBounds(pixel))
         return;
+
+    if (pc.UseActiveTileList != 0u &&
+        HybridHistoryMetadataValid(
+            imageLoad(HybridMetadataCurrent, pixel).xy))
+    {
+        // The classifier published a validated temporal carry for this
+        // receiver. Resolve will consume it directly, so DDGI performs no
+        // reconstruction or exact-miss work for the lane.
+        return;
+    }
 
     uvec4 payload;
     vec3 worldPosition;
@@ -694,11 +708,25 @@ void HybridPublishDdgiMissTile()
 {
     memoryBarrierShared();
     barrier();
-    if (gl_LocalInvocationIndex != 0u ||
-        (HybridDdgiMissMaskLow | HybridDdgiMissMaskHigh) == 0u)
+    if (gl_LocalInvocationIndex != 0u)
+        return;
+
+    if (pc.UseActiveTileList != 0u)
     {
+        uint tileIndex = gl_WorkGroupID.x;
+        if (tileIndex >= HybridTileCount)
+            return;
+        HybridTiles[tileIndex].z = HybridDdgiMissMaskLow;
+        HybridTiles[tileIndex].w = HybridDdgiMissMaskHigh;
+        if ((HybridDdgiMissMaskLow | HybridDdgiMissMaskHigh) != 0u)
+        {
+            atomicMax(HybridDdgiExactIndirectGroupCountX, tileIndex + 1u);
+        }
         return;
     }
+
+    if ((HybridDdgiMissMaskLow | HybridDdgiMissMaskHigh) == 0u)
+        return;
 
     uint tileIndex = atomicAdd(HybridTileCount, 1u);
     if (tileIndex < HybridTileCapacity)

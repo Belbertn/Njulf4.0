@@ -92,6 +92,69 @@ public sealed class PipelineCompilationSchedulerTests
             Throws.InvalidOperationException);
     }
 
+    [Test]
+    public void CancelPending_SkipsQueuedWorkAndDrainsActiveCompile()
+    {
+        using var scheduler = new PipelineCompilationScheduler(1);
+        using var activeEntered = new ManualResetEventSlim();
+        using var releaseActive = new ManualResetEventSlim();
+        using var drainStarted = new ManualResetEventSlim();
+        int activeExecutions = 0;
+        int queuedExecutions = 0;
+        int lateExecutions = 0;
+
+        scheduler.Schedule(new PipelineArtifactId("active"), _ =>
+        {
+            Interlocked.Increment(ref activeExecutions);
+            activeEntered.Set();
+            releaseActive.Wait();
+        });
+
+        Assert.That(activeEntered.Wait(TimeSpan.FromSeconds(5)), Is.True);
+        scheduler.Schedule(
+            new PipelineArtifactId("queued"),
+            _ => Interlocked.Increment(ref queuedExecutions));
+
+        scheduler.CancelPending();
+        scheduler.CancelPending();
+        scheduler.Schedule(
+            new PipelineArtifactId("late"),
+            _ => Interlocked.Increment(ref lateExecutions));
+
+        Exception? drainFailure = null;
+        Task drain = Task.Run(() =>
+        {
+            drainStarted.Set();
+            try
+            {
+                scheduler.WaitForAll();
+            }
+            catch (Exception exception)
+            {
+                drainFailure = exception;
+            }
+        });
+
+        try
+        {
+            Assert.That(drainStarted.Wait(TimeSpan.FromSeconds(5)), Is.True);
+            Assert.That(drain.IsCompleted, Is.False);
+        }
+        finally
+        {
+            releaseActive.Set();
+        }
+
+        Assert.That(drain.Wait(TimeSpan.FromSeconds(5)), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(drainFailure, Is.InstanceOf<OperationCanceledException>());
+            Assert.That(activeExecutions, Is.EqualTo(1));
+            Assert.That(queuedExecutions, Is.Zero);
+            Assert.That(lateExecutions, Is.Zero);
+        });
+    }
+
     private static void UpdateMaximum(ref int target, int candidate)
     {
         while (true)

@@ -35,6 +35,9 @@ public sealed class DdgiMutationJournalTests
         Assert.Multiple(() =>
         {
             Assert.That(bootstrapRegionCount, Is.EqualTo(1));
+            Assert.That(bootstrap, Has.All.Property(
+                    nameof(DdgiDirtyRegion.IsBootstrap))
+                .True);
             Assert.That(unchanged, Is.Empty);
             Assert.That(afterBootstrap.SceneAttachScanCount, Is.EqualTo(1));
             Assert.That(afterBootstrap.SceneAttachObjectCount, Is.EqualTo(1));
@@ -72,6 +75,7 @@ public sealed class DdgiMutationJournalTests
             Assert.That(region.NewWorldBounds.Min, Is.EqualTo(new Vector3(9f, -1f, -1f)));
             Assert.That(region.Bounds.Min, Is.EqualTo(new Vector3(-1f)));
             Assert.That(region.Bounds.Max, Is.EqualTo(new Vector3(11f, 1f, 1f)));
+            Assert.That(region.IsBootstrap, Is.False);
         });
     }
 

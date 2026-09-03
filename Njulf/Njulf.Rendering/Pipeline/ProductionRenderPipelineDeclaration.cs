@@ -53,6 +53,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         "SimpleDdgiPageFeedbackPass",
         "SkyboxPass",
         "AutomaticPlanarReflectionPass",
+        "HybridReflectionClassifyPass",
         "HybridReflectionDdgiBasePass",
         "HybridReflectionSsrPass",
         "HybridReflectionRayQueryPass",
@@ -638,6 +639,68 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiResidency),
                 ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiScheduler),
                 ReadWriteGraphicsStorage(RenderGraphResourceId.AutomaticPlanarReflections)),
+            Pass("HybridReflectionClassifyPass",
+                ReadComputeSampled(
+                    RenderGraphResourceId.HybridReflectionReceiverPayload),
+                ReadComputeSampled(RenderGraphResourceId.MotionVectors),
+                ReadComputeStorage(
+                    RenderGraphResourceId.HybridReflectionHistory,
+                    RenderGraphHistoryBindingSelection.Previous),
+                ReadComputeStorage(
+                    RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                    RenderGraphHistoryBindingSelection.Previous),
+                WriteComputeStorage(
+                    RenderGraphResourceId.HybridReflectionHistory,
+                    historyBinding:
+                        RenderGraphHistoryBindingSelection.Current),
+                WriteComputeStorage(
+                    RenderGraphResourceId.HybridReflectionMoments,
+                    historyBinding:
+                        RenderGraphHistoryBindingSelection.Current),
+                WriteComputeStorage(
+                    RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                    historyBinding:
+                        RenderGraphHistoryBindingSelection.Current),
+                WriteComputeStorage(
+                    RenderGraphResourceId.HybridReflectionRawRadiance),
+                WriteComputeStorage(
+                    RenderGraphResourceId.HybridReflectionRawMetadata),
+                ReadWriteComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionRayTasks),
+                ReadWriteComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionCounters),
+                ReadWriteTransferComputeIndirectBuffer(
+                    RenderGraphResourceId.HybridReflectionIndirectArguments),
+                ReadWriteComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionTileScheduler)),
+            Pass("HybridReflectionDdgiBasePass",
+                ReadComputeSampled(
+                    RenderGraphResourceId.HybridReflectionReceiverPayload),
+                ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+                ReadComputeStorage(
+                    RenderGraphResourceId.HybridReflectionRawMetadata),
+                ReadComputeStorage(
+                    RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                    RenderGraphHistoryBindingSelection.Current),
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiReceiverProbes),
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
+                ReadWriteComputeStorage(
+                    RenderGraphResourceId.HybridReflectionDdgiCohorts),
+                WriteComputeStorage(
+                    RenderGraphResourceId.HybridReflectionHistory,
+                    historyBinding:
+                        RenderGraphHistoryBindingSelection.Current),
+                ReadWriteComputeIndirectBuffer(
+                    RenderGraphResourceId.HybridReflectionIndirectArguments),
+                ReadWriteComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionCounters),
+                ReadWriteComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionTileScheduler)),
             Pass("HybridReflectionSsrPass",
                 ReadComputeSampled(RenderGraphResourceId.SceneColor),
                 ReadWriteComputeStorage(
@@ -652,6 +715,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadComputeStorage(
                     RenderGraphResourceId.HybridReflectionHistoryMetadata,
                     RenderGraphHistoryBindingSelection.Previous),
+                ReadComputeStorage(
+                    RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                    RenderGraphHistoryBindingSelection.Current),
                 WriteComputeStorage(
                     RenderGraphResourceId.HybridReflectionRawRadiance),
                 WriteComputeStorage(
@@ -691,31 +757,6 @@ internal sealed class ProductionRenderPipelineDeclaration
                     RenderGraphResourceId.HybridReflectionRawMetadata),
                 ReadWriteComputeStorage(
                     RenderGraphResourceId.HybridReflectionDdgiCohorts)),
-            Pass("HybridReflectionDdgiBasePass",
-                ReadComputeSampled(
-                    RenderGraphResourceId.HybridReflectionReceiverPayload),
-                ReadComputeDepth(RenderGraphResourceId.SceneDepth),
-                ReadComputeStorage(
-                    RenderGraphResourceId.HybridReflectionRawMetadata),
-                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
-                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
-                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
-                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiReceiverProbes),
-                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
-                ReadComputeBuffer(
-                    RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
-                ReadWriteComputeStorage(
-                    RenderGraphResourceId.HybridReflectionDdgiCohorts),
-                WriteComputeStorage(
-                    RenderGraphResourceId.HybridReflectionHistory,
-                    historyBinding:
-                        RenderGraphHistoryBindingSelection.Current),
-                ReadWriteTransferComputeIndirectBuffer(
-                    RenderGraphResourceId.HybridReflectionIndirectArguments),
-                ReadWriteComputeBuffer(
-                    RenderGraphResourceId.HybridReflectionCounters),
-                ReadWriteComputeBuffer(
-                    RenderGraphResourceId.HybridReflectionTileScheduler)),
             Pass("HybridReflectionResolvePass",
                 ReadComputeSampled(
                     RenderGraphResourceId.HybridReflectionReceiverPayload),
@@ -733,7 +774,11 @@ internal sealed class ProductionRenderPipelineDeclaration
                     RenderGraphResourceId.HybridReflectionRawMetadata),
                 ReadComputeStorage(
                     RenderGraphResourceId.HybridReflectionDdgiCohorts),
-                ReadWriteComputeBuffer(RenderGraphResourceId.HybridReflectionCounters)),
+                ReadWriteComputeBuffer(RenderGraphResourceId.HybridReflectionCounters),
+                ReadComputeIndirectBuffer(
+                    RenderGraphResourceId.HybridReflectionIndirectArguments),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionTileScheduler)),
             Pass("HybridReflectionTemporalPass",
                 ReadComputeSampled(
                     RenderGraphResourceId.HybridReflectionReceiverPayload),
@@ -754,7 +799,11 @@ internal sealed class ProductionRenderPipelineDeclaration
                     RenderGraphHistoryBindingSelection.Previous),
                 WriteComputeStorage(
                     RenderGraphResourceId.HybridReflectionHistoryMetadata,
-                    historyBinding: RenderGraphHistoryBindingSelection.Current)),
+                    historyBinding: RenderGraphHistoryBindingSelection.Current),
+                ReadComputeIndirectBuffer(
+                    RenderGraphResourceId.HybridReflectionIndirectArguments),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionTileScheduler)),
             Pass("HybridReflectionSpatialPass",
                 ReadComputeSampled(
                     RenderGraphResourceId.HybridReflectionReceiverPayload),
@@ -769,7 +818,11 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeStorage(
                     RenderGraphResourceId.HybridReflectionHistory,
                     historyBinding:
-                        RenderGraphHistoryBindingSelection.Previous)),
+                        RenderGraphHistoryBindingSelection.Previous),
+                ReadComputeIndirectBuffer(
+                    RenderGraphResourceId.HybridReflectionIndirectArguments),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionTileScheduler)),
             Pass("HybridReflectionCompositePass",
                 ReadComputeSampled(
                     RenderGraphResourceId.HybridReflectionReceiverPayload),
@@ -781,6 +834,10 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadComputeStorage(
                     RenderGraphResourceId.HybridReflectionHistory,
                     RenderGraphHistoryBindingSelection.Previous),
+                ReadComputeIndirectBuffer(
+                    RenderGraphResourceId.HybridReflectionIndirectArguments),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.HybridReflectionTileScheduler),
                 ReadWriteComputeStorage(RenderGraphResourceId.SceneColor,
                     ImageLayout.ColorAttachmentOptimal)),
             Pass("OpaqueSceneColorSnapshotPass",

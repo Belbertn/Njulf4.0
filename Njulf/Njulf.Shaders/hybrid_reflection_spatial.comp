@@ -12,7 +12,7 @@ layout(push_constant) uniform HybridReflectionSpatialPushBlock
     uint ScreenWidth;
     uint ScreenHeight;
     uint Iteration;
-    uint ReadScratch;
+    uint UseActiveTileList;
     float NormalPower;
     float DepthSigma;
     float RoughnessSigma;
@@ -60,7 +60,8 @@ void HybridWriteSpatialOutput(ivec2 pixel, vec4 value)
 
 void main()
 {
-    uvec2 invocation = gl_GlobalInvocationID.xy;
+    uvec2 invocation = HybridReflectionTileInvocation(
+        pc.UseActiveTileList != 0u);
     bool inBounds = invocation.x < pc.ScreenWidth &&
         invocation.y < pc.ScreenHeight;
     if (gl_LocalInvocationIndex == 0u)

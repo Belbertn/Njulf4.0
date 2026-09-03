@@ -229,6 +229,24 @@ public readonly record struct ReflectionModeResolution(
     public bool UsesRayQueries => Effective == ReflectionMode.HybridRayQuery;
 }
 
+/// <summary>
+/// Keeps authored reflection probes as an explicit compatibility path. The
+/// adaptive hybrid mode allocates no local-probe cubemap until the user
+/// selects a probe-oriented legacy mode; its environment fallback remains
+/// available independently.
+/// </summary>
+public static class ManualReflectionProbePolicy
+{
+    public static bool IsCompatibilityMode(ReflectionSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return settings.Enabled && settings.MaxProbes > 0 && settings.Mode is
+            ReflectionMode.StaticProbes or
+            ReflectionMode.StaticProbesAndSsr or
+            ReflectionMode.StaticProbesAndPlanar;
+    }
+}
+
 public static class ReflectionModeResolver
 {
     public static ReflectionModeResolution Resolve(
@@ -346,6 +364,8 @@ public static class HybridReflectionBudgetPlanner
     public const float GlossyImportanceFloor = 0.30f;
     public const float MinimumRayImportance = 0.12f;
     public const float BroadImportanceScale = 0.50f;
+    public const float DdgiOwnedMinimumRoughness = 0.25f;
+    public const float DdgiOwnedMaximumF0 = 0.12f;
 
     public static ReflectionResolutionTier ResolveResolutionTier(
         ReflectionSettings settings,
@@ -388,6 +408,16 @@ public static class HybridReflectionBudgetPlanner
             ReflectionLobeFlags.Transmissive);
         bool broadAnisotropic = lobeFlags.HasFlag(
             ReflectionLobeFlags.BroadAnisotropic);
+        bool clearcoat = lobeFlags.HasFlag(ReflectionLobeFlags.Clearcoat);
+        if (!transmissive && !clearcoat &&
+            roughness >= DdgiOwnedMinimumRoughness &&
+            f0 <= DdgiOwnedMaximumF0)
+        {
+            // A low-F0 broad lobe does not contain enough sharp scene detail
+            // to justify SSR or a ray query. Directional DDGI owns it, with
+            // the environment retained as the terminal no-data fallback.
+            return ReflectionResolutionTier.AnalyticFallback;
+        }
         bool requiresFullQuality = roughness <= AlwaysFullRoughness ||
             transmissive || f0 >= MirrorF0Threshold;
         if (tier == ReflectionResolutionTier.Full && !requiresFullQuality)
@@ -857,7 +887,7 @@ public struct GPUHybridReflectionDdgiPushConstants
     public float NormalDotThreshold;
     public float MinimumWorldDepthTolerance;
     public float RelativeWorldDepthTolerance;
-    public uint Reserved;
+    public uint UseActiveTileList;
     public uint ForceExactReconstruction;
 }
 
@@ -925,6 +955,8 @@ public struct GPUHybridReflectionResolvePushConstants
     public uint DdgiBaseAvailable;
     public uint CurrentFrameIndex;
     public uint EffectiveReflectionMode;
+    public uint UseActiveTileList;
+    public uint ManualProbeFallbackEnabled;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -942,7 +974,7 @@ public struct GPUHybridReflectionTemporalPushConstants
     public uint CurrentFrameIndex;
     public uint CameraOnlyReprojection;
     public uint SourceInvalidations;
-    public uint Padding3;
+    public uint UseActiveTileList;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -951,7 +983,7 @@ public struct GPUHybridReflectionSpatialPushConstants
     public uint ScreenWidth;
     public uint ScreenHeight;
     public uint Iteration;
-    public uint ReadScratch;
+    public uint UseActiveTileList;
     public float NormalPower;
     public float DepthSigma;
     public float RoughnessSigma;
@@ -968,7 +1000,7 @@ public struct GPUHybridReflectionCompositePushConstants
     public float FullResolutionRoughness;
     public float HalfResolutionRoughness;
     public float QuarterResolutionRoughness;
-    public float Padding0;
+    public uint UseActiveTileList;
 }
 
 /// <summary>

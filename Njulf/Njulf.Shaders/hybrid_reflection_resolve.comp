@@ -28,6 +28,8 @@ layout(push_constant) uniform HybridReflectionResolvePushBlock
     uint DdgiBaseAvailable;
     uint CurrentFrameIndex;
     uint EffectiveReflectionMode;
+    uint UseActiveTileList;
+    uint ManualProbeFallbackEnabled;
 } pc;
 
 vec3 HybridTransformProbePoint(GPUReflectionProbe probe, vec3 position)
@@ -173,7 +175,8 @@ void HybridSampleAnalyticFallback(
     out float confidence,
     out uint source)
 {
-    if (HybridSampleLocalProbe(worldPosition, reflectionDirection,
+    if (pc.ManualProbeFallbackEnabled != 0u &&
+        HybridSampleLocalProbe(worldPosition, reflectionDirection,
             roughness, radiance, confidence))
     {
         source = HYBRID_REFLECTION_SOURCE_LOCAL_PROBE;
@@ -191,7 +194,8 @@ void HybridSampleAnalyticFallback(
 
 void main()
 {
-    uvec2 invocation = gl_GlobalInvocationID.xy;
+    uvec2 invocation = HybridReflectionTileInvocation(
+        pc.UseActiveTileList != 0u);
     if (invocation.x >= pc.ScreenWidth || invocation.y >= pc.ScreenHeight)
         return;
     ivec2 pixel = ivec2(invocation);

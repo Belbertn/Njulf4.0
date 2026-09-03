@@ -112,6 +112,8 @@ const float HYBRID_REFLECTION_TRANSMISSION_IMPORTANCE_FLOOR = 0.40;
 const float HYBRID_REFLECTION_GLOSSY_IMPORTANCE_FLOOR = 0.30;
 const float HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE = 0.12;
 const float HYBRID_REFLECTION_BROAD_IMPORTANCE_SCALE = 0.50;
+const float HYBRID_REFLECTION_DDGI_OWNED_MINIMUM_ROUGHNESS = 0.25;
+const float HYBRID_REFLECTION_DDGI_OWNED_MAXIMUM_F0 = 0.12;
 const uint HYBRID_REFLECTION_SCREEN_COUNTER_SAMPLE_MASK = 63u;
 const uint HYBRID_REFLECTION_SCREEN_COUNTER_SAMPLE_WEIGHT = 64u;
 
@@ -152,6 +154,14 @@ bool HybridReflectionRequiresSharpDetail(uvec4 payload)
         HybridReflectionPayloadF0(payload));
     return transmissive || roughness <= 0.08 ||
         (!broadAnisotropic && maximumF0 >= 0.35 && roughness <= 0.25);
+}
+
+uvec2 HybridReflectionTileInvocation(bool useActiveTileList)
+{
+    return useActiveTileList
+        ? HybridTiles[gl_WorkGroupID.x].xy * uvec2(8u) +
+            gl_LocalInvocationID.xy
+        : gl_GlobalInvocationID.xy;
 }
 
 vec3 HybridReflectionTraceNormal(uvec4 payload)
@@ -227,6 +237,15 @@ uint HybridResolveAdaptiveReflectionTier(
         NJULF_HYBRID_REFLECTION_LOBE_TRANSMISSIVE) != 0u;
     bool broadAnisotropic = (lobeFlags &
         NJULF_HYBRID_REFLECTION_LOBE_BROAD_ANISOTROPIC) != 0u;
+    bool clearcoat = (lobeFlags &
+        NJULF_HYBRID_REFLECTION_LOBE_CLEARCOAT) != 0u;
+    if (!transmissive && !clearcoat &&
+        perceptualRoughness >=
+            HYBRID_REFLECTION_DDGI_OWNED_MINIMUM_ROUGHNESS &&
+        maximumF0 <= HYBRID_REFLECTION_DDGI_OWNED_MAXIMUM_F0)
+    {
+        return 0u;
+    }
     bool requiresFullQuality = perceptualRoughness <=
             HYBRID_REFLECTION_ALWAYS_FULL_ROUGHNESS ||
         transmissive ||

@@ -79,6 +79,12 @@ void main()
         {
             imageStore(HybridRawRadiance, pixel, vec4(0.0));
             imageStore(HybridRawMetadata, pixel, uvec4(0u));
+            // A fully empty tile is deliberately absent from the compact
+            // list, so classification owns clearing its current-bank history
+            // and prevents a later reappearance from reusing stale data.
+            imageStore(HybridHistoryCurrent, pixel, vec4(0.0));
+            imageStore(HybridMomentsCurrent, pixel, vec4(0.0));
+            imageStore(HybridMetadataCurrent, pixel, uvec4(0u));
         }
     }
     else
@@ -141,6 +147,11 @@ void main()
                     HYBRID_REFLECTION_REASON_RESOLUTION_SKIP,
                     HybridHistoryMetadataAge(previousMetadata), true),
                 0u, 0u, 0u));
+            // Current metadata is otherwise an output of temporal resolve.
+            // Before that stage it is a collision-free per-pixel reuse marker;
+            // raw metadata may still contain the non-sparse lobe sidecar.
+            imageStore(HybridMetadataCurrent, pixel,
+                uvec4(previousMetadata, 0u, 0u));
         }
         if (gl_LocalInvocationIndex == 0u)
         {
@@ -148,7 +159,10 @@ void main()
             atomicAdd(HybridCounters[
                 HYBRID_REFLECTION_COUNTER_REUSE_TILES], 1u);
         }
-        return;
+    }
+    else if (receiverValid)
+    {
+        imageStore(HybridMetadataCurrent, pixel, uvec4(0u));
     }
 
     if (gl_LocalInvocationIndex == 0u)
@@ -159,16 +173,19 @@ void main()
             HybridTiles[tileIndex] = uvec4(
                 gl_WorkGroupID.xy, TileTierPriority, 0u);
             atomicMax(HybridSsrIndirectGroupCountX, tileIndex + 1u);
-            atomicAdd(HybridCounters[
-                HYBRID_REFLECTION_COUNTER_ACTIVE_TILES], 1u);
-            uint tierCounter = TileTierPriority == 4u
-                ? HYBRID_REFLECTION_COUNTER_FULL_RATE_TILES
-                : TileTierPriority == 3u
-                    ? HYBRID_REFLECTION_COUNTER_HALF_RATE_TILES
-                    : TileTierPriority == 2u
-                        ? HYBRID_REFLECTION_COUNTER_QUARTER_RATE_TILES
-                        : HYBRID_REFLECTION_COUNTER_ANALYTIC_TILES;
-            atomicAdd(HybridCounters[tierCounter], 1u);
+            if (TileCanReuse == 0u)
+            {
+                atomicAdd(HybridCounters[
+                    HYBRID_REFLECTION_COUNTER_ACTIVE_TILES], 1u);
+                uint tierCounter = TileTierPriority == 4u
+                    ? HYBRID_REFLECTION_COUNTER_FULL_RATE_TILES
+                    : TileTierPriority == 3u
+                        ? HYBRID_REFLECTION_COUNTER_HALF_RATE_TILES
+                        : TileTierPriority == 2u
+                            ? HYBRID_REFLECTION_COUNTER_QUARTER_RATE_TILES
+                            : HYBRID_REFLECTION_COUNTER_ANALYTIC_TILES;
+                atomicAdd(HybridCounters[tierCounter], 1u);
+            }
             TileAppendIndex = tileIndex;
         }
         else
@@ -182,7 +199,8 @@ void main()
 
     // Capacity is provisioned for every screen tile, but retain a bounded
     // recovery path if a future allocator deliberately admits less storage.
-    if (receiverValid && TileAppendIndex == 0xffffffffu)
+    if (receiverValid && TileAppendIndex == 0xffffffffu &&
+        TileCanReuse == 0u)
     {
         imageStore(HybridRawRadiance, pixel, vec4(0.0));
         imageStore(HybridRawMetadata, pixel, uvec4(
