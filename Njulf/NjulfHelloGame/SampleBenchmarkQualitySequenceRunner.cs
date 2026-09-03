@@ -16,6 +16,13 @@ namespace NjulfHelloGame;
 public sealed class SampleBenchmarkQualitySequenceRunner
 {
     private const int RequiredConsecutiveReadyFrameCount = 30;
+    /// <summary>
+    /// Renderer-wide frame serial at which every moving quality sequence starts
+    /// its authored warmup. Keeping this absolute phase fixed makes consumers of
+    /// the global frame serial reproducible even when asynchronous scene and
+    /// persistent-prior loading complete on different host frames.
+    /// </summary>
+    internal const ulong DeterministicMovingWarmupStartFrameSerial = 1_024UL;
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         WriteIndented = true
@@ -530,8 +537,21 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         if (SampleBenchmarkTrajectory.IsMoving(_options.Trajectory) &&
             _movingWarmupFirstAbsoluteFrameIndex < 0)
         {
+            ulong frameSerial = diagnostics.CaptureFrame.FrameSerial;
+            if (frameSerial > DeterministicMovingWarmupStartFrameSerial)
+            {
+                _settlingWaitTimedOut = true;
+                RecordFailure(
+                    "Quality sequence missed deterministic moving warmup " +
+                    $"frame serial {DeterministicMovingWarmupStartFrameSerial}; " +
+                    $"the next observed diagnostic was {frameSerial}.");
+                Finish();
+                return;
+            }
+
             if (!rendererReady ||
-                !IsWarmStartReadyForDeterministicMovingWarmup(diagnostics))
+                !IsWarmStartReadyForDeterministicMovingWarmup(diagnostics) ||
+                frameSerial < DeterministicMovingWarmupStartFrameSerial)
             {
                 _consecutiveReadyFrameCount = 0;
                 if (_additionalSettlingFrameCount <
@@ -550,12 +570,10 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                 return;
             }
 
-            // The frame whose post-Draw diagnostics first prove that the
-            // renderer and persistent DDGI prior are ready was rendered at
-            // authored route frame zero. Count it as warmup frame zero, then
-            // run the complete requested warmup from this deterministic
-            // boundary. This prevents asynchronous cache-load timing from
-            // selecting a different camera-relative probe overlap per process.
+            // This exact renderer-wide frame was rendered at authored route
+            // frame zero. Count it as warmup frame zero, then run the complete
+            // requested warmup. Do not reset the renderer's monotonic serial:
+            // delayed feedback and resource retirement depend on that contract.
             _movingWarmupFirstAbsoluteFrameIndex = absoluteFrameIndex;
         }
 

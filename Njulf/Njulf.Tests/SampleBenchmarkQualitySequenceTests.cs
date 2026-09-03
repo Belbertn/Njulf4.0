@@ -323,8 +323,13 @@ public sealed class SampleBenchmarkQualitySequenceTests
                     LinearHdrCaptureState.Queued,
                     string.Empty));
 
+            int firstWarmupFrame = checked((int)
+                SampleBenchmarkQualitySequenceRunner
+                    .DeterministicMovingWarmupStartFrameSerial);
+            int lastWarmupFrame = firstWarmupFrame +
+                SampleBistroQualityCaptureContract.LoopFrameCount - 1;
             for (int frame = 0;
-                 frame < SampleBistroQualityCaptureContract.LoopFrameCount;
+                 frame <= lastWarmupFrame;
                  frame++)
             {
                 runner.OnFrameRendered(frame, ReadyDiagnostics(frame));
@@ -336,7 +341,7 @@ public sealed class SampleBenchmarkQualitySequenceTests
                 Assert.That(capturePhaseSynchronizations, Is.EqualTo(1));
                 Assert.That(
                     runner.ResolveTrajectoryFrameIndexForNextRender(
-                        SampleBistroQualityCaptureContract.LoopFrameCount),
+                        lastWarmupFrame + 1),
                     Is.Zero);
             });
         }
@@ -385,23 +390,40 @@ public sealed class SampleBenchmarkQualitySequenceTests
                     ReadyDiagnostics(frame, warmStart: pending));
             }
 
+            int firstWarmupFrame = checked((int)
+                SampleBenchmarkQualitySequenceRunner
+                    .DeterministicMovingWarmupStartFrameSerial);
+            for (int absoluteFrame = 3;
+                 absoluteFrame < firstWarmupFrame;
+                 absoluteFrame++)
+            {
+                Assert.That(
+                    runner.ResolveTrajectoryFrameIndexForNextRender(
+                        absoluteFrame),
+                    Is.Zero);
+                runner.OnFrameRendered(
+                    absoluteFrame,
+                    ReadyDiagnostics(absoluteFrame, warmStart: applied));
+            }
+
             Assert.That(
-                runner.ResolveTrajectoryFrameIndexForNextRender(3),
+                runner.ResolveTrajectoryFrameIndexForNextRender(
+                    firstWarmupFrame),
                 Is.Zero);
             runner.OnFrameRendered(
-                3,
-                ReadyDiagnostics(3, warmStart: applied));
+                firstWarmupFrame,
+                ReadyDiagnostics(firstWarmupFrame, warmStart: applied));
 
-            int lastWarmupFrame = 3 +
+            int lastWarmupFrame = firstWarmupFrame +
                 SampleBistroQualityCaptureContract.LoopFrameCount - 1;
-            for (int absoluteFrame = 4;
+            for (int absoluteFrame = firstWarmupFrame + 1;
                  absoluteFrame <= lastWarmupFrame;
                  absoluteFrame++)
             {
                 Assert.That(
                     runner.ResolveTrajectoryFrameIndexForNextRender(
                         absoluteFrame),
-                    Is.EqualTo(absoluteFrame - 3));
+                    Is.EqualTo(absoluteFrame - firstWarmupFrame));
                 runner.OnFrameRendered(
                     absoluteFrame,
                     ReadyDiagnostics(absoluteFrame, warmStart: applied));
@@ -686,8 +708,13 @@ public sealed class SampleBenchmarkQualitySequenceTests
                     return true;
                 },
                 _ => result!);
+            int firstWarmupFrame = checked((int)
+                SampleBenchmarkQualitySequenceRunner
+                    .DeterministicMovingWarmupStartFrameSerial);
+            int lastWarmupFrame = firstWarmupFrame +
+                SampleBistroQualityCaptureContract.LoopFrameCount - 1;
             for (int frame = 0;
-                 frame < SampleBistroQualityCaptureContract.LoopFrameCount;
+                 frame <= lastWarmupFrame;
                  frame++)
             {
                 runner.OnFrameRendered(frame, ReadyDiagnostics(frame));
@@ -695,7 +722,7 @@ public sealed class SampleBenchmarkQualitySequenceTests
 
             var contract = new SampleBistroQualityCaptureContract(
                 SampleBistroQualityCaptureVariant.SunScaleStep);
-            int firstAbsolute = SampleBistroQualityCaptureContract.LoopFrameCount;
+            int firstAbsolute = lastWarmupFrame + 1;
             for (int routeFrame = 0;
                  routeFrame < SampleBistroQualityCaptureContract.LoopFrameCount;
                  routeFrame++)
@@ -719,13 +746,13 @@ public sealed class SampleBenchmarkQualitySequenceTests
                     {
                         State = LinearHdrCaptureState.Failed,
                         Error = "synthetic readback failure",
-                        FrameSerial = 1_000
+                        FrameSerial = (ulong)firstAbsolute + 1UL
                     };
                 }
                 runner.OnFrameRendered(
                     absolute,
                     ReadyDiagnostics(
-                        frameSerial: 1_000 + routeFrame,
+                        frameSerial: firstAbsolute + routeFrame,
                         pose: pose,
                         sceneKind: "Bistro"));
                 if (routeFrame <
