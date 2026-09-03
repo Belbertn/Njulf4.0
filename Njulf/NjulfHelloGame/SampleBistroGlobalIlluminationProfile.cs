@@ -13,8 +13,8 @@ namespace NjulfHelloGame;
 internal static class SampleBistroGlobalIlluminationProfile
 {
     // Bistro ships hundreds of cooked BC textures. Selecting the authored
-    // 512px mip as their runtime base keeps the complete material set inside
-    // the 2 GiB/20%-headroom contract at 1080p without runtime resampling.
+    // 512px mip as their runtime base keeps the complete material set well
+    // inside the 6 GiB/10%-headroom contract at 1080p without runtime resampling.
     internal const uint DefaultImportedTextureDimension = 512u;
 
     // Cornell and Bistro are the interactive transition pair. Keeping their

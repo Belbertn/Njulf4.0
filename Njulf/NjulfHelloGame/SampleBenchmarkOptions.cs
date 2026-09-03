@@ -71,7 +71,7 @@ public sealed record SampleBenchmarkOptions(
     public string ShaderProfileArtifactPath { get; init; } = string.Empty;
     public bool RequireShaderProfileEvidence { get; init; }
     /// <summary>
-    /// Enforces the shipping 1920x1080/60 Hz frame-time and two-GiB memory
+    /// Enforces the shipping 1920x1080/60 Hz frame-time and six-GiB memory
     /// contract in addition to the renderer's component budget metrics.
     /// </summary>
     public bool RequireRealtime1080p60Target { get; init; }

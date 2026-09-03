@@ -153,7 +153,7 @@ Probe overlays must retain the regular virtual lattice. Confirm that nonresident
 - Shadow false-negative P95 is at most 0.5%, demand inflation P95 is at most 1.5×, and no actual demanded page is missed for more than two consecutive rendered frames.
 - The current-profile residency arena is at most 512 KiB and the hard virtual-limit fixture is at most 1 MiB.
 - Topology-identical sparse saves at least the greater of 16 MiB or 10% of same-binary Dense live bytes. The current High fixture saves 40,442,096 bytes (209,946,912 Dense versus 169,504,816 Sparse) with a 139,024-byte arena.
-- Total tracked GPU memory is at most 80% of the target 2 GiB profile, and stable frames create/destroy/rebind no residency or payload resources.
+- Total tracked GPU memory is at most 90% of the target 6 GiB profile, and stable frames create/destroy/rebind no residency or payload resources.
 - Added sparse forward-gather P95 is at most 0.15 ms and 5%; page-management GPU P95 is at most 0.25 ms; added CPU P95 is at most 0.10 ms with no stable-frame per-page enumeration.
 - Dense/Sparse HDR comparisons meet the frozen error gates and human review finds no black flash, stale-cell flash, page seam, ring seam, new leak, or transparent/fog/foliage pumping.
 - RG16F canonical and mirrored visibility bytes are exactly 1,024 bytes per provisioned probe; moment `.xy` payload bits match the legacy writer input and invalid/fresh probes remain fail-closed through probe state.

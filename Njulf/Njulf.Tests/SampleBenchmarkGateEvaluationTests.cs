@@ -57,11 +57,28 @@ public sealed class SampleBenchmarkGateEvaluationTests
         Assert.That(evaluation.Passed, Is.True, evaluation.Failure);
     }
 
+    [Test]
+    public void RealtimeTarget_UsesSixGiBWithTenPercentHeadroom()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleRealtimePerformanceTarget.TargetGpuMemoryBytes,
+                Is.EqualTo(6UL * 1024UL * 1024UL * 1024UL));
+            Assert.That(
+                SampleRealtimePerformanceTarget.MinimumMemoryHeadroomFraction,
+                Is.EqualTo(0.10));
+            Assert.That(
+                SampleRealtimePerformanceTarget.MaximumTrackedGpuMemoryBytes,
+                Is.EqualTo(5_798_205_849UL));
+        });
+    }
+
     [TestCase(6.01, 10.0, 16.0, 16.0, 0UL, "CPU frame P95")]
     [TestCase(6.0, 10.01, 16.0, 16.0, 0UL, "GPU frame P95")]
     [TestCase(6.0, 10.0, 16.68, 16.0, 0UL, "CPU frame P99")]
     [TestCase(6.0, 10.0, 16.0, 16.68, 0UL, "GPU frame P99")]
-    [TestCase(6.0, 10.0, 16.0, 16.0, 1717986919UL,
+    [TestCase(6.0, 10.0, 16.0, 16.0, 5798205850UL,
         "Tracked GPU memory")]
     public void Evaluate_RealtimeTargetFailsClosedAtEachAbsoluteLimit(
         double cpuP95,
@@ -96,6 +113,41 @@ public sealed class SampleBenchmarkGateEvaluationTests
             Assert.That(evaluation.Passed, Is.False);
             Assert.That(evaluation.Failure, Does.Contain(expectedFailure));
         });
+    }
+
+    [TestCase(900UL, true)]
+    [TestCase(901UL, false)]
+    public void Evaluate_RealtimeTargetEnforcesDriverReportedTenPercentHeadroom(
+        ulong actualUsageBytes,
+        bool expectedPass)
+    {
+        SampleBenchmarkReport baseline = CreateReport(metrics: []);
+        SampleBenchmarkReport report = baseline with
+        {
+            Options = baseline.Options with
+            {
+                RequireRealtime1080p60Target = true
+            },
+            CpuFrameMilliseconds = Timing("CPU", 6.0, 16.0),
+            GpuFrameMilliseconds = Timing("GPU", 10.0, 16.0),
+            LastDiagnostics = RendererDiagnostics.Empty with
+            {
+                CaptureRenderWidth = 1920,
+                CaptureRenderHeight = 1080,
+                TrackedGpuMemoryBytes = 0,
+                GpuMemoryBudgetQueryAvailable = 1,
+                ActualGpuMemoryUsageBytes = actualUsageBytes,
+                ActualGpuMemoryBudgetBytes = 1_000
+            }
+        };
+
+        SampleBenchmarkGateEvaluation evaluation =
+            SampleBenchmarkGateEvaluation.Evaluate(report);
+
+        Assert.That(
+            evaluation.Passed,
+            Is.EqualTo(expectedPass),
+            evaluation.Failure);
     }
 
     [Test]

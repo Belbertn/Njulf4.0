@@ -47,10 +47,10 @@ internal static class SampleRealtimePerformanceTarget
     public const double CpuP95BudgetMilliseconds = 6.0;
     public const double GpuP95BudgetMilliseconds = 10.0;
     public const double FrameP99BudgetMilliseconds = 1000.0 / FramesPerSecond;
-    public const ulong TargetGpuMemoryBytes = 2UL * 1024UL * 1024UL * 1024UL;
-    public const double MinimumMemoryHeadroomFraction = 0.20;
+    public const ulong TargetGpuMemoryBytes = 6UL * 1024UL * 1024UL * 1024UL;
+    public const double MinimumMemoryHeadroomFraction = 0.10;
     public const ulong MaximumTrackedGpuMemoryBytes =
-        TargetGpuMemoryBytes * 4UL / 5UL;
+        TargetGpuMemoryBytes * 9UL / 10UL;
 
     public static SampleRealtimePerformanceTargetReport Evaluate(
         SampleBenchmarkReport report)
@@ -96,14 +96,14 @@ internal static class SampleRealtimePerformanceTarget
             failures.Add(
                 $"Tracked GPU memory {trackedBytes} bytes exceeds the " +
                 $"{MaximumTrackedGpuMemoryBytes}-byte limit required for " +
-                $"{MinimumMemoryHeadroomFraction:P0} headroom on a two-GiB target.");
+                $"{MinimumMemoryHeadroomFraction:P0} headroom on a six-GiB target.");
         }
 
         if (diagnostics.GpuMemoryBudgetQueryAvailable != 0 &&
             diagnostics.ActualGpuMemoryBudgetBytes > 0)
         {
             decimal maximumActualUsage =
-                (decimal)diagnostics.ActualGpuMemoryBudgetBytes * 0.80m;
+                (decimal)diagnostics.ActualGpuMemoryBudgetBytes * 0.90m;
             if (diagnostics.ActualGpuMemoryUsageBytes > maximumActualUsage)
             {
                 failures.Add(

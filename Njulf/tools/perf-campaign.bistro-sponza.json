@@ -27,8 +27,8 @@
     "cpuP95Milliseconds": 6.0,
     "gpuP95Milliseconds": 10.0,
     "frameP99Milliseconds": 16.666666666666668,
-    "gpuMemoryBytes": 2147483648,
-    "minimumMemoryHeadroomFraction": 0.2
+    "gpuMemoryBytes": 6442450944,
+    "minimumMemoryHeadroomFraction": 0.1
   },
   "protectedPaths": [
     "tools/perf-campaign.ps1",

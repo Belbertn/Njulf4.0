@@ -2751,6 +2751,14 @@ try {
         param($manifest)
         $manifest.finalConfigurations = @("Release", "Release")
     } $false
+    Invoke-ManifestCase "wrong-gpu-memory-target" {
+        param($manifest)
+        $manifest.performanceTarget.gpuMemoryBytes = 2147483648
+    } $false
+    Invoke-ManifestCase "wrong-memory-headroom" {
+        param($manifest)
+        $manifest.performanceTarget.minimumMemoryHeadroomFraction = 0.2
+    } $false
     Invoke-ManifestCase "missing-approved-workload" {
         param($manifest)
         $manifest.workloads = @($manifest.workloads | Select-Object -Skip 1)

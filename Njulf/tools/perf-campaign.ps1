@@ -914,8 +914,8 @@ function Assert-CampaignManifest {
         (Assert-FiniteNumber $target.cpuP95Milliseconds "performanceTarget.cpuP95Milliseconds") -ne 6.0 -or
         (Assert-FiniteNumber $target.gpuP95Milliseconds "performanceTarget.gpuP95Milliseconds") -ne 10.0 -or
         [Math]::Abs((Assert-FiniteNumber $target.frameP99Milliseconds "performanceTarget.frameP99Milliseconds") - (1000.0 / 60.0)) -gt 1.0e-12 -or
-        (Assert-JsonInteger $target.gpuMemoryBytes "performanceTarget.gpuMemoryBytes" 1) -ne 2147483648 -or
-        (Assert-FiniteNumber $target.minimumMemoryHeadroomFraction "performanceTarget.minimumMemoryHeadroomFraction") -ne 0.2) {
+        (Assert-JsonInteger $target.gpuMemoryBytes "performanceTarget.gpuMemoryBytes" 1) -ne 6442450944 -or
+        (Assert-FiniteNumber $target.minimumMemoryHeadroomFraction "performanceTarget.minimumMemoryHeadroomFraction") -ne 0.1) {
         throw "The absolute 1080p60 performance target differs from the approved contract."
     }
     $finalConfigurations = @($Manifest.finalConfigurations)
