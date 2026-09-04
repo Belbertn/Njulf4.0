@@ -255,7 +255,7 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
         string emit = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_emit.comp");
         string emitClassify = ReadRepoText(
             "Njulf.Shaders",
-            "ddgi_simple_schedule_emit_classify.comp");
+            "ddgi_simple_schedule_materialize.comp");
         string emitScatter = ReadRepoText(
             "Njulf.Shaders",
             "ddgi_simple_schedule_emit_scatter.comp");
@@ -268,7 +268,7 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
         string sampledPublish = ReadRepoText(
             "Njulf.Shaders", "ddgi_simple_publish_sampled.comp");
         string commit = ReadRepoText(
-            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.comp");
+            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.glsl");
         string reset = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_reset.comp");
         string laneBase = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_lane_base.comp");
         string prefix = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_prefix.comp");
@@ -375,8 +375,12 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
                 "pc.LaneTotalsOffsetWords + activeLaneCount"));
             Assert.That(laneBase, Does.Contain(
                 "SIMPLE_DDGI_SCHEDULER_INVALID_PROBE"));
-            Assert.That(laneBase, Does.Match(
-                @"SchedulerWriteIndirect\(SIMPLE_DDGI_SCHEDULER_DISPATCH_ADMIT,\s*1u, 1u, 1u\);"));
+            Assert.That(laneBase, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_DISPATCH_TAIL_ADMIT"));
+            Assert.That(laneBase, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_DISPATCH_ADMIT"));
+            Assert.That(laneBase, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT"));
             Assert.That(prefix, Does.Contain("uint lanePair = gl_GlobalInvocationID.x;"));
             Assert.That(prefix, Does.Contain("uint packedCounts = SchedulerArenaRead(wordOffset);"));
             Assert.That(prefix, Does.Not.Contain("SchedulerWriteGroupLaneValue"));
@@ -401,7 +405,11 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
                 "SIMPLE_DDGI_SCHEDULER_COUNTER_COMPACTED) == 0u"));
             Assert.That(admit, Does.Contain("if (requestBudget == 0u)"));
             Assert.That(admit, Does.Contain(
-                "SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT"));
+                "SIMPLE_DDGI_SCHEDULER_DISPATCH_MATERIALIZE_CLASSIFY"));
+            Assert.That(admit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT_PREFIX"));
+            Assert.That(admit, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT_SCATTER"));
             Assert.That(admit, Does.Contain("if (!specializedTailPhase)"));
             Assert.That(admit, Does.Contain(
                 "volume >= activeVolumes || specializedTailPhase"));
@@ -434,13 +442,11 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
                 "for (uint lane = 0u; lane < SIMPLE_DDGI_SCHEDULER_MAX_LANES; lane++)"));
             Assert.That(admit, Does.Contain(
                 "uint firstPhase = tailSourceOnly ? 0u : (tailSolveOnly ? 6u : 0u);"));
-            Assert.That(schedulePass, Does.Contain(
-                "SimpleDdgiGpuSchedulerLayout.GroupsFor((layout.LaneCapacity + 1) / 2)"));
             Assert.That(schedulePass, Does.Contain("SimpleDdgiSchedule.Admit"));
             Assert.That(schedulePass, Does.Contain("SimpleDdgiSchedule.TailAdmit"));
             Assert.That(schedulePass, Does.Contain("SimpleDdgiSchedule.Materialize"));
-            Assert.That(schedulePass, Does.Contain(
-                "GroupsFor(layout.RequestCapacity)"));
+            Assert.That(schedulePass, Does.Contain("CmdDispatchIndirect("));
+            Assert.That(schedulePass, Does.Contain("DispatchSlots[stage]"));
             Assert.That(schedulePass, Does.Contain("GpuTimestampRecorder? timestamps"));
             Assert.That(schedulePass, Does.Not.Contain(
                 "DispatchStage(cmd, pushConstants, 5, SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.LaneCapacity))"));
@@ -460,7 +466,7 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(materialize, Does.Contain("SchedulerReadUpdateSelection("));
             Assert.That(materialize, Does.Contain("SchedulerWriteUpdate("));
             Assert.That(materialize, Does.Contain(
-                "updateIndex >= accepted"));
+                "updateIndex < accepted"));
             Assert.That(shaderProject, Does.Contain(
                 "SimpleDdgiAdmissionShaderVariant"));
             Assert.That(shaderProject, Does.Contain(
@@ -893,7 +899,7 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(shared, Does.Contain(
                 "SIMPLE_DDGI_SCHEDULER_FEEDBACK_TRANSPORT_TOPOLOGY_OFFSET = 998u"));
             Assert.That(feedback, Does.Contain(
-                "SchedulerVolumeGeneration());"));
+                "feedbackSummary[2u] = SchedulerVolumeGeneration();"));
             Assert.That(feedback, Does.Contain(
                 "SchedulerTransportTopologyGeneration());"));
         });
@@ -907,16 +913,19 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             "ddgi_simple_schedule_emit.comp");
         string classify = ReadRepoText(
             "Njulf.Shaders",
-            "ddgi_simple_schedule_emit_classify.comp");
+            "ddgi_simple_schedule_materialize.comp");
         string scatter = ReadRepoText(
             "Njulf.Shaders",
             "ddgi_simple_schedule_emit_scatter.comp");
         string validator = ReadRepoText(
             "Njulf.Shaders",
-            "ddgi_simple_schedule_validate_scroll_cohorts.comp");
+            "ddgi_simple_schedule_validate_scroll_cohorts.glsl");
         string commit = ReadRepoText(
             "Njulf.Shaders",
-            "ddgi_simple_schedule_commit_local.comp");
+            "ddgi_simple_schedule_commit_local.glsl");
+        string fusedCommit = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_commit.comp");
         string commitPass = ReadRepoText(
             "Njulf.Rendering",
             "Pipeline",
@@ -951,9 +960,9 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(schedulePass, Does.Contain("layout.Outcomes"));
 
             Assert.That(validator, Does.Contain(
-                "volumeAccepted[volume] !="));
+                "volumeAccepted != scrollExpected"));
             Assert.That(validator, Does.Contain(
-                "ScrollExposedProbeCount(volume)"));
+                "ScrollExposedProbeCount(volumeIndex)"));
             Assert.That(validator, Does.Contain(
                 "SchedulerVolumeScrollTransactionSerial(volumeIndex)"));
             Assert.That(validator, Does.Contain(
@@ -967,12 +976,24 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(commit, Does.Contain(
                 "Test this before any cache, lifecycle, atlas, or receiver mutation"));
             Assert.That(commitPass, Does.Contain(
-                "DispatchScrollCohortValidation(cmd, pushConstants);"));
-            Assert.That(commitPass.IndexOf(
-                    "DispatchScrollCohortValidation(cmd, pushConstants);",
+                "DispatchCommit(cmd, pushConstants);"));
+            Assert.That(fusedCommit, Does.Contain(
+                "ValidateScrollCohort(volumeIndex);"));
+            Assert.That(fusedCommit, Does.Contain(
+                "CommitLocalOutcome(outcomeIndex, volumeIndex);"));
+            Assert.That(fusedCommit, Does.Contain(
+                "CommitPropagationOutcome(outcomeIndex, volumeIndex);"));
+            Assert.That(fusedCommit.IndexOf(
+                    "ValidateScrollCohort(volumeIndex);",
                     StringComparison.Ordinal),
-                Is.LessThan(commitPass.IndexOf(
-                    "DispatchResidentLocal(cmd, pushConstants);",
+                Is.LessThan(fusedCommit.IndexOf(
+                    "CommitLocalOutcome(outcomeIndex, volumeIndex);",
+                    StringComparison.Ordinal)));
+            Assert.That(fusedCommit.IndexOf(
+                    "CommitLocalOutcome(outcomeIndex, volumeIndex);",
+                    StringComparison.Ordinal),
+                Is.LessThan(fusedCommit.IndexOf(
+                    "CommitPropagationOutcome(outcomeIndex, volumeIndex);",
                     StringComparison.Ordinal)));
         });
     }

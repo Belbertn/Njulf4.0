@@ -1285,6 +1285,10 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuLodSelectionEnabled { get; init; }
         public int SceneSubmissionGpuInstanceExpansionEnabled { get; init; }
         public int SceneSubmissionGpuInstanceExpansionActive { get; init; }
+        public int SceneSubmissionCounterReadbackEnabled { get; init; }
+        public long GpuSceneOpaqueCompactionMicroseconds { get; init; }
+        public string SceneSubmissionCompactionProgram { get; init; } =
+            string.Empty;
         public int SceneSubmissionInstanceCandidateCount { get; init; }
         public int SceneSubmissionGpuLodDitherTransitionsEnabled { get; init; }
         public int SceneSubmissionGpuLodDitherTransitionsActive { get; init; }

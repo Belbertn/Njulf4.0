@@ -233,7 +233,7 @@ public sealed class SimpleDdgiHotColdSourceCacheTests
         string abi = ReadRepoText("Njulf.Shaders", "ddgi_simple_storage_abi.glsl");
         string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
         string commit = ReadRepoText(
-            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.comp");
+            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.glsl");
         string audit = ReadRepoText(
             "Njulf.Shaders", "ddgi_simple_transport_audit.comp");
 

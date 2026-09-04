@@ -256,14 +256,35 @@ public sealed class GtaoImplementationTests
             Assert.That(passes, Does.Contain(
                 "sceneData.AmbientOcclusionMode == AmbientOcclusionMode.Gtao"));
             Assert.That(raw, Does.Contain("SearchHorizonCos("));
-            Assert.That(raw, Does.Contain("textureLod(HiZTexture"));
             Assert.That(raw, Does.Contain("IntegrateGtaoArc("));
             Assert.That(raw, Does.Contain("ApproximateHorizonAngle("));
             Assert.That(raw, Does.Contain(
                 "ApproximateAcos(float sineMagnitude, float cosine)"));
             Assert.That(raw, Does.Contain("ReconstructViewZw("));
             Assert.That(raw, Does.Contain(
-                "textureLod(HiZTexture, sampleUv, 0.0)"));
+                "ivec2 centerPixel = ResolveDepthPixel(uv, sourceExtent);"));
+            Assert.That(raw, Does.Contain(
+                "vec2 centerUv = DepthPixelUv(centerPixel, sourceExtent);"));
+            Assert.That(raw, Does.Contain(
+                "vec2 resolvedSampleUv = DepthPixelUv(samplePixel, sourceExtent);"));
+            Assert.That(raw, Does.Contain(
+                "resolvedSampleUv, sampleDepth);"));
+            Assert.That(raw, Does.Not.Contain(
+                "ReconstructViewPosition(sampleUv, sampleDepth)"));
+            Assert.That(temporal, Does.Contain(
+                "ivec2 depthPixel = ResolveDepthPixel(uv, sourceExtent);"));
+            Assert.That(temporal, Does.Contain(
+                "vec2 depthUv = DepthPixelUv(depthPixel, sourceExtent);"));
+            Assert.That(temporal, Does.Contain(
+                "ReconstructViewPosition(depthUv, depth)"));
+            Assert.That(raw, Does.Not.Contain("uv + vec2(invSource"));
+            Assert.That(temporal, Does.Not.Contain("uv + vec2(texel"));
+            Assert.That(raw, Does.Not.Contain(
+                "textureLod(HiZTexture, sampleUv"));
+            Assert.That(raw, Does.Contain(
+                "float planeDistance = dot(delta, surfaceNormal);"));
+            Assert.That(raw, Does.Contain(
+                "if (planeDistance <= pc.PlaneBias)"));
             Assert.That(raw, Does.Not.Contain(
                 "sourcePixelsPerDestinationPixel"));
             Assert.That(CountOccurrences(raw,

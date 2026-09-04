@@ -2552,6 +2552,12 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.SceneSubmissionGpuInstanceExpansionEnabled ? 1 : 0,
             SceneSubmissionGpuInstanceExpansionActive =
                 sceneData.SceneSubmissionGpuInstanceExpansionActive ? 1 : 0,
+            SceneSubmissionCounterReadbackEnabled =
+                sceneData.SceneSubmissionCounterReadbackEnabled ? 1 : 0,
+            GpuSceneOpaqueCompactionMicroseconds =
+                sceneData.GpuSceneOpaqueCompactionMicroseconds,
+            SceneSubmissionCompactionProgram =
+                sceneData.SceneSubmissionCompactionProgram,
             SceneSubmissionInstanceCandidateCount =
                 sceneData.SceneInstanceCandidateCount,
             SceneSubmissionGpuLodDitherTransitionsEnabled =

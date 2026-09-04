@@ -54,6 +54,7 @@ const uint SIMPLE_DDGI_FEEDBACK_REBASE_PENDING_RING = 40u;
 const uint SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 43u;
 
 shared uint feedbackReduction[SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS];
+shared uint feedbackSummary[64];
 
 void main()
 {
@@ -578,61 +579,61 @@ void main()
     return;
 #endif
 
-    if (localIndex != 0u)
-        return;
-
-    pendingFresh = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_FRESH];
-    pendingExposed = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_EXPOSED];
-    pendingRelocation = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_RELOCATION];
-    pendingSource = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_SOURCE];
-    pendingSourceInvalidFlag = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOURCE_INVALID];
-    pendingSourcePrivateRepair = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOURCE_REPAIR];
-    pendingSourceCardinality = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOURCE_CARDINALITY];
-    pendingSourceGeneration = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOURCE_GENERATION];
-    pendingSolver = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_SOLVER];
-    converged = feedbackReduction[SIMPLE_DDGI_FEEDBACK_CONVERGED];
-    maximumFreshAge = feedbackReduction[SIMPLE_DDGI_FEEDBACK_MAX_FRESH_AGE];
-    maximumExposedAge = feedbackReduction[SIMPLE_DDGI_FEEDBACK_MAX_EXPOSED_AGE];
-    maximumRelocationAge = feedbackReduction[SIMPLE_DDGI_FEEDBACK_MAX_RELOCATION_AGE];
-    maximumUnpublishedAge = feedbackReduction[SIMPLE_DDGI_FEEDBACK_MAX_UNPUBLISHED_AGE];
-    maximumVisibleUnsupportedAge =
-        feedbackReduction[SIMPLE_DDGI_FEEDBACK_MAX_VISIBLE_UNSUPPORTED_AGE];
-    visibleParticipants = feedbackReduction[SIMPLE_DDGI_FEEDBACK_VISIBLE_PARTICIPANTS];
-    visibleSourceReady = feedbackReduction[SIMPLE_DDGI_FEEDBACK_VISIBLE_SOURCE_READY];
-    visiblePublished = feedbackReduction[SIMPLE_DDGI_FEEDBACK_VISIBLE_PUBLISHED];
-    participatingCount = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PARTICIPANTS];
-    solveEpochVisitedCount = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOLVE_VISITED];
-    activeSourceMutationCount =
-        feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_SOURCE_MUTATION];
-    activeCanonicalMutationCount =
-        feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_CANONICAL_MUTATION];
-    receiverContributingProbeCount =
-        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_PROBES];
-    receiverCoverageBucketCount =
-        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_COVERAGE_BUCKETS];
-    receiverFallbackProbeCount =
-        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_FALLBACK_PROBES];
-    receiverConsumerMask =
-        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK];
-    for (uint ring = 0u; ring < 3u; ring++)
+    uint base = pc.FeedbackOffsetWords;
+    if (localIndex == 0u)
     {
-        adaptiveSavedRayRing[ring] = feedbackReduction[
-            SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_RING + ring];
-        adaptiveMaximumErrorRing[ring] = feedbackReduction[
-            SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_RING + ring];
-    }
-    for (uint content = 0u; content < 4u; content++)
-    {
-        adaptiveSavedRayContent[content] = feedbackReduction[
-            SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_CONTENT + content];
-        adaptiveMaximumErrorContent[content] = feedbackReduction[
-            SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_CONTENT + content];
-    }
-    for (uint ring = 0u; ring < 3u; ring++)
-    {
-        rebasePendingRing[ring] = feedbackReduction[
-            SIMPLE_DDGI_FEEDBACK_REBASE_PENDING_RING + ring];
-    }
+        pendingFresh = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_FRESH];
+        pendingExposed = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_EXPOSED];
+        pendingRelocation = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_RELOCATION];
+        pendingSource = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_SOURCE];
+        pendingSourceInvalidFlag = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOURCE_INVALID];
+        pendingSourcePrivateRepair = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOURCE_REPAIR];
+        pendingSourceCardinality = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOURCE_CARDINALITY];
+        pendingSourceGeneration = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOURCE_GENERATION];
+        pendingSolver = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_SOLVER];
+        converged = feedbackReduction[SIMPLE_DDGI_FEEDBACK_CONVERGED];
+        maximumFreshAge = feedbackReduction[SIMPLE_DDGI_FEEDBACK_MAX_FRESH_AGE];
+        maximumExposedAge = feedbackReduction[SIMPLE_DDGI_FEEDBACK_MAX_EXPOSED_AGE];
+        maximumRelocationAge = feedbackReduction[SIMPLE_DDGI_FEEDBACK_MAX_RELOCATION_AGE];
+        maximumUnpublishedAge = feedbackReduction[SIMPLE_DDGI_FEEDBACK_MAX_UNPUBLISHED_AGE];
+        maximumVisibleUnsupportedAge =
+            feedbackReduction[SIMPLE_DDGI_FEEDBACK_MAX_VISIBLE_UNSUPPORTED_AGE];
+        visibleParticipants = feedbackReduction[SIMPLE_DDGI_FEEDBACK_VISIBLE_PARTICIPANTS];
+        visibleSourceReady = feedbackReduction[SIMPLE_DDGI_FEEDBACK_VISIBLE_SOURCE_READY];
+        visiblePublished = feedbackReduction[SIMPLE_DDGI_FEEDBACK_VISIBLE_PUBLISHED];
+        participatingCount = feedbackReduction[SIMPLE_DDGI_FEEDBACK_PARTICIPANTS];
+        solveEpochVisitedCount = feedbackReduction[SIMPLE_DDGI_FEEDBACK_SOLVE_VISITED];
+        activeSourceMutationCount =
+            feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_SOURCE_MUTATION];
+        activeCanonicalMutationCount =
+            feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_CANONICAL_MUTATION];
+        receiverContributingProbeCount =
+            feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_PROBES];
+        receiverCoverageBucketCount =
+            feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_COVERAGE_BUCKETS];
+        receiverFallbackProbeCount =
+            feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_FALLBACK_PROBES];
+        receiverConsumerMask =
+            feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK];
+        for (uint ring = 0u; ring < 3u; ring++)
+        {
+            adaptiveSavedRayRing[ring] = feedbackReduction[
+                SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_RING + ring];
+            adaptiveMaximumErrorRing[ring] = feedbackReduction[
+                SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_RING + ring];
+        }
+        for (uint content = 0u; content < 4u; content++)
+        {
+            adaptiveSavedRayContent[content] = feedbackReduction[
+                SIMPLE_DDGI_FEEDBACK_ADAPTIVE_SAVED_CONTENT + content];
+            adaptiveMaximumErrorContent[content] = feedbackReduction[
+                SIMPLE_DDGI_FEEDBACK_ADAPTIVE_ERROR_CONTENT + content];
+        }
+        for (uint ring = 0u; ring < 3u; ring++)
+        {
+            rebasePendingRing[ring] = feedbackReduction[
+                SIMPLE_DDGI_FEEDBACK_REBASE_PENDING_RING + ring];
+        }
 
     uint considered = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_CONSIDERED);
     uint eligible = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE);
@@ -668,14 +669,11 @@ void main()
             ? SchedulerSourceGeneration()
             : 0u;
 
-    uint base = pc.FeedbackOffsetWords;
-    SchedulerArenaWrite(base + 0u, SchedulerFrame(12u));
-    SchedulerArenaWrite(base + 1u, SchedulerFrame(13u));
-    SchedulerArenaWrite(base + 2u, SchedulerVolumeGeneration());
-    SchedulerArenaWrite(base + 3u, SchedulerResourceGeneration());
-    SchedulerArenaWrite(base + 4u, SchedulerQueueGeneration());
-    SchedulerArenaWrite(base + 5u, SchedulerSourceGeneration());
-    SchedulerArenaWrite(base + 6u, SchedulerTransportGeneration());
+    feedbackSummary[2u] = SchedulerVolumeGeneration();
+    feedbackSummary[3u] = SchedulerResourceGeneration();
+    feedbackSummary[4u] = SchedulerQueueGeneration();
+    feedbackSummary[5u] = SchedulerSourceGeneration();
+    feedbackSummary[6u] = SchedulerTransportGeneration();
     uint status = 0u;
     if (SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW) != 0u)
         status |= 1u;
@@ -685,72 +683,80 @@ void main()
             pc.CountersOffsetWords +
                 SIMPLE_DDGI_SCHEDULER_COUNTER_EMISSION_FAILURE) != 0u)
         status |= 4u;
-    SchedulerArenaWrite(base + 7u, status);
-    SchedulerArenaWrite(base + 8u, considered);
-    SchedulerArenaWrite(base + 9u, eligible);
-    SchedulerArenaWrite(base + 10u, accepted);
-    SchedulerArenaWrite(base + 11u, committed);
-    SchedulerArenaWrite(base + 12u, rejected);
-    SchedulerArenaWrite(base + 13u, SchedulerRequestBudget());
-    SchedulerArenaWrite(base + 14u, accepted);
-    SchedulerArenaWrite(base + 15u, SchedulerPrimaryRayBudget());
-    SchedulerArenaWrite(base + 16u, primaryUsed);
-    SchedulerArenaWrite(base + 17u, targetSource);
-    SchedulerArenaWrite(base + 18u, sourceUsed);
+    feedbackSummary[7u] = status;
+    feedbackSummary[8u] = considered;
+    feedbackSummary[9u] = eligible;
+    feedbackSummary[10u] = accepted;
+    feedbackSummary[11u] = committed;
+    feedbackSummary[12u] = rejected;
+    feedbackSummary[13u] = SchedulerRequestBudget();
+    feedbackSummary[14u] = accepted;
+    feedbackSummary[15u] = SchedulerPrimaryRayBudget();
+    feedbackSummary[16u] = primaryUsed;
+    feedbackSummary[17u] = targetSource;
+    feedbackSummary[18u] = sourceUsed;
     // An unused source budget is not a capacity shortfall once the source
     // cohort is empty. Reporting it as one kept host-side source readiness
     // permanently active during cached propagation and camera-only scrolling.
-    SchedulerArenaWrite(
-        base + 19u,
+    feedbackSummary[19u] =
         pendingSource != 0u && targetSource > sourceUsed
             ? targetSource - sourceUsed
-            : 0u);
-    SchedulerArenaWrite(base + 20u,
-        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION));
-    SchedulerArenaWrite(base + 21u, transportUsed);
-    SchedulerArenaWrite(base + 22u,
-        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW));
-    SchedulerArenaWrite(base + 23u,
-        SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMMIT_REJECTED));
-    SchedulerArenaWrite(base + 24u, pendingFresh);
-    SchedulerArenaWrite(base + 25u, pendingExposed);
-    SchedulerArenaWrite(base + 26u, pendingRelocation);
-    SchedulerArenaWrite(base + 27u, pendingSource);
-    SchedulerArenaWrite(base + 28u, pendingSolver);
-    SchedulerArenaWrite(base + 29u, converged);
-    SchedulerArenaWrite(base + 30u, maximumFreshAge);
-    SchedulerArenaWrite(base + 31u, maximumExposedAge);
-    SchedulerArenaWrite(base + 32u, maximumRelocationAge);
-    SchedulerArenaWrite(base + 33u, maximumUnpublishedAge);
-    SchedulerArenaWrite(base + 34u, maximumVisibleUnsupportedAge);
-    SchedulerArenaWrite(base + 35u, sourceCohortIncomplete ? SchedulerFrameIndex() : 0u);
-    SchedulerArenaWrite(base + 36u, sourceCohortIncomplete ? 0u : SchedulerFrameIndex());
-    SchedulerArenaWrite(base + 37u, sourceCohortIncomplete ? targetSource : 0u);
-    SchedulerArenaWrite(base + 38u, sourceCohortIncomplete ? 0u : sourceUsed);
-    SchedulerArenaWrite(base + 39u, SchedulerTransportGeneration());
-    SchedulerArenaWrite(base + 40u,
-        pendingSolver == 0u ? SchedulerTransportGeneration() : 0u);
-    SchedulerArenaWrite(base + 41u, staticConvergedGeneration);
-    SchedulerArenaWrite(base + 42u, sourceCohortIncomplete || pendingSolver != 0u ? 1u : 0u);
-    SchedulerArenaWrite(base + 43u, hardSourceProbeUsed);
-    SchedulerArenaWrite(base + 44u, routineSourceProbeUsed);
-    SchedulerArenaWrite(base + 45u, cachedSolverProbeUsed);
+            : 0u;
+    feedbackSummary[20u] = SchedulerArenaRead(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION);
+    feedbackSummary[21u] = transportUsed;
+    feedbackSummary[22u] = SchedulerArenaRead(
+        pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_OVERFLOW);
+    feedbackSummary[23u] = SchedulerArenaRead(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_COMMIT_REJECTED);
+    feedbackSummary[24u] = pendingFresh;
+    feedbackSummary[25u] = pendingExposed;
+    feedbackSummary[26u] = pendingRelocation;
+    feedbackSummary[27u] = pendingSource;
+    feedbackSummary[28u] = pendingSolver;
+    feedbackSummary[29u] = converged;
+    feedbackSummary[30u] = maximumFreshAge;
+    feedbackSummary[31u] = maximumExposedAge;
+    feedbackSummary[32u] = maximumRelocationAge;
+    feedbackSummary[33u] = maximumUnpublishedAge;
+    feedbackSummary[34u] = maximumVisibleUnsupportedAge;
+    feedbackSummary[35u] = sourceCohortIncomplete
+        ? SchedulerFrameIndex()
+        : 0u;
+    feedbackSummary[36u] = sourceCohortIncomplete
+        ? 0u
+        : SchedulerFrameIndex();
+    feedbackSummary[37u] = sourceCohortIncomplete ? targetSource : 0u;
+    feedbackSummary[38u] = sourceCohortIncomplete ? 0u : sourceUsed;
+    feedbackSummary[39u] = SchedulerTransportGeneration();
+    feedbackSummary[40u] = pendingSolver == 0u
+        ? SchedulerTransportGeneration()
+        : 0u;
+    feedbackSummary[41u] = staticConvergedGeneration;
+    feedbackSummary[42u] = sourceCohortIncomplete || pendingSolver != 0u
+        ? 1u
+        : 0u;
+    feedbackSummary[43u] = hardSourceProbeUsed;
+    feedbackSummary[44u] = routineSourceProbeUsed;
+    feedbackSummary[45u] = cachedSolverProbeUsed;
     // Exact source-repair attribution replaces two retired dirty-latency
     // placeholders in the fixed feedback ABI. These counts distinguish a
     // public cache marker from a transaction-private resident repair without
     // any per-ray diagnostics or additional readback memory.
-    SchedulerArenaWrite(
-        base + 46u,
+    feedbackSummary[46u] =
         min(pendingSourceInvalidFlag, 0xffffu) |
-            (min(pendingSourceCardinality, 0xffffu) << 16u));
-    SchedulerArenaWrite(
-        base + 47u,
+            (min(pendingSourceCardinality, 0xffffu) << 16u);
+    feedbackSummary[47u] =
         min(pendingSourcePrivateRepair, 0xffffu) |
-            (min(pendingSourceGeneration, 0xffffu) << 16u));
+            (min(pendingSourceGeneration, 0xffffu) << 16u);
     for (uint bucket = 0u; bucket < 6u; bucket++)
-        SchedulerArenaWrite(base + 48u + bucket,
-            SchedulerArenaRead(pc.CountersOffsetWords +
-                SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket));
+    {
+        feedbackSummary[48u + bucket] = SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_BUCKET_BASE + bucket);
+    }
     uint dispatchedLanes = 0u;
     uint noOpLanes = 0u;
     if (!SchedulerCertifiedQuiesced())
@@ -771,16 +777,53 @@ void main()
             noOpLanes += admission == 0u ? 1u : 0u;
         }
     }
-    SchedulerArenaWrite(base + 54u, dispatchedLanes);
-    SchedulerArenaWrite(base + 55u, noOpLanes);
-    SchedulerArenaWrite(base + 56u, visibleParticipants);
-    SchedulerArenaWrite(base + 57u, visibleSourceReady);
-    SchedulerArenaWrite(base + 58u, visiblePublished);
-    SchedulerArenaWrite(base + 59u, participatingCount);
-    SchedulerArenaWrite(base + 60u, solveEpochVisitedCount);
-    SchedulerArenaWrite(base + 61u, SchedulerSolveEpoch());
-    SchedulerArenaWrite(base + 62u, sourceProbeUsed);
-    SchedulerArenaWrite(base + 63u, published);
+    feedbackSummary[54u] = dispatchedLanes;
+    feedbackSummary[55u] = noOpLanes;
+    feedbackSummary[56u] = visibleParticipants;
+    feedbackSummary[57u] = visibleSourceReady;
+    feedbackSummary[58u] = visiblePublished;
+    feedbackSummary[59u] = participatingCount;
+    feedbackSummary[60u] = solveEpochVisitedCount;
+    feedbackSummary[61u] = SchedulerSolveEpoch();
+    feedbackSummary[62u] = sourceProbeUsed;
+    feedbackSummary[63u] = published;
+    }
+
+    // Lane zero assembles the fixed ABI in shared memory; all lanes publish
+    // it concurrently. The two-word frame header is deliberately excluded
+    // and written only after every summary, cursor, and extended word is done.
+    barrier();
+    if (localIndex >= 2u)
+        SchedulerArenaWrite(base + localIndex, feedbackSummary[localIndex]);
+
+    uint cursorCopyCount = SIMPLE_DDGI_SCHEDULER_MAX_LANES;
+    if (SchedulerCertifiedQuiesced())
+    {
+#if SIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION == 0
+        uint partialWordCount =
+            partialGroupCount * SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS;
+        cursorCopyCount = partialWordCount > 64u
+            ? min(
+                partialWordCount - 64u,
+                SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+            : 0u;
+#else
+        cursorCopyCount = 0u;
+#endif
+    }
+    for (uint lane = localIndex;
+         lane < cursorCopyCount;
+         lane += gl_WorkGroupSize.x)
+    {
+        SchedulerArenaWrite(
+            base + 64u + lane,
+            SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane));
+    }
+    barrier();
+
+    if (localIndex != 0u)
+        return;
+
     SchedulerArenaWrite(
         base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_UNBUCKETED_OFFSET,
         SchedulerArenaRead(
@@ -851,42 +894,6 @@ void main()
                 pc.CountersOffsetWords +
                     SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE_RING_BASE + ring));
     }
-    // Feedback reserves the words after the fixed 64-word summary for the
-    // persistent rotating lane cursors. They are copied only after the
-    // summary generation/serial has been validated by the host.
-    if (!SchedulerCertifiedQuiesced())
-    {
-        for (uint lane = 0u;
-             lane < SIMPLE_DDGI_SCHEDULER_MAX_LANES;
-             lane++)
-        {
-            SchedulerArenaWrite(
-                base + 64u + lane,
-                SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane));
-        }
-    }
-#if SIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION == 0
-    else
-    {
-        // Partial records reuse the beginning of the 4 KiB feedback region.
-        // Groups three through eight overlap only the lane-cursor prefix.
-        // Ordinary frames rewrite all cursors above; certified-quiesced frames
-        // must restore that exact overwritten prefix before host readback.
-        uint partialWordCount =
-            partialGroupCount * SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS;
-        uint overwrittenCursorCount = partialWordCount > 64u
-            ? min(
-                partialWordCount - 64u,
-                SIMPLE_DDGI_SCHEDULER_MAX_LANES)
-            : 0u;
-        for (uint lane = 0u; lane < overwrittenCursorCount; lane++)
-        {
-            SchedulerArenaWrite(
-                base + 64u + lane,
-                SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane));
-        }
-    }
-#endif
     for (uint category = 0u;
          category < SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CATEGORY_COUNT;
          category++)
@@ -986,4 +993,12 @@ void main()
         pc.CountersOffsetWords +
             SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_TELEMETRY,
         0u);
+
+    // Publish the high word first and the low word last. The low word is the
+    // completion marker observed by the host after readback, so no current
+    // frame header can expose a partially written summary.
+    memoryBarrierBuffer();
+    SchedulerArenaWrite(base + 1u, SchedulerFrame(13u));
+    memoryBarrierBuffer();
+    SchedulerArenaWrite(base + 0u, SchedulerFrame(12u));
 }

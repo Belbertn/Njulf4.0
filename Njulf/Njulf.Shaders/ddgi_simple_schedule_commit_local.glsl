@@ -1,11 +1,3 @@
-#version 460
-#extension GL_GOOGLE_include_directive : require
-#extension GL_EXT_nonuniform_qualifier : enable
-
-#include "ddgi_simple_schedule_shared.glsl"
-
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
-
 const uint SIMPLE_DDGI_COMMIT_PHYSICAL_GENERATION_MASK = 0x00ffffffu;
 const uint SIMPLE_DDGI_COMMIT_CLASSIFICATION_SHIFT = 24u;
 const uint SIMPLE_DDGI_COMMIT_CLASSIFICATION_MASK =
@@ -225,9 +217,8 @@ void RejectOutcome(
     MarkPrivateRepair(probeIndex);
 }
 
-void main()
+void CommitLocalOutcome(uint outcomeIndex, uint ownedVolumeIndex)
 {
-    uint outcomeIndex = gl_GlobalInvocationID.x;
     uint accepted = min(
         SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
         SchedulerRequestCapacity());
@@ -262,6 +253,8 @@ void main()
             SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_PAYLOAD_IDENTITY);
         return;
     }
+    if (volumeIndex != ownedVolumeIndex)
+        return;
     bool mandatoryScrollOutcome =
         (updateFlags & SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL) != 0u &&
         SchedulerVolumeHasMandatoryScrollRepair(volumeIndex) &&

@@ -66,7 +66,7 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
 
         string commitShader = ReadRepoText(
             "Njulf.Shaders",
-            "ddgi_simple_schedule_commit_local.comp");
+            "ddgi_simple_schedule_commit_local.glsl");
         Assert.Multiple(() =>
         {
             Assert.That(commitShader, Does.Contain(
@@ -124,7 +124,7 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
             "ddgi_simple_storage_abi.glsl").ReplaceLineEndings("\n");
         string commitShader = ReadRepoText(
             "Njulf.Shaders",
-            "ddgi_simple_schedule_commit_local.comp").ReplaceLineEndings("\n");
+            "ddgi_simple_schedule_commit_local.glsl").ReplaceLineEndings("\n");
 
         Assert.Multiple(() =>
         {

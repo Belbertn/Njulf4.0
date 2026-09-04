@@ -89,10 +89,8 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
                 Is.EqualTo(ProceduralSkySunDriver.SceneDirectionalLight));
             Assert.That(
                 settings.Environment.SourceKind,
-                Is.EqualTo(EnvironmentSourceKind.HdrEquirectangular));
-            Assert.That(
-                settings.Environment.SourcePath,
-                Is.EqualTo("Assets/Bistro_v5_2/san_giuseppe_bridge_4k.hdr"));
+                Is.EqualTo(EnvironmentSourceKind.ProceduralSky));
+            Assert.That(settings.Environment.SourcePath, Is.Null);
             Assert.That(settings.Environment.AtmosphereIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.Environment.SolarIrradianceScale, Is.EqualTo(14.0f));
             Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));

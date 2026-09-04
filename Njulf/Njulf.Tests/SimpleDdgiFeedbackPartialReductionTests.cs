@@ -334,7 +334,7 @@ public sealed class SimpleDdgiFeedbackPartialReductionTests
             StringComparison.Ordinal);
         string execute = pass[executeStart..helperStart];
         int partialBind = execute.IndexOf(
-            "_pipelines[3]",
+            "_pipelines[1]",
             StringComparison.Ordinal);
         int partialDispatch = execute.IndexOf(
             "CmdDispatch(cmd, partialGroupCount, 1, 1)",
@@ -345,7 +345,7 @@ public sealed class SimpleDdgiFeedbackPartialReductionTests
             partialDispatch,
             StringComparison.Ordinal);
         int finalBind = execute.IndexOf(
-            "_pipelines[4]",
+            "_pipelines[2]",
             interStageBarrier,
             StringComparison.Ordinal);
         int finalDispatch = execute.IndexOf(
@@ -399,7 +399,15 @@ public sealed class SimpleDdgiFeedbackPartialReductionTests
             Assert.That(shader, Does.Contain(
                 "partialWordCount - 64u"));
             Assert.That(shader, Does.Contain(
-                "lane < overwrittenCursorCount"));
+                "lane < cursorCopyCount"));
+            Assert.That(shader, Does.Contain(
+                "feedbackSummary[localIndex]"));
+            Assert.That(shader.LastIndexOf(
+                    "SchedulerArenaWrite(base + 0u, SchedulerFrame(12u));",
+                    StringComparison.Ordinal),
+                Is.GreaterThan(shader.LastIndexOf(
+                    "base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_ADAPTIVE_ERROR_CONTENT_OFFSET",
+                    StringComparison.Ordinal)));
 
             int partialName = pass.IndexOf(
                 "\"ddgi_simple_schedule_feedback_partial.comp.spv\"",

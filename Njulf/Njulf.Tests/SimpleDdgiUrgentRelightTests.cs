@@ -363,7 +363,7 @@ public sealed class SimpleDdgiUrgentRelightTests
         string trace = ReadRepoText(
             "Njulf.Shaders", "ddgi_simple_trace.comp");
         string commit = ReadRepoText(
-            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.comp");
+            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.glsl");
         string feedback = ReadRepoText(
             "Njulf.Shaders", "ddgi_simple_schedule_feedback.comp");
         string sampled = ReadRepoText(
@@ -405,7 +405,7 @@ public sealed class SimpleDdgiUrgentRelightTests
         string shared = ReadRepoText(
             "Njulf.Shaders", "ddgi_simple_shared.glsl");
         string commit = ReadRepoText(
-            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.comp");
+            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.glsl");
         string feedback = ReadRepoText(
             "Njulf.Shaders", "ddgi_simple_schedule_feedback.comp");
         string sampled = ReadRepoText(

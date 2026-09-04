@@ -7,6 +7,14 @@
 #include "common.glsl"
 #include "directional_shadow_caster_diagnostics.glsl"
 
+#ifndef NJULF_SCENE_OPAQUE_INSTANCE_PROGRAM
+#error NJULF_SCENE_OPAQUE_INSTANCE_PROGRAM must select the flat (0) or instance (1) program.
+#endif
+
+#if NJULF_SCENE_OPAQUE_INSTANCE_PROGRAM != 0 && NJULF_SCENE_OPAQUE_INSTANCE_PROGRAM != 1
+#error NJULF_SCENE_OPAQUE_INSTANCE_PROGRAM must be 0 or 1.
+#endif
+
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform SceneOpaqueCompactionPushConstantBlock
@@ -115,6 +123,7 @@ const uint MESHLET_HIERARCHY_NODE_FLAG_FORCE_REFINE = 1u << 1u;
 const uint MESHLET_HIERARCHY_STATE_MARKER = 1u << 31u;
 const uint MESHLET_HIERARCHY_STACK_CAPACITY = 96u;
 
+#if NJULF_SCENE_OPAQUE_INSTANCE_PROGRAM
 shared uint InstanceCandidateInstanceId;
 shared uint InstanceCandidateMaterialIndex;
 shared uint InstanceCandidateCommandFlags;
@@ -150,6 +159,7 @@ shared uint HierarchyTraversalSelectedMeshletCount;
 shared uint HierarchyTraversalDone;
 shared uint HierarchyTraversalFailure;
 shared uint HierarchyTraversalEmittedAny;
+#endif
 
 uint CounterBufferIndex()
 {
@@ -1090,6 +1100,7 @@ void ResolveLodTransition(
         pc.Push.TemporalFrameIndex);
 }
 
+#if NJULF_SCENE_OPAQUE_INSTANCE_PROGRAM
 uint EncodeHierarchyProjectionFactor(float projectionFactor)
 {
     float finiteFactor =
@@ -2405,7 +2416,9 @@ void ProcessInstanceCandidate(
         InstanceCandidateDitherThreshold,
         frustumPlanes);
 }
+#endif
 
+#if !NJULF_SCENE_OPAQUE_INSTANCE_PROGRAM
 void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
 {
     uint candidateCount = pc.Push.SimpleCandidateCount +
@@ -2737,6 +2750,7 @@ void ProcessDirectionalShadowCandidate(
             IndirectDispatchCountWord(indirectDispatchSlot)], 1u);
     }
 }
+#endif
 
 void main()
 {
@@ -2744,13 +2758,9 @@ void main()
     vec4 frustumPlanes[6];
     ReadMeshletTaskFrustumPlanes(pc.Push.CurrentFrameIndex, frustumPlanes);
 
-    if ((pc.Push.Flags &
-         SCENE_OPAQUE_COMPACTION_FLAG_INSTANCE_EXPANSION) != 0u)
-    {
-        ProcessInstanceCandidate(gl_WorkGroupID.x, frustumPlanes);
-    }
-    else
-    {
+#if NJULF_SCENE_OPAQUE_INSTANCE_PROGRAM
+    ProcessInstanceCandidate(gl_WorkGroupID.x, frustumPlanes);
+#else
         ProcessOpaqueCandidate(candidateIndex, frustumPlanes);
         ProcessDepthCandidate(
             candidateIndex,
@@ -2784,23 +2794,19 @@ void main()
             SCENE_INDIRECT_DISPATCH_MASKED_DEPTH_SLOT,
             SCENE_INDIRECT_DISPATCH_MASKED_DEPTH_DOUBLE_SIDED_SLOT,
             frustumPlanes);
-    }
-    if ((pc.Push.Flags &
-         SCENE_OPAQUE_COMPACTION_FLAG_INSTANCE_EXPANSION) == 0u)
-    {
-        ProcessDirectionalShadowCandidate(
-            candidateIndex,
-            pc.Push.DirectionalStaticShadowCandidateCount,
-            uint(DIRECTIONAL_STATIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX),
-            pc.Push.DirectionalStaticShadowOutputCapacity,
-            SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE,
-            false);
-        ProcessDirectionalShadowCandidate(
-            candidateIndex,
-            pc.Push.DirectionalDynamicShadowCandidateCount,
-            uint(DIRECTIONAL_DYNAMIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX),
-            pc.Push.DirectionalDynamicShadowOutputCapacity,
-            SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE,
-            true);
-    }
+    ProcessDirectionalShadowCandidate(
+        candidateIndex,
+        pc.Push.DirectionalStaticShadowCandidateCount,
+        uint(DIRECTIONAL_STATIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX),
+        pc.Push.DirectionalStaticShadowOutputCapacity,
+        SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE,
+        false);
+    ProcessDirectionalShadowCandidate(
+        candidateIndex,
+        pc.Push.DirectionalDynamicShadowCandidateCount,
+        uint(DIRECTIONAL_DYNAMIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX),
+        pc.Push.DirectionalDynamicShadowOutputCapacity,
+        SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE,
+        true);
+#endif
 }

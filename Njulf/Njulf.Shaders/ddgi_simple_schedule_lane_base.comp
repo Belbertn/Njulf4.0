@@ -86,8 +86,26 @@ void main()
             1u);
         return;
     }
-    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT,
-        SchedulerGroupsFor(SchedulerCandidateCapacity()), 1u, 1u);
-    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_ADMIT,
-        1u, 1u, 1u);
+    if (base == 0u || SchedulerRequestBudget() == 0u)
+        return;
+
+    SchedulerWriteIndirect(
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT,
+        SchedulerGroupsFor(SchedulerCandidateCapacity()),
+        1u,
+        1u);
+    uint pendingTailSourceCount = SchedulerArenaRead(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_PENDING_TAIL_SOURCE);
+    bool tailSourceOnly = SchedulerTailCertification() &&
+        pendingTailSourceCount != 0u;
+    bool tailSolveOnly = SchedulerTailCertification() &&
+        !tailSourceOnly && SchedulerSolveEpoch() != 0u;
+    SchedulerWriteIndirect(
+        tailSourceOnly || tailSolveOnly
+            ? SIMPLE_DDGI_SCHEDULER_DISPATCH_TAIL_ADMIT
+            : SIMPLE_DDGI_SCHEDULER_DISPATCH_ADMIT,
+        1u,
+        1u,
+        1u);
 }

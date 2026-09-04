@@ -1,15 +1,6 @@
-#version 460
-#extension GL_GOOGLE_include_directive : require
-#extension GL_EXT_nonuniform_qualifier : enable
-
-#include "ddgi_simple_schedule_shared.glsl"
-
-// Mandatory scroll repair is deliberately validated by one bounded GPU scan.
-// This runs after every producer and before CommitLocal, and never reads a
-// probe back to the CPU. Classification admits at most one candidate for each
-// virtual probe, so membership + the exact geometric count proves that the
-// complete exposed set is present without an O(N^2) duplicate scan.
-layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+// Each fused commit workgroup owns one volume. It independently validates the
+// bounded accepted set before any lane may mutate that volume, preserving the
+// mandatory-scroll all-or-defer gate without cross-workgroup synchronization.
 
 uint ScrollExposedProbeCount(uint volumeIndex)
 {
@@ -25,16 +16,18 @@ uint ScrollExposedProbeCount(uint volumeIndex)
     return countX * countY * countZ - overlapX * overlapY * overlapZ;
 }
 
-void main()
+void ValidateScrollCohort(uint volumeIndex)
 {
-    if (gl_GlobalInvocationID.x != 0u)
-        return;
-
     uint activeVolumeCount = min(
         SchedulerActiveVolumeCount(),
         SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES);
-    uint volumeAccepted[SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES];
-    uint volumeFailure[SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES];
+    if (volumeIndex >= activeVolumeCount)
+        return;
+
+    bool mandatoryScroll =
+        SchedulerVolumeHasMandatoryScrollRepair(volumeIndex);
+    uint volumeAccepted = 0u;
+    uint volumeFailure = 0u;
     uint scrollExpected = 0u;
     uint scrollAccepted = 0u;
     uint scrollTraced = 0u;
@@ -48,28 +41,18 @@ void main()
             SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_EMISSION_FAILURE;
     }
 
-    for (uint volume = 0u;
-         volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES;
-         volume++)
+    SchedulerArenaWrite(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_STATE_BASE +
+            volumeIndex,
+        0u);
+    if (mandatoryScroll)
     {
-        volumeAccepted[volume] = 0u;
-        volumeFailure[volume] = 0u;
-        SchedulerArenaWrite(
-            pc.CountersOffsetWords +
-                SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_STATE_BASE +
-                volume,
-            0u);
-        if (volume >= activeVolumeCount ||
-            !SchedulerVolumeHasMandatoryScrollRepair(volume))
+        scrollExpected =
+            SchedulerVolumeScrollExpectedRepairCount(volumeIndex);
+        if (scrollExpected != ScrollExposedProbeCount(volumeIndex))
         {
-            continue;
-        }
-
-        uint expected = SchedulerVolumeScrollExpectedRepairCount(volume);
-        scrollExpected += expected;
-        if (expected != ScrollExposedProbeCount(volume))
-        {
-            volumeFailure[volume] |=
+            volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_COUNT_MISMATCH;
         }
     }
@@ -90,30 +73,32 @@ void main()
             continue;
 
         uint probeIndex = SchedulerArenaRead(outcomeBase + 5u);
-        uint volumeIndex;
-        if (!SchedulerFindVolume(probeIndex, volumeIndex) ||
-            volumeIndex >= activeVolumeCount ||
-            !SchedulerVolumeHasMandatoryScrollRepair(volumeIndex))
+        uint outcomeVolumeIndex;
+        if (!SchedulerFindVolume(probeIndex, outcomeVolumeIndex) ||
+            outcomeVolumeIndex >= activeVolumeCount ||
+            !SchedulerVolumeHasMandatoryScrollRepair(outcomeVolumeIndex))
         {
             globalFatalFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_UNEXPECTED_PROBE;
             continue;
         }
+        if (outcomeVolumeIndex != volumeIndex)
+            continue;
         if (!SchedulerProbeIsCurrentScrollExposed(probeIndex, volumeIndex))
         {
-            volumeFailure[volumeIndex] |=
+            volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_UNEXPECTED_PROBE;
             continue;
         }
 
-        volumeAccepted[volumeIndex]++;
+        volumeAccepted++;
         scrollAccepted++;
 
         uint packedCountAndScrollSerial = SchedulerArenaRead(outcomeBase + 11u);
         if ((packedCountAndScrollSerial >> 16u) !=
             (SchedulerVolumeScrollTransactionSerial(volumeIndex) & 0xffffu))
         {
-            volumeFailure[volumeIndex] |=
+            volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_SERIAL_MISMATCH;
         }
 
@@ -121,7 +106,7 @@ void main()
         if (expectedRays == 0u || expectedRays !=
             SchedulerVolumeScrollBootstrapRays(volumeIndex))
         {
-            volumeFailure[volumeIndex] |=
+            volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_CARDINALITY_MISMATCH;
         }
 
@@ -134,7 +119,7 @@ void main()
         if (traceComplete)
             scrollTraced++;
         else
-            volumeFailure[volumeIndex] |=
+            volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_TRACE_INCOMPLETE;
 
         bool transportRequired =
@@ -147,7 +132,7 @@ void main()
                 SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED) != 0u;
         if (!transportComplete)
         {
-            volumeFailure[volumeIndex] |=
+            volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_TRANSPORT_INCOMPLETE;
         }
 
@@ -157,12 +142,12 @@ void main()
             SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED);
         if ((completionMask & publicationMask) != publicationMask)
         {
-            volumeFailure[volumeIndex] |=
+            volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_PUBLICATION_INCOMPLETE;
         }
         if (SchedulerArenaRead(outcomeBase + 9u) != 0u)
         {
-            volumeFailure[volumeIndex] |=
+            volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_PRODUCER_FAILURE;
         }
         if (SchedulerArenaRead(outcomeBase + 0u) !=
@@ -177,47 +162,42 @@ void main()
                 SchedulerTransportGeneration() ||
             SchedulerArenaRead(outcomeBase + 6u) == 0u)
         {
-            volumeFailure[volumeIndex] |=
+            volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_TRANSACTION_MISMATCH;
         }
     }
 
-    uint cohortFailure = globalFatalFailure;
-    for (uint volume = 0u; volume < activeVolumeCount; volume++)
+    if (mandatoryScroll)
     {
-        if (!SchedulerVolumeHasMandatoryScrollRepair(volume))
-            continue;
-        if (volumeAccepted[volume] !=
-            SchedulerVolumeScrollExpectedRepairCount(volume))
+        if (volumeAccepted != scrollExpected)
         {
-            volumeFailure[volume] |=
+            volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_COUNT_MISMATCH;
         }
-        volumeFailure[volume] |= globalFatalFailure;
-        cohortFailure |= volumeFailure[volume];
+        volumeFailure |= globalFatalFailure;
         SchedulerArenaWrite(
             pc.CountersOffsetWords +
                 SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_STATE_BASE +
-                volume,
-            volumeFailure[volume] == 0u
+                volumeIndex,
+            volumeFailure == 0u
                 ? SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_VALID
                 : 0u);
     }
 
-    SchedulerArenaWrite(
+    SchedulerArenaAtomicAdd(
         pc.CountersOffsetWords +
             SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_EXPECTED,
         scrollExpected);
-    SchedulerArenaWrite(
+    SchedulerArenaAtomicAdd(
         pc.CountersOffsetWords +
             SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_ACCEPTED,
         scrollAccepted);
-    SchedulerArenaWrite(
+    SchedulerArenaAtomicAdd(
         pc.CountersOffsetWords +
             SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_TRACED,
         scrollTraced);
-    SchedulerArenaWrite(
+    SchedulerArenaAtomicOr(
         pc.CountersOffsetWords +
             SIMPLE_DDGI_SCHEDULER_COUNTER_SCROLL_COHORT_FAILURE,
-        cohortFailure);
+        volumeFailure | globalFatalFailure);
 }

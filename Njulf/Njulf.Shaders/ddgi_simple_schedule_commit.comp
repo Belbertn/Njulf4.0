@@ -1,0 +1,53 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "ddgi_simple_schedule_shared.glsl"
+#include "ddgi_simple_schedule_validate_scroll_cohorts.glsl"
+#include "ddgi_simple_schedule_commit_local.glsl"
+#include "ddgi_simple_schedule_commit_propagation.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// One workgroup owns one active volume (ring or refinement volume). Every lane
+// observes the cohort verdict before local publication, and all local commits
+// complete before any residual dependency propagation begins.
+void main()
+{
+    uint volumeIndex = gl_WorkGroupID.x;
+    uint activeVolumeCount = min(
+        SchedulerActiveVolumeCount(),
+        SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES);
+    if (volumeIndex >= activeVolumeCount)
+        return;
+
+    uint localIndex = gl_LocalInvocationID.x;
+    if (localIndex == 0u)
+        ValidateScrollCohort(volumeIndex);
+    memoryBarrierBuffer();
+    barrier();
+
+    if (!SchedulerGpuResident())
+        return;
+
+    uint accepted = min(
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
+        SchedulerRequestCapacity());
+    for (uint outcomeIndex = localIndex;
+         outcomeIndex < accepted;
+         outcomeIndex += gl_WorkGroupSize.x)
+    {
+        CommitLocalOutcome(outcomeIndex, volumeIndex);
+    }
+    memoryBarrierBuffer();
+    barrier();
+
+    for (uint outcomeIndex = localIndex;
+         outcomeIndex < accepted;
+         outcomeIndex += gl_WorkGroupSize.x)
+    {
+        CommitPropagationOutcome(outcomeIndex, volumeIndex);
+    }
+}

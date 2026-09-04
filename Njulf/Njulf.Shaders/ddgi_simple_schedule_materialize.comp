@@ -6,32 +6,55 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+const uint EmitBucketCount = 6u;
+shared uint WorkgroupBucketCounts[EmitBucketCount];
+
+uint EmitBucketScratchWord(uint groupIndex, uint bucket)
+{
+    return pc.CandidateGroupLaneCountsOffsetWords +
+        groupIndex * EmitBucketCount + bucket;
+}
+
+uint ResolveEmitBucket(uint rayCount)
+{
+    for (uint bucket = 0u; bucket < EmitBucketCount; bucket++)
+    {
+        if (rayCount == SchedulerFrame(32u + bucket))
+            return bucket;
+    }
+    return EmitBucketCount;
+}
+
 // Admission serializes only the policy decision and stable accepted order.
 // Resolve immutable state, sparse physical ownership, and the complete update
 // proposal in parallel; emit runs after the schedule-pass storage barrier and
 // therefore never observes the temporary five-word selection record.
 void main()
 {
+    uint localIndex = gl_LocalInvocationID.x;
     uint updateIndex = gl_GlobalInvocationID.x;
     uint accepted = min(
         SchedulerArenaRead(
             pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
         SchedulerRequestCapacity());
-    if (updateIndex >= accepted)
-        return;
+    if (localIndex < EmitBucketCount)
+        WorkgroupBucketCounts[localIndex] = 0u;
+    barrier();
 
-    uint probeIndex;
-    uint volumeIndex;
-    uint workClassAndTransport;
-    uint rayTierAndReason;
-    uint expectedGeneration;
-    SchedulerReadUpdateSelection(
-        updateIndex,
-        probeIndex,
-        volumeIndex,
-        workClassAndTransport,
-        rayTierAndReason,
-        expectedGeneration);
+    if (updateIndex < accepted)
+    {
+        uint probeIndex;
+        uint volumeIndex;
+        uint workClassAndTransport;
+        uint rayTierAndReason;
+        uint expectedGeneration;
+        SchedulerReadUpdateSelection(
+            updateIndex,
+            probeIndex,
+            volumeIndex,
+            workClassAndTransport,
+            rayTierAndReason,
+            expectedGeneration);
 
     uint transport = (workClassAndTransport >> 3u) & 3u;
     uint rayTier = rayTierAndReason & 0xffu;
@@ -129,14 +152,71 @@ void main()
     uint updateSourceGeneration = sourceWork
         ? SchedulerSourceGeneration()
         : SchedulerArenaRead(schedulerStateBase + 2u);
-    SchedulerWriteUpdate(
-        updateIndex,
-        probeIndex,
-        volumeIndex,
-        flags,
-        expectedGeneration,
-        schedulingAge,
-        sourceRayCount,
-        updateSourceGeneration,
-        candidateReasons);
+        SchedulerWriteUpdate(
+            updateIndex,
+            probeIndex,
+            volumeIndex,
+            flags,
+            expectedGeneration,
+            schedulingAge,
+            sourceRayCount,
+            updateSourceGeneration,
+            candidateReasons);
+
+        uint rayCount = clamp(
+            (flags & SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_MASK) >>
+                SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT,
+            1u,
+            SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+        uint bucket = ResolveEmitBucket(rayCount);
+        SchedulerArenaWrite(
+            pc.CandidateOutputOffsetWords + updateIndex,
+            bucket);
+        if (bucket < EmitBucketCount)
+            atomicAdd(WorkgroupBucketCounts[bucket], 1u);
+        else
+            SchedulerArenaAtomicAdd(
+                pc.CountersOffsetWords +
+                    SIMPLE_DDGI_SCHEDULER_COUNTER_UNBUCKETED,
+                1u);
+
+        SchedulerWriteOutcome(
+            updateIndex,
+            probeIndex,
+            volumeIndex,
+            expectedGeneration,
+            sourceRayCount,
+            rayCount,
+            flags);
+        if (!SchedulerTransportV2())
+        {
+            SchedulerMarkOutcomeComplete(
+                updateIndex,
+                SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED);
+        }
+        if (!SchedulerSampledPublicationRequired() ||
+            SchedulerUrgentRelight())
+        {
+            SchedulerMarkOutcomeComplete(
+                updateIndex,
+                SIMPLE_DDGI_SCHEDULER_SAMPLED_PUBLISH_NOT_REQUIRED);
+        }
+        if (updateIndex == 0u && SchedulerUrgentRelight())
+        {
+            uint telemetry = ((SchedulerFrame(12u) & 0xffffu) << 16u) |
+                (min(accepted, 255u) << 8u);
+            SchedulerArenaWrite(
+                pc.CountersOffsetWords +
+                    SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_TELEMETRY,
+                telemetry);
+        }
+    }
+
+    barrier();
+    if (localIndex < EmitBucketCount)
+    {
+        SchedulerArenaWrite(
+            EmitBucketScratchWord(gl_WorkGroupID.x, localIndex),
+            WorkgroupBucketCounts[localIndex]);
+    }
 }

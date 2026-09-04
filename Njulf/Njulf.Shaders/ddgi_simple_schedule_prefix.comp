@@ -47,13 +47,4 @@ void main()
         SchedulerArenaWrite(pc.LaneCandidateCountsOffsetWords + lane1, total1);
         SchedulerArenaWrite(pc.LanePrefixesOffsetWords + lane1, 0u);
     }
-    if (lanePair == 0u)
-    {
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_PREFIX,
-            SchedulerGroupsFor((SIMPLE_DDGI_SCHEDULER_MAX_LANES + 1u) / 2u), 1u, 1u);
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_LANE_BASE,
-            1u, 1u, 1u);
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT,
-            SchedulerGroupsFor(SchedulerCandidateCapacity()), 1u, 1u);
-    }
 }

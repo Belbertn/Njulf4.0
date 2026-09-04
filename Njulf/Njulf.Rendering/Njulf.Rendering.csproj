@@ -5,6 +5,8 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <Nullable>enable</Nullable>
+        <NjulfSceneCompactionCounterReadback Condition="'$(NjulfSceneCompactionCounterReadback)' == ''">true</NjulfSceneCompactionCounterReadback>
+        <DefineConstants Condition="'$(NjulfSceneCompactionCounterReadback)' == 'true'">$(DefineConstants);NJULF_SCENE_COMPACTION_COUNTER_READBACK</DefineConstants>
     </PropertyGroup>
 
     <ItemGroup>

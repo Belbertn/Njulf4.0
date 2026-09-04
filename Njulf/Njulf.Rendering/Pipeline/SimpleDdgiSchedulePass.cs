@@ -15,10 +15,9 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 namespace Njulf.Rendering.Pipeline;
 
 /// <summary>
-/// Records the bounded GPU scheduler transaction.  Every stage is a direct,
-/// fixed-capacity dispatch; only the update consumers use the indirect commands
-/// produced by the final emit sequence.  This keeps the scheduler itself easy to
-/// validate and prevents a stale indirect command from replaying prior work.
+/// Records the bounded GPU scheduler transaction. Reset is the only direct
+/// dispatch; it clears every command before the GPU-sized schedule chain is
+/// consumed, so an empty transaction cannot replay work from a prior frame.
 /// </summary>
 public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
 {
@@ -32,9 +31,22 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
         "ddgi_simple_schedule_admit_tail.comp.spv",
         "ddgi_simple_schedule_admit.comp.spv",
         "ddgi_simple_schedule_materialize.comp.spv",
-        "ddgi_simple_schedule_emit_classify.comp.spv",
         "ddgi_simple_schedule_emit.comp.spv",
         "ddgi_simple_schedule_emit_scatter.comp.spv"
+    ];
+
+    private static readonly SimpleDdgiSchedulerDispatchSlot[] DispatchSlots =
+    [
+        SimpleDdgiSchedulerDispatchSlot.Reset,
+        SimpleDdgiSchedulerDispatchSlot.Classify,
+        SimpleDdgiSchedulerDispatchSlot.Prefix,
+        SimpleDdgiSchedulerDispatchSlot.LaneBase,
+        SimpleDdgiSchedulerDispatchSlot.Compact,
+        SimpleDdgiSchedulerDispatchSlot.TailAdmit,
+        SimpleDdgiSchedulerDispatchSlot.Admit,
+        SimpleDdgiSchedulerDispatchSlot.MaterializeClassify,
+        SimpleDdgiSchedulerDispatchSlot.EmitPrefix,
+        SimpleDdgiSchedulerDispatchSlot.EmitScatter
     ];
 
     private static readonly string[] TimingNames =
@@ -140,27 +152,13 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
         GPUSimpleDdgiSchedulePushConstants pushConstants =
             _volumeManager.GpuScheduler.BuildPushConstants();
 
-        Span<uint> groupCounts =
-        [
-            1,
-            SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.ActiveProbeCount),
-            SimpleDdgiGpuSchedulerLayout.GroupsFor((layout.LaneCapacity + 1) / 2),
-            1,
-            SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.ActiveProbeCount),
-            1,
-            1,
-            SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.RequestCapacity),
-            SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.RequestCapacity),
-            1,
-            SimpleDdgiGpuSchedulerLayout.GroupsFor(layout.RequestCapacity)
-        ];
         const int EmitFirstStage = 8;
         for (int stage = 0; stage < EmitFirstStage; stage++)
         {
             timestamps?.BeginPass(cmd, frameIndex, TimingNames[stage]);
             try
             {
-                DispatchStage(cmd, pushConstants, stage, groupCounts[stage]);
+                DispatchStage(cmd, pushConstants, stage);
             }
             finally
             {
@@ -172,10 +170,10 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
         try
         {
             for (int stage = EmitFirstStage;
-                 stage < groupCounts.Length;
+                 stage < DispatchSlots.Length;
                  stage++)
             {
-                DispatchStage(cmd, pushConstants, stage, groupCounts[stage]);
+                DispatchStage(cmd, pushConstants, stage);
             }
         }
         finally
@@ -213,8 +211,7 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
     private void DispatchStage(
         CommandBuffer cmd,
         GPUSimpleDdgiSchedulePushConstants pushConstants,
-        int stage,
-        uint groupCount)
+        int stage)
     {
         pushConstants.Stage = checked((uint)stage);
         _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[stage]);
@@ -226,7 +223,19 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
             0,
             (uint)Marshal.SizeOf<GPUSimpleDdgiSchedulePushConstants>(),
             &pushConstants);
-        _context.Api.CmdDispatch(cmd, groupCount, 1, 1);
+        if (stage == 0)
+        {
+            _context.Api.CmdDispatch(cmd, 1u, 1u, 1u);
+        }
+        else
+        {
+            ulong offset = _volumeManager.GpuScheduler
+                .GetIndirectCommandOffset(DispatchSlots[stage]);
+            _context.Api.CmdDispatchIndirect(
+                cmd,
+                _volumeManager.GpuScheduler.GetArenaVkBuffer(),
+                offset);
+        }
         InsertStageBarrier(cmd, stage);
     }
 
@@ -337,6 +346,7 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
                 AppendRegion(barriers, ref count, arena, layout.Counters);
                 AppendRegion(barriers, ref count, arena,
                     layout.FeedbackSummary);
+                AppendIndirectCommands(barriers, ref count, arena, layout);
                 break;
             case 1: // classify -> prefix/compact/admit
                 AppendRegion(barriers, ref count, arena, layout.CandidateInput);
@@ -354,28 +364,28 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
                     checked(layout.LanePrefixes.End -
                         layout.LaneCandidateCounts.Offset));
                 break;
-            case 3: // lane-base -> compact/admit
+            case 3: // lane-base -> compact and exactly one admission variant
                 AppendRegion(barriers, ref count, arena, layout.LanePrefixes);
                 AppendRegion(barriers, ref count, arena, layout.LaneTotals);
                 AppendRegion(barriers, ref count, arena, layout.LaneAdmission);
                 AppendRegion(barriers, ref count, arena, layout.Counters);
+                AppendIndirectCommands(barriers, ref count, arena, layout);
                 break;
             case 4: // compact -> both admission variants
                 AppendRegion(barriers, ref count, arena, layout.CandidateOutput);
                 AppendRegion(barriers, ref count, arena, layout.Counters);
                 break;
-            case 5: // tail-specialized admission -> generic admission/materialize
-            case 6: // generic admission -> materialize
+            case 5: // tail-specialized admission -> materialize/emit
+            case 6: // generic admission -> materialize/emit
                 AppendRegion(barriers, ref count, arena, layout.CandidateInput);
                 AppendRegion(barriers, ref count, arena, layout.UpdateRecords);
                 AppendRegion(barriers, ref count, arena, layout.LaneCursors);
                 AppendRegion(barriers, ref count, arena, layout.LaneAdmission);
                 AppendRegion(barriers, ref count, arena, layout.Counters);
+                AppendIndirectCommands(barriers, ref count, arena, layout);
                 break;
-            case 7: // selection materialization -> emit
+            case 7: // fused selection materialization/bucket classify -> emit prefix
                 AppendRegion(barriers, ref count, arena, layout.UpdateRecords);
-                break;
-            case 8: // parallel bucket classify -> stable group prefix
                 AppendRegion(barriers, ref count, arena,
                     layout.CandidateGroupLaneCounts);
                 AppendRegion(barriers, ref count, arena,
@@ -386,7 +396,7 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
                 AppendRegion(barriers, ref count, arena, layout.Counters);
                 AppendRegion(barriers, ref count, arena, layout.Outcomes);
                 break;
-            case 9: // stable group prefix -> stable queue scatter
+            case 8: // stable group prefix -> stable queue scatter
                 AppendRegion(barriers, ref count, arena,
                     layout.CandidateGroupLaneCounts);
                 AppendRegion(barriers, ref count, arena,
@@ -394,8 +404,9 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
                 AppendRegion(barriers, ref count, arena, layout.Counters);
                 AppendRegion(barriers, ref count, arena,
                     layout.RayBucketMetadata);
+                AppendIndirectCommands(barriers, ref count, arena, layout);
                 break;
-            case 10: // stable queue scatter -> resident consumers
+            case 9: // stable queue scatter -> resident consumers
                 AppendRegion(barriers, ref count, arena, layout.Counters);
                 AppendRegion(barriers, ref count, arena, layout.Outcomes);
                 AppendRegion(barriers, ref count, arena,
@@ -445,6 +456,22 @@ public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
             };
             _context.Api.CmdPipelineBarrier2(cmd, &dependency);
         }
+    }
+
+    private static void AppendIndirectCommands(
+        Span<BufferMemoryBarrier2> barriers,
+        ref int count,
+        VkBuffer arena,
+        SimpleDdgiGpuSchedulerLayout layout)
+    {
+        AppendRange(
+            barriers,
+            ref count,
+            arena,
+            layout.IndirectCommands.Offset,
+            layout.IndirectCommands.ByteSize,
+            PipelineStageFlags2.DrawIndirectBit,
+            AccessFlags2.IndirectCommandReadBit);
     }
 
     private static void AppendRegion(

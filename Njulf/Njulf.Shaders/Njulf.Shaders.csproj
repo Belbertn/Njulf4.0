@@ -16,6 +16,12 @@
 
     <ItemGroup>
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
+      <!-- Scene compaction is emitted only as bounded flat/instance native
+           programs. The template itself is never a runtime artifact. -->
+      <ShaderSource Remove="scene_opaque_compact.comp" />
+      <!-- Bucket classification is fused into materialization. Keep the
+           superseded standalone source out of the runtime bundle. -->
+      <ShaderSource Remove="ddgi_simple_schedule_emit_classify.comp" />
       <!-- The trace source is a template for the storage/role/content variants
            declared below. Runtime never loads the unspecialized artifact, so
            keep the source without emitting or embedding ddgi_simple_trace.comp.spv. -->
@@ -377,21 +383,54 @@
       </SimpleDdgiFeedbackShaderVariant>
       <GpuDiagnosticTaskShader Include="depth.task;forward.task;forward_compacted.task" />
       <GpuDiagnosticMeshShader Include="foliage_grass.mesh;foliage_mesh.mesh" />
-      <!-- Compile the exact production compaction source with bounded caster
-           attribution enabled. Keeping this as a separate native program
-           avoids diagnostic atomics in the production culling path. -->
-      <GpuDiagnosticComputeShader Include="scene_opaque_compact_diagnostics.comp">
+      <SceneOpaqueCompactionShaderVariant Include="scene_opaque_compact_flat.comp">
         <Source>scene_opaque_compact.comp</Source>
-      </GpuDiagnosticComputeShader>
-      <!-- The virtual-address baseline remains a separate native program so
-           the resolved-addressing switch never becomes a hot shader branch. -->
-      <ResolvedMeshletAddressingShaderVariant Include="scene_opaque_compact_virtual.comp">
+        <Program>0</Program>
+        <Resolved>1</Resolved>
+        <Diagnostics>0</Diagnostics>
+      </SceneOpaqueCompactionShaderVariant>
+      <SceneOpaqueCompactionShaderVariant Include="scene_opaque_compact_flat_diagnostics.comp">
         <Source>scene_opaque_compact.comp</Source>
-      </ResolvedMeshletAddressingShaderVariant>
-      <ResolvedMeshletAddressingShaderVariant Include="scene_opaque_compact_virtual_diagnostics.comp">
+        <Program>0</Program>
+        <Resolved>1</Resolved>
+        <Diagnostics>1</Diagnostics>
+      </SceneOpaqueCompactionShaderVariant>
+      <SceneOpaqueCompactionShaderVariant Include="scene_opaque_compact_flat_virtual.comp">
         <Source>scene_opaque_compact.comp</Source>
-        <Defines>-DNJULF_GPU_DIAGNOSTIC_COUNTERS=1</Defines>
-      </ResolvedMeshletAddressingShaderVariant>
+        <Program>0</Program>
+        <Resolved>0</Resolved>
+        <Diagnostics>0</Diagnostics>
+      </SceneOpaqueCompactionShaderVariant>
+      <SceneOpaqueCompactionShaderVariant Include="scene_opaque_compact_flat_virtual_diagnostics.comp">
+        <Source>scene_opaque_compact.comp</Source>
+        <Program>0</Program>
+        <Resolved>0</Resolved>
+        <Diagnostics>1</Diagnostics>
+      </SceneOpaqueCompactionShaderVariant>
+      <SceneOpaqueCompactionShaderVariant Include="scene_opaque_compact_instance.comp">
+        <Source>scene_opaque_compact.comp</Source>
+        <Program>1</Program>
+        <Resolved>1</Resolved>
+        <Diagnostics>0</Diagnostics>
+      </SceneOpaqueCompactionShaderVariant>
+      <SceneOpaqueCompactionShaderVariant Include="scene_opaque_compact_instance_diagnostics.comp">
+        <Source>scene_opaque_compact.comp</Source>
+        <Program>1</Program>
+        <Resolved>1</Resolved>
+        <Diagnostics>1</Diagnostics>
+      </SceneOpaqueCompactionShaderVariant>
+      <SceneOpaqueCompactionShaderVariant Include="scene_opaque_compact_instance_virtual.comp">
+        <Source>scene_opaque_compact.comp</Source>
+        <Program>1</Program>
+        <Resolved>0</Resolved>
+        <Diagnostics>0</Diagnostics>
+      </SceneOpaqueCompactionShaderVariant>
+      <SceneOpaqueCompactionShaderVariant Include="scene_opaque_compact_instance_virtual_diagnostics.comp">
+        <Source>scene_opaque_compact.comp</Source>
+        <Program>1</Program>
+        <Resolved>0</Resolved>
+        <Diagnostics>1</Diagnostics>
+      </SceneOpaqueCompactionShaderVariant>
       <ForwardSimpleFragmentShader Include="forward.frag" />
       <ForwardWeightedOitFragmentShader Include="forward.frag" />
       <FoliageForwardFragmentShader Include="foliage_forward.frag" />
@@ -1090,6 +1129,10 @@
         <NjulfShaderArtifact Include="@(ResolvedMeshletAddressingShaderVariant)">
           <Source>$(MSBuildProjectDirectory)\%(ResolvedMeshletAddressingShaderVariant.Source)</Source>
           <Defines>%(ResolvedMeshletAddressingShaderVariant.Defines) -DNJULF_RESOLVED_MESHLET_ADDRESSING=0</Defines>
+        </NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="@(SceneOpaqueCompactionShaderVariant)">
+          <Source>$(MSBuildProjectDirectory)\%(SceneOpaqueCompactionShaderVariant.Source)</Source>
+          <Defines>-DNJULF_SCENE_OPAQUE_INSTANCE_PROGRAM=%(SceneOpaqueCompactionShaderVariant.Program) -DNJULF_RESOLVED_MESHLET_ADDRESSING=%(SceneOpaqueCompactionShaderVariant.Resolved) -DNJULF_GPU_DIAGNOSTIC_COUNTERS=%(SceneOpaqueCompactionShaderVariant.Diagnostics)</Defines>
         </NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_compacted.mesh"><Source>$(MSBuildProjectDirectory)\forward.mesh</Source><Defines>-DFORWARD_COMPACTED_MESH=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_simple_compacted.mesh"><Source>$(MSBuildProjectDirectory)\forward_simple.mesh</Source><Defines>-DFORWARD_COMPACTED_MESH=1</Defines></NjulfShaderArtifact>

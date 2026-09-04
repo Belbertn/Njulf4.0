@@ -1443,7 +1443,7 @@ namespace Njulf.Tests
             string relocate = ReadRepoText("Njulf.Shaders", "ddgi_simple_relocate_classify.comp");
             string commitLocal = ReadRepoText(
                 "Njulf.Shaders",
-                "ddgi_simple_schedule_commit_local.comp");
+                "ddgi_simple_schedule_commit_local.glsl");
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
 
             Assert.Multiple(() =>
@@ -2896,7 +2896,7 @@ namespace Njulf.Tests
                 "ddgi_simple_schedule_classify.comp");
             string commitLocal = ReadRepoText(
                 "Njulf.Shaders",
-                "ddgi_simple_schedule_commit_local.comp");
+                "ddgi_simple_schedule_commit_local.glsl");
             string trace = ReadRepoText(
                 "Njulf.Shaders",
                 "ddgi_simple_trace.comp");

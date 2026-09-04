@@ -59,9 +59,8 @@ public sealed class ShaderBuildTests
         "ddgi_simple_schedule_admit_tail.comp",
         "ddgi_simple_schedule_feedback_partial.comp",
         "ddgi_simple_schedule_materialize.comp",
-        "ddgi_simple_schedule_emit_classify.comp",
         "ddgi_simple_schedule_emit_scatter.comp",
-        "ddgi_simple_schedule_validate_scroll_cohorts.comp",
+        "ddgi_simple_schedule_commit.comp",
         "farfield_voxelize.comp",
         "farfield_jumpflood.comp",
         "froxel_noise.comp",
@@ -87,8 +86,14 @@ public sealed class ShaderBuildTests
         "depth_compacted.mesh",
         "depth_alpha_compacted.mesh",
         "shadow_depth_alpha_compacted.mesh",
-        "scene_opaque_compact_virtual.comp",
-        "scene_opaque_compact_virtual_diagnostics.comp",
+        "scene_opaque_compact_flat.comp",
+        "scene_opaque_compact_flat_diagnostics.comp",
+        "scene_opaque_compact_flat_virtual.comp",
+        "scene_opaque_compact_flat_virtual_diagnostics.comp",
+        "scene_opaque_compact_instance.comp",
+        "scene_opaque_compact_instance_diagnostics.comp",
+        "scene_opaque_compact_instance_virtual.comp",
+        "scene_opaque_compact_instance_virtual_diagnostics.comp",
         "forward_compacted.mesh",
         "forward_compacted_48v64p_128t.mesh",
         "forward_compacted_64v126p_64t.mesh",
@@ -126,6 +131,22 @@ public sealed class ShaderBuildTests
                 Does.Not.Contain(
                     "Njulf.Shaders.hybrid_reflection_ddgi_base.comp"),
                 "The runtime-branched DDGI template must not be emitted as an unspecialized artifact.");
+            Assert.That(
+                shaderResourceNames,
+                Does.Not.Contain("Njulf.Shaders.scene_opaque_compact.comp"),
+                "Scene compaction must be emitted only as flat/instance programs.");
+            Assert.That(
+                shaderResourceNames,
+                Does.Not.Contain(
+                    "Njulf.Shaders.scene_opaque_compact_virtual.comp"));
+            Assert.That(
+                shaderResourceNames,
+                Does.Not.Contain(
+                    "Njulf.Shaders.scene_opaque_compact_diagnostics.comp"));
+            Assert.That(
+                shaderResourceNames,
+                Does.Not.Contain(
+                    "Njulf.Shaders.scene_opaque_compact_virtual_diagnostics.comp"));
         });
 
         foreach (string shaderName in RequiredShaders)
@@ -137,6 +158,74 @@ public sealed class ShaderBuildTests
             Assert.That(stream!.Length, Is.GreaterThanOrEqualTo(4), $"Shader resource '{resourceName}' is empty.");
             Assert.That(stream.Read(magicBytes), Is.EqualTo(4), $"Could not read SPIR-V magic from '{resourceName}'.");
             Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(magicBytes), Is.EqualTo(0x07230203));
+        }
+    }
+
+    [TestCase(true, false, false,
+        "scene_opaque_compact_flat.comp.spv")]
+    [TestCase(true, false, true,
+        "scene_opaque_compact_flat_diagnostics.comp.spv")]
+    [TestCase(true, true, false,
+        "scene_opaque_compact_instance.comp.spv")]
+    [TestCase(true, true, true,
+        "scene_opaque_compact_instance_diagnostics.comp.spv")]
+    [TestCase(false, false, false,
+        "scene_opaque_compact_flat_virtual.comp.spv")]
+    [TestCase(false, false, true,
+        "scene_opaque_compact_flat_virtual_diagnostics.comp.spv")]
+    [TestCase(false, true, false,
+        "scene_opaque_compact_instance_virtual.comp.spv")]
+    [TestCase(false, true, true,
+        "scene_opaque_compact_instance_virtual_diagnostics.comp.spv")]
+    public void SceneOpaqueCompactionSelectionUsesBoundedProgram(
+        bool resolvedMeshletAddressing,
+        bool instanceExpansion,
+        bool diagnostics,
+        string expected)
+    {
+        Assert.That(
+            MeshPipeline.ResolveSceneOpaqueCompactionShaderName(
+                resolvedMeshletAddressing,
+                instanceExpansion,
+                diagnostics),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void FlatSceneCompactionOmitsInstanceWorkgroupStateAndBarriers()
+    {
+        string[] addressingVariants =
+        [
+            string.Empty,
+            "_virtual"
+        ];
+
+        foreach (string addressing in addressingVariants)
+        {
+            byte[] flat = LoadEmbeddedShader(
+                $"scene_opaque_compact_flat{addressing}.comp");
+            byte[] instance = LoadEmbeddedShader(
+                $"scene_opaque_compact_instance{addressing}.comp");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    ContainsSpirvOpcode(flat, 224),
+                    Is.False,
+                    "The flat program must not retain OpControlBarrier.");
+                Assert.That(
+                    ContainsSpirvWorkgroupVariable(flat),
+                    Is.False,
+                    "The flat program must not retain Workgroup OpVariable.");
+                Assert.That(
+                    ContainsSpirvOpcode(instance, 224),
+                    Is.True,
+                    "The instance program must retain traversal barriers.");
+                Assert.That(
+                    ContainsSpirvWorkgroupVariable(instance),
+                    Is.True,
+                    "The instance program must retain traversal workgroup state.");
+            });
         }
     }
 

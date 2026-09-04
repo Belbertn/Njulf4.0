@@ -9811,6 +9811,9 @@ namespace Njulf.Rendering
                 timings.GetGpuMicrosecondsOrZero(
                     "HybridReflectionCompositePass");
             sceneData.GpuDepthPrePassMicroseconds = timings.GetGpuMicrosecondsOrZero("DepthPrePass");
+            sceneData.GpuSceneOpaqueCompactionMicroseconds =
+                timings.GetGpuMicrosecondsOrZero(
+                    "SceneOpaqueCompactionPass");
             sceneData.GpuMotionVectorMicroseconds = timings.GetGpuMicrosecondsOrZero("MotionVectorPass");
             sceneData.GpuHiZBuildMicroseconds = timings.GetGpuMicrosecondsOrZero("HiZBuildPass");
             sceneData.GpuAmbientOcclusionMicroseconds =

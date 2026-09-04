@@ -297,8 +297,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _maskedMotionVectorPipeline;
         private VkPipeline _compactedMotionVectorPipeline;
         private VkPipeline _compactedMaskedMotionVectorPipeline;
-        private VkPipeline _sceneOpaqueCompactionPipeline;
-        private VkPipeline _sceneOpaqueCompactionDiagnosticsPipeline;
+        private VkPipeline _sceneOpaqueCompactionFlatPipeline;
+        private VkPipeline _sceneOpaqueCompactionInstancePipeline;
+        private VkPipeline _sceneOpaqueCompactionFlatDiagnosticsPipeline;
+        private VkPipeline _sceneOpaqueCompactionInstanceDiagnosticsPipeline;
         private VkPipeline _forwardVisibilityCompactionPipeline;
         private PipelineLayout _layout;
         private PipelineLayout _rayTransparentLayout;
@@ -462,10 +464,52 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _compactedMotionVectorPipeline;
         public VkPipeline CompactedMaskedMotionVectorPipeline =>
             _compactedMaskedMotionVectorPipeline;
-        public VkPipeline SceneOpaqueCompactionPipeline =>
-            GpuMeshletCountersEnabled && _sceneOpaqueCompactionDiagnosticsPipeline.Handle != 0
-                ? _sceneOpaqueCompactionDiagnosticsPipeline
-                : _sceneOpaqueCompactionPipeline;
+        public VkPipeline ResolveSceneOpaqueCompactionPipeline(
+            bool instanceExpansion)
+        {
+            VkPipeline productionPipeline = instanceExpansion
+                ? _sceneOpaqueCompactionInstancePipeline
+                : _sceneOpaqueCompactionFlatPipeline;
+            VkPipeline diagnosticsPipeline = instanceExpansion
+                ? _sceneOpaqueCompactionInstanceDiagnosticsPipeline
+                : _sceneOpaqueCompactionFlatDiagnosticsPipeline;
+            return GpuMeshletCountersEnabled && diagnosticsPipeline.Handle != 0
+                ? diagnosticsPipeline
+                : productionPipeline;
+        }
+
+        public string ResolveSceneOpaqueCompactionShaderName(
+            bool instanceExpansion)
+        {
+            VkPipeline diagnosticsPipeline = instanceExpansion
+                ? _sceneOpaqueCompactionInstanceDiagnosticsPipeline
+                : _sceneOpaqueCompactionFlatDiagnosticsPipeline;
+            bool diagnostics = GpuMeshletCountersEnabled &&
+                diagnosticsPipeline.Handle != 0;
+            bool resolvedMeshletAddressing =
+                Settings.IsPerformanceOptimizationEnabled(
+                    PerformanceOptimizationFeature
+                        .ResolvedMeshletAddressing);
+            return ResolveSceneOpaqueCompactionShaderName(
+                resolvedMeshletAddressing,
+                instanceExpansion,
+                diagnostics);
+        }
+
+        internal static string ResolveSceneOpaqueCompactionShaderName(
+            bool resolvedMeshletAddressing,
+            bool instanceExpansion,
+            bool diagnostics)
+        {
+            string program = instanceExpansion ? "instance" : "flat";
+            string addressing = resolvedMeshletAddressing
+                ? string.Empty
+                : "_virtual";
+            string diagnosticSuffix = diagnostics
+                ? "_diagnostics"
+                : string.Empty;
+            return $"scene_opaque_compact_{program}{addressing}{diagnosticSuffix}.comp.spv";
+        }
         public VkPipeline ForwardVisibilityCompactionPipeline => _forwardVisibilityCompactionPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
         public PipelineLayout Layout => _layout;
@@ -4438,24 +4482,50 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 Settings.IsPerformanceOptimizationEnabled(
                     PerformanceOptimizationFeature
                         .ResolvedMeshletAddressing);
-            string sceneOpaqueCompactionShader = resolvedMeshletAddressing
-                ? "scene_opaque_compact.comp.spv"
-                : "scene_opaque_compact_virtual.comp.spv";
-            _sceneOpaqueCompactionPipeline = CreateComputePipeline(
-                sceneOpaqueCompactionShader,
+            _sceneOpaqueCompactionFlatPipeline = CreateComputePipeline(
+                ResolveSceneOpaqueCompactionShaderName(
+                    resolvedMeshletAddressing,
+                    instanceExpansion: false,
+                    diagnostics: false),
                 _sceneSubmissionComputeLayout);
-            _context.SetDebugName(_sceneOpaqueCompactionPipeline.Handle, ObjectType.Pipeline, "Scene Opaque Compaction Compute Pipeline");
+            _context.SetDebugName(
+                _sceneOpaqueCompactionFlatPipeline.Handle,
+                ObjectType.Pipeline,
+                "Scene Opaque Flat Compaction Compute Pipeline");
+            _sceneOpaqueCompactionInstancePipeline = CreateComputePipeline(
+                ResolveSceneOpaqueCompactionShaderName(
+                    resolvedMeshletAddressing,
+                    instanceExpansion: true,
+                    diagnostics: false),
+                _sceneSubmissionComputeLayout);
+            _context.SetDebugName(
+                _sceneOpaqueCompactionInstancePipeline.Handle,
+                ObjectType.Pipeline,
+                "Scene Opaque Instance Compaction Compute Pipeline");
             if (GpuMeshletCountersEnabled)
             {
-                _sceneOpaqueCompactionDiagnosticsPipeline = CreateComputePipeline(
-                    resolvedMeshletAddressing
-                        ? "scene_opaque_compact_diagnostics.comp.spv"
-                        : "scene_opaque_compact_virtual_diagnostics.comp.spv",
+                _sceneOpaqueCompactionFlatDiagnosticsPipeline =
+                    CreateComputePipeline(
+                        ResolveSceneOpaqueCompactionShaderName(
+                            resolvedMeshletAddressing,
+                            instanceExpansion: false,
+                            diagnostics: true),
+                        _sceneSubmissionComputeLayout);
+                _context.SetDebugName(
+                    _sceneOpaqueCompactionFlatDiagnosticsPipeline.Handle,
+                    ObjectType.Pipeline,
+                    "Scene Opaque Flat Compaction Diagnostics Pipeline");
+                _sceneOpaqueCompactionInstanceDiagnosticsPipeline =
+                    CreateComputePipeline(
+                        ResolveSceneOpaqueCompactionShaderName(
+                            resolvedMeshletAddressing,
+                            instanceExpansion: true,
+                            diagnostics: true),
                     _sceneSubmissionComputeLayout);
                 _context.SetDebugName(
-                    _sceneOpaqueCompactionDiagnosticsPipeline.Handle,
+                    _sceneOpaqueCompactionInstanceDiagnosticsPipeline.Handle,
                     ObjectType.Pipeline,
-                    "Scene Opaque Compaction Exact Shadow Diagnostics Pipeline");
+                    "Scene Opaque Instance Compaction Diagnostics Pipeline");
             }
             _forwardVisibilityCompactionPipeline = CreateComputePipeline("forward_visibility_compact.comp.spv", _sceneSubmissionComputeLayout);
             _context.SetDebugName(_forwardVisibilityCompactionPipeline.Handle, ObjectType.Pipeline, "Forward Visibility Compaction Compute Pipeline");
@@ -5616,17 +5686,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _compactedMaskedMotionVectorPipeline = default;
             }
 
-            if (_sceneOpaqueCompactionPipeline.Handle != 0)
-            {
-                _context.Api.DestroyPipeline(_context.Device, _sceneOpaqueCompactionPipeline, null);
-                _sceneOpaqueCompactionPipeline = default;
-            }
-
-            if (_sceneOpaqueCompactionDiagnosticsPipeline.Handle != 0)
-            {
-                _context.Api.DestroyPipeline(_context.Device, _sceneOpaqueCompactionDiagnosticsPipeline, null);
-                _sceneOpaqueCompactionDiagnosticsPipeline = default;
-            }
+            DestroyOptionalPipeline(ref _sceneOpaqueCompactionFlatPipeline);
+            DestroyOptionalPipeline(ref _sceneOpaqueCompactionInstancePipeline);
+            DestroyOptionalPipeline(
+                ref _sceneOpaqueCompactionFlatDiagnosticsPipeline);
+            DestroyOptionalPipeline(
+                ref _sceneOpaqueCompactionInstanceDiagnosticsPipeline);
 
             if (_forwardVisibilityCompactionPipeline.Handle != 0)
             {

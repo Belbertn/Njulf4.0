@@ -87,7 +87,9 @@ void main()
         SchedulerArenaWrite(metadataBase + 2u, 0u);
         SchedulerArenaWrite(metadataBase + 3u, 0u);
     }
-    for (uint command = localIndex; command < 15u; command += 64u)
+    for (uint command = localIndex;
+         command < SIMPLE_DDGI_SCHEDULER_DISPATCH_COUNT;
+         command += 64u)
     {
         uint base = pc.IndirectCommandsOffsetWords +
             command * SIMPLE_DDGI_SCHEDULER_INDIRECT_WORDS;
@@ -99,12 +101,29 @@ void main()
 
     if (localIndex == 0u)
     {
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_RESET, 1u, 1u, 1u);
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_CLASSIFY, 0u, 1u, 1u);
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_PREFIX, 0u, 1u, 1u);
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_LANE_BASE, 0u, 1u, 1u);
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_COMPACT, 0u, 1u, 1u);
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_ADMIT, 0u, 1u, 1u);
-        SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT, 1u, 1u, 1u);
+        SchedulerWriteIndirect(
+            SIMPLE_DDGI_SCHEDULER_DISPATCH_RESET,
+            1u,
+            1u,
+            1u);
+        if (!certifiedQuiesced && SchedulerCandidateCapacity() != 0u)
+        {
+            SchedulerWriteIndirect(
+                SIMPLE_DDGI_SCHEDULER_DISPATCH_CLASSIFY,
+                SchedulerGroupsFor(SchedulerCandidateCapacity()),
+                1u,
+                1u);
+            SchedulerWriteIndirect(
+                SIMPLE_DDGI_SCHEDULER_DISPATCH_PREFIX,
+                SchedulerGroupsFor(
+                    (SIMPLE_DDGI_SCHEDULER_MAX_LANES + 1u) / 2u),
+                1u,
+                1u);
+            SchedulerWriteIndirect(
+                SIMPLE_DDGI_SCHEDULER_DISPATCH_LANE_BASE,
+                1u,
+                1u,
+                1u);
+        }
     }
 }

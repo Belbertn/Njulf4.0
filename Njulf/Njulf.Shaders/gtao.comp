@@ -83,10 +83,19 @@ float Hash(uvec3 value)
     return float(state & 0x00ffffffu) / 16777216.0;
 }
 
-float FetchDepth(vec2 uv, ivec2 extent)
+ivec2 ResolveDepthPixel(vec2 uv, ivec2 extent)
 {
-    ivec2 pixel = ivec2(clamp(uv * vec2(extent), vec2(0.0),
-        vec2(extent - ivec2(1))));
+    return clamp(ivec2(floor(uv * vec2(extent))), ivec2(0),
+        extent - ivec2(1));
+}
+
+vec2 DepthPixelUv(ivec2 pixel, ivec2 extent)
+{
+    return (vec2(pixel) + vec2(0.5)) / vec2(extent);
+}
+
+float FetchDepth(ivec2 pixel)
+{
     return texelFetch(DepthTexture, pixel, 0).r;
 }
 
@@ -130,19 +139,31 @@ vec3 CompleteViewPosition(
 }
 
 vec3 ReconstructGeometricNormal(
-    vec2 uv,
+    ivec2 centerPixel,
     vec3 center,
-    ivec2 sourceExtent,
-    vec2 invSource)
+    ivec2 sourceExtent)
 {
-    vec2 rightUv = min(uv + vec2(invSource.x, 0.0), vec2(1.0));
-    vec2 leftUv = max(uv - vec2(invSource.x, 0.0), vec2(0.0));
-    vec2 upUv = min(uv + vec2(0.0, invSource.y), vec2(1.0));
-    vec2 downUv = max(uv - vec2(0.0, invSource.y), vec2(0.0));
-    float rightDepth = FetchDepth(rightUv, sourceExtent);
-    float leftDepth = FetchDepth(leftUv, sourceExtent);
-    float upDepth = FetchDepth(upUv, sourceExtent);
-    float downDepth = FetchDepth(downUv, sourceExtent);
+    ivec2 maximumPixel = sourceExtent - ivec2(1);
+    ivec2 rightPixel = min(centerPixel + ivec2(1, 0), maximumPixel);
+    ivec2 leftPixel = max(centerPixel - ivec2(1, 0), ivec2(0));
+    ivec2 upPixel = min(centerPixel + ivec2(0, 1), maximumPixel);
+    ivec2 downPixel = max(centerPixel - ivec2(0, 1), ivec2(0));
+    vec2 rightUv = DepthPixelUv(rightPixel, sourceExtent);
+    vec2 leftUv = DepthPixelUv(leftPixel, sourceExtent);
+    vec2 upUv = DepthPixelUv(upPixel, sourceExtent);
+    vec2 downUv = DepthPixelUv(downPixel, sourceExtent);
+    float rightDepth = rightPixel.x != centerPixel.x
+        ? FetchDepth(rightPixel)
+        : 0.0;
+    float leftDepth = leftPixel.x != centerPixel.x
+        ? FetchDepth(leftPixel)
+        : 0.0;
+    float upDepth = upPixel.y != centerPixel.y
+        ? FetchDepth(upPixel)
+        : 0.0;
+    float downDepth = downPixel.y != centerPixel.y
+        ? FetchDepth(downPixel)
+        : 0.0;
     vec2 rightZw = ReconstructViewZw(rightUv, rightDepth);
     vec2 leftZw = ReconstructViewZw(leftUv, leftDepth);
     vec2 upZw = ReconstructViewZw(upUv, upDepth);
@@ -191,12 +212,14 @@ float SearchHorizonCos(
     vec2 uv,
     vec3 center,
     vec3 viewDirection,
+    vec3 surfaceNormal,
     vec3 sliceTangent,
     vec2 screenDirection,
     float projectedRadiusPixels,
     uint stepCount,
     float inverseStepCount,
     vec2 invDestination,
+    ivec2 sourceExtent,
     float lowHorizonCos)
 {
     float horizonCos = lowHorizonCos;
@@ -212,17 +235,26 @@ float SearchHorizonCos(
         if (any(lessThanEqual(sampleUv, vec2(0.0))) ||
             any(greaterThanEqual(sampleUv, vec2(1.0))))
             continue;
-        // Use the finest Hi-Z level for horizon classification. Coarser
-        // nearest-filtered levels quantize planar depth into visible blocks
-        // and turn those blocks into false horizon bands on nearby surfaces.
-        float sampleDepth = textureLod(HiZTexture, sampleUv, 0.0).r;
+        // Hi-Z mip zero is already half resolution in Njulf. Reconstructing
+        // this full-resolution sample position from its conservative 2x2
+        // depth produces false, axis-aligned horizons on planar surfaces.
+        ivec2 samplePixel = ResolveDepthPixel(sampleUv, sourceExtent);
+        vec2 resolvedSampleUv = DepthPixelUv(samplePixel, sourceExtent);
+        float sampleDepth = FetchDepth(samplePixel);
         if (sampleDepth <= 1.0e-6)
             continue;
-        vec3 samplePosition = ReconstructViewPosition(sampleUv, sampleDepth);
+        vec3 samplePosition = ReconstructViewPosition(
+            resolvedSampleUv, sampleDepth);
         vec3 delta = samplePosition - center;
         float distanceToSample = length(delta);
         if (!Finite(samplePosition) || !Finite(distanceToSample) ||
             distanceToSample <= 1.0e-5 || distanceToSample > pc.Radius)
+            continue;
+        // Only geometry above the receiver's tangent plane can occlude its
+        // visible hemisphere. This also prevents residual depth quantization
+        // on a flat surface from being promoted into a false horizon.
+        float planeDistance = dot(delta, surfaceNormal);
+        if (planeDistance <= pc.PlaneBias)
             continue;
         float tangentDistance = dot(delta, sliceTangent);
         if (tangentDistance <= 1.0e-5)
@@ -273,21 +305,22 @@ void main()
     if (any(greaterThanEqual(pixel, extent)))
         return;
     ivec2 sourceExtent = textureSize(DepthTexture, 0);
-    vec2 invSource = 1.0 / max(pc.SourceDimensions, vec2(1.0));
     vec2 invDestination = 1.0 /
         max(pc.DestinationDimensions, vec2(1.0));
     vec2 uv = (vec2(pixel) + vec2(0.5)) /
         max(pc.DestinationDimensions, vec2(1.0));
-    float depth = FetchDepth(uv, sourceExtent);
+    ivec2 centerPixel = ResolveDepthPixel(uv, sourceExtent);
+    vec2 centerUv = DepthPixelUv(centerPixel, sourceExtent);
+    float depth = FetchDepth(centerPixel);
     if (depth <= 1.0e-6)
     {
         imageStore(GtaoRawOutput, pixel,
             vec4(0.0, 0.0, 1.0, 0.0));
         return;
     }
-    vec3 center = ReconstructViewPosition(uv, depth);
+    vec3 center = ReconstructViewPosition(centerUv, depth);
     vec3 normal = ReconstructGeometricNormal(
-        uv, center, sourceExtent, invSource);
+        centerPixel, center, sourceExtent);
     if (!Finite(center) || !Finite(normal))
     {
         imageStore(GtaoRawOutput, pixel,
@@ -351,14 +384,14 @@ void main()
         float positiveLowHorizonCos = -normalSinCos.x;
         float negativeLowHorizonCos = normalSinCos.x;
         float positiveHorizonCos = SearchHorizonCos(
-            uv, center, viewDirection,
+            centerUv, center, viewDirection, normal,
             tangent, screenDirection, projectedRadiusPixels, stepCount,
-            inverseStepCount, invDestination,
+            inverseStepCount, invDestination, sourceExtent,
             positiveLowHorizonCos);
         float negativeHorizonCos = SearchHorizonCos(
-            uv, center, viewDirection,
+            centerUv, center, viewDirection, normal,
             -tangent, -screenDirection, projectedRadiusPixels, stepCount,
-            inverseStepCount, invDestination,
+            inverseStepCount, invDestination, sourceExtent,
             negativeLowHorizonCos);
         float positiveHorizonSine = sqrt(max(
             1.0 - positiveHorizonCos * positiveHorizonCos, 0.0));

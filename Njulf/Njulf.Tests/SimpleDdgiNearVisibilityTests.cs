@@ -300,7 +300,7 @@ public sealed class SimpleDdgiNearVisibilityTests
         string blend = ReadRepoText(
             "Njulf.Shaders", "ddgi_simple_blend.comp");
         string commit = ReadRepoText(
-            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.comp");
+            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.glsl");
 
         Assert.Multiple(() =>
         {

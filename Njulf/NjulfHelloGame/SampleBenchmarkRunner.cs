@@ -944,6 +944,8 @@ public sealed class SampleBenchmarkAnalyzer
     private static readonly IReadOnlyList<TimingSelector> GpuTimings =
     [
         new("DepthPrePass", d => d.GpuDepthPrePassMicroseconds),
+        new("SceneOpaqueCompactionPass", d =>
+            d.GpuSceneOpaqueCompactionMicroseconds),
         new("MotionVectorPass", d => d.GpuMotionVectorMicroseconds),
         new("DirectionalShadowPass", d => d.GpuDirectionalShadowMicroseconds),
         new("DirectionalRayShadowPass", d => d.GpuDirectionalRayShadowMicroseconds),
@@ -1017,12 +1019,15 @@ public sealed class SampleBenchmarkAnalyzer
     private static readonly IReadOnlyList<TimingSelector> GpuIndependentTimings =
         GpuTimings
             // Foliage shadow telemetry aliases the directional-shadow pass.
+            // Scene submission is timestamped as an attribution scope nested
+            // inside the production graph's scene/depth submission interval.
             // Scheduler stage timestamps are nested inside SchedulePass. They
             // remain first-class attribution rows, but summing both parent and
             // children makes a valid frame appear over-accounted by exactly the
             // scheduler duration and invalidates otherwise locked captures.
             .Where(static selector =>
                 selector.Name != "FoliageShadow" &&
+                selector.Name != "SceneOpaqueCompactionPass" &&
                 selector.Name != "ForwardGiGatherPass" &&
                 selector.Name != "SimpleDdgiReceiverCachePass" &&
                 !selector.Name.StartsWith(

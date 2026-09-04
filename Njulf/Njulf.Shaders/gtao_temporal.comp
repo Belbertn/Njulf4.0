@@ -63,11 +63,19 @@ bool Finite(vec4 value)
     return !any(isnan(value)) && !any(isinf(value));
 }
 
-float FetchDepth(vec2 uv)
+ivec2 ResolveDepthPixel(vec2 uv, ivec2 extent)
 {
-    ivec2 extent = textureSize(DepthTexture, 0);
-    ivec2 pixel = ivec2(clamp(uv * vec2(extent), vec2(0.0),
-        vec2(extent - ivec2(1))));
+    return clamp(ivec2(floor(uv * vec2(extent))), ivec2(0),
+        extent - ivec2(1));
+}
+
+vec2 DepthPixelUv(ivec2 pixel, ivec2 extent)
+{
+    return (vec2(pixel) + vec2(0.5)) / vec2(extent);
+}
+
+float FetchDepth(ivec2 pixel)
+{
     return texelFetch(DepthTexture, pixel, 0).r;
 }
 
@@ -78,17 +86,32 @@ vec3 ReconstructViewPosition(vec2 uv, float depth)
     return view.xyz / max(abs(view.w), 1.0e-6);
 }
 
-vec3 ReconstructGeometricNormal(vec2 uv, float centerDepth, vec3 center)
+vec3 ReconstructGeometricNormal(
+    ivec2 centerPixel,
+    vec3 center,
+    ivec2 sourceExtent)
 {
-    vec2 texel = 1.0 / max(pc.SceneDimensions, vec2(1.0));
-    vec2 rightUv = min(uv + vec2(texel.x, 0.0), vec2(1.0));
-    vec2 leftUv = max(uv - vec2(texel.x, 0.0), vec2(0.0));
-    vec2 upUv = min(uv + vec2(0.0, texel.y), vec2(1.0));
-    vec2 downUv = max(uv - vec2(0.0, texel.y), vec2(0.0));
-    float rightDepth = FetchDepth(rightUv);
-    float leftDepth = FetchDepth(leftUv);
-    float upDepth = FetchDepth(upUv);
-    float downDepth = FetchDepth(downUv);
+    ivec2 maximumPixel = sourceExtent - ivec2(1);
+    ivec2 rightPixel = min(centerPixel + ivec2(1, 0), maximumPixel);
+    ivec2 leftPixel = max(centerPixel - ivec2(1, 0), ivec2(0));
+    ivec2 upPixel = min(centerPixel + ivec2(0, 1), maximumPixel);
+    ivec2 downPixel = max(centerPixel - ivec2(0, 1), ivec2(0));
+    vec2 rightUv = DepthPixelUv(rightPixel, sourceExtent);
+    vec2 leftUv = DepthPixelUv(leftPixel, sourceExtent);
+    vec2 upUv = DepthPixelUv(upPixel, sourceExtent);
+    vec2 downUv = DepthPixelUv(downPixel, sourceExtent);
+    float rightDepth = rightPixel.x != centerPixel.x
+        ? FetchDepth(rightPixel)
+        : 0.0;
+    float leftDepth = leftPixel.x != centerPixel.x
+        ? FetchDepth(leftPixel)
+        : 0.0;
+    float upDepth = upPixel.y != centerPixel.y
+        ? FetchDepth(upPixel)
+        : 0.0;
+    float downDepth = downPixel.y != centerPixel.y
+        ? FetchDepth(downPixel)
+        : 0.0;
     vec3 right = ReconstructViewPosition(rightUv, rightDepth);
     vec3 left = ReconstructViewPosition(leftUv, leftDepth);
     vec3 up = ReconstructViewPosition(upUv, upDepth);
@@ -120,7 +143,10 @@ void LoadSharedGeometry(int sharedIndex, ivec2 outputPixel)
         outputExtent - ivec2(1));
     vec2 uv = (vec2(clampedPixel) + vec2(0.5)) /
         max(pc.Dimensions, vec2(1.0));
-    float depth = FetchDepth(uv);
+    ivec2 sourceExtent = textureSize(DepthTexture, 0);
+    ivec2 depthPixel = ResolveDepthPixel(uv, sourceExtent);
+    vec2 depthUv = DepthPixelUv(depthPixel, sourceExtent);
+    float depth = FetchDepth(depthPixel);
     SharedDepth[sharedIndex] = depth;
     if (depth <= 1.0e-6)
     {
@@ -130,11 +156,9 @@ void LoadSharedGeometry(int sharedIndex, ivec2 outputPixel)
         return;
     }
 
-    vec3 position = ReconstructViewPosition(uv, depth);
+    vec3 position = ReconstructViewPosition(depthUv, depth);
     vec3 normal = ReconstructGeometricNormal(
-        uv,
-        depth,
-        position);
+        depthPixel, position, sourceExtent);
     SharedViewPosition[sharedIndex] = vec4(position, 1.0);
     SharedGeometricNormal[sharedIndex] = vec4(normal, 1.0);
 }

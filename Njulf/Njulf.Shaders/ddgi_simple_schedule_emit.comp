@@ -33,7 +33,7 @@ void main()
             pc.CountersOffsetWords +
                 SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
         SchedulerRequestCapacity());
-    uint groupCount = SchedulerGroupsFor(SchedulerRequestCapacity());
+    uint groupCount = SchedulerGroupsFor(accepted);
     uint bucketOffset = 0u;
 
     // Convert the fixed six counters per workgroup into stable exclusive
@@ -131,13 +131,10 @@ void main()
     SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_PUBLISH,
         accepted, 1u, 1u);
     SchedulerWriteIndirect(
-        SIMPLE_DDGI_SCHEDULER_DISPATCH_COMMIT_LOCAL,
-        SchedulerGroupsFor(accepted),
-        1u,
-        1u);
-    SchedulerWriteIndirect(
-        SIMPLE_DDGI_SCHEDULER_DISPATCH_COMMIT_PROPAGATION,
-        SchedulerGroupsFor(accepted),
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_COMMIT,
+        min(
+            SchedulerActiveVolumeCount(),
+            SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES),
         1u,
         1u);
     SchedulerWriteIndirect(

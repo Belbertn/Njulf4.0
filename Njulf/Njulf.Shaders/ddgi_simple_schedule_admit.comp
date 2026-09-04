@@ -10,6 +10,34 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+void PublishAcceptedScheduleCommands()
+{
+    uint accepted = min(
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
+        SchedulerRequestCapacity());
+    if (accepted == 0u)
+        return;
+
+    uint acceptedGroups = SchedulerGroupsFor(accepted);
+    SchedulerWriteIndirect(
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_MATERIALIZE_CLASSIFY,
+        acceptedGroups,
+        1u,
+        1u);
+    SchedulerWriteIndirect(
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT_PREFIX,
+        1u,
+        1u,
+        1u);
+    SchedulerWriteIndirect(
+        SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT_SCATTER,
+        acceptedGroups,
+        1u,
+        1u);
+}
+
 // Admission is intentionally serialized in lane order.  Classification and
 // compaction are massively parallel; this small bounded pass is the single
 // deterministic authority for reservations, cursors, and queue indices.  It
@@ -34,11 +62,6 @@ void main()
     if (SchedulerArenaRead(
             pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMPACTED) == 0u)
     {
-        SchedulerWriteIndirect(
-            SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT,
-            1u,
-            1u,
-            1u);
         return;
     }
 
@@ -49,11 +72,6 @@ void main()
         // A current tail certificate quiesces nonparticipant maintenance on
         // most frames. Preserve the explicit empty transaction without paying
         // for deterministic quota construction or lane scans.
-        SchedulerWriteIndirect(
-            SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT,
-            1u,
-            1u,
-            1u);
         return;
     }
     uint activeVolumes = min(SchedulerActiveVolumeCount(), SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES);
@@ -1112,5 +1130,5 @@ void main()
         }
     }
 
-    SchedulerWriteIndirect(SIMPLE_DDGI_SCHEDULER_DISPATCH_EMIT, 1u, 1u, 1u);
+    PublishAcceptedScheduleCommands();
 }

@@ -16,17 +16,19 @@ public enum SimpleDdgiSchedulerDispatchSlot : byte
     Prefix = 2,
     LaneBase = 3,
     Compact = 4,
-    Admit = 5,
-    Emit = 6,
-    CommitLocal = 7,
-    CommitPropagation = 8,
-    Feedback = 9,
-    Trace = 10,
-    Relocate = 11,
-    Transport = 12,
-    Blend = 13,
-    Publish = 14,
-    Count = 15
+    TailAdmit = 5,
+    Admit = 6,
+    MaterializeClassify = 7,
+    EmitPrefix = 8,
+    EmitScatter = 9,
+    Commit = 10,
+    Feedback = 11,
+    Trace = 12,
+    Relocate = 13,
+    Transport = 14,
+    Blend = 15,
+    Publish = 16,
+    Count = 17
 }
 
 /// <summary>One 16-byte aligned range in the resident scheduler arena.</summary>

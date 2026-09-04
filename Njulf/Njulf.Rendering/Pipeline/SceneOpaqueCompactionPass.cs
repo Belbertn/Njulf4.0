@@ -16,6 +16,11 @@ namespace Njulf.Rendering.Pipeline
 {
     public sealed unsafe class SceneOpaqueCompactionPass : RenderPassBase
     {
+#if NJULF_SCENE_COMPACTION_COUNTER_READBACK
+        private const bool BuildCounterReadbackEnabled = true;
+#else
+        private const bool BuildCounterReadbackEnabled = false;
+#endif
         private const uint WorkgroupSize = 64;
         private const int MaximumLodTransitionStateCount = 4096;
         private const int LodTransitionOutputCapacityMultiplier = 2;
@@ -157,6 +162,10 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            bool counterReadbackEnabled = BuildCounterReadbackEnabled ||
+                sceneData.SceneSubmissionValidationCompareCpuGpuLists;
+            sceneData.SceneSubmissionCounterReadbackEnabled =
+                counterReadbackEnabled;
             int candidateCount = checked(sceneData.SimpleOpaqueMeshletCount +
                 sceneData.SimpleNormalOpaqueMeshletCount +
                 sceneData.FullOpaqueMeshletCount);
@@ -190,6 +199,9 @@ namespace Njulf.Rendering.Pipeline
             bool instanceExpansion = CanUseInstanceExpansion(sceneData);
             sceneData.SceneSubmissionGpuInstanceExpansionActive =
                 instanceExpansion;
+            sceneData.SceneSubmissionCompactionProgram =
+                _meshPipeline.ResolveSceneOpaqueCompactionShaderName(
+                    instanceExpansion);
             sceneData.SceneSubmissionGpuHierarchicalLodActive =
                 instanceExpansion &&
                 sceneData.SceneSubmissionGpuHierarchicalLodEnabled &&
@@ -452,7 +464,11 @@ namespace Njulf.Rendering.Pipeline
                 resetBarrierCount;
             PrepareLodHistory(cmd, sceneData);
 
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _meshPipeline.SceneOpaqueCompactionPipeline);
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Compute,
+                _meshPipeline.ResolveSceneOpaqueCompactionPipeline(
+                    instanceExpansion));
             var descriptorSets = stackalloc DescriptorSet[2];
             descriptorSets[0] = _bindlessHeap.StorageBufferSet;
             descriptorSets[1] = _bindlessHeap.TextureSamplerSet;
@@ -600,9 +616,19 @@ namespace Njulf.Rendering.Pipeline
                     checked((uint)directionalStaticLayout.TotalLogicalCapacity),
                     checked((uint)directionalDynamicLayout.TotalLogicalCapacity),
                     sceneData.ForwardVisibilityCompactionEnabled,
-                    sceneData.SceneSubmissionValidationCompareCpuGpuLists);
+                    sceneData.SceneSubmissionValidationCompareCpuGpuLists,
+                    counterReadbackEnabled);
             RecordLodHistoryBarrier(cmd, frameIndex);
-            RecordCounterReadback(cmd, frameIndex, counterBuffer);
+            if (counterReadbackEnabled)
+            {
+                RecordCounterReadback(cmd, frameIndex, counterBuffer);
+            }
+            else
+            {
+                _counterReadbackRecorded[frameIndex] = false;
+                _completedCounters[frameIndex] =
+                    SceneSubmissionCounterSnapshot.Invalid;
+            }
             if (sceneData.SceneSubmissionValidationCompareCpuGpuLists)
             {
                 CaptureExpectedValidationFrame(frameIndex, sceneData);
@@ -1432,7 +1458,8 @@ namespace Njulf.Rendering.Pipeline
             uint directionalStaticElementCount,
             uint directionalDynamicElementCount,
             bool forwardVisibilityCompactionEnabled,
-            bool validationReadbackEnabled)
+            bool validationReadbackEnabled,
+            bool counterReadbackEnabled)
         {
             Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[16];
             int barrierIndex = 0;
@@ -1454,9 +1481,13 @@ namespace Njulf.Rendering.Pipeline
                     AccessFlags2.ShaderStorageWriteBit,
                 PipelineStageFlags2.ComputeShaderBit |
                     PipelineStageFlags2.TaskShaderBitExt |
-                    PipelineStageFlags2.TransferBit,
+                    (counterReadbackEnabled
+                        ? PipelineStageFlags2.TransferBit
+                        : PipelineStageFlags2.None),
                 AccessFlags2.ShaderStorageReadBit |
-                    AccessFlags2.TransferReadBit,
+                    (counterReadbackEnabled
+                        ? AccessFlags2.TransferReadBit
+                        : AccessFlags2.None),
                 0,
                 counterBuffer.ByteSize);
 

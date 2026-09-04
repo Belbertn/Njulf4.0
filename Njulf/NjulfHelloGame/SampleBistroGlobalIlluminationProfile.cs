@@ -104,13 +104,11 @@ internal static class SampleBistroGlobalIlluminationProfile
     private static void ConfigureEnvironment(EnvironmentSettings environment)
     {
         environment.Enabled = true;
-        // Retain Bistro's warm, location-specific image lighting. Falcor's
-        // single intensity cannot be copied into this split-lighting pipeline:
-        // the sky, diffuse IBL, DDGI fallback, and specular path would each
-        // multiply the same source energy.
-        environment.SourceKind = EnvironmentSourceKind.HdrEquirectangular;
-        environment.SourcePath =
-            "Assets/Bistro_v5_2/san_giuseppe_bridge_4k.hdr";
+        // Use the procedural atmosphere by default while retaining Bistro's
+        // authored directional key as the sun driver. Clear any image source
+        // inherited from the previously active scene.
+        environment.SourceKind = EnvironmentSourceKind.ProceduralSky;
+        environment.SourcePath = null;
         environment.TexturePrecision = EnvironmentTexturePrecision.Float16;
         environment.SunDriver = ProceduralSkySunDriver.SceneDirectionalLight;
         environment.AnimateTimeOfDay = false;

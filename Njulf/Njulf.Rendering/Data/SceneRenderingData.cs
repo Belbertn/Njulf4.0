@@ -505,6 +505,7 @@ namespace Njulf.Rendering.Data
         public long CpuPrimaryCommandRecordMicroseconds { get; set; }
         public long CpuSecondaryCommandRecordMicroseconds { get; set; }
         public long GpuDepthPrePassMicroseconds { get; set; }
+        public long GpuSceneOpaqueCompactionMicroseconds { get; set; }
         public long GpuHiZBuildMicroseconds { get; set; }
         public long GpuLightCullMicroseconds { get; set; }
         public long GpuForwardOpaqueMicroseconds { get; set; }
@@ -593,6 +594,9 @@ namespace Njulf.Rendering.Data
         public bool SceneSubmissionGpuCompactionActive { get; set; }
         public bool SceneSubmissionGpuInstanceExpansionEnabled { get; set; }
         public bool SceneSubmissionGpuInstanceExpansionActive { get; set; }
+        public bool SceneSubmissionCounterReadbackEnabled { get; set; }
+        public string SceneSubmissionCompactionProgram { get; set; } =
+            string.Empty;
         /// <summary>
         /// The current GPU-compacted opaque/depth/shadow lists contain dense
         /// one-sided and double-sided ranges and may use fixed-function culling
@@ -2327,6 +2331,7 @@ namespace Njulf.Rendering.Data
             CpuPrimaryCommandRecordMicroseconds = 0;
             CpuSecondaryCommandRecordMicroseconds = 0;
             GpuDepthPrePassMicroseconds = 0;
+            GpuSceneOpaqueCompactionMicroseconds = 0;
             GpuHiZBuildMicroseconds = 0;
             GpuLightCullMicroseconds = 0;
             GpuForwardOpaqueMicroseconds = 0;
@@ -2470,6 +2475,8 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuCompactionActive = false;
             SceneSubmissionGpuInstanceExpansionEnabled = false;
             SceneSubmissionGpuInstanceExpansionActive = false;
+            SceneSubmissionCounterReadbackEnabled = false;
+            SceneSubmissionCompactionProgram = string.Empty;
             SceneSubmissionSidedRasterSpecializationActive = false;
             SceneSubmissionAsymmetricSidedStreamsActive = false;
             SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;

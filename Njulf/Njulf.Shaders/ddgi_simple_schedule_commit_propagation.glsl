@@ -1,11 +1,3 @@
-#version 460
-#extension GL_GOOGLE_include_directive : require
-#extension GL_EXT_nonuniform_qualifier : enable
-
-#include "ddgi_simple_schedule_shared.glsl"
-
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
-
 void MarkResidualDependent(
     uint probeIndex,
     float residualUpperBound,
@@ -64,12 +56,11 @@ void MarkResidualDependent(
 // full sweep remains mandatory. The bounded CPU reverse-list oracle exercises
 // the complete-graph path; promotion to a GPU reverse list can remove this
 // fallback counter without changing queue semantics.
-void main()
+void CommitPropagationOutcome(uint outcomeIndex, uint ownedVolumeIndex)
 {
     if (!SchedulerSparseResidualPropagation())
         return;
 
-    uint outcomeIndex = gl_GlobalInvocationID.x;
     uint accepted = min(
         SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
         SchedulerRequestCapacity());
@@ -88,6 +79,10 @@ void main()
 
     uint probeIndex = SchedulerArenaRead(outcomeBase + 5u);
     if (probeIndex >= SchedulerActiveProbeCount())
+        return;
+    uint volumeIndex;
+    if (!SchedulerFindVolume(probeIndex, volumeIndex) ||
+        volumeIndex != ownedVolumeIndex)
         return;
     float residual = uintBitsToFloat(SchedulerArenaRead(outcomeBase + 14u));
     if (isnan(residual) || isinf(residual) || residual < 0.0)
@@ -134,9 +129,6 @@ void main()
                 SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_FULL_SWEEP_FALLBACK],
         1u);
 
-    uint volumeIndex;
-    if (!SchedulerFindVolume(probeIndex, volumeIndex))
-        return;
     uint countX = max(SchedulerVolumeCurrentCountX(volumeIndex), 1u);
     uint countY = max(SchedulerVolumeCurrentCountY(volumeIndex), 1u);
     uint countZ = max(SchedulerVolumeCurrentCountZ(volumeIndex), 1u);

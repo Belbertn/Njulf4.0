@@ -120,7 +120,7 @@ public sealed class SimpleDdgiCompactGatherTests
         string publish = ReadRepoText("Njulf.Shaders", "ddgi_simple_publish.comp");
         string commit = ReadRepoText(
             "Njulf.Shaders",
-            "ddgi_simple_schedule_commit_local.comp");
+            "ddgi_simple_schedule_commit_local.glsl");
 
         Assert.Multiple(() =>
         {
