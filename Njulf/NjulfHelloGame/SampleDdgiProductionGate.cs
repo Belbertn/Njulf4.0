@@ -306,7 +306,7 @@ public static class SampleDdgiProductionGate
             DdgiQualityTier.DdgiLow => 64UL * 1024UL * 1024UL,
             DdgiQualityTier.DdgiMedium => 128UL * 1024UL * 1024UL,
             DdgiQualityTier.DdgiUltra => 384UL * 1024UL * 1024UL,
-            _ => 192UL * 1024UL * 1024UL
+            _ => 288UL * 1024UL * 1024UL
         };
     }
 

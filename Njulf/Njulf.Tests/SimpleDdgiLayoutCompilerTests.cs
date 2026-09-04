@@ -596,7 +596,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
         [
             ("low", 2_648, 256, 32, false, 64UL * 1024UL * 1024UL),
             ("medium", 6_892, 768, 64, false, 128UL * 1024UL * 1024UL),
-            ("high", 17_600, 4_096, 128, true, 192UL * 1024UL * 1024UL),
+            ("high", 17_600, 4_096, 128, true, 288UL * 1024UL * 1024UL),
             ("ultra", 23_636, 6_144, 192, true, 384UL * 1024UL * 1024UL)
         ];
 
@@ -683,18 +683,27 @@ public sealed class SimpleDdgiLayoutCompilerTests
         });
     }
 
-    [TestCase(DdgiQualityTier.DdgiLow, 4_096)]
-    [TestCase(DdgiQualityTier.DdgiMedium, 8_192)]
-    [TestCase(DdgiQualityTier.DdgiHigh, 16_384)]
-    [TestCase(DdgiQualityTier.DdgiUltra, 32_768)]
-    public void ResolvedTierBudget_UsesTheSingleAuthoritativeProbeCap(DdgiQualityTier tier, int expectedProbeBudget)
+    [TestCase(DdgiQualityTier.DdgiLow, 4_096, 64)]
+    [TestCase(DdgiQualityTier.DdgiMedium, 8_192, 128)]
+    [TestCase(DdgiQualityTier.DdgiHigh, 16_384, 288)]
+    [TestCase(DdgiQualityTier.DdgiUltra, 32_768, 384)]
+    public void ResolvedTierBudget_UsesTheSingleAuthoritativeTierCaps(
+        DdgiQualityTier tier,
+        int expectedProbeBudget,
+        int expectedMemoryBudgetMiB)
     {
-        var settings = new GlobalIlluminationSettings { DdgiQualityTier = tier };
+        var settings = new GlobalIlluminationSettings();
+        settings.ApplyDdgiQualityTier(tier);
 
         SimpleDdgiLayoutBudget budget = SimpleDdgiLayoutBudget.Resolve(settings);
 
         Assert.That(budget.ProbeBudget, Is.EqualTo(expectedProbeBudget));
-        Assert.That(budget.PersistentMemoryBudgetBytes, Is.EqualTo(settings.DdgiAtlasMemoryBudgetBytes));
+        Assert.That(
+            budget.PersistentMemoryBudgetBytes,
+            Is.EqualTo((ulong)expectedMemoryBudgetMiB * 1024UL * 1024UL));
+        Assert.That(
+            budget.PersistentMemoryBudgetBytes,
+            Is.EqualTo(settings.DdgiAtlasMemoryBudgetBytes));
     }
 
     [Test]

@@ -39,7 +39,7 @@ public static class SampleGlobalIlluminationValidation
     [
         new(DdgiQualityTier.DdgiLow, SampleDdgiProductionGate.SimpleDdgiTransportBlendP95BudgetMilliseconds, 64UL * 1024UL * 1024UL, ReferenceTier: false),
         new(DdgiQualityTier.DdgiMedium, SampleDdgiProductionGate.SimpleDdgiTransportBlendP95BudgetMilliseconds, 128UL * 1024UL * 1024UL, ReferenceTier: false),
-        new(DdgiQualityTier.DdgiHigh, SampleDdgiProductionGate.SimpleDdgiTransportBlendP95BudgetMilliseconds, 192UL * 1024UL * 1024UL, ReferenceTier: false),
+        new(DdgiQualityTier.DdgiHigh, SampleDdgiProductionGate.SimpleDdgiTransportBlendP95BudgetMilliseconds, 288UL * 1024UL * 1024UL, ReferenceTier: false),
         new(DdgiQualityTier.DdgiUltra, SampleDdgiProductionGate.SimpleDdgiTransportBlendP95BudgetMilliseconds, 384UL * 1024UL * 1024UL, ReferenceTier: true)
     ];
 

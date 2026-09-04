@@ -2679,7 +2679,7 @@ namespace Njulf.Rendering.Data
     public sealed class GlobalIlluminationSettings
     {
         public const int MaxSimpleDdgiMaterialTextureCascade = 4;
-        public const ulong DefaultDdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL;
+        public const ulong DefaultDdgiAtlasMemoryBudgetBytes = 288UL * 1024UL * 1024UL;
         public const int MinSimpleDdgiRaysPerProbe = 16;
         public const int DefaultDdgiProbeUpdatePrimaryRayBudget = 1_024 * MaxSimpleDdgiRaysPerProbe;
         public const int MaxDdgiProbeUpdatePrimaryRayBudget = 16_777_216;
@@ -4854,7 +4854,7 @@ namespace Njulf.Rendering.Data
                 DdgiQualityTier.DdgiLow => (4_096, 2, -1, 64UL * 1024UL * 1024UL),
                 DdgiQualityTier.DdgiMedium => (16_384, 4, 0, 128UL * 1024UL * 1024UL),
                 DdgiQualityTier.DdgiUltra => (524_288, 16, 3, 384UL * 1024UL * 1024UL),
-                _ => (262_144, 8, 1, 192UL * 1024UL * 1024UL)
+                _ => (262_144, 8, 1, 288UL * 1024UL * 1024UL)
             };
 
             ApplySimpleDdgiQualityTier(tier);
