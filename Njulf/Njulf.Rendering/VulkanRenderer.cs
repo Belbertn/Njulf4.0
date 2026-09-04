@@ -4506,7 +4506,9 @@ namespace Njulf.Rendering
                     SceneMaterialPipelineKinds.ThickTransmission,
                     HasRealTransparentShadowReceiver: true,
                     HasGeometryDecalShadowReceiver: true,
-                    HasTransparentReflectionReceiver: true)
+                    HasTransparentReflectionReceiver: true,
+                    ForwardOpaqueKinds:
+                        SceneForwardOpaquePipelineKinds.All)
                 : BuildScenePipelineManifest(scene);
             bool receiverFeedbackRequired =
                 _simpleDdgiReceiverFeedback?.GraphicsPipelinesRequested == true;
@@ -5047,9 +5049,12 @@ namespace Njulf.Rendering
                     continue;
                 manifest = IncludeSceneMaterial(
                     manifest,
+                    renderObject.Mesh,
                     renderObject.Material,
                     renderObject.Name);
                 if (manifest.MaterialKinds == complete &&
+                    manifest.ForwardOpaqueKinds ==
+                        SceneForwardOpaquePipelineKinds.All &&
                     manifest.HasRealTransparentShadowReceiver &&
                     manifest.HasGeometryDecalShadowReceiver &&
                     manifest.HasTransparentReflectionReceiver)
@@ -5062,9 +5067,12 @@ namespace Njulf.Rendering
                     continue;
                 manifest = IncludeSceneMaterial(
                     manifest,
+                    batch.Mesh,
                     batch.Material,
                     batch.Name);
                 if (manifest.MaterialKinds == complete &&
+                    manifest.ForwardOpaqueKinds ==
+                        SceneForwardOpaquePipelineKinds.All &&
                     manifest.HasRealTransparentShadowReceiver &&
                     manifest.HasGeometryDecalShadowReceiver &&
                     manifest.HasTransparentReflectionReceiver)
@@ -5076,6 +5084,7 @@ namespace Njulf.Rendering
 
         private ScenePipelineManifest IncludeSceneMaterial(
             ScenePipelineManifest manifest,
+            object? mesh,
             object? material,
             string objectName)
         {
@@ -5084,8 +5093,14 @@ namespace Njulf.Rendering
                     material,
                     _materialManager.DefaultMaterialHandle,
                     objectName);
+            bool hasVertexColor = mesh is MeshHandle meshHandle &&
+                                  meshHandle.IsValid &&
+                                  _meshManager.GetMeshInfo(meshHandle)
+                                      .HasVertexColor;
             return manifest.Include(
-                _materialManager.GetMaterialMetadata(handle));
+                _materialManager.GetMaterialData(handle),
+                _materialManager.GetMaterialMetadata(handle),
+                hasVertexColor);
         }
 
         public void ReportFirstPresent(long elapsedMicroseconds)

@@ -31,13 +31,11 @@ namespace Njulf.Rendering.Data
                 return MaterialForwardClass.ThinGlass;
             if (metadata.IsGeometryDecal || metadata.RenderMode == MaterialRenderMode.Blend)
                 return MaterialForwardClass.Transparent;
-            if (metadata.RenderMode == MaterialRenderMode.Mask)
-                return MaterialForwardClass.Masked;
 
-            if (RequiresFullOpaquePath(material))
+            if (RequiresExtensionOpaquePath(material))
                 return MaterialForwardClass.FullOpaque;
 
-            return HasNormalMap(material)
+            return RequiresFullInputOpaquePath(material, metadata)
                 ? MaterialForwardClass.SimpleOpaqueNormal
                 : MaterialForwardClass.SimpleOpaque;
         }
@@ -52,17 +50,24 @@ namespace Njulf.Rendering.Data
             return materialClass == MaterialForwardClass.SimpleOpaqueNormal;
         }
 
-        private static bool RequiresFullOpaquePath(GPUMaterialData material)
+        private static bool RequiresExtensionOpaquePath(
+            GPUMaterialData material)
         {
-            MaterialFeatureFlags featureFlags = (MaterialFeatureFlags)material.FeatureFlags;
-            // BC5 and normal-map handedness are base normal decode modes already
-            // supported by the compact opaque shader. Treating either as extension
-            // lighting would route ordinary materials through the largest variant.
-            MaterialFeatureFlags unsupportedSimpleFlags =
-                featureFlags & ~(MaterialFeatureFlags.CompressedNormalBc5 |
-                                 MaterialFeatureFlags.NormalMapGreenInverted);
-            if (unsupportedSimpleFlags != MaterialFeatureFlags.None || material.ExtensionDataIndex >= 0)
+            MaterialFeatureFlags featureFlags =
+                (MaterialFeatureFlags)material.FeatureFlags;
+            return featureFlags.RequiresExtensionData() ||
+                   material.ExtensionDataIndex >= 0;
+        }
+
+        private static bool RequiresFullInputOpaquePath(
+            GPUMaterialData material,
+            MaterialRenderMetadata metadata)
+        {
+            if (metadata.RenderMode == MaterialRenderMode.Mask ||
+                HasNormalMap(material))
+            {
                 return true;
+            }
 
             if (!IsIdentityTransform(material.BaseColorOffsetScale, material.TextureRotations.X) ||
                 !IsIdentityTransform(material.NormalOffsetScale, material.TextureRotations.Y) ||

@@ -1694,7 +1694,9 @@ public sealed class HybridReflectionContractsTests
             Assert.That(mesh, Does.Contain(
                 "RendererBuildConfiguration.FastPipelineStartup"));
             Assert.That(mesh, Does.Contain(
-                "familyCount = RendererBuildConfiguration.FastPipelineStartup"));
+                "GetPreparedForwardOpaquePipelineFamilyCount()"));
+            Assert.That(mesh, Does.Contain(
+                "ResolvePreparedForwardOpaquePipelineFamily(index)"));
             Assert.That(renderer, Does.Contain(
                 "ref _hybridReflectionReceiverPipelinesPrepared"));
             Assert.That(renderer, Does.Contain(

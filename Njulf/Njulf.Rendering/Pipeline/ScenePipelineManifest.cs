@@ -14,6 +14,16 @@ internal enum SceneMaterialPipelineKinds : byte
     ThickTransmission = 1 << 4
 }
 
+[Flags]
+internal enum SceneForwardOpaquePipelineKinds : byte
+{
+    None = 0,
+    Simple = 1 << 0,
+    SimpleFullInput = 1 << 1,
+    Full = 1 << 2,
+    All = Simple | SimpleFullInput | Full
+}
+
 internal enum ScenePipelinePreparationScope : byte
 {
     FirstPresentCritical,
@@ -29,13 +39,18 @@ internal readonly record struct ScenePipelineManifest(
     SceneMaterialPipelineKinds MaterialKinds,
     bool HasRealTransparentShadowReceiver = false,
     bool HasGeometryDecalShadowReceiver = false,
-    bool HasTransparentReflectionReceiver = false)
+    bool HasTransparentReflectionReceiver = false,
+    SceneForwardOpaquePipelineKinds ForwardOpaqueKinds =
+        SceneForwardOpaquePipelineKinds.None)
 {
     internal static ScenePipelineManifest Empty => new(
         SceneMaterialPipelineKinds.None);
 
     internal bool Requires(SceneMaterialPipelineKinds kind) =>
         (MaterialKinds & kind) != 0;
+
+    internal bool Requires(SceneForwardOpaquePipelineKinds kind) =>
+        (ForwardOpaqueKinds & kind) != 0;
 
     internal bool HasTransparentSurface =>
         (MaterialKinds &
@@ -67,7 +82,36 @@ internal readonly record struct ScenePipelineManifest(
             kind == SceneMaterialPipelineKinds.GeometryDecal &&
             metadata.ReceivesShadows,
             HasTransparentReflectionReceiver ||
-            SceneDataBuilder.ReceivesSceneReflections(metadata));
+            SceneDataBuilder.ReceivesSceneReflections(metadata),
+            ForwardOpaqueKinds);
+    }
+
+    internal ScenePipelineManifest Include(
+        GPUMaterialData material,
+        MaterialRenderMetadata metadata,
+        bool hasVertexColor)
+    {
+        ScenePipelineManifest included = Include(metadata);
+        MaterialForwardClass forwardClass =
+            MaterialForwardClassifier.Classify(material, metadata);
+        MaterialForwardClass bucket =
+            SceneDataBuilder.ResolveOpaqueForwardBucket(
+                forwardClass,
+                hasVertexColor);
+        SceneForwardOpaquePipelineKinds kind = bucket switch
+        {
+            MaterialForwardClass.SimpleOpaque =>
+                SceneForwardOpaquePipelineKinds.Simple,
+            MaterialForwardClass.SimpleOpaqueNormal =>
+                SceneForwardOpaquePipelineKinds.SimpleFullInput,
+            MaterialForwardClass.FullOpaque =>
+                SceneForwardOpaquePipelineKinds.Full,
+            _ => SceneForwardOpaquePipelineKinds.None
+        };
+        return included with
+        {
+            ForwardOpaqueKinds = included.ForwardOpaqueKinds | kind
+        };
     }
 
     internal static SceneMaterialPipelineKinds Classify(

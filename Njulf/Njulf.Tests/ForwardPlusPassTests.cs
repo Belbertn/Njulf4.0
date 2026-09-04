@@ -44,6 +44,96 @@ public sealed class ForwardPlusPassTests
     }
 
     [Test]
+    public void ForwardOpaqueActiveBank_UsesSubmissionCompatibleFamilies()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                MeshPipeline.ResolveActiveForwardOpaquePipelineFamily(
+                    tasklessSubmissionEnabled: false,
+                    0),
+                Is.EqualTo(ForwardOpaquePipelineFamily.Full));
+            Assert.That(
+                MeshPipeline.ResolveActiveForwardOpaquePipelineFamily(
+                    tasklessSubmissionEnabled: false,
+                    1),
+                Is.EqualTo(ForwardOpaquePipelineFamily.Simple));
+            Assert.That(
+                MeshPipeline.ResolveActiveForwardOpaquePipelineFamily(
+                    tasklessSubmissionEnabled: false,
+                    2),
+                Is.EqualTo(ForwardOpaquePipelineFamily.SimpleFullInput));
+            Assert.That(
+                MeshPipeline.ResolveActiveForwardOpaquePipelineFamily(
+                    tasklessSubmissionEnabled: true,
+                    0),
+                Is.EqualTo(ForwardOpaquePipelineFamily.CompactedFull));
+            Assert.That(
+                MeshPipeline.ResolveActiveForwardOpaquePipelineFamily(
+                    tasklessSubmissionEnabled: true,
+                    1),
+                Is.EqualTo(ForwardOpaquePipelineFamily.CompactedSimple));
+            Assert.That(
+                MeshPipeline.ResolveActiveForwardOpaquePipelineFamily(
+                    tasklessSubmissionEnabled: true,
+                    2),
+                Is.EqualTo(
+                    ForwardOpaquePipelineFamily
+                        .CompactedSimpleFullInput));
+        });
+    }
+
+    [Test]
+    public void ForwardOpaqueBank_PublicationIsAtomicAndFallbackIsNonSticky()
+    {
+        int publicationState = 0;
+        const ForwardOpaquePipelineFamily requested =
+            ForwardOpaquePipelineFamily.CompactedSimple;
+
+        ForwardOpaquePipelineFamily bootstrap =
+            MeshPipeline.ResolveEffectiveForwardOpaquePipelineFamily(
+                requested,
+                tasklessSubmissionEnabled: true,
+                specializedBankReady: false);
+        bool failedPublication =
+            MeshPipeline.PublishForwardOpaquePipelineBank(
+                ref publicationState,
+                complete: false);
+        bool successfulPublication =
+            MeshPipeline.PublishForwardOpaquePipelineBank(
+                ref publicationState,
+                complete: true);
+        ForwardOpaquePipelineFamily promoted =
+            MeshPipeline.ResolveEffectiveForwardOpaquePipelineFamily(
+                requested,
+                tasklessSubmissionEnabled: true,
+                specializedBankReady:
+                    System.Threading.Volatile.Read(ref publicationState) != 0);
+        MeshPipeline.PublishForwardOpaquePipelineBank(
+            ref publicationState,
+            complete: false);
+        ForwardOpaquePipelineFamily recreated =
+            MeshPipeline.ResolveEffectiveForwardOpaquePipelineFamily(
+                requested,
+                tasklessSubmissionEnabled: true,
+                specializedBankReady:
+                    System.Threading.Volatile.Read(ref publicationState) != 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                bootstrap,
+                Is.EqualTo(ForwardOpaquePipelineFamily.CompactedFull));
+            Assert.That(failedPublication, Is.False);
+            Assert.That(successfulPublication, Is.True);
+            Assert.That(promoted, Is.EqualTo(requested));
+            Assert.That(
+                recreated,
+                Is.EqualTo(ForwardOpaquePipelineFamily.CompactedFull));
+        });
+    }
+
+    [Test]
     public void ForwardPipelineResolution_IsLookupOnlyDuringRendering()
     {
         string meshPipeline = ReadRepoText(

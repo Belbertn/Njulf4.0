@@ -2458,8 +2458,10 @@ namespace Njulf.Rendering.Data
                 _doubleSidedOpaqueMeshletCount++;
             }
 
-            if (MaterialForwardClassifier.IsSimpleOpaque(forwardClass) &&
-                !meshInfo.HasVertexColor)
+            MaterialForwardClass forwardBucket = ResolveOpaqueForwardBucket(
+                forwardClass,
+                meshInfo.HasVertexColor);
+            if (forwardBucket == MaterialForwardClass.SimpleOpaque)
             {
                 if ((commandFlags &
                      GPUMeshletCommandFlags.MaterialDoubleSided) != 0)
@@ -2471,8 +2473,7 @@ namespace Njulf.Rendering.Data
                 return;
             }
 
-            if (MaterialForwardClassifier.IsSimpleNormalOpaque(forwardClass) ||
-                MaterialForwardClassifier.IsSimpleOpaque(forwardClass))
+            if (forwardBucket == MaterialForwardClass.SimpleOpaqueNormal)
             {
                 if ((commandFlags &
                      GPUMeshletCommandFlags.MaterialDoubleSided) != 0)
@@ -2672,25 +2673,17 @@ namespace Njulf.Rendering.Data
                 bool castsDirectionalShadow = false,
                 bool dynamicDirectionalShadow = false)
         {
-            GPUSceneInstanceClassification classification;
-            if (MaterialForwardClassifier.IsSimpleOpaque(forwardClass) &&
-                !hasVertexColor)
+            MaterialForwardClass forwardBucket = ResolveOpaqueForwardBucket(
+                forwardClass,
+                hasVertexColor);
+            GPUSceneInstanceClassification classification = forwardBucket switch
             {
-                classification =
-                    GPUSceneInstanceClassification.SimpleOpaque;
-            }
-            else if (MaterialForwardClassifier.IsSimpleNormalOpaque(
-                         forwardClass) ||
-                     MaterialForwardClassifier.IsSimpleOpaque(forwardClass))
-            {
-                classification =
-                    GPUSceneInstanceClassification.SimpleNormalOpaque;
-            }
-            else
-            {
-                classification =
-                    GPUSceneInstanceClassification.FullOpaque;
-            }
+                MaterialForwardClass.SimpleOpaque =>
+                    GPUSceneInstanceClassification.SimpleOpaque,
+                MaterialForwardClass.SimpleOpaqueNormal =>
+                    GPUSceneInstanceClassification.SimpleNormalOpaque,
+                _ => GPUSceneInstanceClassification.FullOpaque
+            };
 
             if (renderMode == MaterialRenderMode.Mask)
                 classification |= GPUSceneInstanceClassification.Masked;
@@ -2707,6 +2700,22 @@ namespace Njulf.Rendering.Data
             }
 
             return classification;
+        }
+
+        internal static MaterialForwardClass ResolveOpaqueForwardBucket(
+            MaterialForwardClass forwardClass,
+            bool hasVertexColor)
+        {
+            if (MaterialForwardClassifier.IsSimpleOpaque(forwardClass))
+            {
+                return hasVertexColor
+                    ? MaterialForwardClass.SimpleOpaqueNormal
+                    : MaterialForwardClass.SimpleOpaque;
+            }
+
+            return MaterialForwardClassifier.IsSimpleNormalOpaque(forwardClass)
+                ? MaterialForwardClass.SimpleOpaqueNormal
+                : MaterialForwardClass.FullOpaque;
         }
 
         private MeshInfo GetValidatedMeshInfo(MeshHandle meshHandle)

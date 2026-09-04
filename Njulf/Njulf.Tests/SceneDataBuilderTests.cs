@@ -217,7 +217,13 @@ namespace Njulf.Tests
             MaterialRenderMode.Opaque,
             GPUSceneInstanceClassification.FullOpaque)]
         [TestCase(
-            MaterialForwardClass.Masked,
+            MaterialForwardClass.SimpleOpaqueNormal,
+            false,
+            MaterialRenderMode.Mask,
+            GPUSceneInstanceClassification.SimpleNormalOpaque |
+            GPUSceneInstanceClassification.Masked)]
+        [TestCase(
+            MaterialForwardClass.FullOpaque,
             false,
             MaterialRenderMode.Mask,
             GPUSceneInstanceClassification.FullOpaque |
@@ -234,6 +240,74 @@ namespace Njulf.Tests
                     hasVertexColor,
                     renderMode),
                 Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void OpaqueMaterialComplexity_RoutesBothSubmissionPaths()
+        {
+            GPUMaterialData plain = CreateGpuMaterial(
+                BindlessIndex.DefaultWhiteTexture,
+                BindlessIndex.DefaultNormalTexture,
+                BindlessIndex.DefaultBlackTexture,
+                BindlessIndex.DefaultBlackTexture);
+            GPUMaterialData normalMapped = plain;
+            normalMapped.NormalTextureIndex =
+                BindlessIndex.FirstDynamicTextureIndex;
+            GPUMaterialData transformed = plain;
+            transformed.BaseColorOffsetScale =
+                new Vector4(0.1f, 0f, 1f, 1f);
+            GPUMaterialData secondaryUv = plain;
+            secondaryUv.TextureTexCoordSets =
+                new Vector4(1f, 0f, 0f, 0f);
+            GPUMaterialData masked = plain;
+            masked.NormalScaleBias = new Vector4(1f, 1f, 0f, 0f);
+            GPUMaterialData extensionMasked = masked;
+            extensionMasked.FeatureFlags =
+                (uint)MaterialFeatureFlags.Clearcoat;
+            extensionMasked.ExtensionDataIndex = 0;
+
+            AssertForwardRouting(
+                "plain",
+                plain,
+                hasVertexColor: false,
+                MaterialForwardClass.SimpleOpaque,
+                masked: false);
+            AssertForwardRouting(
+                "normal",
+                normalMapped,
+                hasVertexColor: false,
+                MaterialForwardClass.SimpleOpaqueNormal,
+                masked: false);
+            AssertForwardRouting(
+                "transform",
+                transformed,
+                hasVertexColor: false,
+                MaterialForwardClass.SimpleOpaqueNormal,
+                masked: false);
+            AssertForwardRouting(
+                "secondary UV",
+                secondaryUv,
+                hasVertexColor: false,
+                MaterialForwardClass.SimpleOpaqueNormal,
+                masked: false);
+            AssertForwardRouting(
+                "vertex color",
+                plain,
+                hasVertexColor: true,
+                MaterialForwardClass.SimpleOpaqueNormal,
+                masked: false);
+            AssertForwardRouting(
+                "extension-free mask",
+                masked,
+                hasVertexColor: false,
+                MaterialForwardClass.SimpleOpaqueNormal,
+                masked: true);
+            AssertForwardRouting(
+                "extension mask",
+                extensionMasked,
+                hasVertexColor: false,
+                MaterialForwardClass.FullOpaque,
+                masked: true);
         }
 
         [Test]
@@ -304,6 +378,52 @@ namespace Njulf.Tests
                 FeatureFlags = 0u,
                 ExtensionDataIndex = -1
             };
+        }
+
+        private static void AssertForwardRouting(
+            string name,
+            GPUMaterialData material,
+            bool hasVertexColor,
+            MaterialForwardClass expectedBucket,
+            bool masked)
+        {
+            MaterialRenderMetadata metadata =
+                MaterialRenderMetadata.FromGpuMaterial(material);
+            MaterialForwardClass materialClass =
+                MaterialForwardClassifier.Classify(material, metadata);
+            MaterialForwardClass cpuBucket =
+                SceneDataBuilder.ResolveOpaqueForwardBucket(
+                    materialClass,
+                    hasVertexColor);
+            GPUSceneInstanceClassification gpuClassification =
+                SceneDataBuilder.ClassifyGpuInstanceCandidate(
+                    materialClass,
+                    hasVertexColor,
+                    metadata.RenderMode);
+            GPUSceneInstanceClassification expectedGpuBucket =
+                expectedBucket switch
+                {
+                    MaterialForwardClass.SimpleOpaque =>
+                        GPUSceneInstanceClassification.SimpleOpaque,
+                    MaterialForwardClass.SimpleOpaqueNormal =>
+                        GPUSceneInstanceClassification.SimpleNormalOpaque,
+                    _ => GPUSceneInstanceClassification.FullOpaque
+                };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(cpuBucket, Is.EqualTo(expectedBucket), name);
+                Assert.That(
+                    gpuClassification &
+                    GPUSceneInstanceClassification.ForwardBucketMask,
+                    Is.EqualTo(expectedGpuBucket),
+                    name);
+                Assert.That(
+                    gpuClassification.HasFlag(
+                        GPUSceneInstanceClassification.Masked),
+                    Is.EqualTo(masked),
+                    name);
+            });
         }
     }
 }
