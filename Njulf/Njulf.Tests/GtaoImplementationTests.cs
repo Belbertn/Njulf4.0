@@ -255,9 +255,21 @@ public sealed class GtaoImplementationTests
                 "sceneData.AmbientOcclusionMode != AmbientOcclusionMode.Ssao"));
             Assert.That(passes, Does.Contain(
                 "sceneData.AmbientOcclusionMode == AmbientOcclusionMode.Gtao"));
-            Assert.That(raw, Does.Contain("SearchHorizon("));
+            Assert.That(raw, Does.Contain("SearchHorizonCos("));
             Assert.That(raw, Does.Contain("textureLod(HiZTexture"));
-            Assert.That(raw, Does.Contain("IntegrateVisibleArc("));
+            Assert.That(raw, Does.Contain("IntegrateGtaoArc("));
+            Assert.That(raw, Does.Contain("ApproximateHorizonAngle("));
+            Assert.That(raw, Does.Contain(
+                "ApproximateAcos(float sineMagnitude, float cosine)"));
+            Assert.That(raw, Does.Contain("ReconstructViewZw("));
+            Assert.That(raw, Does.Contain(
+                "textureLod(HiZTexture, sampleUv, 0.0)"));
+            Assert.That(raw, Does.Not.Contain(
+                "sourcePixelsPerDestinationPixel"));
+            Assert.That(CountOccurrences(raw,
+                "textureSize(DepthTexture, 0)"), Is.EqualTo(1));
+            Assert.That(raw, Does.Not.Contain("float angle = atan("));
+            Assert.That(raw, Does.Not.Contain("float normalAngle = atan("));
             Assert.That(raw, Does.Contain("EncodeOctahedral(bentNormal)"));
             Assert.That(temporal, Does.Contain("vec2 previousUv = uv - motion;"));
             Assert.That(temporal, Does.Contain("NeighborhoodEnvelope("));
@@ -298,6 +310,108 @@ public sealed class GtaoImplementationTests
     }
 
     [Test]
+    public void GtaoApproximations_StayWithinNumericalErrorBudget()
+    {
+        const int functionSampleCount = 65_536;
+        float maximumAngleError = 0.0f;
+        float maximumAcosError = 0.0f;
+        for (int i = 0; i <= functionSampleCount; i++)
+        {
+            float ratio = (float)i / functionSampleCount;
+            maximumAngleError = MathF.Max(maximumAngleError, MathF.Max(
+                MathF.Abs(ApproximateHorizonAngle(ratio, 1.0f) -
+                    MathF.Atan(ratio)),
+                MathF.Abs(ApproximateHorizonAngle(1.0f, ratio) -
+                    MathF.Atan2(1.0f, ratio))));
+            float value = -1.0f + 2.0f * ratio;
+            float sineMagnitude = MathF.Sqrt(MathF.Max(
+                1.0f - value * value, 0.0f));
+            maximumAcosError = MathF.Max(maximumAcosError,
+                MathF.Abs(ApproximateAcos(sineMagnitude, value) -
+                    MathF.Acos(value)));
+        }
+
+        const int arcSampleCount = 256;
+        float maximumArcError = 0.0f;
+        bool allArcValuesFinite = true;
+        for (int horizonIndex = 0; horizonIndex <= arcSampleCount * 2;
+             horizonIndex++)
+        {
+            float exactHorizon = -MathF.PI +
+                MathF.PI * horizonIndex / arcSampleCount;
+            float horizonCosine = MathF.Cos(exactHorizon);
+            float horizonSineMagnitude = MathF.Abs(MathF.Sin(exactHorizon));
+            float approximateHorizon = exactHorizon < 0.0f
+                ? -ApproximateAcos(horizonSineMagnitude, horizonCosine)
+                : ApproximateAcos(horizonSineMagnitude, horizonCosine);
+            for (int normalIndex = 0; normalIndex <= arcSampleCount;
+                 normalIndex++)
+            {
+                float normalAngle = -MathF.PI * 0.5f +
+                    MathF.PI * normalIndex / arcSampleCount;
+                float normalSine = MathF.Sin(normalAngle);
+                float normalCosine = MathF.Cos(normalAngle);
+                float exact = 0.25f * (normalCosine +
+                    2.0f * exactHorizon * normalSine -
+                    MathF.Cos(2.0f * exactHorizon - normalAngle));
+                float approximate = IntegrateGtaoArc(
+                    approximateHorizon,
+                    MathF.Sin(exactHorizon),
+                    horizonCosine,
+                    normalSine,
+                    normalCosine);
+                allArcValuesFinite &= float.IsFinite(approximate);
+                maximumArcError = MathF.Max(maximumArcError,
+                    MathF.Abs(approximate - exact));
+            }
+        }
+
+        const int directionCount = 4_096;
+        float maximumUnoccludedError = 0.0f;
+        for (int tiltIndex = 0; tiltIndex <= 16; tiltIndex++)
+        {
+            float tilt = 1.4f * tiltIndex / 16.0f;
+            float normalHorizontal = MathF.Sin(tilt);
+            float normalView = MathF.Cos(tilt);
+            double visibility = 0.0;
+            for (int directionIndex = 0; directionIndex < directionCount;
+                 directionIndex++)
+            {
+                float directionAngle = MathF.PI *
+                    (directionIndex + 0.5f) / directionCount;
+                float normalTangent = normalHorizontal *
+                    MathF.Cos(directionAngle);
+                float projectedLength = MathF.Sqrt(
+                    normalTangent * normalTangent + normalView * normalView);
+                float normalSine = normalTangent / projectedLength;
+                float normalCosine = normalView / projectedLength;
+                float h0Sine = -MathF.Sqrt(MathF.Max(
+                    1.0f - normalSine * normalSine, 0.0f));
+                float h1Sine = -h0Sine;
+                float h0 = -ApproximateAcos(-h0Sine, normalSine);
+                float h1 = ApproximateAcos(h1Sine, -normalSine);
+                visibility += projectedLength * (
+                    IntegrateGtaoArc(h0, h0Sine, normalSine,
+                        normalSine, normalCosine) +
+                    IntegrateGtaoArc(h1, h1Sine, -normalSine,
+                        normalSine, normalCosine));
+            }
+            maximumUnoccludedError = MathF.Max(maximumUnoccludedError,
+                MathF.Abs((float)(visibility / directionCount) - 1.0f));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(allArcValuesFinite, Is.True);
+            Assert.That(maximumAngleError, Is.LessThanOrEqualTo(0.000005f));
+            Assert.That(maximumAcosError, Is.LessThanOrEqualTo(0.000005f));
+            Assert.That(maximumArcError, Is.LessThanOrEqualTo(0.00001f));
+            Assert.That(maximumUnoccludedError,
+                Is.LessThanOrEqualTo(0.00001f));
+        });
+    }
+
+    [Test]
     public void OctahedralBentNormals_RoundTripFiniteUnitHemisphereVectors()
     {
         var random = new Random(1729);
@@ -321,6 +435,56 @@ public sealed class GtaoImplementationTests
                 Assert.That(agreement, Is.GreaterThan(0.9999f));
             });
         }
+    }
+
+    private static float ApproximateHorizonAngle(float y, float x)
+    {
+        const float halfPi = MathF.PI * 0.5f;
+        float absoluteY = MathF.Abs(y);
+        float maximumComponent = MathF.Max(x, absoluteY);
+        float minimumComponent = MathF.Min(x, absoluteY);
+        float ratio = minimumComponent /
+            MathF.Max(maximumComponent, 1.0e-20f);
+        float ratioSquared = ratio * ratio;
+        float polynomial = -0.013480470f;
+        polynomial = polynomial * ratioSquared + 0.057477314f;
+        polynomial = polynomial * ratioSquared - 0.121239071f;
+        polynomial = polynomial * ratioSquared + 0.195635925f;
+        polynomial = polynomial * ratioSquared - 0.332994597f;
+        polynomial = polynomial * ratioSquared + 0.999995630f;
+        float angle = polynomial * ratio;
+        if (absoluteY > x)
+            angle = halfPi - angle;
+        return y < 0.0f ? -angle : angle;
+    }
+
+    private static float ApproximateAcos(
+        float sineMagnitude,
+        float cosine)
+    {
+        float boundedCosine = Math.Clamp(cosine, -1.0f, 1.0f);
+        float absoluteCosine = MathF.Abs(boundedCosine);
+        float acuteAngle = ApproximateHorizonAngle(
+            sineMagnitude, MathF.Max(absoluteCosine, 1.0e-20f));
+        return boundedCosine < 0.0f ? MathF.PI - acuteAngle : acuteAngle;
+    }
+
+    private static float IntegrateGtaoArc(
+        float horizon,
+        float horizonSine,
+        float horizonCosine,
+        float normalSine,
+        float normalCosine)
+    {
+        float cosineDoubleHorizon = horizonCosine * horizonCosine -
+            horizonSine * horizonSine;
+        float sineDoubleHorizon = 2.0f * horizonSine * horizonCosine;
+        float cosineDoubleHorizonMinusNormal =
+            cosineDoubleHorizon * normalCosine +
+            sineDoubleHorizon * normalSine;
+        return 0.25f * (normalCosine +
+            2.0f * horizon * normalSine -
+            cosineDoubleHorizonMinusNormal);
     }
 
     private static (float X, float Y) EncodeOctahedral(
@@ -362,6 +526,19 @@ public sealed class GtaoImplementationTests
         x *= inverseLength;
         y *= inverseLength;
         z *= inverseLength;
+    }
+
+    private static int CountOccurrences(string source, string value)
+    {
+        int count = 0;
+        int offset = 0;
+        while ((offset = source.IndexOf(value, offset,
+                   StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += value.Length;
+        }
+        return count;
     }
 
     private static string FindRepoDirectory(string name)
