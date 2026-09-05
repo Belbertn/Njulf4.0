@@ -32,7 +32,7 @@ namespace Njulf.Rendering.Data
             if (metadata.IsGeometryDecal || metadata.RenderMode == MaterialRenderMode.Blend)
                 return MaterialForwardClass.Transparent;
 
-            if (RequiresExtensionOpaquePath(material))
+            if (RequiresExtensionOpaquePath(material, metadata))
                 return MaterialForwardClass.FullOpaque;
 
             return RequiresFullInputOpaquePath(material, metadata)
@@ -51,10 +51,32 @@ namespace Njulf.Rendering.Data
         }
 
         private static bool RequiresExtensionOpaquePath(
-            GPUMaterialData material)
+            GPUMaterialData material,
+            MaterialRenderMetadata metadata)
         {
             MaterialFeatureFlags featureFlags =
                 (MaterialFeatureFlags)material.FeatureFlags;
+            // Opaque ThinSurface transmission affects GI transport, not the
+            // visible raster lobe (forward.frag's rasterTransmissionEnabled).
+            // Keep its payload for GI, but do not require the Full shader when
+            // transmission is the only extension. IOR and other visible lobes
+            // still require Full, even on a thin transmitting surface.
+            bool giOnlyTransmission =
+                metadata.TransmissionPolicy == GiTransmissionPolicy.ThinSurface &&
+                metadata.ShadingModel != MaterialShadingModel.ThinGlass &&
+                (material.TransportFlags & (uint)(
+                    GiMaterialTransportFlags.ThinSurfaceTransmission |
+                    GiMaterialTransportFlags.ThinGlass)) ==
+                (uint)GiMaterialTransportFlags.ThinSurfaceTransmission &&
+                (featureFlags & MaterialFeatureFlags.Transmission) != 0;
+            if (giOnlyTransmission)
+            {
+                MaterialFeatureFlags rasterFeatures = featureFlags & ~(
+                    MaterialFeatureFlags.Transmission |
+                    MaterialFeatureFlags.TransmissionTexture);
+                return rasterFeatures.RequiresExtensionData();
+            }
+
             return featureFlags.RequiresExtensionData() ||
                    material.ExtensionDataIndex >= 0;
         }

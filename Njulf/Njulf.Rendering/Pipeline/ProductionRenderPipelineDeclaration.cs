@@ -1032,6 +1032,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             Pass("ImGuiRenderPass", ReadWriteColorAttachment(RenderGraphResourceId.SwapchainColor))
         ]);
 
+        if (OpaqueVisibilityComputePolicy.Requested)
+            AddOpaqueVisibilityUsages(declarations);
         return declarations;
     }
 
@@ -1429,6 +1431,9 @@ internal sealed class ProductionRenderPipelineDeclaration
     {
         return
         [
+            ImageResource(RenderGraphResourceId.OpaqueVisibility, "Opaque visibility", RenderTargetManager.OpaqueVisibilityFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
+            BufferSetResource(RenderGraphResourceId.OpaqueVisibilityWork, "Opaque compute work queues"),
             ImageResource(RenderGraphResourceId.SceneColor, "Scene color", RenderTargetManager.SceneColorFormat,
                 RenderGraphResourceSizePolicy.SceneResolution),
             OwnedImageResource(RenderGraphResourceId.LdrSceneColor, "LDR scene color",
@@ -2221,6 +2226,38 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphResourceSizePolicy.Dynamic,
             RenderGraphResourceLifetime.Imported,
             Persistent: true);
+    }
+
+    private static void AddOpaqueVisibilityUsages(List<RenderGraphPassResourceDeclaration> declarations)
+    {
+        for (int i = 0; i < declarations.Count; ++i)
+        {
+            var declaration = declarations[i];
+            if (declaration.PassName == "DepthPrePass")
+            {
+                var usages = new List<RenderGraphResourceUsage>(declaration.Usages)
+                {
+                    WriteColorAttachment(RenderGraphResourceId.OpaqueVisibility)
+                };
+                declarations[i] = declaration with { Usages = usages.ToArray() };
+            }
+            else if (declaration.PassName == "ForwardPlusPass")
+            {
+                var usages = new List<RenderGraphResourceUsage>(declaration.Usages.Length + 2);
+                foreach (var usage in declaration.Usages)
+                    usages.Add(usage with
+                    {
+                        StageMask = usage.StageMask == PipelineStageFlags2.None ? PipelineStageFlags2.AllCommandsBit :
+                            usage.StageMask | PipelineStageFlags2.ComputeShaderBit,
+                        AccessMask = usage.AccessMask | (usage.StageMask == PipelineStageFlags2.None ? AccessFlags2.MemoryReadBit : AccessFlags2.None) |
+                            (usage.Access == RenderGraphResourceAccess.Read
+                            ? AccessFlags2.ShaderReadBit : AccessFlags2.ShaderReadBit | AccessFlags2.ShaderWriteBit)
+                    });
+                usages.Add(ReadComputeSampled(RenderGraphResourceId.OpaqueVisibility));
+                usages.Add(ReadWriteComputeIndirectBuffer(RenderGraphResourceId.OpaqueVisibilityWork));
+                declarations[i] = declaration with { Usages = usages.ToArray() };
+            }
+        }
     }
 
     private static RenderGraphResourceUsage Read(RenderGraphResourceId resource)

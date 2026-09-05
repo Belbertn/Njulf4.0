@@ -11,7 +11,8 @@ internal enum SceneMaterialPipelineKinds : byte
     OrdinaryTransparent = 1 << 1,
     ThinGlass = 1 << 2,
     GeometryDecal = 1 << 3,
-    ThickTransmission = 1 << 4
+    ThickTransmission = 1 << 4,
+    AutomaticPlanarReceiver = 1 << 5
 }
 
 [Flags]

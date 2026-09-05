@@ -92,6 +92,9 @@ function Read-ProductionSpecializedSpirvDisassembly {
 $receiverModuleNames = @(
     'forward.frag.spv',
     'forward_opaque_ddgi.frag.spv',
+    'forward_planar_capture_ddgi.frag.spv',
+    'forward_planar_capture_simple_ddgi.frag.spv',
+    'forward_planar_capture_simple_full_input_ddgi.frag.spv',
     'forward_opaque_ddgi_provenance.frag.spv',
     'forward_opaque_simple_ddgi.frag.spv',
     'forward_opaque_simple_ddgi_provenance.frag.spv',
@@ -106,6 +109,9 @@ $receiverModuleNames = @(
 
 $exactOpaqueDemandModuleNames = @(
     'forward_opaque_ddgi.frag.spv',
+    'forward_planar_capture_ddgi.frag.spv',
+    'forward_planar_capture_simple_ddgi.frag.spv',
+    'forward_planar_capture_simple_full_input_ddgi.frag.spv',
     'forward_opaque_ddgi_provenance.frag.spv',
     'forward_opaque_simple_ddgi.frag.spv',
     'forward_opaque_simple_ddgi_provenance.frag.spv',
@@ -208,6 +214,19 @@ foreach ($moduleName in $receiverModuleNames) {
     }
 
     $disassembly = Read-SpirvDisassembly -ModulePath $modulePath
+
+    if ($moduleName -like 'forward_planar_capture*') {
+        if ($disassembly -match 'OpExecutionMode[^\r\n]*EarlyFragmentTests') {
+            $violations.Add("${moduleName}: capture depth writes must follow fragment discards")
+        }
+        # The ordinary capture owns its directional lighting. Bindless slot
+        # 185 is the directional-radiance input (178 is the receiver gather
+        # arena); the initialized query must remain live in these programs.
+        if ($disassembly -notmatch 'OpStore\s+%SimpleDdgiDirectionalRadianceQueryBufferIndex\s+%uint_185\b' -or
+            $disassembly -notmatch 'OpLoad\s+%uint\s+%SimpleDdgiDirectionalRadianceQueryBufferIndex\b') {
+            $violations.Add("${moduleName}: capture lost the ordinary directional DDGI radiance query")
+        }
+    }
 
     $accessPatternPrefix = 'Op(?:InBounds)?AccessChain[^\r\n]*%BindlessStorage(?:Vector)?Buffers[^\r\n]*'
     $receiverAccesses = [regex]::Matches(

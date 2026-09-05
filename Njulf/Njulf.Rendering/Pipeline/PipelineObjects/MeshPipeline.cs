@@ -71,7 +71,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         bool BindRayScene,
         bool BindReceiverCache);
 
-    public sealed unsafe class MeshPipeline : IDisposable
+    public sealed unsafe partial class MeshPipeline : IDisposable
     {
         private const string EntryPoint = "main";
         private const string ForwardSimpleFullInputMeshShaderName =
@@ -391,6 +391,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             CreateComputePipelines();
         }
 
+        private VkPipeline _visibilityDepthPipeline;
+        private VkPipeline _visibilityMaskedDepthPipeline;
+        private VkPipeline _visibilityCompactedDepthPipeline;
+        private VkPipeline _visibilityCompactedMaskedDepthPipeline;
+        internal VkPipeline VisibilityDepthPipeline => _visibilityDepthPipeline;
+        internal VkPipeline VisibilityMaskedDepthPipeline => _visibilityMaskedDepthPipeline;
+        internal VkPipeline VisibilityCompactedDepthPipeline => _visibilityCompactedDepthPipeline;
+        internal VkPipeline VisibilityCompactedMaskedDepthPipeline => _visibilityCompactedMaskedDepthPipeline;
         public VkPipeline DepthPipeline => _depthPipeline;
         public MeshShaderSelection MeshShaderSelection =>
             _meshShaderSelection;
@@ -562,6 +570,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             bool prepareSpecializations = preparationScope ==
                 ScenePipelinePreparationScope.Complete;
+
+            if (manifest.Requires(SceneMaterialPipelineKinds.AutomaticPlanarReceiver))
+                PrepareAutomaticPlanarCapturePipelines(prepareSpecializations);
 
             bool alphaMaskFeedbackReady = true;
             if (prepareSpecializations &&
@@ -3341,6 +3352,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         "Compacted Mesh-Only Alpha-Test Shadow Pipeline");
                 }));
 
+            if (OpaqueVisibilityComputePolicy.Requested)
+            {
+                _visibilityDepthPipeline = CreateGraphicsPipeline(depthTaskShaderName,
+                    "depth_visibility.mesh.spv", "depth_sided_visibility.frag.spv",
+                    RenderTargetManager.OpaqueVisibilityFormat, depthFormat, true, true, false, CullModeFlags.None, false);
+                _visibilityMaskedDepthPipeline = CreateGraphicsPipeline(depthTaskShaderName,
+                    "depth_alpha_visibility.mesh.spv", "depth_alpha_visibility.frag.spv",
+                    RenderTargetManager.OpaqueVisibilityFormat, depthFormat, true, true, false, CullModeFlags.None, false);
+                _visibilityCompactedDepthPipeline = CreateGraphicsPipeline(null,
+                    _compactedDepthMeshShaderName.Replace(".mesh.spv", "_visibility.mesh.spv"), "depth_sided_visibility.frag.spv",
+                    RenderTargetManager.OpaqueVisibilityFormat, depthFormat, true, true, false, CullModeFlags.None, false);
+                _visibilityCompactedMaskedDepthPipeline = CreateGraphicsPipeline(null,
+                    _compactedDepthAlphaMeshShaderName.Replace(".mesh.spv", "_visibility.mesh.spv"), "depth_alpha_visibility.frag.spv",
+                    RenderTargetManager.OpaqueVisibilityFormat, depthFormat, true, true, false, CullModeFlags.None, false);
+            }
+
             if (RendererBuildConfiguration.FastPipelineStartup)
             {
                 if (TasklessSubmissionEnabled)
@@ -5049,6 +5076,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 return meshShaderName.StartsWith(
                            "forward",
                            StringComparison.Ordinal) ||
+                       (meshShaderName.StartsWith("depth", StringComparison.Ordinal) &&
+                        meshShaderName.Contains("compacted", StringComparison.Ordinal) &&
+                        meshShaderName.Contains("_visibility.", StringComparison.Ordinal)) ||
                        (meshShaderName.StartsWith(
                             "motion_vector",
                             StringComparison.Ordinal) &&
@@ -5894,6 +5924,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void DestroyPipelines()
         {
+            DestroyAutomaticPlanarCapturePipelines();
             ResetForwardOpaquePipelineBank();
             DestroyTransparentPartitionPipelines();
             ResetDeferredPipelineStates();
@@ -5907,6 +5938,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyHybridReflectionPipelines();
             DestroyAlphaMaskReceiverFeedbackPipelines();
             DestroyTransparentReceiverFeedbackPipelines();
+
+            if (_visibilityDepthPipeline.Handle != 0) _context.Api.DestroyPipeline(_context.Device, _visibilityDepthPipeline, null);
+            if (_visibilityMaskedDepthPipeline.Handle != 0) _context.Api.DestroyPipeline(_context.Device, _visibilityMaskedDepthPipeline, null);
+            if (_visibilityCompactedDepthPipeline.Handle != 0) _context.Api.DestroyPipeline(_context.Device, _visibilityCompactedDepthPipeline, null);
+            if (_visibilityCompactedMaskedDepthPipeline.Handle != 0) _context.Api.DestroyPipeline(_context.Device, _visibilityCompactedMaskedDepthPipeline, null);
+            _visibilityDepthPipeline = _visibilityMaskedDepthPipeline = _visibilityCompactedDepthPipeline = _visibilityCompactedMaskedDepthPipeline = default;
 
             if (_depthPipeline.Handle != 0)
             {

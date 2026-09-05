@@ -55,7 +55,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
-            return sceneData.ForwardVisibilityCompactionEnabled &&
+            return !sceneData.OpaqueVisibilityCompleted && sceneData.ForwardVisibilityCompactionEnabled &&
                 sceneData.SceneSubmissionGpuCompactionActive &&
                 sceneData.SceneSubmissionIndirectMeshletDispatchEnabled &&
                 sceneData.OcclusionCullingEnabled &&

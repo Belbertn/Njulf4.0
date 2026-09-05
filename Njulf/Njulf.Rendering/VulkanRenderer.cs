@@ -4490,13 +4490,16 @@ namespace Njulf.Rendering
                     SceneMaterialPipelineKinds.OrdinaryTransparent |
                     SceneMaterialPipelineKinds.ThinGlass |
                     SceneMaterialPipelineKinds.GeometryDecal |
-                    SceneMaterialPipelineKinds.ThickTransmission,
+                    SceneMaterialPipelineKinds.ThickTransmission |
+                    SceneMaterialPipelineKinds.AutomaticPlanarReceiver,
                     HasRealTransparentShadowReceiver: true,
                     HasGeometryDecalShadowReceiver: true,
                     HasTransparentReflectionReceiver: true,
                     ForwardOpaqueKinds:
                         SceneForwardOpaquePipelineKinds.All)
                 : BuildScenePipelineManifest(scene);
+            _sceneDataBuilder.RetainAutomaticPlanarDrawRecords =
+                pipelineManifest.Requires(SceneMaterialPipelineKinds.AutomaticPlanarReceiver);
             bool receiverFeedbackRequired =
                 _simpleDdgiReceiverFeedback?.GraphicsPipelinesRequested == true;
             bool receiverCacheRequired =
@@ -4614,6 +4617,10 @@ namespace Njulf.Rendering
                     "Pipeline.Prepare.Foliage",
                     _foliagePipeline.Prepare);
             }
+
+            if (foliageRequired && pipelineManifest.Requires(
+                    SceneMaterialPipelineKinds.AutomaticPlanarReceiver))
+                _foliagePipeline.PrepareAutomaticPlanarCapturePipelines();
 
             CollectRequiredParticleBlendModes(
                 scene,
@@ -5030,7 +5037,8 @@ namespace Njulf.Rendering
                 SceneMaterialPipelineKinds.OrdinaryTransparent |
                 SceneMaterialPipelineKinds.ThinGlass |
                 SceneMaterialPipelineKinds.GeometryDecal |
-                SceneMaterialPipelineKinds.ThickTransmission;
+                SceneMaterialPipelineKinds.ThickTransmission |
+                SceneMaterialPipelineKinds.AutomaticPlanarReceiver;
 
             foreach (RenderObject renderObject in scene.RenderObjects)
             {
@@ -5086,6 +5094,14 @@ namespace Njulf.Rendering
                                   meshHandle.IsValid &&
                                   _meshManager.GetMeshInfo(meshHandle)
                                       .HasVertexColor;
+            if (_materialManager.GetMaterialDefinition(handle).AutomaticPlanarReflectionEnabled)
+            {
+                manifest = manifest with
+                {
+                    MaterialKinds = manifest.MaterialKinds |
+                        SceneMaterialPipelineKinds.AutomaticPlanarReceiver
+                };
+            }
             return manifest.Include(
                 _materialManager.GetMaterialData(handle),
                 _materialManager.GetMaterialMetadata(handle),

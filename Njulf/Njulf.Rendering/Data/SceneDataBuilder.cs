@@ -279,6 +279,22 @@ namespace Njulf.Rendering.Data
 
         public bool CaptureCpuSnapshots { get; set; }
 
+        private bool _retainAutomaticPlanarDrawRecords;
+        internal bool RetainAutomaticPlanarDrawRecords
+        {
+            get => _retainAutomaticPlanarDrawRecords;
+            set
+            {
+                lock (_lock)
+                {
+                    if (_retainAutomaticPlanarDrawRecords == value)
+                        return;
+                    _retainAutomaticPlanarDrawRecords = value;
+                    _hasCachedPayload = false;
+                }
+            }
+        }
+
         public SceneDataBuilder(
             VulkanContext context,
             MeshManager meshManager,
@@ -604,10 +620,14 @@ namespace Njulf.Rendering.Data
                     : inverseViewMatrix;
                 bool previousHiZFrameValid = _hasPreviousHiZFrameData &&
                     IsPreviousHiZCameraHistoryUsable(viewProjectionMatrix, previousHiZViewProjectionMatrix);
-                bool cameraDependentCpuPayload =
+                // Auxiliary views consume these raw records, never the main
+                // camera's compacted stream or its capacity. Keep their source
+                // geometry independent of main-view frustum and LOD selection.
+                useCpuMeshletFrustumCulling &= !RetainAutomaticPlanarDrawRecords;
+                bool cameraDependentCpuPayload = !RetainAutomaticPlanarDrawRecords && (
                     useCameraDependentCpuPayload ||
                     useCpuMeshletFrustumCulling ||
-                    CaptureCpuSnapshots;
+                    CaptureCpuSnapshots);
                 long signatureStart = Stopwatch.GetTimestamp();
                 StaticScenePayloadSignature staticPayloadSignature = StaticScenePayloadSignature.Create(
                     scene,
@@ -764,6 +784,7 @@ namespace Njulf.Rendering.Data
                         buildGpuInstanceCandidates: buildGpuInstanceCandidates,
                         retainCpuOpaqueMeshletCommands:
                             !buildGpuInstanceCandidates ||
+                            RetainAutomaticPlanarDrawRecords ||
                             captureSceneSubmissionValidationLists ||
                             CaptureCpuSnapshots,
                         gpuLod1DistanceRatio: gpuLod1DistanceRatio,
@@ -984,6 +1005,9 @@ namespace Njulf.Rendering.Data
                 sceneData.SimpleOpaqueMeshletCount = simpleOpaqueMeshletCount;
                 sceneData.SimpleNormalOpaqueMeshletCount = simpleNormalOpaqueMeshletCount;
                 sceneData.FullOpaqueMeshletCount = fullOpaqueMeshletCount;
+                sceneData.AutomaticPlanarSimpleMeshletCount = _meshletDrawCommands.Count;
+                sceneData.AutomaticPlanarSimpleFullInputMeshletCount = _simpleNormalOpaqueMeshletDrawCommands.Count;
+                sceneData.AutomaticPlanarFullMeshletCount = _fullOpaqueMeshletDrawCommands.Count;
                 sceneData.SolidMeshletCount = solidDepthMeshletCount;
                 sceneData.MaskedMeshletCount = maskedDepthMeshletCount;
                 sceneData.TransparentMeshletCount = _transparentMeshletDrawCommands.Count;

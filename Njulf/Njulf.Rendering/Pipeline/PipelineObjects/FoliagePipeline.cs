@@ -12,7 +12,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline.PipelineObjects
 {
-    public sealed unsafe class FoliagePipeline : IDisposable
+    public sealed unsafe partial class FoliagePipeline : IDisposable
     {
         private const string EntryPoint = "main";
 
@@ -1258,6 +1258,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void DestroyPipelines()
         {
+            DestroyAutomaticPlanarCapturePipelines();
             DestroyPipeline(ref _cullPipeline);
             DestroyPipeline(ref _authoredExpandPipeline);
             DestroyPipeline(ref _depthPipeline);

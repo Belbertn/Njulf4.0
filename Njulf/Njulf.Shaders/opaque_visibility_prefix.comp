@@ -1,0 +1,20 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "opaque_visibility_work.glsl"
+layout(local_size_x = 1) in;
+void main()
+{
+    uint offset = 0u;
+    for (uint family = 0u; family < VisibilityFamilyCount; ++family)
+    {
+        uint count = VisibilityControl[VisibilityCountWord + family];
+        VisibilityControl[VisibilityOffsetWord + family] = offset;
+        VisibilityControl[VisibilityCursorWord + family] = 0u;
+        uint groups = (count + 15u) / 16u;
+        uint argument = VisibilityIndirectWord + 3u * family;
+        VisibilityControl[argument] = min(groups, 65535u);
+        VisibilityControl[argument + 1u] = max((groups + 65534u) / 65535u, 1u);
+        VisibilityControl[argument + 2u] = 1u;
+        offset += count;
+    }
+}

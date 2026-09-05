@@ -74,6 +74,14 @@ $algorithmicAtomicCounts = @{
     # that guarded lookup; non-ray programs retain one optimized copy.
     'forward.frag.spv' = 27
     'forward_opaque_ddgi.frag.spv' = 14
+    # Planar captures retain the canonical exact DDGI gather. Late depth
+    # testing changes coverage ownership, not its bounded scheduling atomics.
+    'forward_planar_capture_ddgi.frag.spv' = 14
+    'forward_planar_capture_ddgi_b1.frag.spv' = 9
+    'forward_planar_capture_simple_ddgi.frag.spv' = 14
+    'forward_planar_capture_simple_full_input_ddgi.frag.spv' = 14
+    'forward_planar_capture_simple_ddgi_b1.frag.spv' = 9
+    'forward_planar_capture_simple_full_input_ddgi_b1.frag.spv' = 9
     'forward_opaque_ddgi_provenance.frag.spv' = 14
     'forward_opaque_simple_ddgi.frag.spv' = 14
     'forward_opaque_simple_ddgi_provenance.frag.spv' = 14

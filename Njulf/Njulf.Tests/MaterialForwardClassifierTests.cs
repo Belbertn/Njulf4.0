@@ -50,6 +50,35 @@ namespace Njulf.Tests
             Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.FullOpaque));
         }
 
+        [TestCase(MaterialFeatureFlags.None, false, false, MaterialForwardClass.SimpleOpaque)]
+        [TestCase(MaterialFeatureFlags.None, true, false, MaterialForwardClass.SimpleOpaqueNormal)]
+        [TestCase(MaterialFeatureFlags.TransmissionTexture, true, false, MaterialForwardClass.SimpleOpaqueNormal)]
+        [TestCase(MaterialFeatureFlags.None, true, true, MaterialForwardClass.SimpleOpaqueNormal)]
+        [TestCase(MaterialFeatureFlags.Ior, true, false, MaterialForwardClass.FullOpaque)]
+        [TestCase(MaterialFeatureFlags.Clearcoat, true, false, MaterialForwardClass.FullOpaque)]
+        public void Classify_GiOnlyTransmission_RequiresFullOnlyForVisibleExtensions(
+            MaterialFeatureFlags additionalFeatures,
+            bool normalMap,
+            bool masked,
+            MaterialForwardClass expected)
+        {
+            GPUMaterialData material = CreateDefaultMaterial();
+            material.FeatureFlags = (uint)(MaterialFeatureFlags.Transmission |
+                MaterialFeatureFlags.CompressedNormalBc5 | additionalFeatures);
+            material.ExtensionDataIndex = 0;
+            material.TransportFlags =
+                (uint)GiMaterialTransportFlags.ThinSurfaceTransmission;
+            material.NormalTextureIndex = normalMap
+                ? BindlessIndex.FirstDynamicTextureIndex
+                : BindlessIndex.DefaultNormalTexture;
+            material.NormalScaleBias = new Vector4(1f, masked ? 1f : 0f, 0.5f, 1f);
+
+            Assert.That(
+                MaterialForwardClassifier.Classify(
+                    material, MaterialRenderMetadata.FromGpuMaterial(material)),
+                Is.EqualTo(expected));
+        }
+
         [Test]
         public void Classify_TextureTransform_UsesSimpleFullInput()
         {

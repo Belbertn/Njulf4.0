@@ -29,7 +29,11 @@ vec4 SampleMaterialCoverageTexture(int textureIndex, vec2 uv)
 {
     bool valid = textureIndex >= FIRST_TEXTURE_INDEX && textureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES;
     int safeIndex = valid ? textureIndex : DEFAULT_BLACK_TEXTURE;
+#ifdef NJULF_VISIBILITY_COMPUTE
+    return textureGrad(BindlessTextures[nonuniformEXT(safeIndex)], uv, dFdx(uv), dFdy(uv));
+#else
     return texture(BindlessTextures[nonuniformEXT(safeIndex)], uv);
+#endif
 }
 
 vec2 MaterialCoverageUv(vec2 texCoord0, vec2 texCoord1, float texCoordSet, vec4 offsetScale, float rotationRadians)

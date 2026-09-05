@@ -1,8 +1,18 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
+#ifdef NJULF_VISIBILITY_COMPUTE
+#define NJULF_VISIBILITY_COVERAGE_AUTHORITY true
+#include "opaque_visibility_derivatives.glsl"
+#define main ShadeForwardSurface
+#define discard return
+#endif
+#ifndef NJULF_VISIBILITY_COVERAGE_AUTHORITY
+#define NJULF_VISIBILITY_COVERAGE_AUTHORITY false
+#endif
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
-#if defined(FORWARD_SIMPLE_OPAQUE)
+#if defined(FORWARD_SIMPLE_OPAQUE) && !defined(NJULF_VISIBILITY_COMPUTE)
 #extension GL_EXT_mesh_shader : require
 #define FORWARD_PER_PRIMITIVE_IDS 1
 #else
@@ -157,7 +167,9 @@ bool NjulfReceiverCacheSplitLane()
 // late depth write so discarded alpha-mask samples cannot occlude later work.
 #if !defined(NJULF_C5_TRACE_RESOLUTION_SOURCE) || \
     !NJULF_C5_TRACE_RESOLUTION_SOURCE
+#if !defined(NJULF_VISIBILITY_COMPUTE) && !defined(NJULF_AUTOMATIC_PLANAR_CAPTURE)
 layout(early_fragment_tests) in;
+#endif
 #endif
 
 #ifndef NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
@@ -397,7 +409,17 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #define FORWARD_SIMPLE_VERTEX_INPUT 0
 #endif
 
-#if FORWARD_SIMPLE_VERTEX_INPUT
+#ifdef NJULF_VISIBILITY_COMPUTE
+vec3 fragNormal;
+vec2 fragTexCoord;
+uint fragMaterialIndex;
+uint fragObjectIndex;
+uint fragMeshletIndex;
+vec3 fragWorldPosition;
+vec4 fragWorldTangent;
+vec2 fragTexCoord2;
+vec4 fragVertexColor;
+#elif FORWARD_SIMPLE_VERTEX_INPUT
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2, component = 0) perprimitiveEXT flat in uint fragMaterialIndex;
@@ -432,6 +454,13 @@ layout(location = 7) in vec2 fragTexCoord2;
 layout(location = 8) in vec4 fragVertexColor;
 #endif
 
+#ifdef NJULF_VISIBILITY_COMPUTE
+vec4 outColor;
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+uvec4 outHybridReflectionReceiverPayload;
+uvec2 outHybridReflectionLobeExtension;
+#endif
+#else
 #if FORWARD_WEIGHTED_OIT
 layout(location = 0) out vec4 outOitAccumulation;
 layout(location = 1) out vec4 outOitRevealage;
@@ -480,10 +509,37 @@ layout(location = 2) out uvec2 outHybridReflectionLobeExtension;
 #endif
 #endif
 
+#endif
+
 layout(push_constant) uniform ForwardPushConstantBlock
 {
     GPUForwardPushConstants Push;
 } pc;
+
+vec3 ForwardWorldPositionDx(vec3 position)
+{
+#ifdef NJULF_VISIBILITY_COMPUTE
+    return VisibilityWorldDx;
+#else
+    return dFdx(position);
+#endif
+}
+vec3 ForwardWorldPositionDy(vec3 position)
+{
+#ifdef NJULF_VISIBILITY_COMPUTE
+    return VisibilityWorldDy;
+#else
+    return dFdy(position);
+#endif
+}
+float ForwardDepthGradient()
+{
+#ifdef NJULF_VISIBILITY_COMPUTE
+    return VisibilityDepthGradient;
+#else
+    return abs(dFdx(gl_FragCoord.z)) + abs(dFdy(gl_FragCoord.z));
+#endif
+}
 
 vec2 ForwardScreenPixel()
 {
@@ -1219,7 +1275,7 @@ vec3 ReconstructViewPositionFromDepth(vec2 uv, float depth)
     return view.xyz / max(abs(view.w), 0.00001);
 }
 
-#if defined(FORWARD_SIMPLE_OPAQUE) && FORWARD_SIMPLE_VERTEX_INPUT && \
+#if defined(FORWARD_SIMPLE_OPAQUE) && !defined(NJULF_VISIBILITY_COMPUTE) && FORWARD_SIMPLE_VERTEX_INPUT && \
     NJULF_COMMON_SURFACE_COVERAGE_DIAGNOSTICS
 bool CommonSurfaceMaterialEligible(GPUMaterialData material)
 {
@@ -2111,8 +2167,8 @@ float EvaluateDirectionalTransparentRay(
         normal = -normal;
 
     float footprint = max(
-        length(dFdx(worldPosition)),
-        length(dFdy(worldPosition)));
+        length(ForwardWorldPositionDx(worldPosition)),
+        length(ForwardWorldPositionDy(worldPosition)));
     if (!DirectionalRayFinite(footprint) || footprint <= 1.0e-7)
         footprint = max(length(worldPosition - pc.Push.CameraPosition) /
             max(max(pc.Push.ScreenDimensions.x, pc.Push.ScreenDimensions.y), 1.0),
@@ -2231,7 +2287,7 @@ bool DirectionalRayShadowMaskSupportsReceiver(bool geometryDecal)
         BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
         pixel,
         0).r;
-    float tolerance = max(0.00001, abs(dFdx(gl_FragCoord.z)) + abs(dFdy(gl_FragCoord.z)));
+    float tolerance = max(0.00001, ForwardDepthGradient());
     return abs(ownerDepth - gl_FragCoord.z) <= tolerance;
 }
 
@@ -5677,7 +5733,7 @@ void main()
         material,
         albedoSample,
         fragVertexColor.a);
-    if (!MaterialCoverageSurvivesForward(materialCoverage))
+    if (!MaterialCoverageSurvivesForward(materialCoverage) && !NJULF_VISIBILITY_COVERAGE_AUTHORITY)
         discard;
 
     vec3 geometricNormal = normalize(fragNormal) *
@@ -5963,14 +6019,14 @@ void main()
     forwardDebugOutputAlpha =
         alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha;
 
-    if (!MaterialCoverageSurvivesForward(materialCoverage))
+    if (!MaterialCoverageSurvivesForward(materialCoverage) && !NJULF_VISIBILITY_COVERAGE_AUTHORITY)
     {
         if (geometryDecal)
             RecordDecalFragmentAttribution(DECAL_ESTIMATED_COVERAGE_KILLED_COUNTER);
         discard;
     }
 
-#if defined(FORWARD_SIMPLE_OPAQUE) && FORWARD_SIMPLE_VERTEX_INPUT && \
+#if defined(FORWARD_SIMPLE_OPAQUE) && !defined(NJULF_VISIBILITY_COMPUTE) && FORWARD_SIMPLE_VERTEX_INPUT && \
     NJULF_COMMON_SURFACE_COVERAGE_DIAGNOSTICS
     RecordCommonSurfaceMaterialCoverage(material);
 #endif
@@ -6348,6 +6404,11 @@ void main()
             reflectionFootprintRoughness,
             normal));
 
+#ifdef NJULF_VISIBILITY_COMPUTE
+    // Helper lanes supply the same primitive's material derivatives only.
+    if (!VisibilityCovered)
+        return;
+#endif
     bool reflectsIndirectDiffuse = GiMaterialHasFlag(
         material.TransportFlags,
         GI_MATERIAL_REFLECTS_INDIRECT_DIFFUSE);
@@ -8403,4 +8464,10 @@ void main()
 #endif
     WriteForwardColor(vec4(color, finalOutputAlpha));
 }
+#endif
+
+#ifdef NJULF_VISIBILITY_COMPUTE
+#undef main
+#undef discard
+#include "opaque_shade.glsl"
 #endif

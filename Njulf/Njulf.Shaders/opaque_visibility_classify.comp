@@ -1,0 +1,81 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#include "common.glsl"
+#include "opaque_visibility_work.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(push_constant) uniform ForwardPushConstantBlock { GPUForwardPushConstants Push; } pc;
+
+bool VisibilityIdentityTransform(vec4 transform, float rotation)
+{
+    return all(lessThanEqual(abs(transform - vec4(0.0, 0.0, 1.0, 1.0)), vec4(0.0001))) &&
+        abs(rotation) <= 0.0001;
+}
+
+uint VisibilityMaterialFamily(uvec2 identity)
+{
+    GPUMeshletDrawCommand draw = ReadMeshletDrawCommandFromBase(
+        identity.y & 0xffffu, pc.Push.CurrentFrameIndex, identity.x);
+    GPUMaterialData material = ReadForwardMaterial(draw.MaterialIndex);
+    // Match MaterialFeatureFlagsExtensions.RequiresExtensionData: bits 0..21
+    // own extension payloads, as does IOR; foliage/normal encoding bits do not.
+    const uint extensionMask = ((1u << 22u) - 1u) | MATERIAL_FEATURE_IOR;
+    if (material.ExtensionDataIndex >= 0 || (material.FeatureFlags & extensionMask) != 0u)
+        return 2u;
+    if (material.NormalScaleBias.y > 0.5 ||
+        (material.NormalTextureIndex != DEFAULT_NORMAL_TEXTURE && material.NormalScaleBias.x > 0.0001) ||
+        any(greaterThan(abs(material.TextureTexCoordSets), vec4(0.0001))) ||
+        !VisibilityIdentityTransform(material.BaseColorOffsetScale, material.TextureRotations.x) ||
+        !VisibilityIdentityTransform(material.NormalOffsetScale, material.TextureRotations.y) ||
+        !VisibilityIdentityTransform(material.MetallicRoughnessOffsetScale, material.TextureRotations.z) ||
+        !VisibilityIdentityTransform(material.EmissiveOffsetScale, material.TextureRotations.w))
+        return 1u;
+    return 0u;
+}
+
+void main()
+{
+    uvec2 extent = uvec2(pc.Push.ScreenDimensions);
+    uvec2 origin = gl_GlobalInvocationID.xy * 2u;
+    if (any(greaterThanEqual(origin, extent)))
+        return;
+    uvec2 identities[4];
+    uint masks[4];
+    uint count = 0u;
+    for (uint lane = 0u; lane < 4u; ++lane)
+    {
+        uvec2 pixel = origin + uvec2(lane & 1u, lane >> 1u);
+        if (any(greaterThanEqual(pixel, extent)))
+            continue;
+        uvec2 identity = texelFetch(OpaqueVisibility, ivec2(pixel), 0).xy;
+        if (identity.x == 0xffffffffu)
+            continue;
+        uint slot = 0u;
+        for (; slot < count; ++slot)
+            if (all(equal(identity, identities[slot])))
+                break;
+        if (slot == count)
+        {
+            identities[count] = identity;
+            masks[count] = 0u;
+            ++count;
+        }
+        masks[slot] |= 1u << lane;
+    }
+    if (count == 0u)
+        return;
+    uint first = atomicAdd(VisibilityControl[0], count);
+    uint capacity = extent.x * extent.y;
+    if (first > capacity || count > capacity - first)
+    {
+        atomicOr(VisibilityControl[1], 1u);
+        return;
+    }
+    for (uint slot = 0u; slot < count; ++slot)
+    {
+        uint family = VisibilityMaterialFamily(identities[slot]);
+        VisibilityJobs[first + slot] = uvec4(identities[slot], origin.y * extent.x + origin.x,
+            masks[slot] | (family << 8u));
+        atomicAdd(VisibilityControl[VisibilityCountWord + family], 1u);
+    }
+}

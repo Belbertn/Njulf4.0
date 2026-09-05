@@ -1,0 +1,13 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "opaque_visibility_work.glsl"
+layout(local_size_x = 64) in;
+void main()
+{
+    uint job = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 64u + gl_LocalInvocationIndex;
+    if (job >= VisibilityControl[0] || VisibilityControl[1] != 0u)
+        return;
+    uint family = (VisibilityJobs[job].w >> 8u) & 3u;
+    uint slot = atomicAdd(VisibilityControl[VisibilityCursorWord + family], 1u);
+    VisibilityIndices[VisibilityControl[VisibilityOffsetWord + family] + slot] = job;
+}

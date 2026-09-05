@@ -37,6 +37,10 @@ shared uint meshNegativeDeterminant;
 
 layout(location = 0) flat out uint meshMaterialIndex[];
 
+#ifdef NJULF_OPAQUE_VISIBILITY
+layout(location = 12) perprimitiveEXT flat out uvec2 meshVisibility[];
+#endif
+
 layout(push_constant) uniform DepthPushConstantBlock
 {
     GPUDepthPushConstants Push;
@@ -109,6 +113,11 @@ void main()
          triangleSlot < meshlet.LocalTriangleCount;
          triangleSlot += gl_WorkGroupSize.x)
     {
+#ifdef NJULF_OPAQUE_VISIBILITY
+        meshVisibility[triangleSlot] = uvec2(
+            drawCommandIndex,
+            pc.Push.MeshletDrawBufferBaseIndex | (triangleSlot << 16u));
+#endif
         uint triangleOffset = triangleSlot * 3u;
         uint i0 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 0u);
         uint i1 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 1u);

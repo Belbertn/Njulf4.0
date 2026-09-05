@@ -215,7 +215,9 @@ namespace Njulf.Rendering.Pipeline
         GtaoCurrentGeometry,
         // Versioned full-resolution shared surface-reprojection history.
         // Appended to preserve every established graph resource identity.
-        TemporalSurfaceValidityHistory
+        TemporalSurfaceValidityHistory,
+        OpaqueVisibility,
+        OpaqueVisibilityWork
     }
 
     public enum RenderGraphResourceKind

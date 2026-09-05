@@ -56,6 +56,13 @@ namespace Njulf.Rendering.Pipeline
             // A SceneRenderingData instance can be reused by tooling. Never let a prior frame's
             // completion marker satisfy a consumer if recording this prepass fails partway through.
             sceneData.DepthPrePassCompleted = false;
+            sceneData.OpaqueVisibilityCompleted = false;
+            bool visibility = _renderTargets.OpaqueVisibility != null && sceneData.FoliageClusterCount == 0;
+            var solidPipeline = visibility ? _meshPipeline.VisibilityDepthPipeline : _meshPipeline.DepthPipeline;
+            var maskedPipeline = visibility ? _meshPipeline.VisibilityMaskedDepthPipeline : _meshPipeline.MaskedDepthPipeline;
+            var compactedSolidPipeline = visibility ? _meshPipeline.VisibilityCompactedDepthPipeline : _meshPipeline.CompactedDepthPipeline;
+            var compactedMaskedPipeline = visibility ? _meshPipeline.VisibilityCompactedMaskedDepthPipeline : _meshPipeline.CompactedMaskedDepthPipeline;
+            if (visibility) _renderTargets.OpaqueVisibility!.TransitionToColorAttachment(cmd);
             sceneData.DepthPrePassFrameSerial = 0;
 
             _renderTargets.SceneDepth.TransitionToDepthAttachment(cmd);
@@ -109,11 +116,11 @@ namespace Njulf.Rendering.Pipeline
             var colorAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
-                ImageView = default, // No color attachment for depth prepass
-                ImageLayout = ImageLayout.Undefined,
-                LoadOp = AttachmentLoadOp.DontCare,
+                ImageView = visibility ? _renderTargets.OpaqueVisibility!.View : default,
+                ImageLayout = ImageLayout.ColorAttachmentOptimal,
+                LoadOp = AttachmentLoadOp.Clear,
                 StoreOp = AttachmentStoreOp.Store,
-                ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
+                ClearValue = new ClearValue(new ClearColorValue(uint.MaxValue, uint.MaxValue, 0u, 0u))
             };
             
             var depthAttachment = new RenderingAttachmentInfo
@@ -131,8 +138,8 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.RenderingInfo,
                 RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = renderExtent },
                 LayerCount = 1,
-                ColorAttachmentCount = 0,
-                PColorAttachments = null,
+                ColorAttachmentCount = visibility ? 1u : 0u,
+                PColorAttachments = visibility ? &colorAttachment : null,
                 PDepthAttachment = &depthAttachment,
                 PStencilAttachment = null
             };
@@ -144,8 +151,8 @@ namespace Njulf.Rendering.Pipeline
                 DrawSceneCompactedDepthList(
                     cmd,
                     sceneData,
-                    _meshPipeline.DepthPipeline,
-                    _meshPipeline.CompactedDepthPipeline,
+                    solidPipeline,
+                    compactedSolidPipeline,
                     SceneOpaqueCompactionPass.ResolveCompactedDrawStreamCapacity(
                         sceneData.SceneSubmissionGpuDepthSolidCandidateCount,
                         sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity,
@@ -162,8 +169,8 @@ namespace Njulf.Rendering.Pipeline
                 DrawSceneCompactedDepthList(
                     cmd,
                     sceneData,
-                    _meshPipeline.MaskedDepthPipeline,
-                    _meshPipeline.CompactedMaskedDepthPipeline,
+                    maskedPipeline,
+                    compactedMaskedPipeline,
                     SceneOpaqueCompactionPass.ResolveCompactedDrawStreamCapacity(
                         sceneData.SceneSubmissionGpuDepthMaskedCandidateCount,
                         sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity,
@@ -182,14 +189,14 @@ namespace Njulf.Rendering.Pipeline
                 DrawDepthList(
                     cmd,
                     sceneData,
-                    _meshPipeline.DepthPipeline,
+                    solidPipeline,
                     sceneData.SolidMeshletCount,
                     BindlessIndex.SolidDepthMeshletDrawBufferBase);
 
                 DrawDepthList(
                     cmd,
                     sceneData,
-                    _meshPipeline.MaskedDepthPipeline,
+                    maskedPipeline,
                     sceneData.MaskedMeshletCount,
                     BindlessIndex.MaskedDepthMeshletDrawBufferBase);
             }
@@ -199,6 +206,7 @@ namespace Njulf.Rendering.Pipeline
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
             sceneData.DepthPrePassFrameSerial = sceneData.DdgiFrameSerial;
             sceneData.DepthPrePassCompleted = true;
+            sceneData.OpaqueVisibilityCompleted = visibility;
         }
 
         private bool CanUseSceneCompactedDepth(SceneRenderingData sceneData)

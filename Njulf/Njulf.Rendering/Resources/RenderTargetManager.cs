@@ -55,6 +55,9 @@ namespace Njulf.Rendering.Resources
 
     public sealed class RenderTargetManager : IDisposable
     {
+        public const Format OpaqueVisibilityFormat = Format.R32G32Uint;
+        internal RenderTarget? OpaqueVisibility { get; }
+
         public const Format SceneColorFormat = Format.R16G16B16A16Sfloat;
         public const Format FoggedSceneColorFormat = SceneColorFormat;
         public const Format AmbientOcclusionFormat = Format.R8Unorm;
@@ -211,6 +214,12 @@ namespace Njulf.Rendering.Resources
                 extent,
                 HdrSceneColorStorageDescriptor);
             SceneDepth = new RenderTarget(_context, "Scene Depth", depthFormat, extent, SceneDepthDescriptor);
+            if (OpaqueVisibilityComputePolicy.Requested)
+            {
+                OpaqueVisibility = new RenderTarget(_context, "Opaque visibility", OpaqueVisibilityFormat,
+                    extent, new RenderTargetDescriptor(colorAttachment: true, sampled: true));
+                _renderGraph?.RegisterImportedRenderTarget(RenderGraphResourceId.OpaqueVisibility, OpaqueVisibility);
+            }
             _renderGraph?.RegisterImportedRenderTarget(RenderGraphResourceId.SceneColor, SceneColor);
             _renderGraph?.RegisterImportedRenderTarget(RenderGraphResourceId.SceneDepth, SceneDepth);
             FoggedSceneColor = CreateGraphOwnedRenderTarget(
@@ -580,6 +589,7 @@ namespace Njulf.Rendering.Resources
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
             SceneDepth.EstimatedByteSize +
+            (OpaqueVisibility?.EstimatedByteSize ?? 0UL) +
             SumEnabledBytes(FoggedSceneColor) +
             AmbientOcclusionRenderTargetBytes +
             MaterialTransportProvenanceRenderTargetBytes +
@@ -1118,6 +1128,7 @@ namespace Njulf.Rendering.Resources
             ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
             RecreateIfDifferent(SceneDepth, extent);
+            if (OpaqueVisibility != null) RecreateIfDifferent(OpaqueVisibility, extent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.FogOutput, FoggedSceneColor, CalculateFoggedSceneColorExtent(extent, fogEnabled));
             RecreateAmbientOcclusionTargets(
                 extent,
@@ -1253,7 +1264,7 @@ namespace Njulf.Rendering.Resources
                 "Hybrid Reflection Receiver Payload",
                 HybridReflectionReceiverPayloadFormat,
                 extent,
-                ColorSampledDescriptor);
+                OpaqueVisibilityComputePolicy.Requested ? ColorStorageSampledDescriptor : ColorSampledDescriptor);
             HybridReflectionRawRadiance = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.HybridReflectionRawRadiance,
                 "Hybrid Reflection Raw Radiance and Confidence",
@@ -1704,6 +1715,7 @@ namespace Njulf.Rendering.Resources
 
             _disposed = true;
             SceneColor.Dispose();
+            OpaqueVisibility?.Dispose();
             SceneDepth.Dispose();
             DisposeIfManagerOwned(RenderGraphResourceId.FogOutput, FoggedSceneColor);
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionRaw, AmbientOcclusionRaw);
