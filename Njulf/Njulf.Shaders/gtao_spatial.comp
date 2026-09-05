@@ -8,14 +8,12 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 0) uniform sampler2D TemporalInput;
 layout(set = 0, binding = 1) uniform usampler2D GeometryInput;
 layout(set = 0, binding = 2) uniform sampler2D RawInput;
-layout(set = 0, binding = 3) uniform sampler2D DepthTexture;
-layout(rgba16f, set = 0, binding = 4) uniform writeonly image2D GtaoFilteredOutput;
-layout(r8, set = 0, binding = 5) uniform writeonly image2D ScalarAoOutput;
-layout(rgba16f, set = 0, binding = 6) uniform writeonly image2D GtaoDebugOutput;
+layout(rgba16f, set = 0, binding = 3) uniform writeonly image2D GtaoFilteredOutput;
+layout(r8, set = 0, binding = 4) uniform writeonly image2D ScalarAoOutput;
+layout(rgba16f, set = 0, binding = 5) uniform writeonly image2D GtaoDebugOutput;
 
 layout(push_constant) uniform GtaoSpatialPushBlock
 {
-    mat4 InverseProjectionMatrix;
     vec2 SourceDimensions;
     vec2 OutputDimensions;
     float DepthSigma;
@@ -68,16 +66,31 @@ bool UnpackGeometry(uvec2 packed, out vec3 normal, out float viewDepth)
     return !isnan(viewDepth) && !isinf(viewDepth);
 }
 
-void LoadSharedSample(int sharedIndex, ivec2 outputPixel)
+int ResolveSourceCoordinate(
+    int outputCoordinate,
+    int outputExtent,
+    int sourceExtent)
 {
-    ivec2 outputExtent = ivec2(pc.OutputDimensions);
-    ivec2 clampedOutput = clamp(outputPixel, ivec2(0),
-        outputExtent - ivec2(1));
-    vec2 uv = (vec2(clampedOutput) + vec2(0.5)) /
-        pc.OutputDimensions;
-    ivec2 sourceExtent = textureSize(TemporalInput, 0);
-    ivec2 sourcePixel = clamp(ivec2(floor(uv * vec2(sourceExtent))),
-        ivec2(0), sourceExtent - ivec2(1));
+    int clampedOutput = clamp(outputCoordinate, 0, outputExtent - 1);
+    return clamp(int(floor(
+        (float(clampedOutput) + 0.5) *
+        float(sourceExtent) / float(outputExtent))), 0, sourceExtent - 1);
+}
+
+ivec2 ResolveSourcePixel(
+    ivec2 outputPixel,
+    ivec2 outputExtent,
+    ivec2 sourceExtent)
+{
+    return ivec2(
+        ResolveSourceCoordinate(
+            outputPixel.x, outputExtent.x, sourceExtent.x),
+        ResolveSourceCoordinate(
+            outputPixel.y, outputExtent.y, sourceExtent.y));
+}
+
+void LoadSharedSourceSample(int sharedIndex, ivec2 sourcePixel)
+{
     vec4 payload = texelFetch(TemporalInput, sourcePixel, 0);
     uvec2 packedGeometry = texelFetch(GeometryInput,
         sourcePixel, 0).xy;
@@ -99,6 +112,29 @@ float Gaussian(float value, float sigma)
     return exp(-0.5 * value * value / (safeSigma * safeSigma));
 }
 
+float CombinedAxisGaussianWeight(
+    int sourceCoordinate,
+    int outputCoordinate,
+    int sourceExtent,
+    int outputExtent,
+    int radius,
+    float sigma)
+{
+    float weight = 0.0;
+    for (int offset = -GTAO_MAX_RADIUS;
+         offset <= GTAO_MAX_RADIUS;
+         ++offset)
+    {
+        if (abs(offset) > radius)
+            continue;
+        int mapped = ResolveSourceCoordinate(
+            outputCoordinate + offset, outputExtent, sourceExtent);
+        if (mapped == sourceCoordinate)
+            weight += Gaussian(float(offset), sigma);
+    }
+    return weight;
+}
+
 vec3 RejectionColor(uint reason)
 {
     if (reason == 0u) return vec3(0.05, 0.65, 0.10);
@@ -111,29 +147,79 @@ vec3 RejectionColor(uint reason)
     return vec3(0.00, 0.85, 0.85);
 }
 
+void AccumulateSharedSample(
+    int sharedIndex,
+    float spatialWeight,
+    vec4 centerGeometry,
+    inout float visibilitySum,
+    inout vec3 bentNormalSum,
+    inout float confidenceSum,
+    inout float weightSum)
+{
+    vec4 samplePayload = SharedPayload[sharedIndex];
+    vec4 sampleGeometry = SharedGeometry[sharedIndex];
+    if (sampleGeometry.w < 0.0)
+        return;
+    float depthDifference = abs(sampleGeometry.w - centerGeometry.w);
+    float depthSigma = min(max(pc.DepthSigma, 0.02),
+        max(0.03, centerGeometry.w * 0.04));
+    if (depthDifference > depthSigma * 4.0)
+        return;
+    float normalAgreement = clamp(dot(
+        sampleGeometry.xyz, centerGeometry.xyz), 0.0, 1.0);
+    if (normalAgreement < 0.50)
+        return;
+    float depthWeight = Gaussian(depthDifference, depthSigma);
+    float normalWeight = pow(normalAgreement,
+        max(pc.NormalSigma * 0.125, 1.0));
+    float weight = spatialWeight * depthWeight * normalWeight;
+    vec3 bentNormal = DecodeOctahedral(samplePayload.xy);
+    if (dot(bentNormal, centerGeometry.xyz) <= 0.0)
+        return;
+    visibilitySum += samplePayload.z * weight;
+    bentNormalSum += bentNormal * weight;
+    confidenceSum += samplePayload.w * weight;
+    weightSum += weight;
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 localPixel = ivec2(gl_LocalInvocationID.xy);
     ivec2 groupBase = pixel - localPixel;
+    ivec2 outputExtent = imageSize(GtaoFilteredOutput);
+    ivec2 sourceExtent = textureSize(TemporalInput, 0);
+    ivec2 sharedSourceOrigin = ResolveSourcePixel(
+        groupBase - ivec2(GTAO_MAX_RADIUS),
+        outputExtent,
+        sourceExtent);
+    ivec2 sharedSourceEnd = ResolveSourcePixel(
+        groupBase + ivec2(GTAO_GROUP_SIZE - 1 + GTAO_MAX_RADIUS),
+        outputExtent,
+        sourceExtent);
+    ivec2 sharedSourceSpan = sharedSourceEnd - sharedSourceOrigin + ivec2(1);
     uint linearLocal = gl_LocalInvocationIndex;
-    for (uint sharedIndex = linearLocal;
-         sharedIndex < uint(GTAO_SHARED_COUNT);
-         sharedIndex += 64u)
+    uint uniqueSourceCount = uint(sharedSourceSpan.x * sharedSourceSpan.y);
+    for (uint sourceIndex = linearLocal;
+         sourceIndex < uniqueSourceCount;
+         sourceIndex += 64u)
     {
-        ivec2 sharedPixel = ivec2(
-            int(sharedIndex) % GTAO_SHARED_STRIDE,
-            int(sharedIndex) / GTAO_SHARED_STRIDE);
-        LoadSharedSample(int(sharedIndex), groupBase + sharedPixel -
-            ivec2(GTAO_MAX_RADIUS));
+        ivec2 sourceOffset = ivec2(
+            int(sourceIndex) % sharedSourceSpan.x,
+            int(sourceIndex) / sharedSourceSpan.x);
+        int sharedIndex = sourceOffset.y * GTAO_SHARED_STRIDE +
+            sourceOffset.x;
+        LoadSharedSourceSample(
+            sharedIndex, sharedSourceOrigin + sourceOffset);
     }
     barrier();
 
-    ivec2 outputExtent = imageSize(GtaoFilteredOutput);
     if (any(greaterThanEqual(pixel, outputExtent)))
         return;
-    int centerIndex = (localPixel.y + GTAO_MAX_RADIUS) *
-        GTAO_SHARED_STRIDE + localPixel.x + GTAO_MAX_RADIUS;
+    ivec2 centerSource = ResolveSourcePixel(
+        pixel, outputExtent, sourceExtent);
+    ivec2 centerOffset = centerSource - sharedSourceOrigin;
+    int centerIndex = centerOffset.y * GTAO_SHARED_STRIDE + centerOffset.x;
     vec4 centerPayload = SharedPayload[centerIndex];
     vec4 centerGeometry = SharedGeometry[centerIndex];
     if (centerGeometry.w < 0.0)
@@ -150,40 +236,62 @@ void main()
     vec3 bentNormalSum = vec3(0.0);
     float confidenceSum = 0.0;
     float weightSum = 0.0;
-    for (int y = -radius; y <= radius; ++y)
+    float spatialSigma = max(float(radius), 1.0);
+    if (all(equal(sourceExtent, outputExtent)))
     {
-        for (int x = -radius; x <= radius; ++x)
+        for (int y = -radius; y <= radius; ++y)
         {
-            int sharedIndex = (localPixel.y + GTAO_MAX_RADIUS + y) *
-                GTAO_SHARED_STRIDE +
-                localPixel.x + GTAO_MAX_RADIUS + x;
-            vec4 samplePayload = SharedPayload[sharedIndex];
-            vec4 sampleGeometry = SharedGeometry[sharedIndex];
-            if (sampleGeometry.w < 0.0)
-                continue;
-            float depthDifference = abs(
-                sampleGeometry.w - centerGeometry.w);
-            float depthSigma = min(max(pc.DepthSigma, 0.02),
-                max(0.03, centerGeometry.w * 0.04));
-            if (depthDifference > depthSigma * 4.0)
-                continue;
-            float normalAgreement = clamp(dot(
-                sampleGeometry.xyz, centerGeometry.xyz), 0.0, 1.0);
-            if (normalAgreement < 0.50)
-                continue;
-            float spatialWeight = Gaussian(length(vec2(x, y)),
-                max(float(radius), 1.0));
-            float depthWeight = Gaussian(depthDifference, depthSigma);
-            float normalWeight = pow(normalAgreement,
-                max(pc.NormalSigma * 0.125, 1.0));
-            float weight = spatialWeight * depthWeight * normalWeight;
-            vec3 bentNormal = DecodeOctahedral(samplePayload.xy);
-            if (dot(bentNormal, centerGeometry.xyz) <= 0.0)
-                continue;
-            visibilitySum += samplePayload.z * weight;
-            bentNormalSum += bentNormal * weight;
-            confidenceSum += samplePayload.w * weight;
-            weightSum += weight;
+            for (int x = -radius; x <= radius; ++x)
+            {
+                ivec2 sourcePixel = clamp(pixel + ivec2(x, y),
+                    ivec2(0), sourceExtent - ivec2(1));
+                ivec2 sourceOffset = sourcePixel - sharedSourceOrigin;
+                int sharedIndex = sourceOffset.y * GTAO_SHARED_STRIDE +
+                    sourceOffset.x;
+                AccumulateSharedSample(
+                    sharedIndex,
+                    Gaussian(length(vec2(x, y)), spatialSigma),
+                    centerGeometry,
+                    visibilitySum,
+                    bentNormalSum,
+                    confidenceSum,
+                    weightSum);
+            }
+        }
+    }
+    else
+    {
+        ivec2 kernelSourceMin = ResolveSourcePixel(
+            pixel - ivec2(radius), outputExtent, sourceExtent);
+        ivec2 kernelSourceMax = ResolveSourcePixel(
+            pixel + ivec2(radius), outputExtent, sourceExtent);
+        for (int sourceY = kernelSourceMin.y;
+             sourceY <= kernelSourceMax.y;
+             ++sourceY)
+        {
+            float yWeight = CombinedAxisGaussianWeight(
+                sourceY, pixel.y, sourceExtent.y, outputExtent.y,
+                radius, spatialSigma);
+            for (int sourceX = kernelSourceMin.x;
+                 sourceX <= kernelSourceMax.x;
+                 ++sourceX)
+            {
+                float xWeight = CombinedAxisGaussianWeight(
+                    sourceX, pixel.x, sourceExtent.x, outputExtent.x,
+                    radius, spatialSigma);
+                ivec2 sourceOffset = ivec2(sourceX, sourceY) -
+                    sharedSourceOrigin;
+                int sharedIndex = sourceOffset.y * GTAO_SHARED_STRIDE +
+                    sourceOffset.x;
+                AccumulateSharedSample(
+                    sharedIndex,
+                    xWeight * yWeight,
+                    centerGeometry,
+                    visibilitySum,
+                    bentNormalSum,
+                    confidenceSum,
+                    weightSum);
+            }
         }
     }
     float visibility = weightSum > 1.0e-6
@@ -203,15 +311,25 @@ void main()
     imageStore(GtaoFilteredOutput, pixel, filtered);
     imageStore(ScalarAoOutput, pixel, vec4(filtered.z, 0.0, 0.0, 1.0));
 
-    vec2 uv = (vec2(pixel) + vec2(0.5)) / pc.OutputDimensions;
-    vec4 raw = textureLod(RawInput, uv, 0.0);
     vec3 debugColor = vec3(filtered.z);
     if (pc.DebugView == 1u || pc.DebugView == 6u)
+    {
+        vec2 uv = (vec2(pixel) + vec2(0.5)) / pc.OutputDimensions;
+        vec4 raw = textureLod(RawInput, uv, 0.0);
         debugColor = vec3(raw.z);
+    }
     else if (pc.DebugView == 7u)
+    {
+        vec2 uv = (vec2(pixel) + vec2(0.5)) / pc.OutputDimensions;
+        vec4 raw = textureLod(RawInput, uv, 0.0);
         debugColor = vec3(1.0 - raw.z);
+    }
     else if (pc.DebugView == 8u)
+    {
+        vec2 uv = (vec2(pixel) + vec2(0.5)) / pc.OutputDimensions;
+        vec4 raw = textureLod(RawInput, uv, 0.0);
         debugColor = DecodeOctahedral(raw.xy) * 0.5 + vec3(0.5);
+    }
     else if (pc.DebugView == 9u)
         debugColor = bentNormal * 0.5 + vec3(0.5);
     else if (pc.DebugView == 10u)

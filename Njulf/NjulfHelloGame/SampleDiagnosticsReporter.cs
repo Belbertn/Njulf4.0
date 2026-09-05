@@ -606,7 +606,9 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.SimpleDdgiSchedulerFeedbackSourceProbeCount}/" +
             $"{diagnostics.SimpleDdgiSchedulerFeedbackCachedSolverProbeCount}/" +
             $"{diagnostics.SimpleDdgiSchedulerFeedbackPublishedCount}, " +
-            $"deadlineRecoveries={transportConvergence.TailConvergenceDeadlineRecoveryCount}.");
+            $"deadlineRecoveries={transportConvergence.TailConvergenceDeadlineRecoveryCount}, " +
+            $"auditStartDeferrals={transportConvergence.TailAuditCameraMotionDeferredStartCount}:" +
+            $"'{transportConvergence.TailAuditStartDeferralReason}'.");
         SimpleDdgiRefinementBrickDiagnostics refinement =
             diagnostics.SimpleDdgiRefinement;
         SimpleDdgiRefinementEmissiveDemandDiagnostics emissiveDemand =

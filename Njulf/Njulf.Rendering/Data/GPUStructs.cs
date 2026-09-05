@@ -2006,8 +2006,10 @@ namespace Njulf.Rendering.Data
         public float MaximumHistoryWeight;
         public float RelativeDepthThreshold;
         public float NormalThreshold;
-        // 0 = finite-sun ray history, 1 = short CSM history.
-        public float TemporalKind;
+        // Bits 0-1: 0 = finite-sun history, 1 = short CSM history,
+        // 2-3 = the same modes with detailed counters. Bit 2 advertises the
+        // shared temporal-surface validity prefilter.
+        public uint TemporalFlags;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -3874,7 +3876,6 @@ namespace Njulf.Rendering.Data
         public uint DirectionCount;
         public uint StepCount;
         public uint FrameIndex;
-        public uint HiZMipCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -3898,7 +3899,6 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUGtaoTemporalPushConstants
     {
-        public Matrix4x4 InverseProjectionMatrix;
         public Vector2 Dimensions;
         public Vector2 SceneDimensions;
         public uint HistoryValid;
@@ -3914,7 +3914,6 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUGtaoSpatialPushConstants
     {
-        public Matrix4x4 InverseProjectionMatrix;
         public Vector2 SourceDimensions;
         public Vector2 OutputDimensions;
         public float DepthSigma;

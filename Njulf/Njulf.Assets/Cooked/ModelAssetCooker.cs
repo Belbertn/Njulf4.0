@@ -161,7 +161,10 @@ public sealed class ModelAssetCooker : IDisposable
             new(StringComparer.OrdinalIgnoreCase);
         private CookedAssetDatabase? _database;
 
-        public CookRunSession(string outputRoot, ModelCookOptions options)
+        public CookRunSession(
+            string outputRoot,
+            ModelCookOptions options,
+            RendererMeshletBuildProfile? meshletBuildProfile)
         {
             ArgumentNullException.ThrowIfNull(options);
             OutputRoot = options.UsePlatformSubdirectory
@@ -178,7 +181,10 @@ public sealed class ModelAssetCooker : IDisposable
                     options.Platform,
                     options.TextureOptions.TargetFormatPolicy)
             };
-            SettingsHash = ComputeSettingsHash(options, PlatformTextureOptions);
+            SettingsHash = ComputeSettingsHash(
+                options,
+                PlatformTextureOptions,
+                meshletBuildProfile);
         }
 
         public string OutputRoot { get; }
@@ -471,7 +477,10 @@ public sealed class ModelAssetCooker : IDisposable
             assetIndex: 1,
             assetCount: 1,
             cancellationToken);
-        var session = new CookRunSession(outputRoot, options);
+        var session = new CookRunSession(
+            outputRoot,
+            options,
+            _meshletBuildProfile);
         return CookModelCore(sourcePath, options, session, context);
     }
 
@@ -981,7 +990,10 @@ public sealed class ModelAssetCooker : IDisposable
         }
 
         options ??= new ModelCookOptions();
-        var session = new CookRunSession(outputRoot, options);
+        var session = new CookRunSession(
+            outputRoot,
+            options,
+            _meshletBuildProfile);
 
         var runTimer = Stopwatch.StartNew();
         var folderProgress = new CookProgressContext(
@@ -1281,11 +1293,13 @@ public sealed class ModelAssetCooker : IDisposable
 
     private static ulong ComputeSettingsHash(
         ModelCookOptions options,
-        TextureCookOptions platformTextureOptions) =>
+        TextureCookOptions platformTextureOptions,
+        RendererMeshletBuildProfile? meshletBuildProfile) =>
         CookedHash.Bytes(CookedJson.Serialize(new
         {
             options.ImporterOptions,
             TextureOptions = platformTextureOptions,
+            MeshletBuildProfile = meshletBuildProfile,
             options.ToolVersion,
             options.Platform,
             CookedModelImportContract.MaterialTransportMetadataRevision,

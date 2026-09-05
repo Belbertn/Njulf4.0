@@ -635,9 +635,12 @@ public sealed class SampleBenchmarkRunner
         if (!cache.RequestedMode.UsesCache())
             return true;
 
+        bool generatedFrameRequired = cache.RequestedMode ==
+            SimpleDdgiReceiverCacheMode.TemporalAdaptive;
         return cache.EffectiveMode == cache.RequestedMode &&
             cache.FallbackReason == SimpleDdgiReceiverCacheFallbackReason.None &&
-            diagnostics.ForwardGiReceiverCacheGenerated != 0 &&
+            (!generatedFrameRequired ||
+             diagnostics.ForwardGiReceiverCacheGenerated != 0) &&
             diagnostics.ForwardGiReceiverCacheConsumed != 0 &&
             diagnostics.ForwardGiExactGatherUsed == 0;
     }

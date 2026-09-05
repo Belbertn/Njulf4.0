@@ -29,6 +29,7 @@ const uint SCENE_OPAQUE_COMPACTION_FLAG_SIDED_STREAMS = 1u << 3u;
 const uint SCENE_OPAQUE_COMPACTION_FLAG_INSTANCE_EXPANSION = 1u << 4u;
 const uint SCENE_OPAQUE_COMPACTION_FLAG_LOD_DITHER_TRANSITION = 1u << 5u;
 const uint SCENE_OPAQUE_COMPACTION_FLAG_HIERARCHICAL_LOD = 1u << 6u;
+const uint SCENE_OPAQUE_COMPACTION_FLAG_AGGREGATE_VALIDATION_OUTPUT = 1u << 7u;
 const uint GPU_LOD_SELECTION_MODE_LEGACY_DISTANCE = 0u;
 const uint GPU_LOD_SELECTION_MODE_SCREEN_SPACE_ERROR = 1u;
 const uint GPU_LOD_HISTORY_FRAME_COUNT = 2u;
@@ -224,6 +225,12 @@ bool SidedStreamsEnabled()
 {
     return (pc.Push.Flags &
         SCENE_OPAQUE_COMPACTION_FLAG_SIDED_STREAMS) != 0u;
+}
+
+bool AggregateValidationOutputEnabled()
+{
+    return (pc.Push.Flags &
+        SCENE_OPAQUE_COMPACTION_FLAG_AGGREGATE_VALIDATION_OUTPUT) != 0u;
 }
 
 bool IsDoubleSided(GPUMeshletDrawCommand command)
@@ -1290,15 +1297,19 @@ void EmitExpandedOpaqueCommand(
 {
     uint counterBufferIndex = CounterBufferIndex();
     bool doubleSided = IsDoubleSided(command);
+    bool aggregateValidationOutput = AggregateValidationOutputEnabled();
 
     uint aggregateIndex = 0u;
     uint aggregateCount = 0u;
-    ReserveSubgroupRange(
-        visible,
-        counterBufferIndex,
-        SCENE_SUBMISSION_COUNTER_OPAQUE_APPEND,
-        aggregateIndex,
-        aggregateCount);
+    if (aggregateValidationOutput)
+    {
+        ReserveSubgroupRange(
+            visible,
+            counterBufferIndex,
+            SCENE_SUBMISSION_COUNTER_OPAQUE_APPEND,
+            aggregateIndex,
+            aggregateCount);
+    }
 
     uint bucketIndex = 0u;
     uint bucketCount = 0u;
@@ -1310,14 +1321,15 @@ void EmitExpandedOpaqueCommand(
         bucketCount);
 
     uint bucketCapacity = OpaqueBucketOutputCapacity(bucket, doubleSided);
-    bool aggregateOverflow = visible &&
+    bool aggregateOverflow = aggregateValidationOutput && visible &&
         aggregateIndex >= pc.Push.OutputCapacity;
     bool bucketOverflow = visible && bucketIndex >= bucketCapacity;
     bool emitted = visible && !aggregateOverflow && !bucketOverflow;
 
     if (emitted)
     {
-        WriteMeshletDrawCommand(aggregateIndex, command);
+        if (aggregateValidationOutput)
+            WriteMeshletDrawCommand(aggregateIndex, command);
         WriteOpaqueBucketMeshletDrawCommand(
             bucket,
             bucketIndex +
@@ -1343,10 +1355,13 @@ void EmitExpandedOpaqueCommand(
         emitted,
         counterBufferIndex,
         OpaqueBucketEmittedCounterWord(bucket));
-    AddSubgroupCount(
-        emitted,
-        IndirectDispatchBufferIndex(),
-        IndirectDispatchCountWord(SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT));
+    if (aggregateValidationOutput)
+    {
+        AddSubgroupCount(
+            emitted,
+            IndirectDispatchBufferIndex(),
+            IndirectDispatchCountWord(SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT));
+    }
     AddSubgroupCount(
         emitted,
         IndirectDispatchBufferIndex(),
@@ -2502,11 +2517,19 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
         }
     }
 
-    uint aggregateOutputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_APPEND], 1u);
-    if (aggregateOutputIndex >= pc.Push.OutputCapacity)
+    bool aggregateValidationOutput = AggregateValidationOutputEnabled();
+    uint aggregateOutputIndex = 0u;
+    if (aggregateValidationOutput)
     {
-        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_OVERFLOW], 1u);
-        return;
+        aggregateOutputIndex = atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                SCENE_SUBMISSION_COUNTER_OPAQUE_APPEND],
+            1u);
+        if (aggregateOutputIndex >= pc.Push.OutputCapacity)
+        {
+            atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_OVERFLOW], 1u);
+            return;
+        }
     }
 
     bool doubleSided = IsDoubleSided(command);
@@ -2522,7 +2545,8 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
         return;
     }
 
-    WriteMeshletDrawCommand(aggregateOutputIndex, command);
+    if (aggregateValidationOutput)
+        WriteMeshletDrawCommand(aggregateOutputIndex, command);
     WriteOpaqueBucketMeshletDrawCommand(
         bucket,
         bucketOutputIndex +
@@ -2532,8 +2556,11 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
         command);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[OpaqueBucketEmittedCounterWord(bucket)], 1u);
-    atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
-        IndirectDispatchCountWord(SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT)], 1u);
+    if (aggregateValidationOutput)
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
+            IndirectDispatchCountWord(SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT)], 1u);
+    }
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
         IndirectDispatchCountWord(
             OpaqueBucketIndirectDispatchSlot(bucket, doubleSided))], 1u);

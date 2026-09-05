@@ -391,13 +391,13 @@ public sealed class CookedAssetTests
     }
 
     [Test]
-    public void MeshPackage_RoundTripsRangesAndBulkStreams()
+    public void MeshPackage_RoundTripsRangesBulkStreamsAnd64VertexLocalIndices()
     {
         string path = Path.Combine(_directory, "triangle.njmesh");
         var bounds = new BoundingBox(Vector3.Zero, Vector3.One);
         var record = new CookedSubMeshRecord(
             "Triangle", 0, -1, -1, Matrix4x4.Identity,
-            0, 3, 0, 3, 0, 0, 0, 1, 0, 3, 0, 3,
+            0, 64, 0, 3, 0, 0, 0, 1, 0, 64, 0, 3,
             [new ProcessedMeshLodRange(0, 0, 1, 1), new ProcessedMeshLodRange(1, 1, 1, 0.35f), new ProcessedMeshLodRange(2, 2, 1, 0.12f)],
             [new ProcessedMeshDrawRange("Triangle", 0, 0, 3, 0)],
             bounds, BoundingSphere.FromBox(bounds), (uint)ProcessedVertexAttribute.Position)
@@ -412,17 +412,26 @@ public sealed class CookedAssetTests
             CoarseRayProxyIndexOffset = 0,
             CoarseRayProxyIndexCount = 3
         };
+        CookedVertexPositionStream[] positions = Enumerable.Range(0, 64)
+            .Select(index => new CookedVertexPositionStream
+            {
+                Position = new Vector4(index, 0, 0, 1)
+            })
+            .ToArray();
+        uint[] localVertices = Enumerable.Range(0, 64)
+            .Select(static index => checked((uint)index))
+            .ToArray();
         var payload = new CookedMeshPayload(
             [record],
-            [new(), new(), new()],
-            [new(), new(), new()],
-            [new(), new(), new()],
+            positions,
+            new CookedVertexNormalTangentStream[64],
+            new CookedVertexUvColorStream[64],
             [],
-            [0u, 1u, 2u],
-            [new Meshlet(Vector3.Zero, 1, 0, 3, 0, 3, 0, 3, 0, 1, Vector3.UnitZ, 0.25f)],
-            [new Meshlet(Vector3.Zero, 1, 0, 3, 0, 3, 0, 3, 0, 1)],
-            [new Meshlet(Vector3.Zero, 1, 0, 3, 0, 3, 0, 3, 0, 1)],
-            [0u, 1u, 2u], [0u, 1u, 2u])
+            [0u, 1u, 63u],
+            [new Meshlet(Vector3.Zero, 1, 0, 64, 0, 3, 0, 64, 0, 1, Vector3.UnitZ, 0.25f)],
+            [new Meshlet(Vector3.Zero, 1, 0, 64, 0, 3, 0, 64, 0, 1)],
+            [new Meshlet(Vector3.Zero, 1, 0, 64, 0, 3, 0, 64, 0, 1)],
+            localVertices, [0u, 1u, 63u])
         {
             HierarchyNodes =
             [
@@ -438,16 +447,18 @@ public sealed class CookedAssetTests
                     Flags = MeshletHierarchyNodeFlags.Leaf
                 }
             ],
-            CoarseRayProxyIndices = [0u, 1u, 2u]
+            CoarseRayProxyIndices = [0u, 1u, 63u]
         };
         CookedPackage.WriteMesh(path, payload, 1, 2, 3);
         CookedMeshPayload loaded = CookedPackage.LoadMesh(path, CookedAssetReaderFlags.None, out long bytesRead);
         Assert.Multiple(() =>
         {
             Assert.That(loaded.SubMeshes.Single().Name, Is.EqualTo("Triangle"));
-            Assert.That(loaded.VertexPositions, Has.Length.EqualTo(3));
-            Assert.That(loaded.Indices, Is.EqualTo(new uint[] { 0, 1, 2 }));
+            Assert.That(loaded.VertexPositions, Has.Length.EqualTo(64));
+            Assert.That(loaded.Indices, Is.EqualTo(new uint[] { 0, 1, 63 }));
             Assert.That(loaded.MeshletsLod0, Has.Length.EqualTo(1));
+            Assert.That(loaded.MeshletsLod0[0].LocalVertexCount, Is.EqualTo(64));
+            Assert.That(loaded.MeshletTriangles, Is.EqualTo(new uint[] { 0, 1, 63 }));
             Assert.That(loaded.MeshletsLod0[0].NormalConeAxis, Is.EqualTo(Vector3.UnitZ));
             Assert.That(loaded.MeshletsLod0[0].NormalConeCutoff, Is.EqualTo(0.25f));
             Assert.That(loaded.HierarchyNodes, Has.Length.EqualTo(1));
@@ -459,7 +470,7 @@ public sealed class CookedAssetTests
                 Is.EqualTo(0));
             Assert.That(
                 loaded.CoarseRayProxyIndices,
-                Is.EqualTo(new uint[] { 0u, 1u, 2u }));
+                Is.EqualTo(new uint[] { 0u, 1u, 63u }));
             Assert.That(bytesRead, Is.GreaterThan(0));
         });
     }

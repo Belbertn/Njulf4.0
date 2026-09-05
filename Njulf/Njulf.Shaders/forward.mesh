@@ -40,8 +40,21 @@ taskPayloadSharedEXT ForwardTaskPayload forwardPayload;
 #endif
 shared uint meshNegativeDeterminant;
 
+#ifndef FORWARD_PER_PRIMITIVE_IDS
+#define FORWARD_PER_PRIMITIVE_IDS 0
+#endif
+
 layout(location = 0) out vec3 meshNormal[];
 layout(location = 1) out vec2 meshTexCoord[];
+#if FORWARD_PER_PRIMITIVE_IDS
+layout(location = 2, component = 0) perprimitiveEXT flat out uint meshMaterialIndex[];
+layout(location = 2, component = 1) perprimitiveEXT flat out uint meshObjectIndex[];
+layout(location = 2, component = 2) perprimitiveEXT flat out uint meshMeshletIndex[];
+layout(location = 3) out vec3 meshWorldPosition[];
+layout(location = 4) out vec4 meshWorldTangent[];
+layout(location = 5) out vec2 meshTexCoord2[];
+layout(location = 6) out vec4 meshVertexColor[];
+#else
 layout(location = 2) flat out uint meshMaterialIndex[];
 layout(location = 3) flat out uint meshObjectIndex[];
 layout(location = 4) out vec3 meshWorldPosition[];
@@ -49,6 +62,7 @@ layout(location = 5) out vec4 meshWorldTangent[];
 layout(location = 6) flat out uint meshMeshletIndex[];
 layout(location = 7) out vec2 meshTexCoord2[];
 layout(location = 8) out vec4 meshVertexColor[];
+#endif
 
 layout(push_constant) uniform ForwardPushConstantBlock
 {
@@ -132,12 +146,16 @@ void main()
         gl_MeshVerticesEXT[vertexSlot].gl_Position = MulRowMajor(worldPosition, pc.Push.ViewProjectionMatrix);
         meshNormal[vertexSlot] = worldNormal;
         meshTexCoord[vertexSlot] = vertex.TexCoord;
+#if !FORWARD_PER_PRIMITIVE_IDS
         meshMaterialIndex[vertexSlot] = command.MaterialIndex;
         meshObjectIndex[vertexSlot] = command.InstanceId;
+#endif
         meshWorldPosition[vertexSlot] = worldPosition.xyz;
         float worldHandedness = meshNegativeDeterminant != 0u ? -1.0 : 1.0;
         meshWorldTangent[vertexSlot] = vec4(worldTangent, vertex.Tangent.w * worldHandedness);
+#if !FORWARD_PER_PRIMITIVE_IDS
         meshMeshletIndex[vertexSlot] = command.MeshletIndex;
+#endif
         meshTexCoord2[vertexSlot] = vertex.TexCoord2;
         meshVertexColor[vertexSlot] = vertex.Color;
     }
@@ -150,6 +168,11 @@ void main()
         uint i0 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 0u);
         uint i1 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 1u);
         uint i2 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 2u);
+#if FORWARD_PER_PRIMITIVE_IDS
+        meshMaterialIndex[triangleSlot] = command.MaterialIndex;
+        meshObjectIndex[triangleSlot] = command.InstanceId;
+        meshMeshletIndex[triangleSlot] = command.MeshletIndex;
+#endif
         gl_PrimitiveTriangleIndicesEXT[triangleSlot] = ResolveMirroredInstanceTriangle(
             i0,
             i1,

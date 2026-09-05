@@ -97,7 +97,12 @@ public sealed class ShaderBuildTests
         "forward_compacted.mesh",
         "forward_compacted_48v64p_128t.mesh",
         "forward_compacted_64v126p_64t.mesh",
-        "forward_compacted_64v126p_128t.mesh"
+        "forward_compacted_64v126p_128t.mesh",
+        "forward_simple_full_input.mesh",
+        "forward_simple_full_input_compacted.mesh",
+        "forward_simple_full_input_compacted_48v64p_128t.mesh",
+        "forward_simple_full_input_compacted_64v126p_64t.mesh",
+        "forward_simple_full_input_compacted_64v126p_128t.mesh"
     ];
 
     [Test]

@@ -390,7 +390,6 @@ internal abstract unsafe class GtaoComputePassBase : RenderPassBase
 internal sealed unsafe class GtaoPass : GtaoComputePassBase
 {
     private readonly RenderTargetManager _renderTargets;
-    private readonly HiZDepthPyramid _hiZ;
     private readonly RenderSettings _settings;
 
     public GtaoPass(
@@ -417,7 +416,7 @@ internal sealed unsafe class GtaoPass : GtaoComputePassBase
             bindlessHeap,
             [
                 Binding(0, DescriptorType.CombinedImageSampler),
-                Binding(1, DescriptorType.CombinedImageSampler),
+                Binding(1, DescriptorType.StorageImage),
                 Binding(2, DescriptorType.StorageImage)
             ],
             1,
@@ -425,7 +424,6 @@ internal sealed unsafe class GtaoPass : GtaoComputePassBase
             pipelineCacheService)
     {
         _renderTargets = renderTargets;
-        _hiZ = hiZ;
         _settings = settings;
     }
 
@@ -455,14 +453,14 @@ internal sealed unsafe class GtaoPass : GtaoComputePassBase
             Power = settings.Power,
             DirectionCount = (uint)settings.EffectiveGtaoDirectionCount,
             StepCount = (uint)settings.EffectiveGtaoStepCount,
-            FrameIndex = sceneData.TemporalSampleIndex,
-            HiZMipCount = _hiZ.MipLevels
+            FrameIndex = sceneData.TemporalSampleIndex
         };
         BindAndPush(cmd, 0, push);
         Extent2D extent = _renderTargets.GtaoRaw.Extent;
         _context.Api.CmdDispatch(cmd, (extent.Width + 7u) / 8u,
             (extent.Height + 7u) / 8u, 1u);
         _renderTargets.GtaoRaw.TransitionToComputeShaderRead(cmd);
+        _renderTargets.GtaoCurrentGeometry.TransitionToComputeShaderRead(cmd);
     }
 
     protected override void RewriteDescriptors()
@@ -473,13 +471,11 @@ internal sealed unsafe class GtaoPass : GtaoComputePassBase
                 _renderTargets.SceneDepth.View,
                 _bindlessHeap.ScreenSampler,
                 ImageLayout.DepthStencilReadOnlyOptimal),
-            new GtaoImageDescriptor(1,
-                DescriptorType.CombinedImageSampler,
-                _hiZ.FullView,
-                _bindlessHeap.HiZSampler,
-                ImageLayout.ShaderReadOnlyOptimal),
-            new GtaoImageDescriptor(2, DescriptorType.StorageImage,
+            new GtaoImageDescriptor(1, DescriptorType.StorageImage,
                 _renderTargets.GtaoRaw.View, default,
+                ImageLayout.General),
+            new GtaoImageDescriptor(2, DescriptorType.StorageImage,
+                _renderTargets.GtaoCurrentGeometry.View, default,
                 ImageLayout.General));
     }
 }
@@ -545,7 +541,6 @@ internal sealed unsafe class GtaoTemporalPass : GtaoComputePassBase
         sceneData.GtaoHistoryValid = historyValid ? 1 : 0;
         var push = new GPUGtaoTemporalPushConstants
         {
-            InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
             Dimensions = new Vector2(extent.Width, extent.Height),
             SceneDimensions = new Vector2(sceneData.ScreenWidth,
                 sceneData.ScreenHeight),
@@ -585,9 +580,9 @@ internal sealed unsafe class GtaoTemporalPass : GtaoComputePassBase
                     ImageLayout.ShaderReadOnlyOptimal),
                 new GtaoImageDescriptor(1,
                     DescriptorType.CombinedImageSampler,
-                    _renderTargets.SceneDepth.View,
-                    _bindlessHeap.ScreenSampler,
-                    ImageLayout.DepthStencilReadOnlyOptimal),
+                    _renderTargets.GtaoCurrentGeometry.View,
+                    _bindlessHeap.HiZSampler,
+                    ImageLayout.ShaderReadOnlyOptimal),
                 new GtaoImageDescriptor(2,
                     DescriptorType.CombinedImageSampler,
                     _renderTargets.MotionVectors.View,
@@ -650,10 +645,9 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
                 Binding(0, DescriptorType.CombinedImageSampler),
                 Binding(1, DescriptorType.CombinedImageSampler),
                 Binding(2, DescriptorType.CombinedImageSampler),
-                Binding(3, DescriptorType.CombinedImageSampler),
+                Binding(3, DescriptorType.StorageImage),
                 Binding(4, DescriptorType.StorageImage),
-                Binding(5, DescriptorType.StorageImage),
-                Binding(6, DescriptorType.StorageImage)
+                Binding(5, DescriptorType.StorageImage)
             ],
             2,
             (uint)Marshal.SizeOf<GPUGtaoSpatialPushConstants>(),
@@ -690,7 +684,6 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
         Extent2D outputExtent = _renderTargets.GtaoFiltered.Extent;
         var push = new GPUGtaoSpatialPushConstants
         {
-            InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
             SourceDimensions = new Vector2(sourceExtent.Width,
                 sourceExtent.Height),
             OutputDimensions = new Vector2(outputExtent.Width,
@@ -732,18 +725,13 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
                     _renderTargets.GtaoRaw.View,
                     _bindlessHeap.ScreenSampler,
                     ImageLayout.ShaderReadOnlyOptimal),
-                new GtaoImageDescriptor(3,
-                    DescriptorType.CombinedImageSampler,
-                    _renderTargets.SceneDepth.View,
-                    _bindlessHeap.ScreenSampler,
-                    ImageLayout.DepthStencilReadOnlyOptimal),
-                new GtaoImageDescriptor(4, DescriptorType.StorageImage,
+                new GtaoImageDescriptor(3, DescriptorType.StorageImage,
                     _renderTargets.GtaoFiltered.View, default,
                     ImageLayout.General),
-                new GtaoImageDescriptor(5, DescriptorType.StorageImage,
+                new GtaoImageDescriptor(4, DescriptorType.StorageImage,
                     _renderTargets.AmbientOcclusionBlurred.View, default,
                     ImageLayout.General),
-                new GtaoImageDescriptor(6, DescriptorType.StorageImage,
+                new GtaoImageDescriptor(5, DescriptorType.StorageImage,
                     _renderTargets.GtaoSpatialScratch.View, default,
                     ImageLayout.General));
         }

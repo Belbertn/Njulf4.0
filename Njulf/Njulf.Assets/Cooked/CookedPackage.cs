@@ -149,7 +149,13 @@ public static class CookedPackage
         if (mesh.CoarseRayProxyIndices.Length > 0)
             WriteIndexSequenceSection(writer, CookedSectionIds.CoarseRayProxyIndices, CookedSectionFlags.None, mesh.CoarseRayProxyIndices, mesh.VertexPositions.Length, useMeshOptimizer);
         WriteIndexSequenceSection(writer, CookedSectionIds.MeshletVertices, Required, mesh.MeshletVertices, mesh.VertexPositions.Length, useMeshOptimizer);
-        WriteIndexSequenceSection(writer, CookedSectionIds.MeshletTriangles, Required, mesh.MeshletTriangles, RendererMeshletLodBuilder.MaxVerticesPerMeshlet, useMeshOptimizer);
+        WriteIndexSequenceSection(
+            writer,
+            CookedSectionIds.MeshletTriangles,
+            Required,
+            mesh.MeshletTriangles,
+            MeshletBuilder.DefaultMaxVerticesPerMeshlet,
+            useMeshOptimizer);
         string packagePath = Path.GetFullPath(path);
         string sidecarPath = Path.Combine(
             Path.GetDirectoryName(packagePath)!,

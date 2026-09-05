@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Data;
@@ -207,11 +208,11 @@ public sealed class GtaoImplementationTests
         Assert.Multiple(() =>
         {
             Assert.That(Marshal.SizeOf<GPUGtaoPushConstants>(),
-                Is.EqualTo(184));
+                Is.EqualTo(180));
             Assert.That(Marshal.SizeOf<GPUGtaoTemporalPushConstants>(),
-                Is.EqualTo(112));
+                Is.EqualTo(48));
             Assert.That(Marshal.SizeOf<GPUGtaoSpatialPushConstants>(),
-                Is.EqualTo(96));
+                Is.EqualTo(32));
             Assert.That((flags >> 16) & 0x3fu, Is.EqualTo(11u));
             Assert.That((flags >> 22) & 0x03u,
                 Is.EqualTo((uint)
@@ -271,12 +272,14 @@ public sealed class GtaoImplementationTests
                 "resolvedSampleUv, sampleDepth);"));
             Assert.That(raw, Does.Not.Contain(
                 "ReconstructViewPosition(sampleUv, sampleDepth)"));
+            Assert.That(raw, Does.Contain(
+                "GtaoCurrentGeometryOutput"));
+            Assert.That(raw, Does.Not.Contain("HiZTexture"));
             Assert.That(temporal, Does.Contain(
-                "ivec2 depthPixel = ResolveDepthPixel(uv, sourceExtent);"));
-            Assert.That(temporal, Does.Contain(
-                "vec2 depthUv = DepthPixelUv(depthPixel, sourceExtent);"));
-            Assert.That(temporal, Does.Contain(
-                "ReconstructViewPosition(depthUv, depth)"));
+                "GtaoCurrentGeometryInput"));
+            Assert.That(temporal, Does.Not.Contain("DepthTexture"));
+            Assert.That(temporal, Does.Not.Contain(
+                "ReconstructViewPosition("));
             Assert.That(raw, Does.Not.Contain("uv + vec2(invSource"));
             Assert.That(temporal, Does.Not.Contain("uv + vec2(texel"));
             Assert.That(raw, Does.Not.Contain(
@@ -297,7 +300,7 @@ public sealed class GtaoImplementationTests
             Assert.That(temporal, Does.Contain(
                 "GTAO_TEMPORAL_SHARED_STRIDE"));
             Assert.That(temporal, Does.Contain(
-                "shared vec4 SharedViewPosition"));
+                "shared float SharedViewDepth"));
             Assert.That(temporal, Does.Contain(
                 "SharedGeometricNormal[sharedIndex]"));
             Assert.That(temporal, Does.Contain("barrier();"));
@@ -307,12 +310,21 @@ public sealed class GtaoImplementationTests
                 "dot(previousNormal, normal) < pc.NormalThreshold"));
             Assert.That(spatial, Does.Contain(
                 "shared vec4 SharedPayload[GTAO_SHARED_COUNT];"));
+            Assert.That(spatial, Does.Contain(
+                "CombinedAxisGaussianWeight("));
+            Assert.That(spatial, Does.Contain(
+                "uint uniqueSourceCount ="));
+            Assert.That(spatial, Does.Not.Contain("DepthTexture"));
             Assert.That(spatial, Does.Contain("barrier();"));
             Assert.That(spatial, Does.Contain(
                 "imageStore(ScalarAoOutput"));
             Assert.That(graph, Does.Contain("Pass(\"GtaoPass\""));
             Assert.That(graph, Does.Contain("Pass(\"GtaoTemporalPass\""));
             Assert.That(graph, Does.Contain("Pass(\"GtaoSpatialPass\""));
+            Assert.That(graph, Does.Contain(
+                "WriteComputeStorage(RenderGraphResourceId.GtaoCurrentGeometry"));
+            Assert.That(graph, Does.Contain(
+                "ReadComputeSampled(RenderGraphResourceId.GtaoCurrentGeometry)"));
             Assert.That(forward, Does.Contain(
                 "TryResolveIndirectDiffuseNormal("));
             Assert.That(forward, Does.Contain(
@@ -328,6 +340,81 @@ public sealed class GtaoImplementationTests
             Assert.That(forward, Does.Not.Contain(
                 "reflect(-viewDirection, diffuseIndirectNormal)"));
         });
+    }
+
+    [Test]
+    public void CollapsedSpatialKernel_PreservesExactGaussianCoefficients()
+    {
+        var extents = new[]
+        {
+            (OutputWidth: 13, OutputHeight: 9, SourceWidth: 13, SourceHeight: 9),
+            (OutputWidth: 13, OutputHeight: 9, SourceWidth: 7, SourceHeight: 5),
+            (OutputWidth: 13, OutputHeight: 9, SourceWidth: 4, SourceHeight: 3)
+        };
+
+        foreach (var extent in extents)
+        {
+            var centers = new[]
+            {
+                (X: 0, Y: 0),
+                (X: extent.OutputWidth - 1, Y: extent.OutputHeight - 1),
+                (X: extent.OutputWidth / 2, Y: extent.OutputHeight / 2),
+                (X: Math.Min(7, extent.OutputWidth - 1),
+                    Y: Math.Min(7, extent.OutputHeight - 1))
+            };
+            foreach (var center in centers)
+            foreach (int radius in new[] { 0, 1, 2 })
+            {
+                double sigma = Math.Max(radius, 1);
+                var brute = new Dictionary<(int X, int Y), double>();
+                for (int y = -radius; y <= radius; y++)
+                for (int x = -radius; x <= radius; x++)
+                {
+                    var source = (
+                        ResolveSourceCoordinate(center.X + x,
+                            extent.OutputWidth, extent.SourceWidth),
+                        ResolveSourceCoordinate(center.Y + y,
+                            extent.OutputHeight, extent.SourceHeight));
+                    double coefficient = Math.Exp(
+                        -0.5 * (x * x + y * y) / (sigma * sigma));
+                    brute[source] = brute.GetValueOrDefault(source) +
+                        coefficient;
+                }
+
+                var collapsed = new Dictionary<(int X, int Y), double>();
+                int minimumSourceX = ResolveSourceCoordinate(
+                    center.X - radius, extent.OutputWidth, extent.SourceWidth);
+                int maximumSourceX = ResolveSourceCoordinate(
+                    center.X + radius, extent.OutputWidth, extent.SourceWidth);
+                int minimumSourceY = ResolveSourceCoordinate(
+                    center.Y - radius, extent.OutputHeight, extent.SourceHeight);
+                int maximumSourceY = ResolveSourceCoordinate(
+                    center.Y + radius, extent.OutputHeight, extent.SourceHeight);
+                for (int sourceY = minimumSourceY;
+                     sourceY <= maximumSourceY;
+                     sourceY++)
+                for (int sourceX = minimumSourceX;
+                     sourceX <= maximumSourceX;
+                     sourceX++)
+                {
+                    double xWeight = CombinedAxisWeight(sourceX, center.X,
+                        extent.SourceWidth, extent.OutputWidth, radius, sigma);
+                    double yWeight = CombinedAxisWeight(sourceY, center.Y,
+                        extent.SourceHeight, extent.OutputHeight, radius, sigma);
+                    collapsed[(sourceX, sourceY)] = xWeight * yWeight;
+                }
+
+                Assert.That(collapsed.Keys, Is.EquivalentTo(brute.Keys));
+                foreach (var sample in brute)
+                {
+                    Assert.That(collapsed[sample.Key],
+                        Is.EqualTo(sample.Value).Within(1.0e-12),
+                        $"scale={extent.SourceWidth}x{extent.SourceHeight}/" +
+                        $"{extent.OutputWidth}x{extent.OutputHeight}, " +
+                        $"center={center}, radius={radius}, source={sample.Key}");
+                }
+            }
+        }
     }
 
     [Test]
@@ -547,6 +634,43 @@ public sealed class GtaoImplementationTests
         x *= inverseLength;
         y *= inverseLength;
         z *= inverseLength;
+    }
+
+    private static int ResolveSourceCoordinate(
+        int outputCoordinate,
+        int outputExtent,
+        int sourceExtent)
+    {
+        int clampedOutput = Math.Clamp(
+            outputCoordinate, 0, outputExtent - 1);
+        return Math.Clamp((int)Math.Floor(
+            (clampedOutput + 0.5) * sourceExtent / outputExtent),
+            0,
+            sourceExtent - 1);
+    }
+
+    private static double CombinedAxisWeight(
+        int sourceCoordinate,
+        int outputCoordinate,
+        int sourceExtent,
+        int outputExtent,
+        int radius,
+        double sigma)
+    {
+        double weight = 0.0;
+        for (int offset = -2; offset <= 2; offset++)
+        {
+            if (Math.Abs(offset) > radius ||
+                ResolveSourceCoordinate(
+                    outputCoordinate + offset,
+                    outputExtent,
+                    sourceExtent) != sourceCoordinate)
+            {
+                continue;
+            }
+            weight += Math.Exp(-0.5 * offset * offset / (sigma * sigma));
+        }
+        return weight;
     }
 
     private static int CountOccurrences(string source, string value)

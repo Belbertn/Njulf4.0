@@ -22,6 +22,7 @@ namespace Njulf.Rendering.Pipeline
         private const bool BuildCounterReadbackEnabled = false;
 #endif
         private const uint WorkgroupSize = 64;
+        internal const uint AggregateValidationOutputFlag = 1u << 7;
         private const int MaximumLodTransitionStateCount = 4096;
         private const int LodTransitionOutputCapacityMultiplier = 2;
         private const int MaxValidationSampleCommands = 4096;
@@ -449,6 +450,7 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 frameIndex,
                 resetPlan,
+                sceneData.SceneSubmissionValidationCompareCpuGpuLists,
                 drawBuffer,
                 simpleDrawBuffer,
                 simpleNormalDrawBuffer,
@@ -732,7 +734,7 @@ namespace Njulf.Rendering.Pipeline
             UpdateRegisteredBindlessBuffers(frameIndex);
         }
 
-        private static uint BuildCompactionFlags(
+        internal static uint BuildCompactionFlags(
             SceneRenderingData sceneData,
             bool compactDirectionalShadows)
         {
@@ -749,6 +751,8 @@ namespace Njulf.Rendering.Pipeline
                 flags |= 1u << 5;
             if (sceneData.SceneSubmissionGpuHierarchicalLodActive)
                 flags |= 1u << 6;
+            if (sceneData.SceneSubmissionValidationCompareCpuGpuLists)
+                flags |= AggregateValidationOutputFlag;
             return flags;
         }
 
@@ -1237,6 +1241,7 @@ namespace Njulf.Rendering.Pipeline
             CommandBuffer cmd,
             int frameIndex,
             SceneOpaqueResetPlan resetPlan,
+            bool aggregateValidationOutput,
             RuntimeBuffer drawBuffer,
             RuntimeBuffer simpleDrawBuffer,
             RuntimeBuffer simpleNormalDrawBuffer,
@@ -1258,15 +1263,24 @@ namespace Njulf.Rendering.Pipeline
             ulong clearedBytes = counterBuffer.ByteSize;
             if (resetPlan.ClearPayloads)
             {
-                _context.Api.CmdFillBuffer(cmd, draw, 0, drawBuffer.ByteSize, 0xffffffffu);
+                if (aggregateValidationOutput)
+                {
+                    _context.Api.CmdFillBuffer(
+                        cmd,
+                        draw,
+                        0,
+                        drawBuffer.ByteSize,
+                        0xffffffffu);
+                    clearedBytes = checked(
+                        clearedBytes + drawBuffer.ByteSize);
+                }
                 _context.Api.CmdFillBuffer(cmd, simpleDraw, 0, simpleDrawBuffer.ByteSize, 0xffffffffu);
                 _context.Api.CmdFillBuffer(cmd, simpleNormalDraw, 0, simpleNormalDrawBuffer.ByteSize, 0xffffffffu);
                 _context.Api.CmdFillBuffer(cmd, fullDraw, 0, fullDrawBuffer.ByteSize, 0xffffffffu);
                 _context.Api.CmdFillBuffer(cmd, solidDepthDraw, 0, solidDepthDrawBuffer.ByteSize, 0xffffffffu);
                 _context.Api.CmdFillBuffer(cmd, maskedDepthDraw, 0, maskedDepthDrawBuffer.ByteSize, 0xffffffffu);
                 clearedBytes = checked(
-                    clearedBytes + drawBuffer.ByteSize +
-                    simpleDrawBuffer.ByteSize +
+                    clearedBytes + simpleDrawBuffer.ByteSize +
                     simpleNormalDrawBuffer.ByteSize +
                     fullDrawBuffer.ByteSize +
                     solidDepthDrawBuffer.ByteSize +
@@ -1337,14 +1351,17 @@ namespace Njulf.Rendering.Pipeline
                 counterBuffer.ByteSize);
             if (resetPlan.ClearPayloads)
             {
-                barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
-                    draw,
-                    PipelineStageFlags2.TransferBit,
-                    AccessFlags2.TransferWriteBit,
-                    PipelineStageFlags2.ComputeShaderBit,
-                    AccessFlags2.ShaderStorageWriteBit,
-                    0,
-                    drawBuffer.ByteSize);
+                if (aggregateValidationOutput)
+                {
+                    barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                        draw,
+                        PipelineStageFlags2.TransferBit,
+                        AccessFlags2.TransferWriteBit,
+                        PipelineStageFlags2.ComputeShaderBit,
+                        AccessFlags2.ShaderStorageWriteBit,
+                        0,
+                        drawBuffer.ByteSize);
+                }
                 barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
                     simpleDraw,
                     PipelineStageFlags2.TransferBit,

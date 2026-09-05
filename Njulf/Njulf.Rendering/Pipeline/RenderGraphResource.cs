@@ -209,7 +209,13 @@ namespace Njulf.Rendering.Pipeline
         // atlases. They are separate image chains because their formats and
         // layout state differ, and are append-only for capture compatibility.
         SimpleDdgiSampledIrradianceAtlas,
-        SimpleDdgiSampledVisibilityAtlas
+        SimpleDdgiSampledVisibilityAtlas,
+        // Raw GTAO publishes current geometric normal/view depth once for the
+        // temporal pass. Append-only to preserve established capture IDs.
+        GtaoCurrentGeometry,
+        // Versioned full-resolution shared surface-reprojection history.
+        // Appended to preserve every established graph resource identity.
+        TemporalSurfaceValidityHistory
     }
 
     public enum RenderGraphResourceKind

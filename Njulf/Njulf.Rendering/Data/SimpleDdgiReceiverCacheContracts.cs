@@ -113,7 +113,9 @@ public readonly record struct SimpleDdgiReceiverCacheDiagnostics(
     uint MaskedFeedbackCandidateHighWater = 0u,
     uint MaskedFeedbackLogicalCapacity = 0u,
     uint MaskedFeedbackObservedHighWater = 0u,
-    ulong MaskedFeedbackCompactBufferBytes = 0UL)
+    ulong MaskedFeedbackCompactBufferBytes = 0UL,
+    ulong CommonSurfaceSimpleOpaquePixelEstimate = 0UL,
+    ulong CommonSurfaceEligiblePixelEstimate = 0UL)
 {
     public static SimpleDdgiReceiverCacheDiagnostics Exact(
         SimpleDdgiReceiverCacheMode requestedMode,
@@ -171,6 +173,13 @@ public readonly record struct SimpleDdgiReceiverCacheDiagnostics(
     public double ExactFallbackPercentage =>
         CounterReadbackValid != 0 && ForwardCandidateCount != 0
             ? ExactFallbackFragmentCount * 100.0 / ForwardCandidateCount
+            : 0.0;
+
+    public double CommonSurfaceEligiblePercentage =>
+        CounterReadbackValid != 0 &&
+        CommonSurfaceSimpleOpaquePixelEstimate != 0
+            ? CommonSurfaceEligiblePixelEstimate * 100.0 /
+              CommonSurfaceSimpleOpaquePixelEstimate
             : 0.0;
 
     public bool TimingEligible =>
@@ -235,7 +244,9 @@ public readonly record struct SimpleDdgiReceiverCacheGpuCounters(
     ulong ForwardInsufficientSupportRejectCount,
     ulong ExactFallbackFragmentCount,
     ulong LegacyFragmentCount,
-    ulong DirectionalCacheEvaluationCount = 0UL)
+    ulong DirectionalCacheEvaluationCount = 0UL,
+    ulong CommonSurfaceSimpleOpaquePixelEstimate = 0UL,
+    ulong CommonSurfaceEligiblePixelEstimate = 0UL)
 {
     public static SimpleDdgiReceiverCacheGpuCounters Unavailable => default;
 }

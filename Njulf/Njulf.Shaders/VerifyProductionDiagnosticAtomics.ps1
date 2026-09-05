@@ -179,6 +179,9 @@ $algorithmicAtomicCounts = @{
     # tetrahedral owners. Its bounded atomics are the sparse receiver-demand
     # and contribution handshake; diffuse visibility/recovery sites are absent.
     'forward_transparent_thin_glass.frag.spv' = 17
+    # The sorted ray ThinGlass specialization retains bounded reflection-task
+    # admission and its directional DDGI receiver handshake.
+    'forward_transparent_thin_glass_ray.frag.spv' = 16
     # Normal ray-query transparent variants contain both bounded optical-task
     # admission and the DDGI gather used to shade a committed reflection hit.
     # Their production compile deliberately preserves function boundaries to
@@ -239,6 +242,7 @@ $algorithmicAtomicCounts = @{
     # The frame-local opaque cache executes the same three exact gather sites
     # while residency demand stays disabled.
     'ddgi_simple_receiver_cache.comp.spv' = 3
+    'ddgi_simple_receiver_cache_diffuse_visibility.comp.spv' = 3
     # Adaptive generation retains the same three gather sites. The B1 variants
     # share two outlined attribution operations with those gathers. Its
     # classifier owns both specialization branches: the compact rollback
@@ -264,6 +268,7 @@ $algorithmicAtomicCounts = @{
     'ddgi_simple_receiver_cache_resolve_diagnostics.comp.spv' = 6
     'forward_opaque_ddgi_cache_required_diagnostics.frag.spv' = 28
     'forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv' = 28
+    'forward_opaque_simple_common_surface_diagnostics.frag.spv' = 30
     'forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv' = 28
 
     # Sparse page classification, reconciliation, fixed feedback reduction,

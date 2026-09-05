@@ -19,10 +19,12 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
     private const uint WorkgroupSize = 8u;
     private readonly RenderTargetManager _renderTargets;
     private readonly DirectionalShadowHistoryResources _resources;
+    private readonly TemporalSurfaceValidityResources _surfaceValidityResources;
     private readonly ShadowSettings _settings;
     private readonly BufferManager _bufferManager;
     private readonly GiPipelineCacheService? _cacheService;
     private DirectionalShadowComputePipeline? _csmResolve;
+    private DirectionalShadowComputePipeline? _surfaceValidity;
     private DirectionalShadowComputePipeline? _temporal;
 
     public DirectionalShadowTemporalPass(
@@ -31,6 +33,7 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
         BindlessHeap bindlessHeap,
         RenderTargetManager renderTargets,
         DirectionalShadowHistoryResources resources,
+        TemporalSurfaceValidityResources surfaceValidityResources,
         ShadowSettings settings,
         BufferManager bufferManager,
         GiPipelineCacheService? cacheService = null)
@@ -38,6 +41,8 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
     {
         _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
         _resources = resources ?? throw new ArgumentNullException(nameof(resources));
+        _surfaceValidityResources = surfaceValidityResources ??
+            throw new ArgumentNullException(nameof(surfaceValidityResources));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
         _cacheService = cacheService;
@@ -52,6 +57,12 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
             _bindlessHeap,
             "directional_csm_resolve.comp.spv",
             (uint)Marshal.SizeOf<GPUDirectionalRayShadowPushConstants>(),
+            _cacheService);
+        _surfaceValidity = new DirectionalShadowComputePipeline(
+            _context,
+            _bindlessHeap,
+            "temporal_surface_validity.comp.spv",
+            (uint)Marshal.SizeOf<GPUTemporalSurfaceValidityPushConstants>(),
             _cacheService);
         _temporal = new DirectionalShadowComputePipeline(
             _context,
@@ -76,7 +87,7 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
     {
         if (!ShouldExecute(frameIndex, sceneData))
             return;
-        if (_temporal == null || _csmResolve == null)
+        if (_temporal == null || _csmResolve == null || _surfaceValidity == null)
             throw new InvalidOperationException("Directional shadow temporal pipelines are unavailable.");
 
         _renderTargets.SceneDepth.TransitionToDepthReadOnly(commandBuffer);
@@ -101,6 +112,12 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
             {
                 HistoryResetReason = resetReasons
             };
+
+        bool sharedValidityAvailable = ProduceSurfaceValidity(
+            commandBuffer,
+            frameIndex,
+            sceneData,
+            resetReasons);
 
         int previousFrame = (frameIndex + RenderingConstants.FramesInFlight - 1) %
             RenderingConstants.FramesInFlight;
@@ -132,9 +149,11 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
                 : 0.90f,
             RelativeDepthThreshold = 0.02f,
             NormalThreshold = 0.85f,
-            TemporalKind = sceneData.DirectionalShadowFramePlan.UsesCsmTemporal
-                ? sceneData.DirectionalShadowRayCountersEnabled ? 3f : 1f
-                : sceneData.DirectionalShadowRayCountersEnabled ? 2f : 0f
+            TemporalFlags =
+                (sceneData.DirectionalShadowFramePlan.UsesCsmTemporal
+                    ? sceneData.DirectionalShadowRayCountersEnabled ? 3u : 1u
+                    : sceneData.DirectionalShadowRayCountersEnabled ? 2u : 0u) |
+                (sharedValidityAvailable ? 4u : 0u)
         };
         _context.Api.CmdBindPipeline(
             commandBuffer,
@@ -169,6 +188,74 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
         PublishHistoryState(sceneData, revision);
         if (sceneData.DirectionalShadowRayCountersEnabled)
             _resources.MarkCountersSubmitted(frameIndex);
+    }
+
+    private bool ProduceSurfaceValidity(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        SceneRenderingData sceneData,
+        DirectionalShadowHistoryResetReason resetReasons)
+    {
+        if (!_surfaceValidityResources.IsCompatible(
+                _resources.Width,
+                _resources.Height))
+        {
+            return false;
+        }
+
+        int previousFrame =
+            (frameIndex + RenderingConstants.FramesInFlight - 1) %
+            RenderingConstants.FramesInFlight;
+        uint currentBufferIndex = checked((uint)
+            (BindlessIndex.TemporalSurfaceValidityBufferBase + frameIndex));
+        var push = new GPUTemporalSurfaceValidityPushConstants
+        {
+            ScreenWidth = _surfaceValidityResources.Width,
+            ScreenHeight = _surfaceValidityResources.Height,
+            CurrentBufferIndex = currentBufferIndex,
+            PreviousBufferIndex = checked((uint)
+                (BindlessIndex.TemporalSurfaceValidityBufferBase + previousFrame)),
+            HistoryValid = resetReasons == DirectionalShadowHistoryResetReason.None &&
+                           sceneData.MotionVectorsEnabled != 0
+                ? 1u
+                : 0u,
+            RelativeDepthThreshold = 0.02f,
+            NormalThreshold = 0.75f,
+            AbiVersion = TemporalSurfaceValidityCodec.AbiVersion
+        };
+        _context.Api.CmdBindPipeline(
+            commandBuffer,
+            PipelineBindPoint.Compute,
+            _surfaceValidity!.Pipeline);
+        BindBindlessStorageAndTextures(
+            commandBuffer,
+            _surfaceValidity.Layout,
+            PipelineBindPoint.Compute);
+        _context.Api.CmdPushConstants(
+            commandBuffer,
+            _surfaceValidity.Layout,
+            ShaderStageFlags.ComputeBit,
+            0u,
+            (uint)Marshal.SizeOf<GPUTemporalSurfaceValidityPushConstants>(),
+            &push);
+        _context.Api.CmdDispatch(
+            commandBuffer,
+            (_surfaceValidityResources.Width + WorkgroupSize - 1u) /
+                WorkgroupSize,
+            (_surfaceValidityResources.Height + WorkgroupSize - 1u) /
+                WorkgroupSize,
+            1u);
+
+        Barrier(
+            commandBuffer,
+            _bufferManager.GetBuffer(
+                _surfaceValidityResources.GetBuffer(frameIndex)),
+            _surfaceValidityResources.BufferBytes,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        return true;
     }
 
     private void ResetCounters(CommandBuffer commandBuffer, int frameIndex)
@@ -343,8 +430,10 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
     public override void Cleanup()
     {
         _csmResolve?.Dispose();
+        _surfaceValidity?.Dispose();
         _temporal?.Dispose();
         _csmResolve = null;
+        _surfaceValidity = null;
         _temporal = null;
         _resources.InvalidateHistoryState();
     }

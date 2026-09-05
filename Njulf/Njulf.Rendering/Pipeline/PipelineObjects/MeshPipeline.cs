@@ -74,6 +74,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
     public sealed unsafe class MeshPipeline : IDisposable
     {
         private const string EntryPoint = "main";
+        private const string ForwardSimpleFullInputMeshShaderName =
+            "forward_simple_full_input.mesh.spv";
         internal const uint ForwardReceiverCacheLaneSpecializationConstantId =
             30u;
         internal const uint ForwardPerformanceSpecializationConstantId = 31u;
@@ -146,6 +148,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private readonly MeshShaderSelection _meshShaderSelection;
         private readonly string _compactedForwardMeshShaderName;
         private readonly string _compactedForwardSimpleMeshShaderName;
+        private readonly string _compactedForwardSimpleFullInputMeshShaderName;
         private readonly string _compactedDepthMeshShaderName;
         private readonly string _compactedDepthAlphaMeshShaderName;
         private readonly string _compactedShadowAlphaMeshShaderName;
@@ -244,6 +247,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             new string?[TransparentPipelineKey.CacheEntryCount];
         private int _forwardOpaquePipelineCacheEntryCount;
         private int _forwardOpaqueSpecializedPipelineBankReady;
+        private int _receiverCacheDiagnosticsReportedFamilies;
         private VkPipeline _forwardReceiverCachePipeline;
         private VkPipeline _forwardCompactedReceiverCachePipeline;
         private VkPipeline _forwardSimpleReceiverCachePipeline;
@@ -345,6 +349,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _compactedForwardSimpleMeshShaderName =
                 meshPermutation.SelectTasklessArtifact(
                     "forward_simple_compacted");
+            _compactedForwardSimpleFullInputMeshShaderName =
+                meshPermutation.SelectTasklessArtifact(
+                    "forward_simple_full_input_compacted");
             _compactedDepthMeshShaderName =
                 meshPermutation.SelectTasklessArtifact("depth_compacted");
             _compactedDepthAlphaMeshShaderName =
@@ -651,11 +658,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     TransparentPipelineKey.MaterialClassCount];
             int materialClassCount = 0;
             if (manifest.Requires(
-                    SceneMaterialPipelineKinds.OrdinaryTransparent) ||
-                manifest.Requires(SceneMaterialPipelineKinds.ThinGlass))
+                    SceneMaterialPipelineKinds.OrdinaryTransparent))
             {
                 materialClasses[materialClassCount++] =
                     TransparentMaterialClass.OrdinaryBlend;
+            }
+            if (manifest.Requires(SceneMaterialPipelineKinds.ThinGlass))
+            {
+                materialClasses[materialClassCount++] =
+                    TransparentMaterialClass.ThinGlass;
             }
             if (manifest.Requires(
                     SceneMaterialPipelineKinds.ThickTransmission))
@@ -890,6 +901,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     $"combined='{CombinedAdvancedGiFailureReason}'," +
                     $"hybrid='{HybridReflectionFailureReason}'";
             }
+            if (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled)
+            {
+                Console.WriteLine(
+                    "Forward qualification pipeline bank: " +
+                    ForwardOpaqueSpecializedPipelineBankStatus);
+            }
         }
 
         private bool TryPrepareForwardOpaqueBasePipelineBank()
@@ -940,7 +957,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                             _forwardCompactedSimpleFullInputPipeline =
                                 CreateGraphicsPipeline(
                                     null,
-                                    _compactedForwardMeshShaderName,
+                                    _compactedForwardSimpleFullInputMeshShaderName,
                                     simpleFullInputFragment,
                                     _colorFormat,
                                     _depthFormat,
@@ -989,7 +1006,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                             _forwardSimpleFullInputPipeline =
                                 CreateGraphicsPipeline(
                                     _forwardTaskShaderName,
-                                    "forward.mesh.spv",
+                                    ForwardSimpleFullInputMeshShaderName,
                                     simpleFullInputFragment,
                                     _colorFormat,
                                     _depthFormat,
@@ -1018,6 +1035,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 System.Diagnostics.Debug.WriteLine(
                     "Forward opaque specialization bank unavailable: " +
                     exception.Message);
+                if (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled)
+                {
+                    Console.Error.WriteLine(
+                        "Forward opaque specialization bank unavailable: " +
+                        $"{exception.GetType().Name}: {exception.Message}");
+                }
                 return false;
             }
 
@@ -1135,7 +1158,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 return TryEnsureReceiverCacheSpecializedPipeline(
                     family,
                     "forward_opaque_ddgi_cache_required_diagnostics.frag.spv",
-                    "forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv",
+                    "forward_opaque_simple_common_surface_diagnostics.frag.spv",
                     "forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv",
                     "Surface-Aware Receiver-Cache Diagnostics",
                     ref _forwardReceiverCacheDiagnosticsPipeline,
@@ -1143,7 +1166,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     ref _forwardSimpleReceiverCacheDiagnosticsPipeline,
                     ref _forwardSimpleFullInputReceiverCacheDiagnosticsPipeline,
                     ref _forwardCompactedSimpleReceiverCacheDiagnosticsPipeline,
-                    ref _forwardCompactedSimpleFullInputReceiverCacheDiagnosticsPipeline);
+                    ref _forwardCompactedSimpleFullInputReceiverCacheDiagnosticsPipeline,
+                    commonSurfaceCoverageDiagnostics: true);
             }
 
             return TryEnsureReceiverCacheSpecializedPipeline(
@@ -1306,6 +1330,23 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         internal static string ResolveTransparentPartitionFragmentShader(
             in TransparentPipelineKey key)
         {
+            if (key.MaterialClass == TransparentMaterialClass.ThinGlass)
+            {
+                // Only sorted alpha has a measured ThinGlass hot path. Keep
+                // weighted OIT on its existing bounded generic programs.
+                if (key.CompositionMode ==
+                    TransparencyMode.WeightedBlendedOit)
+                {
+                    return key.RaySceneRequired
+                        ? "forward_weighted_oit_ray.frag.spv"
+                        : "forward_weighted_oit.frag.spv";
+                }
+
+                return key.RaySceneRequired
+                    ? "forward_transparent_thin_glass_ray.frag.spv"
+                    : "forward_transparent_thin_glass.frag.spv";
+            }
+
             string prefix = key.CompositionMode ==
                     TransparencyMode.WeightedBlendedOit
                 ? "forward_weighted_oit_"
@@ -1491,7 +1532,36 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 giCausticReceiverEnabled,
                 range.FirstReceiverLane,
                 range.ReceiverLaneLimit,
-                ForwardOpaqueSpecializedPipelineBankReady);
+                specializedFamilies: true);
+        }
+
+        internal bool AreHybridReflectionPerformancePipelineBankReady()
+        {
+            bool nearFieldDirectSource =
+                NearFieldDirectSourceAttachmentEnabled &&
+                _nearFieldDirectSourceConfiguration.SourceProducerMode ==
+                    SimpleDdgiNearFieldSourceProducerMode.ForwardMrt;
+            bool giCausticReceiver = GiCausticReceiverAttachmentEnabled;
+            for (int combination = 0; combination < 4; combination++)
+            {
+                bool nearField = (combination & 2) != 0;
+                bool caustic = (combination & 1) != 0;
+                if (nearField && !nearFieldDirectSource ||
+                    caustic && !giCausticReceiver ||
+                    nearField && caustic &&
+                    !CombinedAdvancedGiAttachmentEnabled)
+                {
+                    continue;
+                }
+
+                if (!AreHybridReflectionPerformancePipelinesReady(
+                        nearField,
+                        caustic))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private bool AreHybridReflectionPipelineRangeReady(
@@ -1563,7 +1633,35 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             => TryPrepareHybridReflectionPerformancePipelines(
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled,
-                ForwardOpaqueSpecializedPipelineBankReady);
+                prepareSpecializedFamilies: true);
+
+        internal bool TryPrepareHybridReflectionPerformancePipelineBank()
+        {
+            bool nearFieldDirectSource =
+                NearFieldDirectSourceAttachmentEnabled &&
+                _nearFieldDirectSourceConfiguration.SourceProducerMode ==
+                    SimpleDdgiNearFieldSourceProducerMode.ForwardMrt;
+            bool giCausticReceiver = GiCausticReceiverAttachmentEnabled;
+            bool ready = true;
+            for (int combination = 0; combination < 4; combination++)
+            {
+                bool nearField = (combination & 2) != 0;
+                bool caustic = (combination & 1) != 0;
+                if (nearField && !nearFieldDirectSource ||
+                    caustic && !giCausticReceiver ||
+                    nearField && caustic &&
+                    !CombinedAdvancedGiAttachmentEnabled)
+                {
+                    continue;
+                }
+
+                ready &= TryPrepareHybridReflectionPerformancePipelines(
+                    nearField,
+                    caustic,
+                    prepareSpecializedFamilies: true);
+            }
+            return ready;
+        }
 
         private bool TryPrepareHybridReflectionPerformancePipelines(
             bool nearFieldDirectSourceEnabled,
@@ -1669,6 +1767,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     cacheable);
             VkPipeline exactPipeline =
                 ResolvePreparedBasePipeline(effectiveFamily);
+            if (exactPipeline.Handle == 0)
+            {
+                // Auxiliary views can request the non-active task/taskless
+                // sibling after the camera bank has been published. Retain
+                // the bootstrap full-family pipeline for that view instead of
+                // treating an optional specialization as a correctness gate.
+                effectiveFamily = TasklessSubmissionEnabled
+                    ? ForwardOpaquePipelineFamily.CompactedFull
+                    : ForwardOpaquePipelineFamily.Full;
+                exactPipeline = ResolvePreparedBasePipeline(effectiveFamily);
+            }
             bool receiverCache = key.Has(
                 ForwardOpaquePipelineFeatures.ReceiverCache);
             bool nearField = key.Has(
@@ -1751,7 +1860,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ref VkPipeline simplePipeline,
             ref VkPipeline simpleFullInputPipeline,
             ref VkPipeline compactedSimplePipeline,
-            ref VkPipeline compactedSimpleFullInputPipeline)
+            ref VkPipeline compactedSimpleFullInputPipeline,
+            bool commonSurfaceCoverageDiagnostics = false)
         {
             return family switch
             {
@@ -1773,28 +1883,32 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     TryEnsureReceiverCacheSpecializedPipeline(
                         ref simplePipeline,
                         _forwardTaskShaderName,
-                        "forward_simple.mesh.spv",
+                        commonSurfaceCoverageDiagnostics
+                            ? "forward_simple_common_surface_diagnostics.mesh.spv"
+                            : "forward_simple.mesh.spv",
                         simpleFragmentShaderName,
                         debugVariantName),
                 ForwardOpaquePipelineFamily.SimpleFullInput =>
                     TryEnsureReceiverCacheSpecializedPipeline(
                         ref simpleFullInputPipeline,
                         _forwardTaskShaderName,
-                        "forward.mesh.spv",
+                        ForwardSimpleFullInputMeshShaderName,
                         simpleFullInputFragmentShaderName,
                         debugVariantName),
                 ForwardOpaquePipelineFamily.CompactedSimple =>
                     TryEnsureReceiverCacheSpecializedPipeline(
                         ref compactedSimplePipeline,
                         null,
-                        _compactedForwardSimpleMeshShaderName,
+                        commonSurfaceCoverageDiagnostics
+                            ? "forward_simple_compacted_common_surface_diagnostics.mesh.spv"
+                            : _compactedForwardSimpleMeshShaderName,
                         simpleFragmentShaderName,
                         debugVariantName),
                 ForwardOpaquePipelineFamily.CompactedSimpleFullInput =>
                     TryEnsureReceiverCacheSpecializedPipeline(
                         ref compactedSimpleFullInputPipeline,
                         null,
-                        _compactedForwardMeshShaderName,
+                        _compactedForwardSimpleFullInputMeshShaderName,
                         simpleFullInputFragmentShaderName,
                         debugVariantName),
                 _ => false
@@ -1835,9 +1949,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 ArgumentException or InvalidOperationException)
             {
                 DestroyOptionalPipeline(ref pipeline);
-                System.Diagnostics.Debug.WriteLine(
+                string detail =
                     $"Deferred {debugVariantName} pipeline unavailable: " +
-                    $"{exception.GetType().Name}: {exception.Message}");
+                    $"{exception.GetType().Name}: {exception.Message}";
+                System.Diagnostics.Debug.WriteLine(detail);
+                if (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled)
+                    Console.Error.WriteLine(detail);
                 return false;
             }
         }
@@ -1846,6 +1963,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ForwardOpaquePipelineFamily family,
             out VkPipeline pipeline)
         {
+            ForwardOpaquePipelineFamily requestedFamily = family;
             family = ResolveEffectiveForwardOpaquePipelineFamily(family);
             pipeline = family switch
             {
@@ -1863,6 +1981,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _forwardCompactedSimpleFullInputReceiverCacheDiagnosticsPipeline,
                 _ => default
             };
+            if (Settings.Diagnostics.DdgiForwardEstimateCountersEnabled)
+            {
+                int familyBit = 1 << (int)family;
+                if ((_receiverCacheDiagnosticsReportedFamilies & familyBit) == 0)
+                {
+                    _receiverCacheDiagnosticsReportedFamilies |= familyBit;
+                    bool commonSurfaceArtifact = family is
+                        ForwardOpaquePipelineFamily.Simple or
+                        ForwardOpaquePipelineFamily.CompactedSimple;
+                    Console.WriteLine(
+                        "Forward qualification pipeline selection: " +
+                        $"requested={requestedFamily}, effective={family}, " +
+                        $"artifact={(commonSurfaceArtifact ? "common-surface" : "generic")}, " +
+                        $"available={pipeline.Handle != 0}");
+                }
+            }
             return pipeline.Handle != 0;
         }
 
@@ -2061,6 +2195,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             PublishForwardOpaquePipelineBank(
                 ref _forwardOpaqueSpecializedPipelineBankReady,
                 complete: false);
+            _receiverCacheDiagnosticsReportedFamilies = 0;
             InvalidateForwardOpaquePipelineCache();
             ForwardOpaqueSpecializedPipelineBankStatus =
                 "bootstrap-universal-family";
@@ -2406,7 +2541,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         _forwardSimpleFullInputPipeline,
                         ref _forwardSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline,
                         _forwardTaskShaderName,
-                        "forward.mesh.spv",
+                        ForwardSimpleFullInputMeshShaderName,
                         simpleFullInputFragment,
                         "C5 receiver-cache simple full-input",
                         AdvancedGiPipelineKind.NearField) &&
@@ -2424,7 +2559,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         _forwardCompactedSimpleFullInputPipeline,
                         ref _forwardCompactedSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline,
                         null,
-                        _compactedForwardMeshShaderName,
+                        _compactedForwardSimpleFullInputMeshShaderName,
                         simpleFullInputFragment,
                         "C5 receiver-cache compacted simple full-input",
                         AdvancedGiPipelineKind.NearField);
@@ -2463,7 +2598,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _forwardSimpleFullInputPipeline,
                     ref _forwardSimpleFullInputNearFieldDirectSourcePipeline,
                     _forwardTaskShaderName,
-                    "forward.mesh.spv",
+                    ForwardSimpleFullInputMeshShaderName,
                     simpleFullInputFragment,
                     "C5 simple full-input",
                     AdvancedGiPipelineKind.NearField) &&
@@ -2481,7 +2616,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _forwardCompactedSimpleFullInputPipeline,
                     ref _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline,
                     null,
-                    _compactedForwardMeshShaderName,
+                    _compactedForwardSimpleFullInputMeshShaderName,
                     simpleFullInputFragment,
                     "C5 compacted simple full-input",
                     AdvancedGiPipelineKind.NearField);
@@ -2529,7 +2664,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         _forwardSimpleFullInputPipeline,
                         ref _forwardSimpleFullInputReceiverCacheGiCausticReceiverPipeline,
                         _forwardTaskShaderName,
-                        "forward.mesh.spv",
+                        ForwardSimpleFullInputMeshShaderName,
                         ForwardGiCausticReceiverContract
                             .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
                         "C4 receiver-cache simple full-input",
@@ -2549,7 +2684,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         _forwardCompactedSimpleFullInputPipeline,
                         ref _forwardCompactedSimpleFullInputReceiverCacheGiCausticReceiverPipeline,
                         null,
-                        _compactedForwardMeshShaderName,
+                        _compactedForwardSimpleFullInputMeshShaderName,
                         ForwardGiCausticReceiverContract
                             .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
                         "C4 receiver-cache compacted simple full-input",
@@ -2589,7 +2724,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _forwardSimpleFullInputPipeline,
                     ref _forwardSimpleFullInputGiCausticReceiverPipeline,
                     _forwardTaskShaderName,
-                    "forward.mesh.spv",
+                    ForwardSimpleFullInputMeshShaderName,
                     ForwardGiCausticReceiverContract
                         .SimpleFullInputOpaqueFragmentShader,
                     "C4 simple full-input",
@@ -2608,7 +2743,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _forwardCompactedSimpleFullInputPipeline,
                     ref _forwardCompactedSimpleFullInputGiCausticReceiverPipeline,
                     null,
-                    _compactedForwardMeshShaderName,
+                    _compactedForwardSimpleFullInputMeshShaderName,
                     ForwardGiCausticReceiverContract
                         .SimpleFullInputOpaqueFragmentShader,
                     "C4 compacted simple full-input",
@@ -2657,7 +2792,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         _forwardSimpleFullInputPipeline,
                         ref _forwardSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline,
                         _forwardTaskShaderName,
-                        "forward.mesh.spv",
+                        ForwardSimpleFullInputMeshShaderName,
                         ForwardAdvancedGiCombinedContract
                             .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
                         "combined C4/C5 receiver-cache simple full-input",
@@ -2677,7 +2812,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         _forwardCompactedSimpleFullInputPipeline,
                         ref _forwardCompactedSimpleFullInputReceiverCacheCombinedAdvancedGiPipeline,
                         null,
-                        _compactedForwardMeshShaderName,
+                        _compactedForwardSimpleFullInputMeshShaderName,
                         ForwardAdvancedGiCombinedContract
                             .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
                         "combined C4/C5 receiver-cache compacted simple full-input",
@@ -2717,7 +2852,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _forwardSimpleFullInputPipeline,
                     ref _forwardSimpleFullInputCombinedAdvancedGiPipeline,
                     _forwardTaskShaderName,
-                    "forward.mesh.spv",
+                    ForwardSimpleFullInputMeshShaderName,
                     ForwardAdvancedGiCombinedContract
                         .SimpleFullInputOpaqueFragmentShader,
                     "combined C4/C5 simple full-input",
@@ -2736,7 +2871,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _forwardCompactedSimpleFullInputPipeline,
                     ref _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline,
                     null,
-                    _compactedForwardMeshShaderName,
+                    _compactedForwardSimpleFullInputMeshShaderName,
                     ForwardAdvancedGiCombinedContract
                         .SimpleFullInputOpaqueFragmentShader,
                     "combined C4/C5 compacted simple full-input",
@@ -3275,7 +3410,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 ("mesh.forward.simple-full-input", () =>
                 {
                     _forwardSimpleFullInputPipeline = CreateGraphicsPipeline(
-                        forwardTaskShaderName, "forward.mesh.spv",
+                        forwardTaskShaderName,
+                        ForwardSimpleFullInputMeshShaderName,
                         forwardOpaqueSimpleFullInputFragmentShaderName,
                         colorFormat, depthFormat, true, false, false,
                         CullModeFlags.None, false,
@@ -3303,7 +3439,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 {
                     _forwardCompactedSimpleFullInputPipeline =
                         CreateGraphicsPipeline(
-                            null, _compactedForwardMeshShaderName,
+                            null,
+                            _compactedForwardSimpleFullInputMeshShaderName,
                             forwardOpaqueSimpleFullInputFragmentShaderName,
                             colorFormat, depthFormat, true, false, false,
                             CullModeFlags.None, false,
@@ -3403,7 +3540,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         depthFormat,
                         forwardTaskShaderName,
                         "forward_opaque_ddgi_cache_required_diagnostics.frag.spv",
-                        "forward_opaque_simple_ddgi_cache_required_diagnostics.frag.spv",
+                        "forward_opaque_simple_common_surface_diagnostics.frag.spv",
                         "forward_opaque_simple_full_input_ddgi_cache_required_diagnostics.frag.spv",
                         "Surface-Aware Receiver-Cache Diagnostics",
                         out _forwardReceiverCacheDiagnosticsPipeline,
@@ -3411,7 +3548,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         out _forwardSimpleReceiverCacheDiagnosticsPipeline,
                         out _forwardSimpleFullInputReceiverCacheDiagnosticsPipeline,
                         out _forwardCompactedSimpleReceiverCacheDiagnosticsPipeline,
-                        out _forwardCompactedSimpleFullInputReceiverCacheDiagnosticsPipeline);
+                        out _forwardCompactedSimpleFullInputReceiverCacheDiagnosticsPipeline,
+                        commonSurfaceCoverageDiagnostics: true);
                 }
 
                 CreateOpaqueSpecializedPipelineSet(
@@ -4219,13 +4357,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     receiverCacheExactFallbackOnly,
                     receiverCacheCombined,
                     sparseLobePayload);
-            string meshShader = simple && !simpleFullInput
+            string meshShader = simpleFullInput
                 ? compacted
-                    ? _compactedForwardSimpleMeshShaderName
-                    : "forward_simple.mesh.spv"
-                : compacted
-                    ? _compactedForwardMeshShaderName
-                    : "forward.mesh.spv";
+                    ? _compactedForwardSimpleFullInputMeshShaderName
+                    : ForwardSimpleFullInputMeshShaderName
+                : simple
+                    ? compacted
+                        ? _compactedForwardSimpleMeshShaderName
+                        : "forward_simple.mesh.spv"
+                    : compacted
+                        ? _compactedForwardMeshShaderName
+                        : "forward.mesh.spv";
             string? taskShader = compacted ? null : _forwardTaskShaderName;
 
             Format? secondary = combination switch
@@ -4709,7 +4851,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? tertiaryColorFormat = null,
             Format? quaternaryColorFormat = null,
             Format? materialTransportProvenanceFormat = null,
-            bool depthWriteEnable = false)
+            bool depthWriteEnable = false,
+            bool commonSurfaceCoverageDiagnostics = false)
         {
             fullPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
@@ -4745,7 +4888,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     materialTransportProvenanceFormat);
             simplePipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
-                "forward_simple.mesh.spv",
+                commonSurfaceCoverageDiagnostics
+                    ? "forward_simple_common_surface_diagnostics.mesh.spv"
+                    : "forward_simple.mesh.spv",
                 simpleFragmentShaderName,
                 colorFormat,
                 depthFormat,
@@ -4761,7 +4906,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     materialTransportProvenanceFormat);
             simpleFullInputPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
-                "forward.mesh.spv",
+                ForwardSimpleFullInputMeshShaderName,
                 simpleFullInputFragmentShaderName,
                 colorFormat,
                 depthFormat,
@@ -4777,7 +4922,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     materialTransportProvenanceFormat);
             compactedSimplePipeline = CreateGraphicsPipeline(
                 taskShaderName: null,
-                _compactedForwardSimpleMeshShaderName,
+                commonSurfaceCoverageDiagnostics
+                    ? "forward_simple_compacted_common_surface_diagnostics.mesh.spv"
+                    : _compactedForwardSimpleMeshShaderName,
                 simpleFragmentShaderName,
                 colorFormat,
                 depthFormat,
@@ -4793,7 +4940,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     materialTransportProvenanceFormat);
             compactedSimpleFullInputPipeline = CreateGraphicsPipeline(
                 taskShaderName: null,
-                _compactedForwardMeshShaderName,
+                _compactedForwardSimpleFullInputMeshShaderName,
                 simpleFullInputFragmentShaderName,
                 colorFormat,
                 depthFormat,
@@ -4896,9 +5043,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             if (hasColorAttachment)
             {
-                return !blendEnable && meshShaderName.StartsWith(
-                    "forward",
-                    StringComparison.Ordinal);
+                if (blendEnable)
+                    return false;
+
+                return meshShaderName.StartsWith(
+                           "forward",
+                           StringComparison.Ordinal) ||
+                       (meshShaderName.StartsWith(
+                            "motion_vector",
+                            StringComparison.Ordinal) &&
+                        meshShaderName.Contains(
+                            "compacted",
+                            StringComparison.Ordinal));
             }
 
             return meshShaderName.Contains(

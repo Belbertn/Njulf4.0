@@ -36,6 +36,8 @@ layout(location = 6) flat out uint meshClusterIndex[];
 layout(location = 7) flat out uint meshLodBand[];
 layout(location = 8) flat out uint meshGeometryMode[];
 layout(location = 9) flat out uint meshImpostorMetadataIndex[];
+layout(location = 10) out vec3 meshCurrentWorldPosition[];
+layout(location = 11) out vec2 meshViewDepths[];
 
 layout(push_constant) uniform MotionVectorPushConstantBlock
 {
@@ -163,10 +165,11 @@ void main()
         meshMaterialIndex[vertexSlot] = command.MaterialIndex;
         meshReceiverSignature[vertexSlot] =
             (command.InstanceIndex * 0x9e3779b9u) ^
-            (command.MaterialIndex * 0x85ebca6bu) ^ 0xa511e9b3u;
+            (command.MaterialIndex * 0x85ebca6bu) ^
+            (command.MeshletIndex * 0xc2b2ae35u) ^ 0xa511e9b3u;
         meshHistoryFrameAndFlags[vertexSlot] =
             (pc.Push.CurrentFrameIndex & 0xffu) |
-            ((pc.Push.PreviousFrameValid & 2u) << 7u);
+            ((pc.Push.PreviousFrameValid & 6u) << 7u);
         meshClusterIndex[vertexSlot] = command.ClusterIndex;
         meshLodBand[vertexSlot] =
             PackFoliageCoverageStateFromCommand(
@@ -174,6 +177,10 @@ void main()
                 command.Flags);
         meshGeometryMode[vertexSlot] = 1u;
         meshImpostorMetadataIndex[vertexSlot] = 0xffffffffu;
+        meshCurrentWorldPosition[vertexSlot] = currentWorldPosition;
+        meshViewDepths[vertexSlot] = vec2(
+            abs(currentClip.w),
+            abs(previousClip.w));
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

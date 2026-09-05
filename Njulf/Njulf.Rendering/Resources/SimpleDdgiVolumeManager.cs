@@ -47,6 +47,16 @@ namespace Njulf.Rendering.Resources
         Rebuilding = 1,
         Fading = 2
     }
+
+    internal readonly record struct SimpleDdgiTransportAuditMotionState(
+        bool Initialized,
+        Vector3 SubmittedCameraPosition,
+        int StableSubmittedFrameCount,
+        bool CameraRingActive,
+        bool LivePropagationBoundaryCurrent,
+        ulong SceneContentRevision,
+        SimpleDdgiTransportGenerations Generations);
+
     /// <summary>
     /// Deterministic priority buckets used by the bounded simple-DDGI update
     /// scheduler. Values are ordered intentionally; do not reorder them without
@@ -418,6 +428,11 @@ namespace Njulf.Rendering.Resources
         // conservatively to the measured maximum without render-thread allocation.
         private const int DirtyLatencyBucketCount = 4_096;
         private const int SourceCohortQuietFrameCount = 4;
+        internal const int TransportAuditCameraStableFrameCount = 4;
+        private const float TransportAuditCameraTranslationToleranceSquared =
+            1.0e-6f;
+        private const string TransportAuditCameraMotionDeferralReason =
+            "camera-ring-motion-stabilizing";
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -1037,6 +1052,10 @@ namespace Njulf.Rendering.Resources
         private int _transportAuditExpectedTexelCount;
         private uint _transportAuditWitnessProbeIndex = uint.MaxValue;
         private uint _transportAuditWitnessTexelIndex = uint.MaxValue;
+        private SimpleDdgiTransportAuditMotionState
+            _transportAuditMotionState;
+        private ulong _transportAuditCameraMotionDeferredStartCount;
+        private string _transportAuditStartDeferralReason = string.Empty;
         private const int TransportAuditReadbackMarginFrames = 2;
         private ulong _transportAuditFinalSubmissionFrameSerial;
         // A complete resident visit reduction is delayed by frames in flight.
@@ -3538,6 +3557,10 @@ namespace Njulf.Rendering.Resources
             _transportSourceNoProgressRecoveryCount;
         public ulong TransportTailConvergenceDeadlineRecoveryCount =>
             _transportConvergenceDeadlineRecoveryCount;
+        public ulong TransportTailAuditCameraMotionDeferredStartCount =>
+            _transportAuditCameraMotionDeferredStartCount;
+        public string TransportTailAuditStartDeferralReason =>
+            _transportAuditStartDeferralReason;
         public int TransportTailAuditReadbackDeadlineFrames =>
             SimpleDdgiTransportSolveController.ResolveAuditReadbackDeadlineFrames(
                 Math.Max(0, _probeCount),
@@ -3658,6 +3681,19 @@ namespace Njulf.Rendering.Resources
                 return true;
 
             SimpleDdgiTransportGenerations generations = CreateTransportTailGenerations();
+            if (ShouldDeferTransportTailAuditForCameraMotion(
+                    _transportAuditMotionState,
+                    _transportSolveController.Phase,
+                    generations))
+            {
+                _transportAuditCameraMotionDeferredStartCount = SaturatingAdd(
+                    _transportAuditCameraMotionDeferredStartCount,
+                    1UL);
+                _transportAuditStartDeferralReason =
+                    TransportAuditCameraMotionDeferralReason;
+                return false;
+            }
+            _transportAuditStartDeferralReason = string.Empty;
             if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
             {
                 bool blockingSourceWork = _gpuSchedulerFeedbackValid &&
@@ -4617,6 +4653,10 @@ namespace Njulf.Rendering.Resources
                     TransportTailSourceNoProgressRecoveryCount,
                 TailConvergenceDeadlineRecoveryCount =
                     TransportTailConvergenceDeadlineRecoveryCount,
+                TailAuditCameraMotionDeferredStartCount =
+                    TransportTailAuditCameraMotionDeferredStartCount,
+                TailAuditStartDeferralReason =
+                    TransportTailAuditStartDeferralReason,
                 ResidualQualifiedNotConvergedProbeCount =
                     totalResidualQualifiedPending,
                 RoutineSourceRepairProbeCount =
@@ -6028,6 +6068,10 @@ namespace Njulf.Rendering.Resources
                         frameIndex,
                         residentBootstrap,
                         volumeTableRemapped);
+                    ObserveTransportAuditCameraMotion(
+                        cameraPosition,
+                        sceneContentRevision,
+                        remapKind);
                     gpuUploadMicroseconds += ElapsedMicroseconds(phaseStart);
                     _frameIndex++;
                     return;
@@ -6288,6 +6332,10 @@ namespace Njulf.Rendering.Resources
                     cohortLightingTransition,
                     stagingRing,
                     commandBuffer);
+                ObserveTransportAuditCameraMotion(
+                    cameraPosition,
+                    sceneContentRevision,
+                    remapKind);
                 gpuUploadMicroseconds += ElapsedMicroseconds(phaseStart);
                 if (_atlasClearedThisFrame)
                 {
@@ -6390,6 +6438,7 @@ namespace Njulf.Rendering.Resources
             // the serialized mode intact; Upload will re-enter it on the first
             // enabled frame after the bounded bootstrap.
             SetGpuSchedulerMode(SimpleDdgiSchedulerMode.CpuReference);
+            ResetTransportAuditCameraMotionState();
             CancelDeferredRadiometricPublication();
             _gpuScheduler.CollectRetired(_completedFrameFenceValue);
             _volumeCount = 0;
@@ -9127,6 +9176,136 @@ namespace Njulf.Rendering.Resources
             uint currentSourceGeneration) =>
             liveSourceGeneration != 0u &&
             liveSourceGeneration == currentSourceGeneration;
+
+        private void ObserveTransportAuditCameraMotion(
+            Vector3 cameraPosition,
+            ulong sceneContentRevision,
+            SimpleDdgiVolumeRemapKind remapKind)
+        {
+            SimpleDdgiTransportGenerations generations =
+                CreateTransportTailGenerations();
+            _transportAuditMotionState = AdvanceTransportAuditMotionState(
+                _transportAuditMotionState,
+                cameraPosition,
+                HasActiveCameraRingVolume(),
+                HasCurrentLivePropagationBoundary(
+                    _livePropagationSourceGeneration,
+                    _sourceLightingGeneration),
+                sceneContentRevision,
+                generations,
+                _cameraCutThisFrame,
+                remapKind != SimpleDdgiVolumeRemapKind.None);
+            _transportAuditStartDeferralReason =
+                ShouldDeferTransportTailAuditForCameraMotion(
+                    _transportAuditMotionState,
+                    _transportSolveController.Phase,
+                    generations)
+                    ? TransportAuditCameraMotionDeferralReason
+                    : string.Empty;
+        }
+
+        private bool HasActiveCameraRingVolume()
+        {
+            for (int index = 0; index < _volumeCount; index++)
+            {
+                GPUSimpleDdgiVolume volume = _volumeScratch[index];
+                if (Kind(volume) == VolumeKindRing &&
+                    VolumeProbeCount(volume) > 0)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void ResetTransportAuditCameraMotionState()
+        {
+            _transportAuditMotionState = default;
+            _transportAuditStartDeferralReason = string.Empty;
+        }
+
+        internal static SimpleDdgiTransportAuditMotionState
+            AdvanceTransportAuditMotionState(
+                SimpleDdgiTransportAuditMotionState previous,
+                Vector3 cameraPosition,
+                bool cameraRingActive,
+                bool livePropagationBoundaryCurrent,
+                ulong sceneContentRevision,
+                SimpleDdgiTransportGenerations generations,
+                bool cameraCut,
+                bool topologyChanged)
+        {
+            bool boundaryChanged =
+                !previous.Initialized ||
+                previous.CameraRingActive != cameraRingActive ||
+                previous.LivePropagationBoundaryCurrent !=
+                    livePropagationBoundaryCurrent ||
+                previous.SceneContentRevision != sceneContentRevision ||
+                !SameTransportAuditMotionBoundary(
+                    previous.Generations,
+                    generations);
+            int stableFrameCount;
+            if (!cameraRingActive)
+            {
+                stableFrameCount = TransportAuditCameraStableFrameCount;
+            }
+            else if (!livePropagationBoundaryCurrent ||
+                     cameraCut ||
+                     topologyChanged ||
+                     boundaryChanged)
+            {
+                stableFrameCount = 0;
+            }
+            else if ((cameraPosition - previous.SubmittedCameraPosition)
+                         .LengthSquared() >
+                     TransportAuditCameraTranslationToleranceSquared)
+            {
+                stableFrameCount = 0;
+            }
+            else
+            {
+                stableFrameCount = Math.Min(
+                    TransportAuditCameraStableFrameCount,
+                    previous.StableSubmittedFrameCount + 1);
+            }
+
+            return new SimpleDdgiTransportAuditMotionState(
+                Initialized: true,
+                SubmittedCameraPosition: cameraPosition,
+                StableSubmittedFrameCount: stableFrameCount,
+                CameraRingActive: cameraRingActive,
+                LivePropagationBoundaryCurrent:
+                    livePropagationBoundaryCurrent,
+                SceneContentRevision: sceneContentRevision,
+                Generations: generations);
+        }
+
+        internal static bool ShouldDeferTransportTailAuditForCameraMotion(
+            SimpleDdgiTransportAuditMotionState state,
+            SimpleDdgiTransportPhase phase,
+            SimpleDdgiTransportGenerations currentGenerations) =>
+            phase != SimpleDdgiTransportPhase.AuditFrozen &&
+            state.Initialized &&
+            state.CameraRingActive &&
+            state.LivePropagationBoundaryCurrent &&
+            state.Generations.IsInitialized &&
+            SameTransportAuditMotionBoundary(
+                state.Generations,
+                currentGenerations) &&
+            state.StableSubmittedFrameCount <
+                TransportAuditCameraStableFrameCount;
+
+        internal static bool SameTransportAuditMotionBoundary(
+            SimpleDdgiTransportGenerations left,
+            SimpleDdgiTransportGenerations right) =>
+            left.VolumeTable == right.VolumeTable &&
+            left.PhysicalOwnership == right.PhysicalOwnership &&
+            left.SourceLighting == right.SourceLighting &&
+            left.SourceEpoch == right.SourceEpoch &&
+            left.TransportOperator == right.TransportOperator &&
+            left.CanonicalField == right.CanonicalField &&
+            left.SchedulerResources == right.SchedulerResources &&
+            left.DynamicGeometryEpoch == right.DynamicGeometryEpoch;
 
         private static uint NonZeroGeneration(uint value) => value == 0u ? 1u : value;
 

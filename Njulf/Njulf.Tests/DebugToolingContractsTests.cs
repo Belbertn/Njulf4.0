@@ -177,9 +177,9 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.TransparentReflectionCounterCount,
                     Is.EqualTo(18));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterCount,
-                    Is.EqualTo(18));
+                    Is.EqualTo(20));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
-                    Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterBase + 18));
+                    Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiReceiverCacheCounterBase + 20));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount *
                                             sizeof(uint)));
@@ -230,6 +230,8 @@ namespace Njulf.Tests
                     "SIMPLE_DDGI_RECEIVER_CACHE_EXACT_FALLBACK_COUNTER ="));
                 Assert.That(commonShader, Does.Contain(
                     "SIMPLE_DDGI_RECEIVER_CACHE_DIRECTIONAL_EVALUATION_COUNTER ="));
+                Assert.That(commonShader, Does.Contain(
+                    "COMMON_SURFACE_ELIGIBLE_PIXEL_COUNTER ="));
                 Assert.That(simpleSharedShader, Does.Contain(
                     "void RecordSimpleDdgiVolumeEnergyEvidence("));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -287,11 +289,82 @@ namespace Njulf.Tests
                 Assert.That(decoded.LegacyFragmentCount, Is.EqualTo(116ul));
                 Assert.That(decoded.DirectionalCacheEvaluationCount,
                     Is.EqualTo(117ul));
+                Assert.That(decoded.CommonSurfaceSimpleOpaquePixelEstimate,
+                    Is.EqualTo(118ul));
+                Assert.That(decoded.CommonSurfaceEligiblePixelEstimate,
+                    Is.EqualTo(119ul));
             });
 
             Assert.Throws<ArgumentException>(() =>
                 RendererDiagnosticsBuffer.DecodeSimpleDdgiReceiverCacheCounters(
                     new uint[RendererDiagnosticsBuffer.CounterCount - 1]));
+        }
+
+        [Test]
+        public void CommonSurfaceCoverageGate_IsStrictAndQualificationOnly()
+        {
+            string fragment = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string simpleMesh = ReadRepoText(
+                "Njulf.Shaders",
+                "forward_simple.mesh");
+            string atomicAudit = ReadRepoText(
+                "Njulf.Shaders",
+                "VerifyProductionDiagnosticAtomics.ps1");
+            string shaderProject = ReadRepoText(
+                "Njulf.Shaders",
+                "Njulf.Shaders.csproj");
+            string meshPipeline = ReadRepoText(
+                "Njulf.Rendering",
+                "Pipeline",
+                "PipelineObjects",
+                "MeshPipeline.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(fragment, Does.Contain(
+                    "defined(FORWARD_SIMPLE_OPAQUE) && FORWARD_SIMPLE_VERTEX_INPUT"));
+                Assert.That(fragment, Does.Contain(
+                    "material.AlbedoTextureIndex == DEFAULT_WHITE_TEXTURE"));
+                Assert.That(fragment, Does.Contain(
+                    "material.NormalTextureIndex == DEFAULT_NORMAL_TEXTURE"));
+                Assert.That(fragment, Does.Contain(
+                    "material.MetallicRoughnessTextureIndex == DEFAULT_BLACK_TEXTURE"));
+                Assert.That(fragment, Does.Contain(
+                    "material.OcclusionTextureIndex == DEFAULT_WHITE_TEXTURE"));
+                Assert.That(fragment, Does.Contain(
+                    "material.EmissiveTextureIndex == DEFAULT_WHITE_TEXTURE"));
+                Assert.That(fragment, Does.Contain(
+                    "material.FeatureFlags == 0u"));
+                Assert.That(fragment, Does.Contain(
+                    "material.ExtensionDataIndex < 0"));
+                Assert.That(fragment, Does.Contain(
+                    "material.NormalScaleBias.y < 0.5"));
+                Assert.That(fragment, Does.Contain(
+                    "abs(material.Emissive.rgb)"));
+                Assert.That(fragment, Does.Contain(
+                    "COMMON_SURFACE_SIMPLE_OPAQUE_PIXEL_COUNTER"));
+                Assert.That(fragment, Does.Contain(
+                    "COMMON_SURFACE_ELIGIBLE_PIXEL_COUNTER"));
+                Assert.That(simpleMesh, Does.Contain(
+                    "objectData.SkinningEnabled == 0"));
+                Assert.That(simpleMesh, Does.Contain(
+                    "MESHLET_COMMAND_FLAG_LOD_DITHER_TRANSITION"));
+                Assert.That(simpleMesh, Does.Contain(
+                    "#if NJULF_COMMON_SURFACE_COVERAGE_DIAGNOSTICS"));
+                Assert.That(shaderProject, Does.Contain(
+                    "forward_simple_common_surface_diagnostics.mesh"));
+                Assert.That(shaderProject, Does.Contain(
+                    "forward_simple_compacted_common_surface_diagnostics.mesh"));
+                Assert.That(shaderProject, Does.Contain(
+                    "forward_opaque_simple_common_surface_diagnostics.frag"));
+                Assert.That(shaderProject, Does.Contain(
+                    "-DNJULF_DDGI_RECEIVER_CACHE_DIAGNOSTICS=1 " +
+                    "-DNJULF_COMMON_SURFACE_COVERAGE_DIAGNOSTICS=1"));
+                Assert.That(meshPipeline, Does.Contain(
+                    "commonSurfaceCoverageDiagnostics: true"));
+                Assert.That(atomicAudit, Does.Contain(
+                    "'forward_opaque_simple_common_surface_diagnostics.frag.spv' = 30"));
+            });
         }
 
         [Test]

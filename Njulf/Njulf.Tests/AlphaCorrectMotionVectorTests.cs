@@ -1,4 +1,5 @@
 using Njulf.Rendering.Pipeline;
+using Njulf.Rendering.Pipeline.PipelineObjects;
 using NUnit.Framework;
 using Silk.NET.Vulkan;
 
@@ -93,6 +94,40 @@ public sealed class AlphaCorrectMotionVectorTests
                 "motion_vector_compacted.mesh"));
             Assert.That(project, Does.Contain(
                 "motion_vector_alpha_compacted.mesh"));
+        });
+    }
+
+    [Test]
+    public void CompactedMotionPipelines_EnableDynamicRasterState()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(MeshPipeline.UsesDynamicRasterState(
+                "motion_vector_compacted.mesh.spv", true, false), Is.True);
+            Assert.That(MeshPipeline.UsesDynamicRasterState(
+                "motion_vector_alpha_compacted.mesh.spv", true, false), Is.True);
+            Assert.That(MeshPipeline.UsesDynamicRasterState(
+                "motion_vector.mesh.spv", true, false), Is.False);
+            Assert.That(MeshPipeline.UsesDynamicRasterState(
+                "motion_vector_compacted.mesh.spv", true, true), Is.False);
+        });
+    }
+
+    [Test]
+    public void CompactedMotionPartitions_EmitExplicitSidedRasterState()
+    {
+        string source = ReadRepoText(
+            "Njulf.Rendering", "Pipeline", "MotionVectorPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Match(
+                @"oneSided:\s*sceneData\s*\.SceneSubmissionSidedRasterSpecializationActive"));
+            Assert.That(source, Does.Contain("oneSided: false"));
+            Assert.That(source, Does.Contain(
+                "oneSided ? CullModeFlags.BackBit : CullModeFlags.None"));
+            Assert.That(source, Does.Match(
+                @"CmdSetDepthCompareOp\(\s*cmd,\s*CompareOp\.GreaterOrEqual\)"));
         });
     }
 

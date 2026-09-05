@@ -3,6 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "temporal_surface_validity.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -21,7 +22,7 @@ layout(push_constant) uniform DirectionalShadowTemporalPushBlock
     float MaximumHistoryWeight;
     float RelativeDepthThreshold;
     float NormalThreshold;
-    float TemporalKind;
+    uint TemporalFlags;
 } pc;
 
 #if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
@@ -196,26 +197,56 @@ void main()
                 vec2(pc.ScreenWidth - 1u, pc.ScreenHeight - 1u)))
             : pixelCoordinate;
         uint previousIndex = uint(previousPixel.y) * pc.ScreenWidth + uint(previousPixel.x);
-        vec2 previousMoments = unpackHalf2x16(ReadStorageWord(
-            pc.PreviousHistoryBufferIndex,
-            previousIndex * 3u + 0u));
-        vec2 previousDistance = unpackHalf2x16(ReadStorageWord(
-            pc.PreviousHistoryBufferIndex,
-            previousIndex * 3u + 1u));
-        vec3 previousNormal;
-        uint previousSignature;
-        uint previousAge;
-        bool previousValid;
-        UnpackMetadata(
-            ReadStorageWord(pc.PreviousHistoryBufferIndex, previousIndex * 3u + 2u),
-            previousNormal,
-            previousSignature,
-            previousAge,
-            previousValid);
-
+        vec2 previousMoments = vec2(
+            currentVisibility,
+            currentVisibility * currentVisibility);
+        vec2 previousDistance = vec2(
+            currentHitDistance,
+            currentViewDistance);
+        vec3 previousNormal = currentNormal;
+        uint previousSignature = 0u;
+        uint previousAge = 0u;
+        bool previousValid = false;
         uint rejection = 0u;
-        bool historyValid = currentValid && previousInside && previousValid &&
+        bool historyCandidate = currentValid && previousInside &&
             pc.ResetReasons == 0u;
+        if (historyCandidate && (pc.TemporalFlags & 4u) != 0u)
+        {
+            uint sharedBufferIndex =
+                uint(TEMPORAL_SURFACE_VALIDITY_BUFFER_BASE_INDEX) +
+                (pc.CurrentHistoryBufferIndex -
+                    uint(DIRECTIONAL_SHADOW_HISTORY_BUFFER_BASE_INDEX));
+            uint sharedPackedNormal = ReadStorageWord(
+                sharedBufferIndex,
+                pixelIndex * TEMPORAL_SURFACE_VALIDITY_WORDS_PER_PIXEL + 3u);
+            uint requiredTap = TemporalSurfaceNearestTapBit(
+                previousUv * vec2(pc.ScreenWidth, pc.ScreenHeight));
+            uint sharedTapMask = sharedPackedNormal >> 28u;
+            if ((sharedTapMask & requiredTap) == 0u)
+            {
+                historyCandidate = false;
+                rejection = 1u;
+            }
+        }
+        if (historyCandidate)
+        {
+            previousMoments = unpackHalf2x16(ReadStorageWord(
+                pc.PreviousHistoryBufferIndex,
+                previousIndex * 3u + 0u));
+            previousDistance = unpackHalf2x16(ReadStorageWord(
+                pc.PreviousHistoryBufferIndex,
+                previousIndex * 3u + 1u));
+            UnpackMetadata(
+                ReadStorageWord(
+                    pc.PreviousHistoryBufferIndex,
+                    previousIndex * 3u + 2u),
+                previousNormal,
+                previousSignature,
+                previousAge,
+                previousValid);
+        }
+
+        bool historyValid = historyCandidate && previousValid;
         if (historyValid && previousSignature != (currentSignature & 0xffu))
         {
             historyValid = false;
@@ -313,7 +344,7 @@ void main()
                 rejection));
 
 #if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
-        if (pc.TemporalKind >= 2.0)
+        if ((pc.TemporalFlags & 2u) != 0u)
         {
             if (historyValid)
                 atomicAdd(AcceptedHistoryCount, 1u);
@@ -334,7 +365,7 @@ void main()
 
 #if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
     barrier();
-    if (pc.TemporalKind >= 2.0 && gl_LocalInvocationIndex < 2u)
+    if ((pc.TemporalFlags & 2u) != 0u && gl_LocalInvocationIndex < 2u)
     {
         uint frameBank = pc.CurrentHistoryBufferIndex -
             uint(DIRECTIONAL_SHADOW_HISTORY_BUFFER_BASE_INDEX);

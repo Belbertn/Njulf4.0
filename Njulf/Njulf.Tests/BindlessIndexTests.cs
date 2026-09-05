@@ -61,7 +61,9 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.SceneGpuLodHistoryBufferFrame1, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferBase + 1));
             Assert.That(BindlessIndex.DdgiDynamicGeometryBufferBase, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferFrame1 + 1));
             Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(
-                BindlessIndex.HybridReflectionSparseLobeBufferFrame1 + 1));
+                BindlessIndex.TemporalSurfaceValidityBufferFrame1 + 1));
+            Assert.That(BindlessIndex.TemporalSurfaceValidityBufferBase,
+                Is.EqualTo(BindlessIndex.HybridReflectionSparseLobeBufferFrame1 + 1));
             Assert.That(
                 BindlessIndex.FoliageImpostorMetadataBuffer,
                 Is.EqualTo(
@@ -207,6 +209,8 @@ public sealed class BindlessIndexTests
             ["SIMPLE_DDGI_MASKED_FEEDBACK_COMPACT_BUFFER_FRAME1_INDEX"] = BindlessIndex.SimpleDdgiMaskedFeedbackCompactBufferFrame1,
             ["HYBRID_REFLECTION_SPARSE_LOBE_BUFFER_BASE_INDEX"] = BindlessIndex.HybridReflectionSparseLobeBufferBase,
             ["HYBRID_REFLECTION_SPARSE_LOBE_BUFFER_FRAME1_INDEX"] = BindlessIndex.HybridReflectionSparseLobeBufferFrame1,
+            ["TEMPORAL_SURFACE_VALIDITY_BUFFER_BASE_INDEX"] = BindlessIndex.TemporalSurfaceValidityBufferBase,
+            ["TEMPORAL_SURFACE_VALIDITY_BUFFER_FRAME1_INDEX"] = BindlessIndex.TemporalSurfaceValidityBufferFrame1,
             ["AREA_LIGHT_LTC_MATRIX_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcMatrixTexture,
             ["AREA_LIGHT_LTC_AMPLITUDE_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcAmplitudeTexture,
             ["OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX"] = BindlessIndex.OpaqueSceneColorSnapshotTexture,

@@ -9,6 +9,12 @@ param(
         "DetailedInvestigation")]
     [string]$Configuration = "Development",
 
+    [ValidateSet(
+        "portable-48v-64t",
+        "portable-flex-48v-32-64t-cone025-split2",
+        "portable-flex-48v-32-64t-cone050-split2")]
+    [string]$MeshletBuildProfile = "portable-48v-64t",
+
     [switch]$SkipBuild,
     [switch]$SkipCook
 )
@@ -101,6 +107,7 @@ try {
                     "--backend", "Assimp",
                     "--assimp-material-texture-convention", "AmazonBistro",
                     "--texture-format", "AutoBc",
+                    "--meshlet-build-profile", $MeshletBuildProfile,
                     "--force",
                     "--progress", "plain",
                     "--progress-detail", "stages") `

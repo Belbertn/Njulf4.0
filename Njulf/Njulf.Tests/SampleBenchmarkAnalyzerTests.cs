@@ -383,6 +383,34 @@ public sealed class SampleBenchmarkAnalyzerTests
         }
     }
 
+    [Test]
+    public void ProductionTiming_SurfaceCacheDoesNotRequireAdaptiveGeneration()
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            SimpleDdgiReceiverCache = SimpleDdgiReceiverCacheDiagnostics.Active(
+                SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial,
+                SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial,
+                SimpleDdgiReceiverCacheFallbackReason.None,
+                string.Empty,
+                radianceBytes: 1,
+                surfaceSidecarBytes: 1,
+                pipelineArtifact: "receiver-cache-surface-aware"),
+            ForwardGiReceiverCacheGenerated = 0,
+            ForwardGiReceiverCacheConsumed = 1,
+            ForwardGiExactGatherUsed = 0
+        };
+
+        Assert.That(
+            SampleBenchmarkRunner.HasEffectiveRequestedProductionPath(
+                diagnostics),
+            Is.True);
+        Assert.That(
+            SampleBenchmarkRunner.HasEffectiveRequestedProductionPath(
+                diagnostics with { ForwardGiReceiverCacheConsumed = 0 }),
+            Is.False);
+    }
+
     [TestCase(SamplePerformanceScenario.GiMovingPointLight)]
     [TestCase(SamplePerformanceScenario.GiMovingRigidObject)]
     public void DynamicQualificationScenario_FreezesAfterBoundedBenchmarkDisturbance(

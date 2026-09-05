@@ -176,6 +176,7 @@ namespace Njulf.Rendering
         private RenderTargetManager? _renderTargets;
         private DirectionalShadowResources? _directionalShadowResources;
         private DirectionalShadowHistoryResources? _directionalShadowHistoryResources;
+        private TemporalSurfaceValidityResources? _temporalSurfaceValidityResources;
 
         private readonly DirectionalShadowStabilizationState
             _directionalShadowStabilizationState = new();
@@ -1486,6 +1487,10 @@ namespace Njulf.Rendering
                 _context,
                 _bufferManager,
                 _bindlessHeap);
+            _temporalSurfaceValidityResources = new TemporalSurfaceValidityResources(
+                _context,
+                _bufferManager,
+                _bindlessHeap);
             _spotShadowAtlas = new SpotShadowAtlas(_context, _bufferManager, Settings.Shadows);
             _pointShadowCubemapArray = new PointShadowCubemapArray(_context, _bufferManager, Settings.Shadows);
             _environmentManager = new EnvironmentManager(_context, _bufferManager, _textureManager, Settings);
@@ -2028,7 +2033,8 @@ namespace Njulf.Rendering
                 _foliagePipeline,
                 _bufferManager,
                 _foliageManager,
-                ResolveSurfaceHistoryConsumers);
+                ResolveSurfaceHistoryConsumers,
+                _temporalSurfaceValidityResources);
             AddPassInstance(motionVectorPass);
 
             var hizBuildPass = new HiZBuildPass(
@@ -2073,6 +2079,7 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 _renderTargets!,
                 _directionalShadowHistoryResources!,
+                _temporalSurfaceValidityResources!,
                 Settings.Shadows,
                 _bufferManager,
                 _giPipelineCacheService));
@@ -4257,30 +4264,10 @@ namespace Njulf.Rendering
 
         private bool PrepareHybridReflectionReceiverPerformancePipelines()
         {
-            if (!_meshPipeline.TryPrepareHybridReflectionPerformancePipelines(
-                    nearFieldDirectSourceEnabled: false,
-                    giCausticReceiverEnabled: false))
-            {
-                return false;
-            }
-
-            bool nearFieldDirectSource =
-                _advancedGiAdmission.GraphModes.UsesNearFieldHiZResidual &&
-                _meshPipeline.NearFieldDirectSourceConfiguration
-                    .SourceProducerMode ==
-                SimpleDdgiNearFieldSourceProducerMode.ForwardMrt;
-            bool giCausticReceiver =
-                _advancedGiAdmission.GraphModes.UsesCausticWorldCache;
-            if (nearFieldDirectSource && giCausticReceiver &&
-                !_meshPipeline.CombinedAdvancedGiAttachmentEnabled)
-            {
-                giCausticReceiver = false;
-            }
-
-            if ((nearFieldDirectSource || giCausticReceiver) &&
-                !_meshPipeline.TryPrepareHybridReflectionPerformancePipelines(
-                    nearFieldDirectSource,
-                    giCausticReceiver))
+            if (!_meshPipeline
+                    .TryPrepareHybridReflectionPerformancePipelineBank() ||
+                !_meshPipeline
+                    .AreHybridReflectionPerformancePipelineBankReady())
             {
                 return false;
             }
@@ -4750,11 +4737,6 @@ namespace Njulf.Rendering
                 hybridReflectionsRequired &&
                 _meshPipeline.HybridReflectionAttachmentEnabled &&
                 AreReceiverCachePerformancePipelinesRequested();
-            bool hybridReady = !hybridReceiverPerformanceRequired ||
-                TryPreparePostFirstPresentFamily(
-                    "Pipeline.Prepare.PostFirstPresentHybridReflectionSpecializations",
-                    PrepareHybridReflectionReceiverPerformancePipelines);
-
             bool meshReady = TryPreparePostFirstPresentFamily(
                 "Pipeline.Prepare.PostFirstPresentSpecializations",
                 () =>
@@ -4769,6 +4751,13 @@ namespace Njulf.Rendering
                         ScenePipelinePreparationScope.Complete);
                     return true;
                 });
+            // Cache consumers are siblings of the active opaque families.
+            // Prepare them only after that family set is known and publish
+            // readiness only after every required lane has a live handle.
+            bool hybridReady = !hybridReceiverPerformanceRequired ||
+                meshReady && TryPreparePostFirstPresentFamily(
+                    "Pipeline.Prepare.PostFirstPresentHybridReflectionSpecializations",
+                    PrepareHybridReflectionReceiverPerformancePipelines);
             if (meshReady)
             {
                 // Scene-specialized variants are independent of receiver-cache
@@ -7220,6 +7209,22 @@ namespace Njulf.Rendering
                 sceneData.DirectionalShadowFramePlan.UsesScreenHistory
                     ? _directionalShadowHistoryResources?.EstimatedBytes ?? 0UL
                     : 0UL;
+            if (sceneData.DirectionalShadowFramePlan.UsesScreenHistory)
+            {
+                try
+                {
+                    _temporalSurfaceValidityResources?.Ensure(
+                        maskWidth,
+                        maskHeight);
+                }
+                catch (Exception exception)
+                {
+                    // Shared validity is an optimization only. The temporal
+                    // pass retains its complete local validation fallback.
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Temporal surface validity allocation was omitted: {exception.Message}");
+                }
+            }
             if (!sceneData.DirectionalShadowFramePlan.UsesScreenHistory)
                 _directionalShadowHistoryResources?.InvalidateHistoryState();
 
@@ -8552,10 +8557,13 @@ namespace Njulf.Rendering
                     _directionalShadowHistoryResources?.GetDiagnostic(1) ?? BufferHandle.Invalid,
                     _directionalShadowHistoryResources?.GetCounters(0) ?? BufferHandle.Invalid,
                     _directionalShadowHistoryResources?.GetCounters(1) ?? BufferHandle.Invalid,
+                    _temporalSurfaceValidityResources?.GetBuffer(0) ?? BufferHandle.Invalid,
+                    _temporalSurfaceValidityResources?.GetBuffer(1) ?? BufferHandle.Invalid,
                     _areaRayShadowPass?.GetMaskBuffer(0) ?? BufferHandle.Invalid,
                     _areaRayShadowPass?.GetMaskBuffer(1) ?? BufferHandle.Invalid,
                     _directionalRayShadowPass?.ResourceGeneration ?? 0u,
                     _directionalShadowHistoryResources?.ResourceGeneration ?? 0u,
+                    _temporalSurfaceValidityResources?.ResourceGeneration ?? 0u,
                     _areaRayShadowPass?.ResourceGeneration ?? 0u),
                 new CausticAsyncBufferIdentity(
                     causticBuffers.Tasks,
@@ -8773,6 +8781,15 @@ namespace Njulf.Rendering
                     RenderGraphResourceId.DirectionalShadowCounters,
                     $"Directional shadow counters frame {frameIndex}",
                     _directionalShadowHistoryResources?.GetCounters(frameIndex) ??
+                    BufferHandle.Invalid,
+                    queueFamilies,
+                    graphicsFamily,
+                    frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.TemporalSurfaceValidityHistory,
+                    $"Temporal surface validity frame {frameIndex}",
+                    _temporalSurfaceValidityResources?.GetBuffer(frameIndex) ??
                     BufferHandle.Invalid,
                     queueFamilies,
                     graphicsFamily,
@@ -9479,10 +9496,13 @@ namespace Njulf.Rendering
             BufferHandle Diagnostic1,
             BufferHandle Counters0,
             BufferHandle Counters1,
+            BufferHandle TemporalSurface0,
+            BufferHandle TemporalSurface1,
             BufferHandle AreaMask0,
             BufferHandle AreaMask1,
             uint ResourceGeneration,
             uint HistoryResourceGeneration,
+            uint TemporalSurfaceResourceGeneration,
             uint AreaMaskResourceGeneration);
 
         private readonly record struct CausticAsyncBufferIdentity(
@@ -14021,6 +14041,10 @@ namespace Njulf.Rendering
             AddResourceStage(
                 "directional-shadow-history-resources",
                 () => _directionalShadowHistoryResources?.Dispose(),
+                "render-graph");
+            AddResourceStage(
+                "temporal-surface-validity-resources",
+                () => _temporalSurfaceValidityResources?.Dispose(),
                 "render-graph");
             AddResourceStage(
                 "spot-shadow-atlas",

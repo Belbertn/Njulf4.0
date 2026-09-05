@@ -1,0 +1,123 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "temporal_surface_validity.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform TemporalSurfaceValidityPushBlock
+{
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint CurrentBufferIndex;
+    uint PreviousBufferIndex;
+    uint HistoryValid;
+    float RelativeDepthThreshold;
+    float NormalThreshold;
+    uint AbiVersion;
+} pc;
+
+bool TemporalSurfaceTapValid(
+    ivec2 tap,
+    uint currentIdentity,
+    float expectedPreviousDepth,
+    vec3 currentNormal)
+{
+    if (any(lessThan(tap, ivec2(0))) ||
+        any(greaterThanEqual(tap, ivec2(pc.ScreenWidth, pc.ScreenHeight))))
+        return false;
+
+    uint pixelIndex = uint(tap.y) * pc.ScreenWidth + uint(tap.x);
+    uint wordOffset = pixelIndex * TEMPORAL_SURFACE_VALIDITY_WORDS_PER_PIXEL;
+    uint previousIdentity = ReadStorageWord(
+        pc.PreviousBufferIndex,
+        wordOffset + 0u);
+    if (previousIdentity == 0u || previousIdentity != currentIdentity)
+        return false;
+
+    float previousDepth = uintBitsToFloat(ReadStorageWord(
+        pc.PreviousBufferIndex,
+        wordOffset + 1u));
+    uint packedPreviousNormal = ReadStorageWord(
+        pc.PreviousBufferIndex,
+        wordOffset + 3u);
+    if (!TemporalSurfaceFinite(previousDepth) || previousDepth <= 0.0 ||
+        packedPreviousNormal == 0u)
+        return false;
+
+    float allowedDepthDelta = max(
+        0.02,
+        max(previousDepth, expectedPreviousDepth) *
+            max(pc.RelativeDepthThreshold, 0.0001));
+    if (abs(previousDepth - expectedPreviousDepth) > allowedDepthDelta)
+        return false;
+
+    vec3 previousNormal = DecodeTemporalSurfaceOctahedral(
+        packedPreviousNormal);
+    return TemporalSurfaceFinite(previousNormal) &&
+        dot(previousNormal, currentNormal) >= pc.NormalThreshold;
+}
+
+void main()
+{
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.x >= pc.ScreenWidth || pixel.y >= pc.ScreenHeight)
+        return;
+
+    uint pixelIndex = pixel.y * pc.ScreenWidth + pixel.x;
+    uint wordOffset = pixelIndex * TEMPORAL_SURFACE_VALIDITY_WORDS_PER_PIXEL;
+    uint identity = ReadStorageWord(pc.CurrentBufferIndex, wordOffset + 0u);
+    uint packedNormal = ReadStorageWord(pc.CurrentBufferIndex, wordOffset + 3u);
+    float expectedPreviousDepth = uintBitsToFloat(ReadStorageWord(
+        pc.CurrentBufferIndex,
+        wordOffset + 2u));
+    uint tapMask = 0u;
+
+    if (pc.HistoryValid != 0u &&
+        pc.AbiVersion == TEMPORAL_SURFACE_VALIDITY_ABI_VERSION &&
+        identity != 0u && packedNormal != 0u &&
+        TemporalSurfaceFinite(expectedPreviousDepth) &&
+        expectedPreviousDepth > 0.0)
+    {
+        vec2 uv = (vec2(pixel) + vec2(0.5)) /
+            vec2(pc.ScreenWidth, pc.ScreenHeight);
+        vec2 motion = textureLod(
+            BindlessTextures[nonuniformEXT(MOTION_VECTOR_TEXTURE_INDEX)],
+            uv,
+            0.0).rg;
+        vec2 previousUv = uv - motion;
+        bool inside = TemporalSurfaceFinite(motion.x) &&
+            TemporalSurfaceFinite(motion.y) &&
+            all(greaterThanEqual(previousUv, vec2(0.0))) &&
+            all(lessThan(previousUv, vec2(1.0)));
+        if (inside)
+        {
+            vec2 previousPixelCenter = previousUv *
+                vec2(pc.ScreenWidth, pc.ScreenHeight);
+            ivec2 base = ivec2(floor(previousPixelCenter - vec2(0.5)));
+            const ivec2 tapOffsets[4] = ivec2[4](
+                ivec2(0, 0),
+                ivec2(1, 0),
+                ivec2(0, 1),
+                ivec2(1, 1));
+            vec3 currentNormal = DecodeTemporalSurfaceOctahedral(packedNormal);
+            for (uint tapIndex = 0u; tapIndex < 4u; tapIndex++)
+            {
+                if (TemporalSurfaceTapValid(
+                        base + tapOffsets[tapIndex],
+                        identity,
+                        expectedPreviousDepth,
+                        currentNormal))
+                    tapMask |= 1u << tapIndex;
+            }
+        }
+    }
+
+    WriteStorageWord(
+        pc.CurrentBufferIndex,
+        wordOffset + 3u,
+        (packedNormal & TEMPORAL_SURFACE_NORMAL_PAYLOAD_MASK) |
+            (tapMask << 28u));
+}

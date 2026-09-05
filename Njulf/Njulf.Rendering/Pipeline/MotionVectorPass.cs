@@ -26,6 +26,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly FoliagePipeline? _foliagePipeline;
         private readonly BufferManager? _bufferManager;
         private readonly FoliageManager? _foliageManager;
+        private readonly TemporalSurfaceValidityResources?
+            _temporalSurfaceValidityResources;
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
         private readonly Func<SurfaceHistoryConsumer>? _historyConsumers;
@@ -46,7 +48,8 @@ namespace Njulf.Rendering.Pipeline
             FoliagePipeline? foliagePipeline = null,
             BufferManager? bufferManager = null,
             FoliageManager? foliageManager = null,
-            Func<SurfaceHistoryConsumer>? historyConsumers = null)
+            Func<SurfaceHistoryConsumer>? historyConsumers = null,
+            TemporalSurfaceValidityResources? temporalSurfaceValidityResources = null)
             : base("MotionVectorPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
@@ -56,6 +59,7 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _historyConsumers = historyConsumers;
+            _temporalSurfaceValidityResources = temporalSurfaceValidityResources;
         }
 
         public override void Initialize()
@@ -113,6 +117,12 @@ namespace Njulf.Rendering.Pipeline
 
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             Extent2D renderExtent = _renderTargets.MotionVectors.Extent;
+            if (IsSharedValidityActive(sceneData, renderExtent))
+            {
+                _temporalSurfaceValidityResources!.PrepareForMotionSeed(
+                    cmd,
+                    frameIndex);
+            }
 
             var viewport = new Viewport
             {
@@ -286,7 +296,13 @@ namespace Njulf.Rendering.Pipeline
                 MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
                 PreviousFrameValid = PackHistoryFlags(previousFrameValid, sceneData),
                 Time = sceneData.Time,
-                PreviousTime = previousTime
+                PreviousTime = previousTime,
+                CameraPosition = new Vector4(sceneData.CameraPosition, 1f),
+                PreviousCameraPosition = new Vector4(
+                    previousFrameValid
+                        ? _previousCameraPosition
+                        : sceneData.CameraPosition,
+                    1f)
             };
 
             _context.Api.CmdPushConstants(
@@ -383,7 +399,9 @@ namespace Njulf.Rendering.Pipeline
                     meshletCapacity,
                     meshletDrawBufferBaseIndex,
                     indirectDispatchOffset,
-                    firstDraw: 0u);
+                    firstDraw: 0u,
+                    oneSided: sceneData
+                        .SceneSubmissionSidedRasterSpecializationActive);
             }
             if (sceneData.SceneSubmissionSidedRasterSpecializationActive)
             {
@@ -399,7 +417,8 @@ namespace Njulf.Rendering.Pipeline
                         doubleSidedMeshletCapacity,
                         meshletDrawBufferBaseIndex,
                         doubleSidedIndirectDispatchOffset,
-                        firstDraw: checked((uint)doubleSidedFirstDraw));
+                        firstDraw: checked((uint)doubleSidedFirstDraw),
+                        oneSided: false);
                 }
             }
         }
@@ -414,12 +433,19 @@ namespace Njulf.Rendering.Pipeline
             int meshletCapacity,
             int meshletDrawBufferBaseIndex,
             ulong indirectDispatchOffset,
-            uint firstDraw)
+            uint firstDraw,
+            bool oneSided)
         {
             BufferManager bufferManager = _bufferManager ??
                 throw new InvalidOperationException(
                     "Compacted motion-vector drawing requires a buffer manager.");
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+            _context.Api.CmdSetCullMode(
+                cmd,
+                oneSided ? CullModeFlags.BackBit : CullModeFlags.None);
+            _context.Api.CmdSetDepthCompareOp(
+                cmd,
+                CompareOp.GreaterOrEqual);
             var pushConstants = new GPUMotionVectorPushConstants
             {
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
@@ -436,7 +462,13 @@ namespace Njulf.Rendering.Pipeline
                     sceneData),
                 Time = sceneData.Time,
                 PreviousTime = previousTime,
-                FirstDraw = firstDraw
+                FirstDraw = firstDraw,
+                CameraPosition = new Vector4(sceneData.CameraPosition, 1f),
+                PreviousCameraPosition = new Vector4(
+                    previousFrameValid
+                        ? _previousCameraPosition
+                        : sceneData.CameraPosition,
+                    1f)
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -684,11 +716,23 @@ namespace Njulf.Rendering.Pipeline
                    sceneData.DirectionalDynamicShadowMeshletCount == 0;
         }
 
-        private static uint PackHistoryFlags(
+        private uint PackHistoryFlags(
             bool previousFrameValid,
             SceneRenderingData sceneData) =>
             (previousFrameValid ? 1u : 0u) |
-            (sceneData.DirectionalShadowFramePlan.UsesScreenHistory ? 2u : 0u);
+            (sceneData.DirectionalShadowFramePlan.UsesScreenHistory ? 2u : 0u) |
+            (IsSharedValidityActive(
+                sceneData,
+                _renderTargets.MotionVectors.Extent) ? 4u : 0u);
+
+        private bool IsSharedValidityActive(
+            SceneRenderingData sceneData,
+            Extent2D extent) =>
+            TemporalSurfaceValidityCodec.RequiresProducer(
+                sceneData.SurfaceHistoryConsumers) &&
+            _temporalSurfaceValidityResources?.IsCompatible(
+                extent.Width,
+                extent.Height) == true;
 
         private static bool IsCameraCut(Matrix4x4 current, Matrix4x4 previous)
         {

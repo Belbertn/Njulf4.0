@@ -199,6 +199,67 @@ public sealed class ModelAssetCookerTransactionTests
     }
 
     [Test]
+    public void CookModel_ChangedMeshletProfile_InvalidatesIncrementalIdentity()
+    {
+        string sourcePath = Path.Combine(_directory, "profile.gltf");
+        WriteTriangleGltf(sourcePath, extent: 1.0f);
+        var options = new ModelCookOptions
+        {
+            UsePlatformSubdirectory = false,
+            ImporterOptions = new ImporterOptions
+            {
+                Backend = ModelImportBackend.SharpGltf
+            }
+        };
+
+        ulong baselineSettingsHash;
+        using (var baselineCooker = new ModelAssetCooker(
+                   RendererMeshletBuildProfiles.Portable48V64T))
+        {
+            AssetCookResult baseline = baselineCooker.CookModel(
+                sourcePath,
+                _directory,
+                options);
+            string modelPath = Path.Combine(
+                _directory,
+                "models",
+                "profile.njmodel");
+            CookedModelAsset cooked = CookedPackage.LoadModel(modelPath);
+            using var meshReader = new CookedAssetReader(
+                ResolveReference(modelPath, cooked.Manifest.Mesh.RelativePath),
+                CookedAssetKind.Mesh);
+            baselineSettingsHash = meshReader.Header.ImportSettingsHash;
+            Assert.That(baseline.Skipped, Is.False);
+        }
+
+        using var candidateCooker = new ModelAssetCooker(
+            RendererMeshletBuildProfiles.PortableFlexCone025);
+        AssetCookResult candidate = candidateCooker.CookModel(
+            sourcePath,
+            _directory,
+            options);
+        string candidateModelPath = Path.Combine(
+            _directory,
+            "models",
+            "profile.njmodel");
+        CookedModelAsset candidateModel = CookedPackage.LoadModel(
+            candidateModelPath);
+        using var candidateMeshReader = new CookedAssetReader(
+            ResolveReference(
+                candidateModelPath,
+                candidateModel.Manifest.Mesh.RelativePath),
+            CookedAssetKind.Mesh);
+        ulong candidateSettingsHash =
+            candidateMeshReader.Header.ImportSettingsHash;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(candidate.Skipped, Is.False);
+            Assert.That(candidateSettingsHash, Is.Not.EqualTo(baselineSettingsHash));
+        });
+    }
+
+    [Test]
     public void CookModel_OpaqueMaterialNamedFoliage_DoesNotPreserveAlphaCoverage()
     {
         string sourcePath = Path.Combine(_directory, "foliage-trunk.gltf");

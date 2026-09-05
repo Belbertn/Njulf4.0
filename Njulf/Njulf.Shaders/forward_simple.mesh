@@ -38,10 +38,15 @@ shared uint meshNegativeDeterminant;
 
 layout(location = 0) out vec3 meshNormal[];
 layout(location = 1) out vec2 meshTexCoord[];
-layout(location = 2) flat out uint meshMaterialIndex[];
-layout(location = 3) flat out uint meshObjectIndex[];
-layout(location = 4) out vec3 meshWorldPosition[];
-layout(location = 5) flat out uint meshMeshletIndex[];
+layout(location = 2, component = 0) perprimitiveEXT flat out uint meshMaterialIndex[];
+layout(location = 2, component = 1) perprimitiveEXT flat out uint meshObjectIndex[];
+layout(location = 2, component = 2) perprimitiveEXT flat out uint meshMeshletIndex[];
+layout(location = 3) out vec3 meshWorldPosition[];
+// Bit zero is the fragment-side Plan-4 coverage gate. It deliberately carries
+// only geometry facts unavailable from GPUMaterialData.
+#if NJULF_COMMON_SURFACE_COVERAGE_DIAGNOSTICS
+layout(location = 2, component = 3) perprimitiveEXT flat out uint meshCommonSurfaceEligibility[];
+#endif
 
 layout(push_constant) uniform ForwardPushConstantBlock
 {
@@ -101,6 +106,13 @@ void main()
     barrier();
 
     GPUObjectData objectData = ReadInstanceData(pc.Push.CurrentFrameIndex, command.InstanceId);
+#if NJULF_COMMON_SURFACE_COVERAGE_DIAGNOSTICS
+    uint commonSurfaceEligibility =
+        objectData.SkinningEnabled == 0 &&
+        (command.Flags & MESHLET_COMMAND_FLAG_LOD_DITHER_TRANSITION) == 0u
+            ? 1u
+            : 0u;
+#endif
 
     for (uint vertexSlot = gl_LocalInvocationIndex;
          vertexSlot < meshlet.LocalVertexCount;
@@ -117,10 +129,7 @@ void main()
         gl_MeshVerticesEXT[vertexSlot].gl_Position = MulRowMajor(worldPosition, pc.Push.ViewProjectionMatrix);
         meshNormal[vertexSlot] = worldNormal;
         meshTexCoord[vertexSlot] = vertex.TexCoord;
-        meshMaterialIndex[vertexSlot] = command.MaterialIndex;
-        meshObjectIndex[vertexSlot] = command.InstanceId;
         meshWorldPosition[vertexSlot] = worldPosition.xyz;
-        meshMeshletIndex[vertexSlot] = command.MeshletIndex;
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;
@@ -131,6 +140,13 @@ void main()
         uint i0 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 0u);
         uint i1 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 1u);
         uint i2 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 2u);
+        meshMaterialIndex[triangleSlot] = command.MaterialIndex;
+        meshObjectIndex[triangleSlot] = command.InstanceId;
+        meshMeshletIndex[triangleSlot] = command.MeshletIndex;
+#if NJULF_COMMON_SURFACE_COVERAGE_DIAGNOSTICS
+        meshCommonSurfaceEligibility[triangleSlot] =
+            commonSurfaceEligibility;
+#endif
         gl_PrimitiveTriangleIndicesEXT[triangleSlot] = ResolveMirroredInstanceTriangle(
             i0,
             i1,

@@ -254,6 +254,12 @@ namespace Njulf.Rendering.Resources
                 GtaoRadianceFormat,
                 gtaoWorkingExtent,
                 StorageSampledDescriptor);
+            GtaoCurrentGeometry = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.GtaoCurrentGeometry,
+                "GTAO Current Geometry",
+                GtaoGeometryHistoryFormat,
+                gtaoWorkingExtent,
+                StorageSampledDescriptor);
             GtaoSpatialScratch = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.GtaoSpatialScratch,
                 "GTAO Spatial Debug Scratch",
@@ -509,6 +515,7 @@ namespace Njulf.Rendering.Resources
         public RenderTarget AmbientOcclusionBlurred { get; }
         public RenderTarget AmbientOcclusionScratch { get; }
         public RenderTarget GtaoRaw { get; }
+        public RenderTarget GtaoCurrentGeometry { get; }
         public RenderTarget GtaoSpatialScratch { get; }
         public RenderTarget GtaoHistory0 { get; }
         public RenderTarget GtaoHistory1 { get; }
@@ -563,7 +570,7 @@ namespace Njulf.Rendering.Resources
         public int BloomMipCount => _bloomMipChain.Count;
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
         public int ResizeCount { get; private set; }
-        public int RenderTargetCount => 23 + _bloomMipChain.Count +
+        public int RenderTargetCount => 24 + _bloomMipChain.Count +
             (NearFieldDirectSource is null ? 0 :
                 14 + (NearFieldSourceLuminance is null ? 0 : 1) +
                 (NearFieldTraceRasterDepth is null ? 0 : 1) +
@@ -588,6 +595,7 @@ namespace Njulf.Rendering.Resources
             AmbientOcclusionBlurred,
             AmbientOcclusionScratch,
             GtaoRaw,
+            GtaoCurrentGeometry,
             GtaoSpatialScratch,
             GtaoHistory0,
             GtaoHistory1,
@@ -1222,6 +1230,8 @@ namespace Njulf.Rendering.Resources
                 : PlaceholderExtent;
             RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoRaw,
                 GtaoRaw, gtaoWorkingExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoCurrentGeometry,
+                GtaoCurrentGeometry, gtaoWorkingExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoSpatialScratch,
                 GtaoSpatialScratch, gtaoResolvedExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoHistory,
@@ -1700,6 +1710,8 @@ namespace Njulf.Rendering.Resources
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionBlurred, AmbientOcclusionBlurred);
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionScratch, AmbientOcclusionScratch);
             DisposeIfManagerOwned(RenderGraphResourceId.GtaoRaw, GtaoRaw);
+            DisposeIfManagerOwned(RenderGraphResourceId.GtaoCurrentGeometry,
+                GtaoCurrentGeometry);
             DisposeIfManagerOwned(RenderGraphResourceId.GtaoSpatialScratch,
                 GtaoSpatialScratch);
             DisposeIfManagerOwned(RenderGraphResourceId.GtaoHistory,

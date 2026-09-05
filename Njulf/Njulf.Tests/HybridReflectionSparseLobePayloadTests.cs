@@ -162,7 +162,7 @@ public sealed class HybridReflectionSparseLobePayloadTests
                     BindlessIndex.HybridReflectionSparseLobeBufferBase + 1));
             Assert.That(BindlessIndex.StaticBufferCount,
                 Is.EqualTo(
-                    BindlessIndex.HybridReflectionSparseLobeBufferFrame1 + 1));
+                    BindlessIndex.TemporalSurfaceValidityBufferFrame1 + 1));
         });
     }
 

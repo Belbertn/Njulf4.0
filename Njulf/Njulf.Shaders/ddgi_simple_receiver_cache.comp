@@ -22,6 +22,10 @@
 #define NJULF_DDGI_RECEIVER_CACHE_MISSING_FEEDBACK 0
 #endif
 
+#ifndef NJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD
+#define NJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD 1
+#endif
+
 const uint NJULF_PERFORMANCE_ROW_MAJOR_SPATIAL_GATHER = 1u << 6u;
 const uint NJULF_PERFORMANCE_DDGI_PUBLICATION_REUSE = 1u << 10u;
 layout(constant_id = 31) const uint
@@ -39,7 +43,8 @@ bool NjulfDdgiPublicationReuseEnabled()
         NJULF_PERFORMANCE_DDGI_PUBLICATION_REUSE) != 0u;
 }
 
-#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY && \
+    NJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD
 #define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
 #define SIMPLE_DDGI_DIRECTIONAL_COEFFICIENT_RECEIVER 1
 #endif
@@ -100,13 +105,16 @@ const float RECEIVER_NORMAL_RELATIVE_EPSILON = 0.000001;
 #if NJULF_DDGI_RECEIVER_CACHE_LEGACY
 const uint RECEIVER_GATHER_ENTRY_WORDS = 4u;
 #else
-// Four canonical irradiance/metadata words followed by 27 signed FP16 L2
-// coefficient lanes, a confidence word, and an exact frame stamp.
+// Four canonical irradiance/metadata words followed by the directional tail.
+// The diffuse/visibility-only hybrid producer preserves this stride while
+// leaving the tail unused, so the published gather ABI does not change.
 const uint RECEIVER_GATHER_ENTRY_WORDS = 20u;
+#if NJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD
 const uint RECEIVER_GATHER_DIRECTIONAL_COEFFICIENT_WORD = 4u;
 const uint RECEIVER_GATHER_DIRECTIONAL_COEFFICIENT_WORDS = 14u;
 const uint RECEIVER_GATHER_DIRECTIONAL_SUPPORT_WORD = 18u;
 const uint RECEIVER_GATHER_DIRECTIONAL_FRAME_WORD = 19u;
+#endif
 #endif
 
 shared SimpleDdgiParams ReceiverSharedParams;
@@ -339,7 +347,8 @@ void StoreReceiverCacheSample(uint entryIndex, uvec4 packed)
     WriteStorageWordUniform(pc.CacheBufferIndex, word + 3u, packed.w);
 }
 
-#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY && \
+    NJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD
 float ReceiverDirectionalCoefficientValue(
     vec3 coefficients[9],
     uint valueIndex,
@@ -436,7 +445,8 @@ uvec4 EmptyReceiverCacheSample()
 void StoreInvalidReceiverCacheEntry(uint entryIndex)
 {
     StoreReceiverCacheSample(entryIndex, EmptyReceiverCacheSample());
-#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY && \
+    NJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD
     InvalidateReceiverDirectionalCoefficients(entryIndex);
 #endif
 #if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
@@ -680,7 +690,8 @@ void main()
     }
 #endif
     SimpleDdgiParams params = ReceiverSharedParams;
-#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY && \
+    NJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD
     // Coefficients remain signed and direction-independent on the coarse
     // lattice. The query roughness only admits the existing directional field;
     // the fragment applies its exact GGX band scales after surface rejection.
@@ -766,11 +777,14 @@ void main()
                 receiverDepth,
                 indirectSpecularVisibility,
                 params.residencyFlags)));
-#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY && \
+    NJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD
     StoreReceiverDirectionalCoefficients(
         entryIndex,
         gather,
         ownership);
+#endif
+#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY
     StoreReceiverSurface(entryIndex, receiverSurface);
 #endif
 #if NJULF_DDGI_RECEIVER_CACHE_ADAPTIVE

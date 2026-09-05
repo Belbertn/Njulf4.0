@@ -2,6 +2,13 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
+#if defined(FORWARD_SIMPLE_OPAQUE)
+#extension GL_EXT_mesh_shader : require
+#define FORWARD_PER_PRIMITIVE_IDS 1
+#else
+#define FORWARD_PER_PRIMITIVE_IDS 0
+#endif
+
 #ifndef DIRECTIONAL_TRANSPARENT_RAY_QUERY
 #define DIRECTIONAL_TRANSPARENT_RAY_QUERY 0
 #endif
@@ -180,6 +187,16 @@ layout(early_fragment_tests) in;
 #define NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT 0
 #endif
 
+// Hybrid opaque receivers defer directional reflected radiance to the
+// reflection base pass. Keep only diffuse DDGI and rough-specular visibility
+// in their Forward permutation; all other Forward consumers retain the full
+// directional gather.
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#define FORWARD_DDGI_DIRECTIONAL_GATHER 0
+#else
+#define FORWARD_DDGI_DIRECTIONAL_GATHER 1
+#endif
+
 #ifndef NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT
 #define NJULF_HYBRID_REFLECTION_SPARSE_LOBE_OUTPUT 0
 #endif
@@ -297,14 +314,14 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT ((((uint(gl_FragCoord.x) & 15u) == 0u) && ((uint(gl_FragCoord.y) & 15u) == 0u)) ? 256u : 0u)
 #define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE (((uint(gl_FragCoord.x) & 7u) == 0u) && ((uint(gl_FragCoord.y) & 7u) == 0u))
 #define SIMPLE_DDGI_RECEIVER_COVERAGE_HASH (((uint(gl_FragCoord.x) >> 3u) * 73856093u) ^ ((uint(gl_FragCoord.y) >> 3u) * 19349663u))
-#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
+#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER FORWARD_DDGI_DIRECTIONAL_GATHER
 // Reflections consume the stable low-frequency L1 prefix. The full L2 record
 // remains the producer/transport representation, while SSR and ray queries
 // provide the high-frequency scene detail that L1 deliberately omits. The
 // surface-aware cache is the exception: its common path projects full L2 into
 // the compact lattice, so rejected fragments retain a matching full-L2 exact
 // fallback rather than crossing representation at cache boundaries.
-#if !FORWARD_DDGI_RECEIVER_CACHE
+#if !FORWARD_DDGI_RECEIVER_CACHE && FORWARD_DDGI_DIRECTIONAL_GATHER
 #define SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER 1
 #endif
 #if FORWARD_THIN_GLASS_ONLY
@@ -361,7 +378,7 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
 #undef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
 #undef SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
-#if !FORWARD_DDGI_RECEIVER_CACHE
+#if !FORWARD_DDGI_RECEIVER_CACHE && FORWARD_DDGI_DIRECTIONAL_GATHER
 #undef SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER
 #endif
 #if FORWARD_THIN_GLASS_ONLY
@@ -383,13 +400,26 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #if FORWARD_SIMPLE_VERTEX_INPUT
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec2 fragTexCoord;
-layout(location = 2) flat in uint fragMaterialIndex;
-layout(location = 3) flat in uint fragObjectIndex;
-layout(location = 4) in vec3 fragWorldPosition;
-layout(location = 5) flat in uint fragMeshletIndex;
+layout(location = 2, component = 0) perprimitiveEXT flat in uint fragMaterialIndex;
+layout(location = 2, component = 1) perprimitiveEXT flat in uint fragObjectIndex;
+layout(location = 2, component = 2) perprimitiveEXT flat in uint fragMeshletIndex;
+layout(location = 3) in vec3 fragWorldPosition;
+#if NJULF_COMMON_SURFACE_COVERAGE_DIAGNOSTICS
+layout(location = 2, component = 3) perprimitiveEXT flat in uint fragCommonSurfaceEligibility;
+#endif
 const vec4 fragWorldTangent = vec4(1.0, 0.0, 0.0, 1.0);
 const vec2 fragTexCoord2 = vec2(0.0);
 const vec4 fragVertexColor = vec4(1.0);
+#elif FORWARD_PER_PRIMITIVE_IDS
+layout(location = 0) in vec3 fragNormal;
+layout(location = 1) in vec2 fragTexCoord;
+layout(location = 2, component = 0) perprimitiveEXT flat in uint fragMaterialIndex;
+layout(location = 2, component = 1) perprimitiveEXT flat in uint fragObjectIndex;
+layout(location = 2, component = 2) perprimitiveEXT flat in uint fragMeshletIndex;
+layout(location = 3) in vec3 fragWorldPosition;
+layout(location = 4) in vec4 fragWorldTangent;
+layout(location = 5) in vec2 fragTexCoord2;
+layout(location = 6) in vec4 fragVertexColor;
 #else
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec2 fragTexCoord;
@@ -1188,6 +1218,65 @@ vec3 ReconstructViewPositionFromDepth(vec2 uv, float depth)
     vec4 view = MulRowMajor(clip, pc.Push.InverseProjectionMatrix);
     return view.xyz / max(abs(view.w), 0.00001);
 }
+
+#if defined(FORWARD_SIMPLE_OPAQUE) && FORWARD_SIMPLE_VERTEX_INPUT && \
+    NJULF_COMMON_SURFACE_COVERAGE_DIAGNOSTICS
+bool CommonSurfaceMaterialEligible(GPUMaterialData material)
+{
+    const vec4 identityOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    bool noTextures =
+        material.AlbedoTextureIndex == DEFAULT_WHITE_TEXTURE &&
+        material.NormalTextureIndex == DEFAULT_NORMAL_TEXTURE &&
+        material.MetallicRoughnessTextureIndex == DEFAULT_BLACK_TEXTURE &&
+        material.OcclusionTextureIndex == DEFAULT_WHITE_TEXTURE &&
+        material.EmissiveTextureIndex == DEFAULT_WHITE_TEXTURE;
+    bool identityTransforms =
+        all(lessThanEqual(
+            abs(material.BaseColorOffsetScale - identityOffsetScale),
+            vec4(0.0001))) &&
+        all(lessThanEqual(
+            abs(material.NormalOffsetScale - identityOffsetScale),
+            vec4(0.0001))) &&
+        all(lessThanEqual(
+            abs(material.MetallicRoughnessOffsetScale - identityOffsetScale),
+            vec4(0.0001))) &&
+        all(lessThanEqual(
+            abs(material.OcclusionOffsetScale - identityOffsetScale),
+            vec4(0.0001))) &&
+        all(lessThanEqual(
+            abs(material.EmissiveOffsetScale - identityOffsetScale),
+            vec4(0.0001))) &&
+        all(lessThanEqual(abs(material.TextureRotations), vec4(0.0001))) &&
+        all(lessThanEqual(abs(material.TextureTexCoordSets), vec4(0.0001))) &&
+        abs(material.OcclusionBinding.x) <= 0.0001 &&
+        abs(material.OcclusionBinding.y) <= 0.0001;
+    return fragCommonSurfaceEligibility != 0u &&
+        noTextures &&
+        identityTransforms &&
+        material.FeatureFlags == 0u &&
+        material.ExtensionDataIndex < 0 &&
+        material.NormalScaleBias.y < 0.5 &&
+        all(lessThanEqual(abs(material.Emissive.rgb), vec3(0.0001)));
+}
+
+void RecordCommonSurfaceMaterialCoverage(GPUMaterialData material)
+{
+    if (!DdgiSparseDiagnosticPixel())
+        return;
+
+    AddSimpleDdgiReceiverCacheDiagnostic(
+        pc.Push.CurrentFrameIndex,
+        COMMON_SURFACE_SIMPLE_OPAQUE_PIXEL_COUNTER,
+        256u);
+    if (CommonSurfaceMaterialEligible(material))
+    {
+        AddSimpleDdgiReceiverCacheDiagnostic(
+            pc.Push.CurrentFrameIndex,
+            COMMON_SURFACE_ELIGIBLE_PIXEL_COUNTER,
+            256u);
+    }
+}
+#endif
 
 float FetchDepthAtPixel(ivec2 pixel, ivec2 depthSize)
 {
@@ -5880,6 +5969,11 @@ void main()
             RecordDecalFragmentAttribution(DECAL_ESTIMATED_COVERAGE_KILLED_COUNTER);
         discard;
     }
+
+#if defined(FORWARD_SIMPLE_OPAQUE) && FORWARD_SIMPLE_VERTEX_INPUT && \
+    NJULF_COMMON_SURFACE_COVERAGE_DIAGNOSTICS
+    RecordCommonSurfaceMaterialCoverage(material);
+#endif
 
     if (geometryDecal)
         RecordDecalFragmentAttribution(DECAL_ESTIMATED_SURVIVING_COUNTER);

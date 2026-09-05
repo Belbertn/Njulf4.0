@@ -181,6 +181,12 @@ public static class SampleBenchmarkCaptureVariant
             case ForwardGiSurfaceDiagnostics:
                 settings.GlobalIllumination.SimpleDdgiReceiverCacheMode =
                     SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial;
+                // The Plan-4 qualification pass only needs the canonical
+                // receiver cache. Delayed B1 contribution feedback is a
+                // separate experiment and can otherwise keep the diagnostic
+                // pipeline behind an unrelated all-producer readiness gate.
+                settings.GlobalIllumination.SimpleDdgiReceiverFeedbackMode =
+                    SimpleDdgiReceiverFeedbackMode.Off;
                 settings.GlobalIllumination.GiCausticMode =
                     GiCausticMode.Off;
                 settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =

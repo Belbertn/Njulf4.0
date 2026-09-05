@@ -1058,8 +1058,15 @@ namespace Njulf.Rendering.Descriptors
         public const int HybridReflectionSparseLobeBufferFrame1 =
             HybridReflectionSparseLobeBufferBase + 1;
 
-        public const int StaticBufferCount =
+        /// <summary>Four-word full-resolution shared temporal surface history.</summary>
+        public const int TemporalSurfaceValidityBufferBase =
             HybridReflectionSparseLobeBufferFrame1 + 1;
+
+        public const int TemporalSurfaceValidityBufferFrame1 =
+            TemporalSurfaceValidityBufferBase + 1;
+
+        public const int StaticBufferCount =
+            TemporalSurfaceValidityBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1254,6 +1261,8 @@ namespace Njulf.Rendering.Descriptors
                     SimpleDdgiMaskedFeedbackCompactBufferFrame1 => nameof(SimpleDdgiMaskedFeedbackCompactBufferFrame1),
                     HybridReflectionSparseLobeBufferBase => nameof(HybridReflectionSparseLobeBufferBase),
                     HybridReflectionSparseLobeBufferFrame1 => nameof(HybridReflectionSparseLobeBufferFrame1),
+                    TemporalSurfaceValidityBufferBase => nameof(TemporalSurfaceValidityBufferBase),
+                    TemporalSurfaceValidityBufferFrame1 => nameof(TemporalSurfaceValidityBufferFrame1),
                     SceneOpaqueCompactedMeshletDrawBufferBase => nameof(SceneOpaqueCompactedMeshletDrawBufferBase),
                     SceneOpaqueCompactedMeshletDrawBufferFrame1 => nameof(SceneOpaqueCompactedMeshletDrawBufferFrame1),
                     SceneSimpleOpaqueCompactedMeshletDrawBufferBase => nameof(SceneSimpleOpaqueCompactedMeshletDrawBufferBase),

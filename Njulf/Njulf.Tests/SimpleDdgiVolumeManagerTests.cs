@@ -1954,6 +1954,153 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
+    public void CameraRingMotion_DefersAuditUntilFourStableSubmittedFrames()
+    {
+        SimpleDdgiTransportGenerations generations =
+            CreateTransportGenerations();
+        SimpleDdgiTransportAuditMotionState state = default;
+        state = SimpleDdgiVolumeManager.AdvanceTransportAuditMotionState(
+            state,
+            Vector3.Zero,
+            cameraRingActive: true,
+            livePropagationBoundaryCurrent: true,
+            sceneContentRevision: 7UL,
+            generations,
+            cameraCut: false,
+            topologyChanged: false);
+        state = SimpleDdgiVolumeManager.AdvanceTransportAuditMotionState(
+            state,
+            new Vector3(0.01f, 0f, 0f),
+            cameraRingActive: true,
+            livePropagationBoundaryCurrent: true,
+            sceneContentRevision: 7UL,
+            generations,
+            cameraCut: false,
+            topologyChanged: false);
+
+        for (int frame = 0;
+             frame < SimpleDdgiVolumeManager
+                 .TransportAuditCameraStableFrameCount - 1;
+             frame++)
+        {
+            state = SimpleDdgiVolumeManager.AdvanceTransportAuditMotionState(
+                state,
+                new Vector3(0.01f, 0f, 0f),
+                cameraRingActive: true,
+                livePropagationBoundaryCurrent: true,
+                sceneContentRevision: 7UL,
+                generations,
+                cameraCut: false,
+                topologyChanged: false);
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldDeferTransportTailAuditForCameraMotion(
+                        state,
+                        SimpleDdgiTransportPhase.AcceleratedSolve,
+                        generations),
+                Is.True);
+        }
+
+        state = SimpleDdgiVolumeManager.AdvanceTransportAuditMotionState(
+            state,
+            new Vector3(0.01f, 0f, 0f),
+            cameraRingActive: true,
+            livePropagationBoundaryCurrent: true,
+            sceneContentRevision: 7UL,
+            generations,
+            cameraCut: false,
+            topologyChanged: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.StableSubmittedFrameCount, Is.EqualTo(4));
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldDeferTransportTailAuditForCameraMotion(
+                        state,
+                        SimpleDdgiTransportPhase.AcceleratedSolve,
+                        generations),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void AuditMotionGate_LeavesFrozenAndStaticFieldsAloneAndResetsOnBoundaries()
+    {
+        SimpleDdgiTransportGenerations generations =
+            CreateTransportGenerations();
+        SimpleDdgiTransportAuditMotionState moving =
+            SimpleDdgiVolumeManager.AdvanceTransportAuditMotionState(
+                default,
+                Vector3.Zero,
+                cameraRingActive: true,
+                livePropagationBoundaryCurrent: true,
+                sceneContentRevision: 3UL,
+                generations,
+                cameraCut: false,
+                topologyChanged: false);
+        SimpleDdgiTransportAuditMotionState remapped =
+            SimpleDdgiVolumeManager.AdvanceTransportAuditMotionState(
+                moving with { StableSubmittedFrameCount = 4 },
+                Vector3.Zero,
+                cameraRingActive: true,
+                livePropagationBoundaryCurrent: true,
+                sceneContentRevision: 3UL,
+                generations,
+                cameraCut: false,
+                topologyChanged: true);
+        SimpleDdgiTransportAuditMotionState staticOnly =
+            SimpleDdgiVolumeManager.AdvanceTransportAuditMotionState(
+                default,
+                Vector3.Zero,
+                cameraRingActive: false,
+                livePropagationBoundaryCurrent: true,
+                sceneContentRevision: 3UL,
+                generations,
+                cameraCut: false,
+                topologyChanged: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldDeferTransportTailAuditForCameraMotion(
+                        moving,
+                        SimpleDdgiTransportPhase.AuditFrozen,
+                        generations),
+                Is.False,
+                "view motion must not cancel or block an already-frozen audit");
+            Assert.That(remapped.StableSubmittedFrameCount, Is.Zero,
+                "a real remap must re-arm the stability window");
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldDeferTransportTailAuditForCameraMotion(
+                        staticOnly,
+                        SimpleDdgiTransportPhase.AcceleratedSolve,
+                        generations),
+                Is.False,
+                "authored/static-only layouts retain their prior audit behavior");
+        });
+    }
+
+    private static SimpleDdgiTransportGenerations
+        CreateTransportGenerations() =>
+        new(
+            VolumeTable: 1u,
+            PhysicalOwnership: 2u,
+            SourceLighting: 3u,
+            SourceEpoch: 4u,
+            TransportOperator: 5u,
+            CanonicalField: 6u,
+            Solve: 7u,
+            Audit: 8u,
+            Queue: 9u,
+            SchedulerResources: 10u)
+        {
+            DynamicGeometryEpoch = 11u
+        };
+
+    [Test]
     public void LivePropagationBoundary_AcceptsCurrentPublishedSweepWhileAuditCountDrifts()
     {
         Assert.Multiple(() =>

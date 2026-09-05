@@ -714,6 +714,9 @@ public sealed class SampleBenchmarkPairComparerTests
                 settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
                 Is.EqualTo(SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial));
             Assert.That(
+                settings.GlobalIllumination.SimpleDdgiReceiverFeedbackMode,
+                Is.EqualTo(SimpleDdgiReceiverFeedbackMode.Off));
+            Assert.That(
                 settings.Diagnostics.DdgiForwardEstimateCountersEnabled,
                 Is.True);
             Assert.That(

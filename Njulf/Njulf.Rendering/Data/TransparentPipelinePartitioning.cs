@@ -8,7 +8,8 @@ namespace Njulf.Rendering.Data
     {
         GeometryDecal = 0,
         OrdinaryBlend = 1,
-        ThickTransmission = 2
+        ThickTransmission = 2,
+        ThinGlass = 3
     }
 
     public readonly record struct TransparentDrawClassification(
@@ -23,7 +24,7 @@ namespace Njulf.Rendering.Data
         bool ExactReceiverFeedbackRequired,
         bool DecalReceiverCacheRequired)
     {
-        public const int MaterialClassCount = 3;
+        public const int MaterialClassCount = 4;
         public const int CompositionModeCount = 2;
         public const int CacheEntryCount =
             MaterialClassCount * CompositionModeCount * 2 * 2 * 2;
@@ -87,9 +88,14 @@ namespace Njulf.Rendering.Data
             if (isGeometryDecal)
                 return TransparentMaterialClass.GeometryDecal;
 
-            return forwardClass == MaterialForwardClass.ThickTransmission ||
-                   transmissionPolicy == GiTransmissionPolicy.Volume
-                ? TransparentMaterialClass.ThickTransmission
+            if (forwardClass == MaterialForwardClass.ThickTransmission ||
+                transmissionPolicy == GiTransmissionPolicy.Volume)
+            {
+                return TransparentMaterialClass.ThickTransmission;
+            }
+
+            return forwardClass == MaterialForwardClass.ThinGlass
+                ? TransparentMaterialClass.ThinGlass
                 : TransparentMaterialClass.OrdinaryBlend;
         }
     }

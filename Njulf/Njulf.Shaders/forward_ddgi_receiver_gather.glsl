@@ -29,6 +29,7 @@ if (directionalGlobalIlluminationEnabled)
 {
     SimpleDdgiParams directionalParams = ReadSimpleDdgiParams(
         uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+#if FORWARD_DDGI_DIRECTIONAL_GATHER
     uint directionalMode = SimpleDdgiDirectionalRadianceMode(
         directionalParams.residencyFlags);
     uint glossyMode = SimpleDdgiGlossyTransportMode(
@@ -47,6 +48,7 @@ if (directionalGlobalIlluminationEnabled)
             SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF &&
         glossyMode != SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_OFF &&
         (roughnessWeight > 0.0 || thinGlass);
+#endif
     bool diffuseGatherRequired =
         (directionalParams.flags &
             (SIMPLE_DDGI_FLAG_ENABLED |
@@ -55,6 +57,7 @@ if (directionalGlobalIlluminationEnabled)
              SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) &&
         directionalParams.probeCount > 0u;
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+#if FORWARD_DDGI_DIRECTIONAL_GATHER
     bool receiverCompactDirectionalResolved = !directionalConfigured;
 #if FORWARD_DDGI_CACHE_HYBRID_OWNERSHIP_LOCKED
     if (NjulfPerformanceOptimizationEnabled(
@@ -105,6 +108,12 @@ if (directionalGlobalIlluminationEnabled)
         !receiverCompactDirectionalResolved ||
         (ForwardAmbientOcclusionBentNormalMode() == 2u &&
          bentNormalValid);
+#else
+    bool exactGatherRequired =
+        !receiverCacheAccepted ||
+        (ForwardAmbientOcclusionBentNormalMode() == 2u &&
+         bentNormalValid);
+#endif
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
     // Cache-required opaque artifacts also own B1 attribution. Only a
     // surviving alpha-mask fragment that cannot enter the lossless compact
@@ -132,6 +141,7 @@ if (directionalGlobalIlluminationEnabled)
     if (diffuseGatherRequired)
 #endif
     {
+#if FORWARD_DDGI_DIRECTIONAL_GATHER
         if (directionalConfigured)
         {
             SetSimpleDdgiDirectionalRadianceQuery(
@@ -147,6 +157,7 @@ if (directionalGlobalIlluminationEnabled)
                 SetSimpleDdgiDirectionalRadianceQueryEligibilityWeight(1.0);
             }
         }
+#endif
         precomputedSimpleDdgiGather = SampleSimpleDdgiGather(
             directionalParams,
             fragWorldPosition,
@@ -177,6 +188,7 @@ if (directionalGlobalIlluminationEnabled)
                 precomputedSimpleDdgiGather,
                 directionalParams,
                 roughness);
+#if FORWARD_DDGI_DIRECTIONAL_GATHER
         if (directionalConfigured)
         {
             ddgiDirectionalRadiance =
@@ -189,6 +201,7 @@ if (directionalGlobalIlluminationEnabled)
                 0.0,
                 1.0);
         }
+#endif
     }
 }
 }

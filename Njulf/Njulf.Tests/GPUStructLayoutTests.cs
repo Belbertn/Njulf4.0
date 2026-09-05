@@ -7,6 +7,7 @@ using Njulf.Assets;
 using Njulf.Core.Geometry;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
@@ -1300,6 +1301,68 @@ namespace Njulf.Tests
                     "ProcessExpandedDirectionalShadowRange("));
                 Assert.That(shader, Does.Contain(
                     "SCENE_INSTANCE_CLASSIFICATION_CASTS_DIRECTIONAL_SHADOW"));
+            });
+        }
+
+        [Test]
+        public void SceneCompaction_AggregateValidationOutputIsOptionalAcrossFlatAndInstancePaths()
+        {
+            var flatProduction = new SceneRenderingData();
+            var instanceValidation = new SceneRenderingData
+            {
+                SceneSubmissionGpuLodSelectionEnabled = true,
+                SceneSubmissionSidedRasterSpecializationActive = true,
+                SceneSubmissionGpuInstanceExpansionActive = true,
+                SceneSubmissionGpuLodDitherTransitionsActive = true,
+                SceneSubmissionGpuHierarchicalLodActive = true,
+                SceneSubmissionValidationCompareCpuGpuLists = true
+            };
+
+            uint flatFlags = SceneOpaqueCompactionPass.BuildCompactionFlags(
+                flatProduction,
+                compactDirectionalShadows: false);
+            uint validationFlags =
+                SceneOpaqueCompactionPass.BuildCompactionFlags(
+                    instanceValidation,
+                    compactDirectionalShadows: true);
+            string shader = ReadShaderFile("scene_opaque_compact.comp");
+            string expandedPath = shader[
+                shader.IndexOf("void EmitExpandedOpaqueCommand(",
+                    StringComparison.Ordinal)..
+                shader.IndexOf("void EmitExpandedDepthCommand(",
+                    StringComparison.Ordinal)];
+            string flatPath = shader[
+                shader.IndexOf("void ProcessOpaqueCandidate(",
+                    StringComparison.Ordinal)..
+                shader.IndexOf("void ProcessDepthCandidate(",
+                    StringComparison.Ordinal)];
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    flatFlags & SceneOpaqueCompactionPass
+                        .AggregateValidationOutputFlag,
+                    Is.Zero);
+                Assert.That(
+                    validationFlags & SceneOpaqueCompactionPass
+                        .AggregateValidationOutputFlag,
+                    Is.Not.Zero);
+                Assert.That(validationFlags & 0x7fu, Is.EqualTo(0x7fu),
+                    "Instance, sided, hierarchy/LOD, shadow, and base flags must remain intact.");
+                Assert.That(shader, Does.Contain(
+                    "SCENE_OPAQUE_COMPACTION_FLAG_AGGREGATE_VALIDATION_OUTPUT = 1u << 7u"));
+                Assert.That(expandedPath, Does.Contain(
+                    "bool aggregateValidationOutput = AggregateValidationOutputEnabled();"));
+                Assert.That(flatPath, Does.Contain(
+                    "bool aggregateValidationOutput = AggregateValidationOutputEnabled();"));
+                Assert.That(expandedPath, Does.Contain(
+                    "OpaqueBucketAppendCounterWord(bucket, doubleSided)"));
+                Assert.That(flatPath, Does.Contain(
+                    "OpaqueBucketAppendCounterWord(bucket, doubleSided)"));
+                Assert.That(shader, Does.Contain(
+                    "SCENE_SUBMISSION_COUNTER_HIERARCHY_TRAVERSAL_FALLBACK"));
+                Assert.That(shader, Does.Contain(
+                    "SCENE_SUBMISSION_COUNTER_MISSING_LOD_FALLBACK"));
             });
         }
 

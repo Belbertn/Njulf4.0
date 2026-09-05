@@ -191,6 +191,8 @@ namespace Njulf.Rendering.Data
         public ulong TailAuditReadbackTimeoutCount { get; init; }
         public ulong TailSourceNoProgressRecoveryCount { get; init; }
         public ulong TailConvergenceDeadlineRecoveryCount { get; init; }
+        public ulong TailAuditCameraMotionDeferredStartCount { get; init; }
+        public string TailAuditStartDeferralReason { get; init; } = string.Empty;
         public static SimpleDdgiTransportConvergenceTelemetry Empty { get; } = new(
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0f,
             Array.Empty<SimpleDdgiTransportRingConvergenceTelemetry>())

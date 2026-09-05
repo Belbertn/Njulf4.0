@@ -34,7 +34,7 @@ public sealed class TransparentPipelinePartitioningTests
                     MaterialForwardClass.ThinGlass,
                     isGeometryDecal: false,
                     GiTransmissionPolicy.ThinSurface),
-                Is.EqualTo(TransparentMaterialClass.OrdinaryBlend));
+                Is.EqualTo(TransparentMaterialClass.ThinGlass));
             Assert.That(
                 TransparentMaterialClassifier.Classify(
                     MaterialForwardClass.ThickTransmission,
@@ -362,6 +362,16 @@ public sealed class TransparentPipelinePartitioningTests
             RaySceneRequired: false,
             ExactReceiverFeedbackRequired: false,
             DecalReceiverCacheRequired: true);
+        var thinGlassRay = new TransparentPipelineKey(
+            TransparentMaterialClass.ThinGlass,
+            TransparencyMode.SortedAlphaBlend,
+            RaySceneRequired: true,
+            ExactReceiverFeedbackRequired: false,
+            DecalReceiverCacheRequired: false);
+        var weightedThinGlassRay = thinGlassRay with
+        {
+            CompositionMode = TransparencyMode.WeightedBlendedOit
+        };
 
         Assert.Multiple(() =>
         {
@@ -375,6 +385,15 @@ public sealed class TransparentPipelinePartitioningTests
                     weightedDecalCache),
                 Is.EqualTo(
                     "forward_weighted_oit_decal_cache_required.frag.spv"));
+            Assert.That(
+                MeshPipeline.ResolveTransparentPartitionFragmentShader(
+                    thinGlassRay),
+                Is.EqualTo(
+                    "forward_transparent_thin_glass_ray.frag.spv"));
+            Assert.That(
+                MeshPipeline.ResolveTransparentPartitionFragmentShader(
+                    weightedThinGlassRay),
+                Is.EqualTo("forward_weighted_oit_ray.frag.spv"));
             Assert.That(ordinaryRay.CacheIndex,
                 Is.InRange(0,
                     TransparentPipelineKey.CacheEntryCount - 1));
@@ -408,6 +427,12 @@ public sealed class TransparentPipelinePartitioningTests
                 "FORWARD_TRANSPARENT_ROLE_THICK"));
             Assert.That(project, Does.Contain(
                 "forward_transparent_ordinary_ray.frag"));
+            Assert.That(project, Does.Contain(
+                "forward_transparent_thin_glass_ray.frag"));
+            Assert.That(project, Does.Contain(
+                "-DFORWARD_THIN_GLASS_ONLY=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1"));
+            Assert.That(project, Does.Not.Contain(
+                "forward_weighted_oit_thin_glass_ray.frag"));
             Assert.That(project, Does.Contain(
                 "forward_weighted_oit_decal_cache_required.frag"));
         });

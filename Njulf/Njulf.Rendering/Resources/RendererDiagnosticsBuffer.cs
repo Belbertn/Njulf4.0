@@ -211,7 +211,11 @@ namespace Njulf.Rendering.Resources
         public const int SimpleDdgiReceiverCacheCounterBase =
             TransparentReflectionCounterBase +
             TransparentReflectionCounterCount;
-        public const int SimpleDdgiReceiverCacheCounterCount = 18;
+        public const int CommonSurfaceSimpleOpaquePixelCounter =
+            SimpleDdgiReceiverCacheCounterBase + 18;
+        public const int CommonSurfaceEligiblePixelCounter =
+            SimpleDdgiReceiverCacheCounterBase + 19;
+        public const int SimpleDdgiReceiverCacheCounterCount = 20;
         public const int CounterCount =
             SimpleDdgiReceiverCacheCounterBase +
             SimpleDdgiReceiverCacheCounterCount;
@@ -1165,7 +1169,11 @@ namespace Njulf.Rendering.Resources
                 ForwardInsufficientSupportRejectCount: counters[counterBase + 14],
                 ExactFallbackFragmentCount: counters[counterBase + 15],
                 LegacyFragmentCount: counters[counterBase + 16],
-                DirectionalCacheEvaluationCount: counters[counterBase + 17]);
+                DirectionalCacheEvaluationCount: counters[counterBase + 17],
+                CommonSurfaceSimpleOpaquePixelEstimate:
+                    counters[counterBase + 18],
+                CommonSurfaceEligiblePixelEstimate:
+                    counters[counterBase + 19]);
         }
 
         public DebugDdgiOverlayGpuCounters

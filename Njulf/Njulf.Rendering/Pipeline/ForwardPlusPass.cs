@@ -45,6 +45,7 @@ namespace Njulf.Rendering.Pipeline
         private sealed class SimpleDdgiReceiverPipelineBank
         {
             internal VkPipeline CanonicalGather;
+            internal VkPipeline HybridDiffuseVisibilityGather;
             internal VkPipeline CanonicalResolve;
             internal VkPipeline ExactFeedbackGather;
             internal VkPipeline LegacyGather;
@@ -141,6 +142,8 @@ namespace Njulf.Rendering.Pipeline
         private PipelineLayout _simpleDdgiReceiverCachePipelineLayout;
         private PipelineCache _simpleDdgiReceiverCachePipelineCache;
         private VkPipeline _simpleDdgiReceiverCachePipeline;
+        private VkPipeline
+            _simpleDdgiReceiverCacheHybridDiffuseVisibilityPipeline;
         private VkPipeline _simpleDdgiReceiverFeedbackPipeline;
         private VkPipeline _simpleDdgiMaskedFeedbackCompactPipeline;
         private VkPipeline _simpleDdgiReceiverCacheResolvePipeline;
@@ -398,7 +401,11 @@ namespace Njulf.Rendering.Pipeline
                         counters.ExactFallbackFragmentCount,
                     LegacyFragmentCount = counters.LegacyFragmentCount,
                     DirectionalCacheEvaluationCount =
-                        counters.DirectionalCacheEvaluationCount
+                        counters.DirectionalCacheEvaluationCount,
+                    CommonSurfaceSimpleOpaquePixelEstimate =
+                        counters.CommonSurfaceSimpleOpaquePixelEstimate,
+                    CommonSurfaceEligiblePixelEstimate =
+                        counters.CommonSurfaceEligiblePixelEstimate
                 };
             }
         }
@@ -748,6 +755,14 @@ namespace Njulf.Rendering.Pipeline
                     receiverFeedbackRequired &&
                     _settings.IsPerformanceOptimizationEnabled(
                         PerformanceOptimizationFeature.CompactMaskedFeedback);
+                bool hybridDiffuseVisibilityCandidate =
+                    requestedMode ==
+                        SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial &&
+                    _settings.Reflections.Enabled &&
+                    _settings.Reflections.Mode is
+                        (ReflectionMode.StaticProbesAndSsr or
+                         ReflectionMode.StaticProbesAndPlanar or
+                         ReflectionMode.HybridRayQuery);
 
                 if (Volatile.Read(
                         ref _simpleDdgiReceiverPipelineBank) is { } published)
@@ -777,6 +792,29 @@ namespace Njulf.Rendering.Pipeline
                     bank.CanonicalGather = CreateSimpleDdgiReceiverCachePipeline(
                         "ddgi_simple_receiver_cache.comp.spv",
                         "Simple DDGI Receiver Gather Pipeline");
+                    if (hybridDiffuseVisibilityCandidate)
+                    {
+                        try
+                        {
+                            bank.HybridDiffuseVisibilityGather =
+                                CreateSimpleDdgiReceiverCachePipeline(
+                                    "ddgi_simple_receiver_cache_diffuse_visibility.comp.spv",
+                                    "Hybrid DDGI Diffuse Visibility Receiver Gather Pipeline");
+                        }
+                        catch (Exception exception) when (
+                            exception is VulkanException or IOException or
+                                InvalidOperationException or ArgumentException or
+                                OverflowException)
+                        {
+                            // This producer is an optional specialization. The
+                            // canonical gather has the same ABI and remains the
+                            // fallback when native pipeline creation rejects it.
+                            System.Diagnostics.Debug.WriteLine(
+                                "Hybrid DDGI diffuse/visibility gather unavailable; " +
+                                "canonical receiver gather retained. " +
+                                $"{exception.GetType().Name}: {exception.Message}");
+                        }
+                    }
                     bank.CanonicalResolve = CreateSimpleDdgiReceiverCachePipeline(
                         "ddgi_simple_receiver_cache_resolve.comp.spv",
                         "Simple DDGI Receiver Cache Resolve Pipeline");
@@ -851,6 +889,8 @@ namespace Njulf.Rendering.Pipeline
                     }
 
                     _simpleDdgiReceiverCachePipeline = bank.CanonicalGather;
+                    _simpleDdgiReceiverCacheHybridDiffuseVisibilityPipeline =
+                        bank.HybridDiffuseVisibilityGather;
                     _simpleDdgiReceiverCacheResolvePipeline =
                         bank.CanonicalResolve;
                     _simpleDdgiReceiverFeedbackPipeline =
@@ -1651,6 +1691,21 @@ namespace Njulf.Rendering.Pipeline
                                              receiverCacheModeOutputCompatible &&
                                              receiverGatherDispatchable &&
                                              receiverPipelineBank is not null;
+                bool hybridReceiverCacheConsumerReady =
+                    !hybridReflectionReceiverEnabled ||
+                    IsHybridReflectionReceiverCacheSplitEligible(sceneData) &&
+                    _meshPipeline.AreHybridReflectionPerformancePipelinesReady(
+                        nearFieldDirectSourceEnabled,
+                        giCausticReceiverEnabled);
+                if (receiverCacheEligible &&
+                    !hybridReceiverCacheConsumerReady)
+                {
+                    receiverCacheEligible = false;
+                    SetSimpleDdgiReceiverCacheFallback(
+                        SimpleDdgiReceiverCacheFallbackReason
+                            .PipelineUnavailable,
+                        "hybrid cache consumption requires a ready split performance lane; exact pipeline selected");
+                }
                 if (_simpleDdgiReceiverCacheRequestedMode.UsesCache() &&
                          _settings.GlobalIllumination.DebugView !=
                             GlobalIlluminationDebugView.None &&
@@ -1712,6 +1767,17 @@ namespace Njulf.Rendering.Pipeline
                             sceneData,
                             receiverPipelineBank,
                             out receiverFeedbackProducer);
+                    bool hybridDiffuseVisibilityGather =
+                        receiverCacheEligible &&
+                        ShouldUseHybridDiffuseVisibilityReceiverGather(
+                            hybridReflectionReceiverEnabled,
+                            _simpleDdgiReceiverCacheRequestedMode,
+                            receiverFeedbackProducer.IsAvailable,
+                            _settings.Diagnostics
+                                .DdgiForwardEstimateCountersEnabled,
+                            receiverCacheDebugView,
+                            _simpleDdgiReceiverCacheHybridDiffuseVisibilityPipeline
+                                .Handle != 0);
                     timestamps?.BeginPass(
                         cmd,
                         frameIndex,
@@ -1725,7 +1791,8 @@ namespace Njulf.Rendering.Pipeline
                                 sceneData,
                                 renderExtent,
                                 receiverFeedbackProducer,
-                                receiverPipelineBank);
+                                receiverPipelineBank,
+                                hybridDiffuseVisibilityGather);
                         _simpleDdgiReceiverCacheAvailableForCurrentView =
                             receiverCacheEligible && receiverGatherRecorded;
                         if (_simpleDdgiReceiverCacheAvailableForCurrentView)
@@ -1760,6 +1827,8 @@ namespace Njulf.Rendering.Pipeline
                                     : _settings.Diagnostics
                                         .DdgiForwardEstimateCountersEnabled
                                     ? "forward_*_ddgi_cache_required_diagnostics.frag.spv@surface-abi-v1"
+                                    : hybridDiffuseVisibilityGather
+                                    ? "ddgi_simple_receiver_cache_diffuse_visibility.comp.spv+forward_*_ddgi_cache_required.frag.spv@surface-abi-v1"
                                     : "forward_*_ddgi_cache_required.frag.spv@surface-abi-v1";
                         }
                         else if (receiverCacheEligible)
@@ -3285,7 +3354,8 @@ namespace Njulf.Rendering.Pipeline
             Extent2D renderExtent,
             in SimpleDdgiReceiverFeedbackCaptureProducerContract
                 receiverFeedbackProducer,
-            SimpleDdgiReceiverPipelineBank? pipelineBank)
+            SimpleDdgiReceiverPipelineBank? pipelineBank,
+            bool hybridDiffuseVisibilityGather)
         {
             _adaptiveReceiverExecutedForCurrentView = false;
             _adaptiveReceiverFrameToken =
@@ -3303,7 +3373,8 @@ namespace Njulf.Rendering.Pipeline
                     sceneData,
                     renderExtent,
                     receiverFeedbackProducer,
-                    pipelineBank);
+                    pipelineBank,
+                    hybridDiffuseVisibilityGather);
                 if (recorded)
                     PublishSimpleDdgiReceiverPublication(cmd, frameIndex);
                 return recorded;
@@ -3335,7 +3406,8 @@ namespace Njulf.Rendering.Pipeline
                 sceneData,
                 renderExtent,
                 receiverFeedbackProducer,
-                pipelineBank);
+                pipelineBank,
+                hybridDiffuseVisibilityGather);
             if (!canonicalRecorded)
                 return false;
 
@@ -3412,7 +3484,8 @@ namespace Njulf.Rendering.Pipeline
             Extent2D renderExtent,
             in SimpleDdgiReceiverFeedbackCaptureProducerContract
                 receiverFeedbackProducer,
-            SimpleDdgiReceiverPipelineBank? pipelineBank)
+            SimpleDdgiReceiverPipelineBank? pipelineBank,
+            bool hybridDiffuseVisibilityGather)
         {
             bool legacyBenchmark = _simpleDdgiReceiverCacheRequestedMode ==
                 SimpleDdgiReceiverCacheMode.LegacyDepthOnlyBenchmark;
@@ -3446,7 +3519,8 @@ namespace Njulf.Rendering.Pipeline
                     sceneData,
                     renderExtent,
                     receiverFeedbackProducer,
-                    legacyBenchmark))
+                    legacyBenchmark,
+                    hybridDiffuseVisibilityGather))
             {
                 return false;
             }
@@ -3628,15 +3702,19 @@ namespace Njulf.Rendering.Pipeline
             Data.SceneRenderingData sceneData,
             Extent2D renderExtent,
             in SimpleDdgiReceiverFeedbackCaptureProducerContract producer,
-            bool legacyBenchmark)
+            bool legacyBenchmark,
+            bool hybridDiffuseVisibilityGather)
         {
+            VkPipeline gatherPipeline = producer.IsAvailable
+                ? _simpleDdgiReceiverFeedbackPipeline
+                : legacyBenchmark
+                    ? _simpleDdgiReceiverCacheLegacyPipeline
+                    : hybridDiffuseVisibilityGather
+                        ? _simpleDdgiReceiverCacheHybridDiffuseVisibilityPipeline
+                        : _simpleDdgiReceiverCachePipeline;
             if (_bufferManager == null ||
                 frameIndex < 0 || frameIndex >= FramesInFlight ||
-                (producer.IsAvailable
-                    ? _simpleDdgiReceiverFeedbackPipeline.Handle == 0
-                    : legacyBenchmark
-                        ? _simpleDdgiReceiverCacheLegacyPipeline.Handle == 0
-                        : _simpleDdgiReceiverCachePipeline.Handle == 0) ||
+                gatherPipeline.Handle == 0 ||
                 !_simpleDdgiReceiverGatherBuffers[frameIndex].IsValid ||
                 !_simpleDdgiReceiverGatherSurfaceBuffers[frameIndex].IsValid)
             {
@@ -3649,11 +3727,7 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindPipeline(
                 cmd,
                 PipelineBindPoint.Compute,
-                producer.IsAvailable
-                    ? _simpleDdgiReceiverFeedbackPipeline
-                    : legacyBenchmark
-                        ? _simpleDdgiReceiverCacheLegacyPipeline
-                        : _simpleDdgiReceiverCachePipeline);
+                gatherPipeline);
             BindBindlessStorageAndTextures(
                 cmd,
                 _simpleDdgiReceiverCachePipelineLayout,
@@ -4000,13 +4074,23 @@ namespace Njulf.Rendering.Pipeline
             // bent-normal-off hybrid receiver has complementary cache/exact
             // ownership and can use two lower-pressure native programs whose
             // bent-normal mode specializes to zero.
-            return _settings.IsPerformanceOptimizationEnabled(
-                       PerformanceOptimizationFeature
-                           .SplitHybridForwardPrograms) &&
-                   pipelineKey.Has(
+            return pipelineKey.Has(
                        ForwardOpaquePipelineFeatures.ReceiverCache) &&
                    pipelineKey.Has(
                        ForwardOpaquePipelineFeatures.HybridReflectionReceiver) &&
+                   IsHybridReflectionReceiverCacheSplitEligible(sceneData);
+        }
+
+        private bool IsHybridReflectionReceiverCacheSplitEligible(
+            Data.SceneRenderingData sceneData)
+        {
+            // The combined hybrid/cache program is deliberately not admitted:
+            // alpha-mask or bent-normal ownership keeps both expensive paths
+            // live in one fragment program. Only publish the cache when every
+            // opaque bucket can use the measured low-pressure split lanes.
+            return _settings.IsPerformanceOptimizationEnabled(
+                       PerformanceOptimizationFeature
+                           .SplitHybridForwardPrograms) &&
                    sceneData.MaskedMeshletCount <= 0 &&
                    sceneData.AmbientOcclusionBentNormalMode ==
                        AmbientOcclusionBentNormalMode.Off &&
@@ -4018,6 +4102,20 @@ namespace Njulf.Rendering.Pipeline
                    _settings.GlobalIllumination.DebugView ==
                        GlobalIlluminationDebugView.None;
         }
+
+        internal static bool ShouldUseHybridDiffuseVisibilityReceiverGather(
+            bool hybridReflectionReceiverEnabled,
+            SimpleDdgiReceiverCacheMode requestedMode,
+            bool exactFeedbackProducerAvailable,
+            bool diagnosticsEnabled,
+            bool receiverCacheDebugView,
+            bool specializedPipelineAvailable) =>
+            hybridReflectionReceiverEnabled &&
+            requestedMode == SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial &&
+            !exactFeedbackProducerAvailable &&
+            !diagnosticsEnabled &&
+            !receiverCacheDebugView &&
+            specializedPipelineAvailable;
 
         private bool ShouldUseProductionForwardGiDisabledPipeline(
             Data.SceneRenderingData sceneData)
@@ -5538,6 +5636,7 @@ namespace Njulf.Rendering.Pipeline
             Span<VkPipeline> pipelines =
             [
                 bank.CanonicalGather,
+                bank.HybridDiffuseVisibilityGather,
                 bank.CanonicalResolve,
                 bank.ExactFeedbackGather,
                 bank.LegacyGather,
@@ -5694,6 +5793,17 @@ namespace Njulf.Rendering.Pipeline
                     _simpleDdgiReceiverCachePipeline,
                     null);
                 _simpleDdgiReceiverCachePipeline = default;
+            }
+
+            if (_simpleDdgiReceiverCacheHybridDiffuseVisibilityPipeline.Handle !=
+                0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _simpleDdgiReceiverCacheHybridDiffuseVisibilityPipeline,
+                    null);
+                _simpleDdgiReceiverCacheHybridDiffuseVisibilityPipeline =
+                    default;
             }
 
             if (_simpleDdgiReceiverCachePipelineLayout.Handle != 0)

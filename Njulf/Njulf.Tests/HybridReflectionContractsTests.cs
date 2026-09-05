@@ -1228,6 +1228,182 @@ public sealed class HybridReflectionContractsTests
     }
 
     [Test]
+    public void HybridForwardDdgiPermutation_KeepsDiffuseAndVisibilityOnly()
+    {
+        string forward = ReadRepoText("Njulf.Shaders", "forward.frag")
+            .ReplaceLineEndings("\n");
+        string gather = ReadRepoText(
+                "Njulf.Shaders", "forward_ddgi_receiver_gather.glsl")
+            .ReplaceLineEndings("\n");
+        string shaderProject = ReadRepoText(
+            "Njulf.Shaders", "Njulf.Shaders.csproj");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(forward, Does.Contain(
+                "#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT\n" +
+                "#define FORWARD_DDGI_DIRECTIONAL_GATHER 0\n" +
+                "#else\n" +
+                "#define FORWARD_DDGI_DIRECTIONAL_GATHER 1\n" +
+                "#endif"));
+            Assert.That(forward, Does.Contain(
+                "#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER " +
+                "FORWARD_DDGI_DIRECTIONAL_GATHER"));
+            Assert.That(forward, Does.Contain(
+                "#if !FORWARD_DDGI_RECEIVER_CACHE && " +
+                "FORWARD_DDGI_DIRECTIONAL_GATHER\n" +
+                "#define SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER 1"));
+            Assert.That(gather, Does.Contain(
+                "#if FORWARD_DDGI_DIRECTIONAL_GATHER\n" +
+                "    uint directionalMode ="));
+            Assert.That(gather, Does.Contain(
+                "#if FORWARD_DDGI_DIRECTIONAL_GATHER\n" +
+                "        if (directionalConfigured)\n" +
+                "        {\n" +
+                "            SetSimpleDdgiDirectionalRadianceQuery("));
+            Assert.That(gather, Does.Contain(
+                "#endif\n" +
+                "        precomputedSimpleDdgiGather = " +
+                "SampleSimpleDdgiGather("),
+                "Diffuse DDGI must remain outside the directional permutation.");
+            Assert.That(gather, Does.Contain(
+                "indirectSpecularVisibility =\n" +
+                "            SimpleDdgiRoughIndirectSpecularVisibility("),
+                "Hybrid payload visibility must remain authoritative.");
+            Assert.That(gather, Does.Contain(
+                "#if FORWARD_DDGI_DIRECTIONAL_GATHER\n" +
+                "        if (directionalConfigured)\n" +
+                "        {\n" +
+                "            ddgiDirectionalRadiance ="));
+            Assert.That(gather, Does.Contain(
+                "#else\n" +
+                "    bool exactGatherRequired =\n" +
+                "        !receiverCacheAccepted ||\n" +
+                "        (ForwardAmbientOcclusionBentNormalMode() == 2u"),
+                "Cache misses and bent-normal exceptions still require exact diffuse gathering.");
+            Assert.That(forward, Does.Contain(
+                "pow(indirectAo, 1.0 + roughness) * " +
+                "indirectSpecularVisibility"));
+            Assert.That(forward, Does.Contain(
+                "hybridSpecularOcclusion,\n" +
+                "        hybridReflectionLobeFlags"));
+            Assert.That(shaderProject, Does.Not.Contain(
+                "FORWARD_DDGI_DIRECTIONAL_GATHER"),
+                "The ownership decision is derived from the existing hybrid receiver permutation, not a new artifact selector.");
+        });
+    }
+
+    [Test]
+    public void HybridReceiverCache_UsesCompactProducerOnlyForEligibleSurfacePath()
+    {
+        string cacheShader = ReadRepoText(
+                "Njulf.Shaders", "ddgi_simple_receiver_cache.comp")
+            .ReplaceLineEndings("\n");
+        string shaderProject = ReadRepoText(
+                "Njulf.Shaders", "Njulf.Shaders.csproj")
+            .ReplaceLineEndings("\n");
+        string forwardPass = ReadRepoText(
+                "Njulf.Rendering", "Pipeline", "ForwardPlusPass.cs")
+            .ReplaceLineEndings("\n");
+        string renderer = ReadRepoText(
+                "Njulf.Rendering", "VulkanRenderer.cs")
+            .ReplaceLineEndings("\n");
+
+        bool eligible = ForwardPlusPass
+            .ShouldUseHybridDiffuseVisibilityReceiverGather(
+                hybridReflectionReceiverEnabled: true,
+                SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial,
+                exactFeedbackProducerAvailable: false,
+                diagnosticsEnabled: false,
+                receiverCacheDebugView: false,
+                specializedPipelineAvailable: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(eligible, Is.True);
+            Assert.That(
+                ForwardPlusPass.ShouldUseHybridDiffuseVisibilityReceiverGather(
+                    true,
+                    SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial,
+                    exactFeedbackProducerAvailable: true,
+                    diagnosticsEnabled: false,
+                    receiverCacheDebugView: false,
+                    specializedPipelineAvailable: true),
+                Is.False,
+                "Exact B1 feedback retains the canonical gather producer.");
+            Assert.That(
+                ForwardPlusPass.ShouldUseHybridDiffuseVisibilityReceiverGather(
+                    true,
+                    SimpleDdgiReceiverCacheMode.TemporalAdaptive,
+                    exactFeedbackProducerAvailable: false,
+                    diagnosticsEnabled: false,
+                    receiverCacheDebugView: false,
+                    specializedPipelineAvailable: true),
+                Is.False);
+            Assert.That(
+                ForwardPlusPass.ShouldUseHybridDiffuseVisibilityReceiverGather(
+                    true,
+                    SimpleDdgiReceiverCacheMode.SurfaceAwareSpatial,
+                    exactFeedbackProducerAvailable: false,
+                    diagnosticsEnabled: false,
+                    receiverCacheDebugView: false,
+                    specializedPipelineAvailable: false),
+                Is.False,
+                "A missing optional pipeline must select the canonical producer.");
+            Assert.That(shaderProject, Does.Contain(
+                "Include=\"ddgi_simple_receiver_cache_diffuse_visibility.comp\"")
+                .And.Contain(
+                    "-DNJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD=0"));
+            Assert.That(cacheShader, Does.Contain(
+                "#define NJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD 1"));
+            Assert.That(cacheShader, Does.Contain(
+                "#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY && \\\n" +
+                "    NJULF_DDGI_RECEIVER_CACHE_DIRECTIONAL_PAYLOAD\n" +
+                "#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1"));
+            Assert.That(cacheShader, Does.Contain(
+                "StoreReceiverCacheSample(\n" +
+                "        entryIndex,"));
+            Assert.That(cacheShader, Does.Contain(
+                "#endif\n" +
+                "#if !NJULF_DDGI_RECEIVER_CACHE_LEGACY\n" +
+                "    StoreReceiverSurface(entryIndex, receiverSurface);"),
+                "The compact producer must retain canonical words and the surface sidecar.");
+            Assert.That(
+                forwardPass.IndexOf(
+                    "bool hybridReceiverCacheConsumerReady =",
+                    StringComparison.Ordinal),
+                Is.LessThan(forwardPass.IndexOf(
+                    "\n                    timestamps?.BeginPass(\n" +
+                    "                        cmd,\n" +
+                    "                        frameIndex,\n" +
+                    "                        \"SimpleDdgiReceiverCachePass\");",
+                    StringComparison.Ordinal)),
+                "Consumer readiness must be checked before cache timing and dispatch.");
+            Assert.That(forwardPass, Does.Contain(
+                "receiverCacheEligible = false;\n" +
+                "                    SetSimpleDdgiReceiverCacheFallback(\n" +
+                "                        SimpleDdgiReceiverCacheFallbackReason\n" +
+                "                            .PipelineUnavailable"));
+            Assert.That(forwardPass, Does.Contain(
+                "IsHybridReflectionReceiverCacheSplitEligible(sceneData) &&\n" +
+                "                    _meshPipeline.AreHybridReflectionPerformancePipelinesReady("),
+                "The measured high-pressure combined lane must not admit cache consumption.");
+            Assert.That(forwardPass, Does.Contain(
+                "_simpleDdgiReceiverCacheHybridDiffuseVisibilityPipeline\n" +
+                "                                .Handle != 0"),
+                "The production selector must use the compact pipeline when it exists.");
+            Assert.That(
+                renderer.IndexOf(
+                    "bool meshReady = TryPreparePostFirstPresentFamily(",
+                    StringComparison.Ordinal),
+                Is.LessThan(renderer.IndexOf(
+                    "bool hybridReady = !hybridReceiverPerformanceRequired",
+                    StringComparison.Ordinal)),
+                "Active opaque families must be prepared before hybrid cache siblings.");
+        });
+    }
+
+    [Test]
     public void ShaderSources_ContainStrictFallbackShadingAndDebugContracts()
     {
         string ssr = ReadRepoText("Njulf.Shaders",

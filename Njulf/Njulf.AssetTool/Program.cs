@@ -34,6 +34,8 @@ internal static class Program
                 "material-gi-evidence" => MaterialGiEvidenceCommand.Run(args[1..]),
                 "advanced-gi" => AdvancedGiQualificationCommand.Run(args[1..]),
                 "foliage-impostor" => FoliageImpostorBakerCommand.Run(args[1..]),
+                "meshlet-profile-audit" =>
+                    MeshletProfileAuditCommand.Run(args[1..]),
                 "--child-import" => await RunChildImport(args[1..]).ConfigureAwait(false),
                 _ => UnknownCommand(args[0])
             };
@@ -695,5 +697,6 @@ internal static class Program
         Console.WriteLine("  Njulf.AssetTool advanced-gi verify-qualification --manifest <json>");
         Console.WriteLine("  Njulf.AssetTool advanced-gi verify-c1-model --model <cooked.njmodel>");
         Console.WriteLine("  Njulf.AssetTool foliage-impostor bake <manifest.json> --out <folder> [--name <asset-name>]");
+        Console.WriteLine("  Njulf.AssetTool meshlet-profile-audit <source> [<source> ...] --out <json> [--profile <id> ...] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>]");
     }
 }

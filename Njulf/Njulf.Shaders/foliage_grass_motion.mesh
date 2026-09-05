@@ -20,6 +20,8 @@ layout(location = 6) flat out uint meshClusterIndex[];
 layout(location = 7) flat out uint meshLodBand[];
 layout(location = 8) flat out uint meshGeometryMode[];
 layout(location = 9) flat out uint meshImpostorMetadataIndex[];
+layout(location = 10) out vec3 meshCurrentWorldPosition[];
+layout(location = 11) out vec2 meshViewDepths[];
 
 layout(push_constant) uniform MotionVectorPushConstantBlock
 {
@@ -86,11 +88,15 @@ void EmitMotionVertex(
         (materialIndex * 0x85ebca6bu) ^ 0x67f4a7c1u;
     meshHistoryFrameAndFlags[vertexIndex] =
         (pc.Push.CurrentFrameIndex & 0xffu) |
-        ((pc.Push.PreviousFrameValid & 2u) << 7u);
+        ((pc.Push.PreviousFrameValid & 6u) << 7u);
     meshClusterIndex[vertexIndex] = clusterIndex;
     meshLodBand[vertexIndex] = lodBand;
     meshGeometryMode[vertexIndex] = geometryMode;
     meshImpostorMetadataIndex[vertexIndex] = impostorMetadataIndex;
+    meshCurrentWorldPosition[vertexIndex] = currentPosition;
+    meshViewDepths[vertexIndex] = vec2(
+        abs(currentClip.w),
+        abs(previousClip.w));
 }
 
 void EmitMotionVertex(
