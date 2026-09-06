@@ -45,25 +45,13 @@ float HybridLuminance(vec3 color)
 }
 
 bool HybridHistorySurfaceMatches(
-    vec3 worldPosition,
+    float expectedDepth,
+    float depthTolerance,
     vec3 currentNormal,
     uvec2 previousMetadata)
 {
-    if (ReadMeshletTaskPreviousHiZFrameValid(pc.CurrentFrameIndex) == 0u)
-        return false;
-    vec4 previousClip = MulRowMajor(vec4(worldPosition, 1.0),
-        ReadMeshletTaskPreviousHiZViewProjectionMatrix(
-            pc.CurrentFrameIndex));
-    if (any(isnan(previousClip)) || any(isinf(previousClip)) ||
-        abs(previousClip.w) <= 1.0e-7)
-    {
-        return false;
-    }
-    float expectedDepth = previousClip.z / previousClip.w;
     float previousDepth = HybridHistoryMetadataDepth(previousMetadata);
-    float depthTolerance = max(0.0005, abs(expectedDepth) * 0.002);
-    if (!HybridFinite(expectedDepth) || !HybridFinite(previousDepth) ||
-        expectedDepth < 0.0 || expectedDepth > 1.0 ||
+    if (!HybridFinite(previousDepth) ||
         abs(previousDepth - expectedDepth) > depthTolerance)
     {
         return false;
@@ -111,21 +99,38 @@ void main()
     // broad lobes toward geometry.
     vec3 currentNormal = HybridReflectionTraceNormal(payload);
 
-    vec4 current = imageLoad(HybridRawRadiance, pixel);
+    vec4 currentSample = imageLoad(HybridRawRadiance, pixel);
+    vec4 current = currentSample;
     uvec2 currentMetadata = imageLoad(HybridRawMetadata, pixel).xy;
     uint currentIdentity = HybridReceiverIdentity(payload);
     vec2 dimensions = vec2(pc.ScreenWidth, pc.ScreenHeight);
     vec2 uv = (vec2(pixel) + vec2(0.5)) / dimensions;
+    // Every history tap projects the same receiver into the previous frame.
+    // Share that projection with camera-only motion and validate it once.
+    vec4 previousClip = vec4(0.0);
+    bool previousProjectionValid = false;
+    if (pc.CameraOnlyReprojection != 0u || pc.ResetReasons == 0u)
+    {
+        previousClip = MulRowMajor(vec4(currentWorldPosition, 1.0),
+            ReadMeshletTaskPreviousHiZViewProjectionMatrix(
+                pc.CurrentFrameIndex));
+        previousProjectionValid =
+            ReadMeshletTaskPreviousHiZFrameValid(pc.CurrentFrameIndex) != 0u &&
+            !any(isnan(previousClip)) && !any(isinf(previousClip)) &&
+            abs(previousClip.w) > 1.0e-7;
+    }
+    float expectedPreviousDepth = previousProjectionValid
+        ? previousClip.z / previousClip.w
+        : 0.0;
+    float previousDepthTolerance = max(0.0005,
+        abs(expectedPreviousDepth) * 0.002);
+    bool historyProjectionValid = previousProjectionValid &&
+        HybridFinite(expectedPreviousDepth) &&
+        expectedPreviousDepth >= 0.0 && expectedPreviousDepth <= 1.0;
     vec2 motion = vec2(0.0);
     if (pc.CameraOnlyReprojection != 0u)
     {
-        vec4 previousClip = MulRowMajor(
-            vec4(currentWorldPosition, 1.0),
-            ReadMeshletTaskPreviousHiZViewProjectionMatrix(
-                pc.CurrentFrameIndex));
-        if (ReadMeshletTaskPreviousHiZFrameValid(pc.CurrentFrameIndex) == 0u ||
-            any(isnan(previousClip)) || any(isinf(previousClip)) ||
-            abs(previousClip.w) <= 1.0e-7)
+        if (!previousProjectionValid)
         {
             // A two-screen displacement is finite but guaranteed to reject
             // history for every in-bounds current UV.
@@ -162,7 +167,7 @@ void main()
     uvec2 previousMetadata = uvec2(0u);
     float acceptedHistoryWeight = 0.0;
     float dominantHistoryWeight = -1.0;
-    if (pc.ResetReasons == 0u && previousInside)
+    if (pc.ResetReasons == 0u && previousInside && historyProjectionValid)
     {
         vec2 historyPosition = previousUv * dimensions - vec2(0.5);
         ivec2 historyBase = ivec2(floor(historyPosition));
@@ -184,10 +189,6 @@ void main()
                 }
                 uvec2 tapMetadata = imageLoad(
                     HybridMetadataPrevious, previousPixel).xy;
-                vec4 tapHistory = imageLoad(
-                    HybridHistoryPrevious, previousPixel);
-                float tapVariance = imageLoad(
-                    HybridMomentsPrevious, previousPixel).r;
                 uint tapSource =
                     HybridHistoryMetadataSource(tapMetadata);
                 bool tapGeometricSource =
@@ -198,10 +199,19 @@ void main()
                         currentIdentity ||
                     HybridHistorySourceInvalidated(tapSource) ||
                     (sparseCurrent && !tapGeometricSource) ||
-                    !HybridFinite(tapHistory) ||
-                    !HybridFinite(tapVariance) || tapVariance < 0.0 ||
                     !HybridHistorySurfaceMatches(
-                        currentWorldPosition, currentNormal, tapMetadata))
+                        expectedPreviousDepth, previousDepthTolerance,
+                        currentNormal, tapMetadata))
+                {
+                    continue;
+                }
+                // Reject incompatible surfaces before fetching their history.
+                vec4 tapHistory = imageLoad(
+                    HybridHistoryPrevious, previousPixel);
+                float tapVariance = imageLoad(
+                    HybridMomentsPrevious, previousPixel).r;
+                if (!HybridFinite(tapHistory) ||
+                    !HybridFinite(tapVariance) || tapVariance < 0.0)
                 {
                     continue;
                 }
@@ -269,10 +279,13 @@ void main()
         {
             ivec2 neighbor = clamp(pixel + ivec2(x, y), ivec2(0),
                 ivec2(pc.ScreenWidth, pc.ScreenHeight) - ivec2(1));
-            uvec2 neighborMetadata = imageLoad(
-                HybridRawMetadata, neighbor).xy;
-            uvec4 neighborPayload = texelFetch(
-                HybridReceiverPayload, neighbor, 0);
+            bool centerTap = x == 0 && y == 0;
+            uvec2 neighborMetadata = centerTap
+                ? currentMetadata
+                : imageLoad(HybridRawMetadata, neighbor).xy;
+            uvec4 neighborPayload = centerTap
+                ? payload
+                : texelFetch(HybridReceiverPayload, neighbor, 0);
             uint neighborSource = HybridMetadataSource(neighborMetadata.x);
             bool neighborGeometricSource =
                 neighborSource == HYBRID_REFLECTION_SOURCE_SSR ||
@@ -282,7 +295,9 @@ void main()
                 HybridReceiverIdentity(neighborPayload) != currentIdentity ||
                 (sparseCurrent && !neighborGeometricSource))
                 continue;
-            vec3 sampleValue = imageLoad(HybridRawRadiance, neighbor).rgb;
+            vec3 sampleValue = centerTap
+                ? currentSample.rgb
+                : imageLoad(HybridRawRadiance, neighbor).rgb;
             if (!HybridFinite(sampleValue))
                 continue;
             neighborhoodMinimum = min(neighborhoodMinimum, sampleValue);

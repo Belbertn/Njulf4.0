@@ -318,7 +318,7 @@ void main()
     // coverage survives, so this mesh-stage estimate must not duplicate work.
     vec4 clusterDdgiIrradianceCoverage = vec4(0.0);
 #else
-    vec4 clusterDdgiIrradianceCoverage = SampleSimpleDdgiIrradianceCoverage(
+    vec4 clusterDdgiIrradianceCoverage = (pc.Push.Flags & (1u << 5u)) != 0u ? vec4(0.0) : SampleSimpleDdgiIrradianceCoverage(
         cluster.WorldCenterRadius.xyz,
         clumpNormal,
         clusterViewDirection);

@@ -46,6 +46,7 @@ namespace Njulf.Rendering.Descriptors
         private int _lifecycleState;
 
         private const int MaxStorageBuffers = BindlessIndex.StaticBufferCount + 1024;
+        internal const int StorageBufferDescriptorCount = MaxStorageBuffers;
         private const int MaxTextures = BindlessIndex.MaxTextures;
         private const ShaderStageFlags BindlessShaderStages =
             ShaderStageFlags.TaskBitExt |

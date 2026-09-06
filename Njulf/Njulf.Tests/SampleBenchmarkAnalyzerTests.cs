@@ -14,6 +14,45 @@ namespace Njulf.Tests;
 public sealed class SampleBenchmarkAnalyzerTests
 {
     [Test]
+    public void CreateReport_AuditFrameTailsUseAlignedCommandIntentAndDeduplicateHistory()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        var auditEvent = new SimpleDdgiTransportAuditEvent { Sequence = 1 };
+        for (int index = 0; index < 3; index++)
+        {
+            analyzer.AddSample(RendererDiagnostics.Empty with
+            {
+                GpuTimingSupported = 1,
+                GpuTimingValid = 1,
+                GpuFrameMicroseconds = (index + 1) * 10_000,
+                SimpleDdgiTransportConvergence = SimpleDdgiTransportConvergenceTelemetry.Empty with
+                {
+                    TailAuditLifecycleEvents = [auditEvent]
+                },
+                SimpleDdgiCompletedFrameEvidence = new SimpleDdgiCompletedFrameEvidence
+                {
+                    Valid = true,
+                    GpuTimingPassSetAligned = index != 2,
+                    Submitted = new SimpleDdgiSubmittedFrameEvidence
+                    {
+                        IntendedGpuPasses = index == 0 ? SimpleDdgiGpuPassMask.TransportAudit : SimpleDdgiGpuPassMask.None
+                    }
+                }
+            }, RenderBudgetSnapshot.Empty);
+        }
+        var report = analyzer.CreateReport(new SampleBenchmarkOptions(true, 0, 3, null),
+            SamplePerformanceScenario.Normal, 0, 3, 0, 2);
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.DdgiAuditActiveGpuFrameMilliseconds.Count, Is.EqualTo(1));
+            Assert.That(report.DdgiAuditActiveGpuFrameMilliseconds.P95Milliseconds, Is.EqualTo(10));
+            Assert.That(report.DdgiAuditIdleGpuFrameMilliseconds.Count, Is.EqualTo(1));
+            Assert.That(report.DdgiAuditIdleGpuFrameMilliseconds.MaxMilliseconds, Is.EqualTo(20));
+            Assert.That(report.DdgiAuditLifecycleEvents, Is.EqualTo(new[] { auditEvent }));
+        });
+    }
+
+    [Test]
     public void BuildStats_ClampsFloatingPointMeanToObservedRange()
     {
         double[] samples = Enumerable.Repeat(0.001, 240).ToArray();

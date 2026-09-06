@@ -252,7 +252,7 @@ void main()
     // the ordinary cluster-centre gather in this specialized mesh program.
     vec4 meshletDdgiIrradianceCoverage = vec4(0.0);
 #else
-    vec4 meshletDdgiIrradianceCoverage = SampleSimpleDdgiIrradianceCoverage(
+    vec4 meshletDdgiIrradianceCoverage = (pc.Push.Flags & (1u << 5u)) != 0u ? vec4(0.0) : SampleSimpleDdgiIrradianceCoverage(
         command.WorldCenterRadius.xyz,
         clumpNormal,
         meshletViewDirection);

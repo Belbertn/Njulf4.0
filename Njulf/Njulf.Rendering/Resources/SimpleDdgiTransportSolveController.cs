@@ -626,11 +626,14 @@ public sealed class SimpleDdgiTransportSolveController
     /// </summary>
     public void CancelAudit(SimpleDdgiTransportCertificationReason reason)
     {
-        if (Phase == SimpleDdgiTransportPhase.AuditFrozen)
-        {
-            _auditCancelled = true;
-            Phase = SimpleDdgiTransportPhase.AcceleratedSolve;
-        }
+        // Cancellation is scoped to an in-flight audit. A late or repeated
+        // notification must not overwrite an accepted certificate or recovery
+        // result; actual field changes go through generation invalidation.
+        if (Phase != SimpleDdgiTransportPhase.AuditFrozen)
+            return;
+
+        _auditCancelled = true;
+        Phase = SimpleDdgiTransportPhase.AcceleratedSolve;
 
         LastReason = reason;
         LastSummary = LastSummary with { Reason = reason };

@@ -318,6 +318,9 @@ public sealed unsafe class AutomaticPlanarReflectionPass : RenderPassBase
             mode,
             capture.View.Width,
             capture.View.Height);
+        SecondaryViewRegion region = capture.View.Region.Resolve(capture.View.Width, capture.View.Height);
+        push.Reserved0 = region.X | (region.Y << 16);
+        push.Reserved1 = (region.X + region.Width) | ((region.Y + region.Height) << 16);
         _context.Api.CmdPushConstants(
             commandBuffer,
             _reprojectPipelineLayout,
@@ -863,15 +866,15 @@ public sealed unsafe class AutomaticPlanarReflectionPass : RenderPassBase
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    private readonly struct AutomaticPlanarReprojectPushConstants
+    private struct AutomaticPlanarReprojectPushConstants
     {
         public readonly uint FrameIndex;
         public readonly uint Slot;
         public readonly uint Mode;
         public readonly uint Width;
         public readonly uint Height;
-        public readonly uint Reserved0;
-        public readonly uint Reserved1;
+        public uint Reserved0;
+        public uint Reserved1;
         public readonly uint Reserved2;
 
         public AutomaticPlanarReprojectPushConstants(

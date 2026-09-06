@@ -35,6 +35,12 @@ public sealed record SampleBenchmarkReport(
     public MaterialGiProducerIdentity? ProducerIdentity { get; init; }
 
     public SampleDdgiProductionGateReport? DdgiProductionGate { get; init; }
+    public IReadOnlyList<SimpleDdgiTransportAuditEvent> DdgiAuditLifecycleEvents { get; init; } =
+        Array.Empty<SimpleDdgiTransportAuditEvent>();
+    public SampleBenchmarkTimingStats DdgiAuditActiveGpuFrameMilliseconds { get; init; } =
+        SampleBenchmarkTimingStats.Empty("GPU frame with DDGI audit");
+    public SampleBenchmarkTimingStats DdgiAuditIdleGpuFrameMilliseconds { get; init; } =
+        SampleBenchmarkTimingStats.Empty("GPU frame without DDGI audit");
     public IReadOnlyList<SampleGiAccuracyOracleResult> AccuracyOracleResults { get; init; } =
         Array.Empty<SampleGiAccuracyOracleResult>();
     [JsonRequired]

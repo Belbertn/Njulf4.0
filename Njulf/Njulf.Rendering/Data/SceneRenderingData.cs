@@ -82,11 +82,6 @@ namespace Njulf.Rendering.Data
         public int SimpleNormalOpaqueMeshletCount { get; set; }
         public int FullOpaqueMeshletCount { get; set; }
 
-        // Populated raw records for reflected views. Main-view counts can be
-        // GPU instance-expansion capacities and cannot bound these buffers.
-        internal int AutomaticPlanarSimpleMeshletCount { get; set; }
-        internal int AutomaticPlanarSimpleFullInputMeshletCount { get; set; }
-        internal int AutomaticPlanarFullMeshletCount { get; set; }
         public int ForwardSimpleMeshletCount { get; set; }
         public int ForwardFullMaterialMeshletCount { get; set; }
         public int ForwardLocalProbeMeshletCount { get; set; }
@@ -2563,9 +2558,6 @@ namespace Njulf.Rendering.Data
             SimpleOpaqueMeshletCount = 0;
             SimpleNormalOpaqueMeshletCount = 0;
             FullOpaqueMeshletCount = 0;
-            AutomaticPlanarSimpleMeshletCount = 0;
-            AutomaticPlanarSimpleFullInputMeshletCount = 0;
-            AutomaticPlanarFullMeshletCount = 0;
             ForwardSimpleMeshletCount = 0;
             ForwardFullMaterialMeshletCount = 0;
             ForwardLocalProbeMeshletCount = 0;

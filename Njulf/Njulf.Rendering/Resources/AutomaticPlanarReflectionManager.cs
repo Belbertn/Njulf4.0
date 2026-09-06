@@ -279,7 +279,8 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         bool requested = sceneData.EffectiveReflectionMode is
             ReflectionMode.StaticProbesAndPlanar or
             ReflectionMode.HybridRayQuery;
-        if (!requested || sceneData.EffectiveReflectionImplementation !=
+        if (Environment.GetEnvironmentVariable("NJULF_AUTOMATIC_PLANAR_ENABLED") == "0" ||
+            !requested || sceneData.EffectiveReflectionImplementation !=
             ReflectionImplementationMode.Adaptive)
         {
             PublishEmptyFrame(sceneData);
@@ -667,7 +668,12 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
                 sceneData.ScreenHeight);
         if (admission.Admitted)
         {
-            candidates.Add(admission.Candidate);
+            float maximumRoughness = Math.Max(definition.RoughnessFactor,
+                definition.Extensions.ClearcoatFactor > 0 ? definition.Extensions.ClearcoatRoughness : 0f);
+            // Derivative AA can add up to .25 in alpha-squared space.
+            if (sceneData.SpecularAntialiasingMode == SpecularAntialiasingMode.GeometricVariance)
+                maximumRoughness = MathF.Pow(Math.Min(1f, MathF.Pow(maximumRoughness, 4f) + 0.25f), 0.25f);
+            candidates.Add(admission.Candidate with { MaximumSamplingRoughness = maximumRoughness });
             return;
         }
         rejectedCount++;
@@ -766,6 +772,19 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
                 // live capture correct even when a producer cannot provide a
                 // tighter world-space dirty bound.
                 dirtyRegionIntersectsReflectedFrustum: sceneChanged);
+        SecondaryViewRegion previousRegion = previous.CaptureRegion.Resolve(view.Width, view.Height);
+        SecondaryViewRegion requiredRegion = view.Region.Resolve(view.Width, view.Height);
+        bool previousCropped = previousRegion.Width != view.Width || previousRegion.Height != view.Height;
+        if (previous.Valid && previousCropped &&
+            (!previous.CapturedViewProjection.Equals(view.ViewProjection) ||
+             requiredRegion.X < previousRegion.X || requiredRegion.Y < previousRegion.Y ||
+             requiredRegion.X + requiredRegion.Width > previousRegion.X + previousRegion.Width ||
+             requiredRegion.Y + requiredRegion.Height > previousRegion.Y + previousRegion.Height))
+        {
+            // A cropped capture cannot supply newly exposed directions. Preserve normal
+            // stationary reprojection; refresh on camera motion until a tighter coverage oracle exists.
+            action = AutomaticPlanarCaptureAction.Capture;
+        }
         uint age;
         float confidence;
         Matrix4x4 sampleViewProjection = view.ViewProjection;
@@ -837,7 +856,12 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
             age,
             confidence,
             destinationBank,
-            view.ViewProjection);
+            view.ViewProjection)
+        {
+            CaptureRegion = action == AutomaticPlanarCaptureAction.Capture ? view.Region : previous.CaptureRegion,
+            CapturedViewProjection = action == AutomaticPlanarCaptureAction.Capture
+                ? view.ViewProjection : previous.CapturedViewProjection
+        };
         return prepared;
     }
 
@@ -893,7 +917,13 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
             projection,
             view * projection,
             reflectedPosition,
-            clipPlane);
+            clipPlane)
+        {
+            Region = Environment.GetEnvironmentVariable("NJULF_SECONDARY_VIEW_CROP") == "0"
+                ? default
+                : SecondaryViewFootprint.Compute(cluster, sceneData.ViewProjectionMatrix,
+                    view * projection, resource.Width, resource.Height, resource.MipCount)
+        };
     }
 
     private bool EnsureResources(
@@ -1440,7 +1470,10 @@ public readonly record struct AutomaticPlanarCaptureView(
     Matrix4x4 Projection,
     Matrix4x4 ViewProjection,
     Vector3 Position,
-    Vector4 ClipPlane);
+    Vector4 ClipPlane)
+{
+    internal SecondaryViewRegion Region { get; init; }
+}
 
 public sealed record AutomaticPlanarPreparedCapture(
     int Slot,
@@ -1475,7 +1508,11 @@ internal readonly record struct AutomaticPlanarSlotState(
     uint AgeFrames,
     float Confidence,
     int PublishedBank,
-    Matrix4x4 PublishedViewProjection);
+    Matrix4x4 PublishedViewProjection)
+{
+    internal SecondaryViewRegion CaptureRegion { get; init; }
+    internal Matrix4x4 CapturedViewProjection { get; init; }
+}
 
 public sealed class AutomaticPlanarCaptureResource : IDisposable
 {

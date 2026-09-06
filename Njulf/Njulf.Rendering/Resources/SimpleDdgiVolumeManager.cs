@@ -1040,6 +1040,7 @@ namespace Njulf.Rendering.Resources
             _frozenTailInvalidationBuffer = new();
         private SimpleDdgiTransportTailSummary _transportTailSummary =
             SimpleDdgiTransportTailSummary.Empty;
+        private readonly SimpleDdgiTransportAuditHistory _transportAuditHistory = new();
         private int _transportAuditProbeCursor;
         private uint _transportAuditChunkCount;
         private ulong _transportAuditSolveFeedbackFrameSerial;
@@ -3681,6 +3682,11 @@ namespace Njulf.Rendering.Resources
                 return true;
 
             SimpleDdgiTransportGenerations generations = CreateTransportTailGenerations();
+            if (_transportSolveController.IsCertified &&
+                _transportSolveController.LastSummary.IsCurrent(generations))
+            {
+                return false;
+            }
             if (ShouldDeferTransportTailAuditForCameraMotion(
                     _transportAuditMotionState,
                     _transportSolveController.Phase,
@@ -3787,6 +3793,10 @@ namespace Njulf.Rendering.Resources
                 IsComplete = false,
                 Reason = SimpleDdgiTransportCertificationReason.AuditInProgress
             };
+            _transportAuditHistory.Begin(
+                _transportAuditGenerations, _volumeTableGeneration, _frameSerial,
+                _transportAuditChunkCount, checked((uint)_transportAuditExpectedParticipantCount),
+                Stopwatch.GetTimestamp());
             return true;
         }
 
@@ -3841,6 +3851,8 @@ namespace Njulf.Rendering.Resources
                     ref _transportAuditFirstFrameSerial,
                     ref _transportAuditFinalSubmissionFrameSerial,
                     _transportTailSummary);
+            _transportAuditHistory.SubmitChunk(
+                _frameSerial, dispatch.ChunkIndex + 1u, dispatch.IsFinal, Stopwatch.GetTimestamp());
             return true;
         }
 
@@ -4117,6 +4129,11 @@ namespace Njulf.Rendering.Resources
                 ShouldRebaseTransportConvergenceDeadline(summary);
             SimpleDdgiTransportGenerations generations = CreateTransportTailGenerations();
             bool accepted = _transportSolveController.TryAcceptAudit(summary, generations);
+            _transportAuditHistory.Finish(
+                accepted ? SimpleDdgiTransportAuditEventKind.Certified
+                    : SimpleDdgiTransportAuditEventKind.Rejected,
+                _transportSolveController.LastReason, generations, _volumeTableGeneration,
+                _frameSerial, Stopwatch.GetTimestamp());
             CancelTransportSolveDrain();
             _transportTailSummary = _transportSolveController.LastSummary;
             SimpleDdgiTransportRecoveryAction recoveryAction =
@@ -4171,6 +4188,17 @@ namespace Njulf.Rendering.Resources
             SimpleDdgiTransportCertificationReason reason,
             bool preserveLivePropagationBoundary = false)
         {
+            if (_transportSolveController.Phase != SimpleDdgiTransportPhase.AuditFrozen)
+                return;
+
+            _transportAuditHistory.Finish(SimpleDdgiTransportAuditEventKind.Cancelled,
+                reason, CreateTransportTailGenerations(), _volumeTableGeneration,
+                _frameSerial, Stopwatch.GetTimestamp());
+            _transportAuditHistory.SetTrigger(
+                preserveLivePropagationBoundary ? SimpleDdgiTransportAuditTrigger.VolumeScroll
+                    : reason == SimpleDdgiTransportCertificationReason.GenerationsChanged
+                        ? SimpleDdgiTransportAuditTrigger.GenerationChange
+                        : SimpleDdgiTransportAuditTrigger.SourceRepairFeedback, reason);
             CancelTransportSolveDrain();
             _transportSolveController.CancelAudit(reason);
             _transportTailSummary = _transportSolveController.LastSummary;
@@ -4204,6 +4232,10 @@ namespace Njulf.Rendering.Resources
 
             if (_transportSolveController.ExpireAudit(CreateTransportTailGenerations()))
             {
+                _transportAuditHistory.Finish(SimpleDdgiTransportAuditEventKind.TimedOut,
+                    SimpleDdgiTransportCertificationReason.AuditReadbackTimeout,
+                    CreateTransportTailGenerations(), _volumeTableGeneration,
+                    _frameSerial, Stopwatch.GetTimestamp());
                 _transportAuditReadbackTimeoutCount = SaturatingAdd(
                     _transportAuditReadbackTimeoutCount,
                     1UL);
@@ -4431,7 +4463,15 @@ namespace Njulf.Rendering.Resources
             CreateTransportConvergenceTelemetry()
         {
             if (!TransportV2Active || _volumeCount <= 0)
-                return SimpleDdgiTransportConvergenceTelemetry.Empty;
+            {
+                return _transportAuditHistory.Current.Sequence == 0UL
+                    ? SimpleDdgiTransportConvergenceTelemetry.Empty
+                    : SimpleDdgiTransportConvergenceTelemetry.Empty with
+                    {
+                        TailAuditLifecycleEvents = _transportAuditHistory.Snapshot(),
+                        TailAuditLifecycleDroppedEventCount = _transportAuditHistory.DroppedEventCount
+                    };
+            }
 
             var rings = new SimpleDdgiTransportRingConvergenceTelemetry[_volumeCount];
             int totalConverged = 0;
@@ -4657,6 +4697,8 @@ namespace Njulf.Rendering.Resources
                     TransportTailAuditCameraMotionDeferredStartCount,
                 TailAuditStartDeferralReason =
                     TransportTailAuditStartDeferralReason,
+                TailAuditLifecycleEvents = _transportAuditHistory.Snapshot(),
+                TailAuditLifecycleDroppedEventCount = _transportAuditHistory.DroppedEventCount,
                 ResidualQualifiedNotConvergedProbeCount =
                     totalResidualQualifiedPending,
                 RoutineSourceRepairProbeCount =
@@ -6552,7 +6594,8 @@ namespace Njulf.Rendering.Resources
             Array.Clear(_volumeVisibleFreshProbeCounts);
             _hasTransportCalibrationSignatures = false;
             _transportV2WasActive = false;
-            BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
+            BeginTransportGlobalConvergence(forceFieldEvidenceReset: true,
+                auditTrigger: SimpleDdgiTransportAuditTrigger.Disabled);
             _dirtyLatencyOutstandingEventCount = 0;
             _lastParams = CreateDisabledParams(settings);
             UploadParams(stagingRing, commandBuffer);
@@ -8414,7 +8457,8 @@ namespace Njulf.Rendering.Resources
                 _incompatibleTopologyChangeCount,
                 1UL);
             BeginTransportGlobalConvergence(
-                forceFieldEvidenceReset: forceFieldEvidenceReset);
+                forceFieldEvidenceReset: forceFieldEvidenceReset,
+                auditTrigger: SimpleDdgiTransportAuditTrigger.VolumeOwnershipChange);
             for (int i = 0; i < _probeStateReadbackRecorded.Length; i++)
             {
                 if (_probeStateReadbackRecorded[i])
@@ -8482,7 +8526,8 @@ namespace Njulf.Rendering.Resources
                 _sourceRefreshMode = SimpleDdgiSourceRefreshMode.FullTrace;
                 _sourceRelightScale = Vector3.One;
                 CancelDeferredRadiometricPublication();
-                BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
+                BeginTransportGlobalConvergence(forceFieldEvidenceReset: true,
+                    auditTrigger: SimpleDdgiTransportAuditTrigger.InitialSolve);
                 _activeDirtyReasonFlags = 0u;
                 _hasLightingSignature = true;
                 return;
@@ -8563,7 +8608,8 @@ namespace Njulf.Rendering.Resources
                 else
                 {
                     _sourceCohortTransitionActive = false;
-                    BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
+                    BeginTransportGlobalConvergence(forceFieldEvidenceReset: true,
+                        auditTrigger: SimpleDdgiTransportAuditTrigger.LightingChange);
                 }
                 // The physical cache remains allocated, but every slot must trace
                 // its source once under the new light/environment signature.
@@ -8874,7 +8920,8 @@ namespace Njulf.Rendering.Resources
                 Array.Clear(_probeStableUpdateCounts);
             if (_probeLuminanceChangeEma.Length > 0)
                 Array.Clear(_probeLuminanceChangeEma);
-            BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
+            BeginTransportGlobalConvergence(forceFieldEvidenceReset: true,
+                auditTrigger: SimpleDdgiTransportAuditTrigger.SolverCalibration);
         }
 
         private void BeginTransportCalibrationBoost(GlobalIlluminationSettings settings)
@@ -8894,8 +8941,16 @@ namespace Njulf.Rendering.Resources
             SimpleDdgiTransportCertificationReason certificationReason =
                 SimpleDdgiTransportCertificationReason.SourceRepairRequired,
             SimpleDdgiTransportRecoveryAction recoveryAction =
-                SimpleDdgiTransportRecoveryAction.None)
+                SimpleDdgiTransportRecoveryAction.None,
+            SimpleDdgiTransportAuditTrigger auditTrigger =
+                SimpleDdgiTransportAuditTrigger.ConvergenceRequest,
+            SimpleDdgiSourceCacheInvalidationReason sourceInvalidationReason =
+                SimpleDdgiSourceCacheInvalidationReason.None)
         {
+            _transportAuditHistory.Finish(SimpleDdgiTransportAuditEventKind.Cancelled,
+                certificationReason, CreateTransportTailGenerations(), _volumeTableGeneration,
+                _frameSerial, Stopwatch.GetTimestamp());
+            _transportAuditHistory.SetTrigger(auditTrigger, certificationReason, sourceInvalidationReason);
             CancelTransportSolveDrain();
             bool convergenceWasPending = _transportGlobalConvergencePending;
             bool resetFieldEvidence = ShouldResetTransportFieldEvidence(
@@ -9364,7 +9419,10 @@ namespace Njulf.Rendering.Resources
                     preservePeriodicSourceRefreshWave:
                         _transportPeriodicSourceRefreshWavePending,
                     certificationReason:
-                        SimpleDdgiTransportCertificationReason.GenerationsChanged);
+                        SimpleDdgiTransportCertificationReason.GenerationsChanged,
+                    auditTrigger: _transportPeriodicSourceRefreshWavePending
+                        ? SimpleDdgiTransportAuditTrigger.PeriodicSourceRefresh
+                        : SimpleDdgiTransportAuditTrigger.GenerationChange);
                 return;
             }
 
@@ -9373,6 +9431,8 @@ namespace Njulf.Rendering.Resources
                 !_transportSolveController.TryRefreshSolveGenerations(generations))
             {
                 CancelTransportSolveDrain();
+                _transportAuditHistory.SetTrigger(SimpleDdgiTransportAuditTrigger.GenerationChange,
+                    SimpleDdgiTransportCertificationReason.GenerationsChanged);
                 _transportSolveController.Invalidate(
                     generations,
                     SimpleDdgiTransportCertificationReason.GenerationsChanged,
@@ -19860,7 +19920,9 @@ namespace Njulf.Rendering.Resources
                 BeginTransportGlobalConvergence(
                     forceFieldEvidenceReset: true,
                     certificationReason: certificationReason,
-                    recoveryAction: recoveryAction);
+                    recoveryAction: recoveryAction,
+                    auditTrigger: SimpleDdgiTransportAuditTrigger.SourceCacheInvalidation,
+                    sourceInvalidationReason: invalidationReason);
                 if (recordInvalidation)
                 {
                     _sourceCacheInvalidationCount = SaturatingAdd(
@@ -19887,7 +19949,9 @@ namespace Njulf.Rendering.Resources
             BeginTransportGlobalConvergence(
                 forceFieldEvidenceReset: true,
                 certificationReason: certificationReason,
-                recoveryAction: recoveryAction);
+                recoveryAction: recoveryAction,
+                auditTrigger: SimpleDdgiTransportAuditTrigger.SourceCacheInvalidation,
+                sourceInvalidationReason: invalidationReason);
             if (recordInvalidation)
             {
                 _sourceCacheInvalidationCount = SaturatingAdd(

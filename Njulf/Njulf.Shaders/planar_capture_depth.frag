@@ -25,7 +25,7 @@ void main()
 {
     uint layer = (pc.Push.DiagnosticFlags >> 16u) & 0x1fffu;
     uint slot = layer & (AUTOMATIC_PLANAR_CAPTURE_LAYER_FLAG - 1u);
-    if (AutomaticPlanarShouldDiscardCaptureFragment(
+    if ((layer & AUTOMATIC_PLANAR_CAPTURE_LAYER_FLAG) != 0u && AutomaticPlanarShouldDiscardCaptureFragment(
             pc.Push.CurrentFrameIndex, slot, fragObjectIndex,
             fragWorldPosition, pc.Push.CameraPosition))
         discard;

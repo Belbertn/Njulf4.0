@@ -1106,6 +1106,15 @@ public sealed class SimpleDdgiTransportTailTests
             controller.LastReason,
             Is.EqualTo(SimpleDdgiTransportCertificationReason.Certified),
             "An idle render-pass poll must not replace a current certificate's reason.");
+
+        controller.CancelAudit(SimpleDdgiTransportCertificationReason.GenerationsChanged);
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.IsCertified, Is.True,
+                "Cancelling an audit that has already completed must not revoke unchanged certified data.");
+            Assert.That(controller.LastSummary, Is.EqualTo(summary));
+            Assert.That(controller.LastReason, Is.EqualTo(SimpleDdgiTransportCertificationReason.Certified));
+        });
     }
 
     [Test]

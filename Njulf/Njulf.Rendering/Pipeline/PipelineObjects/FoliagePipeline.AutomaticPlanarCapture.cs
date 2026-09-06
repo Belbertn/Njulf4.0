@@ -15,12 +15,14 @@ public sealed unsafe partial class FoliagePipeline
             if (_automaticPlanarCapturePipelines[authored, feedback].Handle != 0)
                 continue;
             VkPipeline pipeline = CreateGraphicsPipeline(null,
-                authored == 0 ? "foliage_grass_compacted.mesh.spv" : "foliage_mesh_compacted.mesh.spv",
+                authored == 0
+                    ? (feedback == 0 ? "foliage_grass_compacted.mesh.spv" : "foliage_grass_b1_compacted.mesh.spv")
+                    : (feedback == 0 ? "foliage_mesh_compacted.mesh.spv" : "foliage_mesh_b1_compacted.mesh.spv"),
                 feedback == 0 ? "foliage_forward_ddgi.frag.spv" : "foliage_forward_ddgi_b1.frag.spv",
                 _colorFormat, _depthFormat, hasColorAttachment: true, depthWriteEnable: true);
             _automaticPlanarCapturePipelines[authored, feedback] = pipeline;
             _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline,
-                $"Automatic Planar Capture Foliage Depth Write A{authored} F{feedback}");
+                $"Secondary Capture Foliage Depth Write A{authored} F{feedback}");
         }
     }
 

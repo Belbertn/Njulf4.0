@@ -86,6 +86,7 @@ public readonly record struct AutomaticPlanarCandidate(
     bool DynamicOrDirty)
 {
     public float Gloss => 1.0f - Math.Clamp(MeanRoughness, 0.0f, 1.0f);
+    internal float MaximumSamplingRoughness { get; init; } = 1f;
 }
 
 public readonly record struct AutomaticPlanarCandidateAdmission(

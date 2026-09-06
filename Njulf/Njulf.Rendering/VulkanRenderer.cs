@@ -2216,6 +2216,7 @@ namespace Njulf.Rendering
                     _nearFieldResidual.CaptureGraphResources().Runtime?
                         .ExecutionExtent ?? default);
             _forwardPlusPass = forwardPass;
+            forwardPass.ConfigureSecondaryViews(_sceneDataBuilder, _foliageCullPass, _automaticPlanarReflectionManager);
             AddPassInstance(forwardPass);
 
             if (_advancedGiAdmission.GraphModes.UsesDirectionalGuiding)
@@ -4498,8 +4499,6 @@ namespace Njulf.Rendering
                     ForwardOpaqueKinds:
                         SceneForwardOpaquePipelineKinds.All)
                 : BuildScenePipelineManifest(scene);
-            _sceneDataBuilder.RetainAutomaticPlanarDrawRecords =
-                pipelineManifest.Requires(SceneMaterialPipelineKinds.AutomaticPlanarReceiver);
             bool receiverFeedbackRequired =
                 _simpleDdgiReceiverFeedback?.GraphicsPipelinesRequested == true;
             bool receiverCacheRequired =
@@ -4618,8 +4617,11 @@ namespace Njulf.Rendering
                     _foliagePipeline.Prepare);
             }
 
-            if (foliageRequired && pipelineManifest.Requires(
-                    SceneMaterialPipelineKinds.AutomaticPlanarReceiver))
+            if (Settings.Reflections.MaxProbes > 0)
+                _meshPipeline.PrepareAutomaticPlanarCapturePipelines(
+                    preparationScope == ScenePipelinePreparationScope.Complete);
+            if (foliageRequired && (Settings.Reflections.MaxProbes > 0 || pipelineManifest.Requires(
+                    SceneMaterialPipelineKinds.AutomaticPlanarReceiver)))
                 _foliagePipeline.PrepareAutomaticPlanarCapturePipelines();
 
             CollectRequiredParticleBlendModes(

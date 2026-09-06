@@ -107,6 +107,15 @@ bool AutomaticPlanarProjectToUv(
 
 void AutomaticPlanarCaptureDepth(ivec2 pixel)
 {
+    uvec2 minimum = uvec2(pc.Reserved0 & 0xffffu, pc.Reserved0 >> 16u);
+    uvec2 maximum = uvec2(pc.Reserved1 & 0xffffu, pc.Reserved1 >> 16u);
+    bool rendered = all(greaterThanEqual(uvec2(pixel), minimum)) && all(lessThan(uvec2(pixel), maximum));
+    if (!rendered)
+    {
+        imageStore(CurrentDepthHistory, pixel, uvec4(0u));
+        imageStore(CurrentColor, pixel, vec4(0.0));
+        return;
+    }
     float depth = texelFetch(CapturedDepth, pixel, 0).r;
     if (!AutomaticPlanarFinite(depth) || depth <= 0.0 || depth > 1.0)
         depth = 0.0;

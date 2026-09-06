@@ -81,7 +81,7 @@ public sealed unsafe partial class MeshPipeline
                     continue;
                 Console.Error.WriteLine($"Automatic planar capture: requested={key.Family}; " +
                     $"shader={ResolveAutomaticPlanarFragmentShader(i / 2, (i & 1) != 0)}; " +
-                    $"mesh={ResolveAutomaticPlanarMeshShader(i / 2)}; stream=raw; " +
+                    $"mesh={ResolveAutomaticPlanarMeshShader(i / 2)}; stream=secondary; " +
                     $"depthPrepass={AutomaticPlanarDepthPrepassEnabled}; pipeline=0x{pipeline.Handle:X}");
                 break;
             }
@@ -114,7 +114,7 @@ public sealed unsafe partial class MeshPipeline
             hasColorAttachment: hasColor, depthWriteEnable: depthWrite, blendEnable: false,
             cullMode: CullModeFlags.None, depthBiasEnable: false);
         _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline,
-            $"Automatic Planar Capture (depthWrite={depthWrite}, {fragmentShader}, {meshShader})");
+            $"Secondary Capture (depthWrite={depthWrite}, {fragmentShader}, {meshShader})");
         return pipeline;
     }
 

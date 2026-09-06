@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Rendering.Core;
@@ -23,6 +22,21 @@ namespace Njulf.Rendering.Pipeline
         private readonly FoliageManager _foliageManager;
         private readonly FoliagePipeline _pipeline;
         private readonly FoliageAuthoredExpandPass _authoredExpandPass;
+        private readonly SceneRenderingData _secondaryCullData = new();
+
+        internal void ExecuteSecondary(CommandBuffer cmd, int frameIndex, in SecondaryViewContext view,
+            in FoliageRuntimeBuffers buffers, DescriptorSet storageSet)
+        {
+            if (buffers.ClusterCount <= 0) return;
+            _secondaryCullData.CameraPosition = view.Position;
+            _secondaryCullData.ScreenWidth = view.Width;
+            _secondaryCullData.ScreenHeight = view.Height;
+            _secondaryCullData.FoliageClusterCount = buffers.ClusterCount;
+            _secondaryCullData.OcclusionCullingEnabled = false;
+            _secondaryCullData.HiZMipCount = 0;
+            _secondaryCullData.PreviousHiZFrameValid = false;
+            RecordViewCulling(cmd, frameIndex, _secondaryCullData, buffers, storageSet);
+        }
 
         public FoliageCullPass(
             VulkanContext context,
@@ -58,12 +72,18 @@ namespace Njulf.Rendering.Pipeline
                 return;
             }
 
-            long start = Stopwatch.GetTimestamp();
+            RecordViewCulling(commandBuffer, frameIndex, sceneData, buffers, default);
+            _foliageManager.RecordCounterReadback(commandBuffer, frameIndex);
+        }
+
+        private void RecordViewCulling(CommandBuffer commandBuffer, int frameIndex, SceneRenderingData sceneData,
+            FoliageRuntimeBuffers buffers, DescriptorSet viewStorageSet)
+        {
             ResetOutputs(commandBuffer, buffers);
 
             _context.Api.CmdBindPipeline(commandBuffer, PipelineBindPoint.Compute, _pipeline.CullPipeline);
 
-            DescriptorSet storageSet = _bindlessHeap.StorageBufferSet;
+            DescriptorSet storageSet = viewStorageSet.Handle != 0 ? viewStorageSet : _bindlessHeap.StorageBufferSet;
             DescriptorSet textureSet = _bindlessHeap.TextureSamplerSet;
             _context.Api.CmdBindDescriptorSets(
                 commandBuffer,
@@ -134,7 +154,6 @@ namespace Njulf.Rendering.Pipeline
             RecordCullToAuthoredExpandBarrier(commandBuffer, buffers);
             _authoredExpandPass.Execute(commandBuffer, buffers);
             RecordCullOutputBarrier(commandBuffer, buffers);
-            _foliageManager.RecordCounterReadback(commandBuffer, frameIndex);
         }
 
         private void ResetOutputs(CommandBuffer commandBuffer, FoliageRuntimeBuffers buffers)

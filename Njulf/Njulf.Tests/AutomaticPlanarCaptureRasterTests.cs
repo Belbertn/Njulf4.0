@@ -17,13 +17,42 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class AutomaticPlanarCaptureRasterTests
 {
+    [Test]
+    public void CroppedCaptureHistoryMarksOnlyRenderedPixelsValid()
+    {
+        using var raster = new PlanarCaptureRaster();
+        (float[] alpha, uint[] depth) result;
+        try { result = raster.RenderCoverage(); }
+        catch (NotSupportedException exception) { Assert.Ignore(exception.Message); return; }
+        for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 8; x++)
+        {
+            bool rendered = x >= 2 && x < 6 && y >= 1 && y < 3;
+            Assert.That(result.alpha[y * 8 + x], Is.EqualTo(rendered ? 1f : 0f), $"confidence ({x},{y})");
+            Assert.That(result.depth[y * 8 + x], Is.EqualTo(rendered ? BitConverter.SingleToUInt32Bits(.5f) : 0u), $"depth ({x},{y})");
+        }
+    }
+
+    [Test]
+    public void ProbeDepthDoesNotApplyPlanarExclusionsOrClipPlane()
+    {
+        using var raster = new PlanarCaptureRaster();
+        float[] depth;
+        try { depth = raster.Render(true, 5); }
+        catch (NotSupportedException exception) { Assert.Ignore(exception.Message); return; }
+        float[] expected = [0f, .75f, .25f, .9f, .9f, .9f, .25f, .75f];
+        for (int y = 0; y < 4; y++)
+        for (int x = 0; x < expected.Length; x++)
+            Assert.That(depth[y * 8 + x], Is.EqualTo(expected[x]).Within(1e-6f), $"probe depth at ({x},{y})");
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public void CaptureDepth_PreservesNearestSurvivingSurfaceAndDiscardedHoles(bool prepass)
     {
         using var raster = new PlanarCaptureRaster();
         float[] depth;
-        try { depth = raster.Render(prepass); }
+        try { depth = raster.Render(prepass, 4096); }
         catch (NotSupportedException exception) { Assert.Ignore(exception.Message); return; }
         // These columns are independently constructed draw sequences. In
         // particular, rejected foreground samples must not hide the rear wall.
@@ -51,13 +80,15 @@ internal sealed unsafe class PlanarCaptureRaster : IDisposable
     private Device _device;
     private Queue _queue;
     private uint _queueFamily;
+    private int _captureLayer;
     private PhysicalDeviceMemoryProperties _memory;
 
     private readonly record struct HostBuffer(VkBuffer Buffer, DeviceMemory Memory, nint Pointer, ulong Size);
     private readonly record struct Target(VkImage Image, ImageView View, ImageAspectFlags Aspect);
 
-    public float[] Render(bool prepass)
+    public float[] Render(bool prepass, int captureLayer)
     {
+        _captureLayer = captureLayer;
         byte[] vertex = CompileFixtureVertex();
         Initialize();
         HostBuffer zero = Buffer(8192), materials = Buffer(4096), hotMaterials = Buffer(4096), metadata = Buffer(8192);
@@ -167,6 +198,100 @@ internal sealed unsafe class PlanarCaptureRaster : IDisposable
         return new ReadOnlySpan<float>((void*)readback.Pointer, (int)(Width * Height)).ToArray();
     }
 
+    public (float[] alpha, uint[] depth) RenderCoverage()
+    {
+        Initialize();
+        Target color = Image(Format.R16G16B16A16Sfloat, ImageAspectFlags.ColorBit,
+            ImageUsageFlags.StorageBit | ImageUsageFlags.SampledBit | ImageUsageFlags.TransferDstBit);
+        Target depth = Image(Format.D32Sfloat, ImageAspectFlags.DepthBit,
+            ImageUsageFlags.SampledBit | ImageUsageFlags.TransferDstBit);
+        Target history = Image(Format.R32Uint, ImageAspectFlags.ColorBit, ImageUsageFlags.StorageBit);
+        HostBuffer colorReadback = Buffer(Width * Height * 8), depthReadback = Buffer(Width * Height * 4);
+        DescriptorSetLayout storage = DescriptorLayout(DescriptorType.StorageBuffer, StorageDescriptors);
+        DescriptorSetLayout textures = DescriptorLayout(DescriptorType.CombinedImageSampler, 1);
+        var bindings = stackalloc DescriptorSetLayoutBinding[5];
+        for (uint i = 0; i < 5; i++) bindings[i] = new(i,
+            i < 2 ? DescriptorType.CombinedImageSampler : DescriptorType.StorageImage, 1, ShaderStageFlags.ComputeBit);
+        var localInfo = new DescriptorSetLayoutCreateInfo { SType = StructureType.DescriptorSetLayoutCreateInfo,
+            BindingCount = 5, PBindings = bindings };
+        Check(_vk.CreateDescriptorSetLayout(_device, &localInfo, null, out DescriptorSetLayout local));
+        _release.Add(() => _vk.DestroyDescriptorSetLayout(_device, local, null));
+        var sizes = stackalloc DescriptorPoolSize[] { new(DescriptorType.StorageBuffer, StorageDescriptors),
+            new(DescriptorType.CombinedImageSampler, 3), new(DescriptorType.StorageImage, 3) };
+        var poolInfo = new DescriptorPoolCreateInfo { SType = StructureType.DescriptorPoolCreateInfo,
+            Flags = DescriptorPoolCreateFlags.UpdateAfterBindBit, MaxSets = 3, PoolSizeCount = 3, PPoolSizes = sizes };
+        Check(_vk.CreateDescriptorPool(_device, &poolInfo, null, out DescriptorPool pool));
+        _release.Add(() => _vk.DestroyDescriptorPool(_device, pool, null));
+        var layouts = stackalloc DescriptorSetLayout[] { storage, textures, local };
+        var allocate = new DescriptorSetAllocateInfo { SType = StructureType.DescriptorSetAllocateInfo,
+            DescriptorPool = pool, DescriptorSetCount = 3, PSetLayouts = layouts };
+        var sets = stackalloc DescriptorSet[3];
+        Check(_vk.AllocateDescriptorSets(_device, &allocate, sets));
+        var samplerInfo = new SamplerCreateInfo { SType = StructureType.SamplerCreateInfo,
+            MinFilter = Filter.Nearest, MagFilter = Filter.Nearest, MipmapMode = SamplerMipmapMode.Nearest,
+            AddressModeU = SamplerAddressMode.ClampToEdge, AddressModeV = SamplerAddressMode.ClampToEdge,
+            AddressModeW = SamplerAddressMode.ClampToEdge };
+        Check(_vk.CreateSampler(_device, &samplerInfo, null, out Sampler sampler));
+        _release.Add(() => _vk.DestroySampler(_device, sampler, null));
+        var images = stackalloc DescriptorImageInfo[] {
+            new(sampler, color.View, ImageLayout.General), new(sampler, depth.View, ImageLayout.General),
+            new(default, history.View, ImageLayout.General), new(default, history.View, ImageLayout.General),
+            new(default, color.View, ImageLayout.General) };
+        var writes = stackalloc WriteDescriptorSet[5];
+        for (uint i = 0; i < 5; i++) writes[i] = new WriteDescriptorSet {
+            SType = StructureType.WriteDescriptorSet, DstSet = sets[2], DstBinding = i, DescriptorCount = 1,
+            DescriptorType = bindings[i].DescriptorType, PImageInfo = images + i };
+        _vk.UpdateDescriptorSets(_device, 5, writes, 0, null);
+        var range = new PushConstantRange(ShaderStageFlags.ComputeBit, 0, 32);
+        var layoutInfo = new PipelineLayoutCreateInfo { SType = StructureType.PipelineLayoutCreateInfo,
+            SetLayoutCount = 3, PSetLayouts = layouts, PushConstantRangeCount = 1, PPushConstantRanges = &range };
+        Check(_vk.CreatePipelineLayout(_device, &layoutInfo, null, out PipelineLayout layout));
+        _release.Add(() => _vk.DestroyPipelineLayout(_device, layout, null));
+        ShaderModule shader = Module(LoadShader("automatic_planar_reproject.comp.spv"));
+        byte* entry = stackalloc byte[] { 109, 97, 105, 110, 0 };
+        var pipelineInfo = new ComputePipelineCreateInfo { SType = StructureType.ComputePipelineCreateInfo,
+            Layout = layout, Stage = new PipelineShaderStageCreateInfo {
+                SType = StructureType.PipelineShaderStageCreateInfo, Stage = ShaderStageFlags.ComputeBit,
+                Module = shader, PName = entry } };
+        Check(_vk.CreateComputePipelines(_device, default, 1, &pipelineInfo, null, out VkPipeline pipeline));
+        _release.Add(() => _vk.DestroyPipeline(_device, pipeline, null));
+        CommandBuffer cmd = BeginCommands();
+        Transition(cmd, color, ImageLayout.Undefined, ImageLayout.General);
+        Transition(cmd, depth, ImageLayout.Undefined, ImageLayout.General);
+        Transition(cmd, history, ImageLayout.Undefined, ImageLayout.General);
+        var colorRange = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
+        var depthRange = new ImageSubresourceRange(ImageAspectFlags.DepthBit, 0, 1, 0, 1);
+        var colorClear = new ClearColorValue(1f, 2f, 3f, 0f);
+        var depthClear = new ClearDepthStencilValue(.5f, 0);
+        _vk.CmdClearColorImage(cmd, color.Image, ImageLayout.General, &colorClear, 1, &colorRange);
+        _vk.CmdClearDepthStencilImage(cmd, depth.Image, ImageLayout.General, &depthClear, 1, &depthRange);
+        Transition(cmd, color, ImageLayout.General, ImageLayout.General);
+        Transition(cmd, depth, ImageLayout.General, ImageLayout.General);
+        _vk.CmdBindPipeline(cmd, PipelineBindPoint.Compute, pipeline);
+        _vk.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, layout, 0, 3, sets, 0, null);
+        uint* push = stackalloc uint[] { 0, 0, 0, Width, Height, 2u | (1u << 16), 6u | (3u << 16), 0 };
+        _vk.CmdPushConstants(cmd, layout, ShaderStageFlags.ComputeBit, 0, 32, push);
+        _vk.CmdDispatch(cmd, 1, 1, 1);
+        Transition(cmd, color, ImageLayout.General, ImageLayout.TransferSrcOptimal);
+        Transition(cmd, history, ImageLayout.General, ImageLayout.TransferSrcOptimal);
+        var copy = new BufferImageCopy { ImageSubresource = new(ImageAspectFlags.ColorBit, 0, 0, 1),
+            ImageExtent = new Extent3D(Width, Height, 1) };
+        _vk.CmdCopyImageToBuffer(cmd, color.Image, ImageLayout.TransferSrcOptimal, colorReadback.Buffer, 1, &copy);
+        _vk.CmdCopyImageToBuffer(cmd, history.Image, ImageLayout.TransferSrcOptimal, depthReadback.Buffer, 1, &copy);
+        var host = new MemoryBarrier { SType = StructureType.MemoryBarrier,
+            SrcAccessMask = AccessFlags.TransferWriteBit, DstAccessMask = AccessFlags.HostReadBit };
+        _vk.CmdPipelineBarrier(cmd, PipelineStageFlags.TransferBit, PipelineStageFlags.HostBit, 0,
+            1, &host, 0, null, 0, null);
+        Check(_vk.EndCommandBuffer(cmd));
+        var submit = new SubmitInfo { SType = StructureType.SubmitInfo, CommandBufferCount = 1, PCommandBuffers = &cmd };
+        Check(_vk.QueueSubmit(_queue, 1, &submit, default));
+        Check(_vk.QueueWaitIdle(_queue));
+        float[] alpha = new float[Width * Height];
+        var pixels = new ReadOnlySpan<Half>((void*)colorReadback.Pointer, alpha.Length * 4);
+        for (int i = 0; i < alpha.Length; i++) alpha[i] = (float)pixels[i * 4 + 3];
+        return (alpha, new ReadOnlySpan<uint>((void*)depthReadback.Pointer, alpha.Length).ToArray());
+    }
+
     private void Draw(CommandBuffer cmd, PipelineLayout layout, int x, float depth,
         uint objectIndex = 0, float alpha = 1f, float worldZ = 1f)
     {
@@ -174,8 +299,7 @@ internal sealed unsafe class PlanarCaptureRaster : IDisposable
         _vk.CmdSetScissor(cmd, 0, 1, &scissor);
         var push = new GPUForwardPushConstants {
             CameraPosition = new Vector3(0, 0, -1), DebugAndAoFlags = 1,
-            CaptureFlags = GPUForwardPushConstants.PackCaptureFlags(true,
-                (int)AutomaticPlanarReflectionManager.AutomaticCaptureLayerFlag) };
+            CaptureFlags = GPUForwardPushConstants.PackCaptureFlags(true, _captureLayer) };
         // The fixture vertex consumes the first matrix row; the production
         // fragment receives its normal 256-byte push-constant interface.
         float* geometry = (float*)&push;
@@ -231,7 +355,7 @@ internal sealed unsafe class PlanarCaptureRaster : IDisposable
 
     private DescriptorSetLayout DescriptorLayout(DescriptorType type, uint count)
     {
-        var binding = new DescriptorSetLayoutBinding(0, type, count, ShaderStageFlags.FragmentBit);
+        var binding = new DescriptorSetLayoutBinding(0, type, count, ShaderStageFlags.FragmentBit | ShaderStageFlags.ComputeBit);
         DescriptorBindingFlags flags = DescriptorBindingFlags.PartiallyBoundBit;
         if (type == DescriptorType.StorageBuffer) flags |= DescriptorBindingFlags.UpdateAfterBindBit;
         var indexing = new DescriptorSetLayoutBindingFlagsCreateInfo {

@@ -256,6 +256,40 @@ overflow masks, the five GPU stage timings, and exact allocated/peak/retired
 bytes. This line is operational telemetry only: it does not replace the
 qualification manifest or the locked capture corpus.
 
+## Transport audit lifecycle
+
+`SimpleDdgiTransportConvergence.TailAuditLifecycleEvents` retains the last 64
+audit transitions; `TailAuditLifecycleDroppedEventCount` reports evictions.
+Snapshots are immutable and reused until the next transition. An unchanged
+certified field does not enter camera-admission bookkeeping, and cancelling
+an audit that is no longer frozen cannot revoke its certificate. Real field
+generation changes still invalidate certification.
+
+Each event identifies the admission trigger and certification/source-cache
+reason, the full frozen and currently observed generation tuples, and the
+logical volume-table generation at admission and observation. Compare the
+actual field/source/ownership generations when investigating repeat work;
+different audit IDs alone do not prove that the input changed.
+
+`Started`, `FirstSubmitted`, and `DispatchComplete` distinguish admission from
+GPU command submission. `Certified` or `Rejected` records CPU consumption of
+the completed readback; `Cancelled` and `TimedOut` record other termination.
+`ElapsedMicroseconds` measures admission to that observation, including
+scheduling and readback delay. Frame serials use the DDGI scheduler domain,
+which can differ from renderer/benchmark frame indices. Chunk counts distinguish
+partial dispatch from completed coverage. The camera-motion gate only defers
+new admission; a frozen audit continuing during motion is expected.
+
+Benchmark reports deduplicate retained transitions into `DdgiAuditLifecycleEvents`
+(including retained warmup history). `DdgiAuditActiveGpuFrameMilliseconds` and
+`DdgiAuditIdleGpuFrameMilliseconds` summarize measured GPU frame timing using
+aligned completed-frame command intent. Unaligned or invalid samples are
+excluded. These are the existing GPU frame pass-sum measurements, not exclusive
+kernel execution. Compare p95/p99/max alongside audit completion latency;
+different camera/convergence cohorts do not establish an audit's causal cost.
+Lifecycle diagnostics remain outside the versioned transient certification
+payload and its semantic digest.
+
 ## Troubleshooting
 
 | Symptom | Likely area |

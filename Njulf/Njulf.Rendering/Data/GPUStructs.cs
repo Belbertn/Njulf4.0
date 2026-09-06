@@ -1365,6 +1365,7 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUFoliageDrawPushConstants
     {
+        internal const uint DisableGlobalIlluminationFlag = 1u << 5;
         private const uint TraceResolutionScaleMask = 0x3u;
         private const uint MaterialTransportProvenanceFlag = 1u << 2;
         private const uint ReflectionFeedbackFlag = 1u << 3;

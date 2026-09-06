@@ -442,6 +442,7 @@ void main()
     SimpleDdgiParams simpleDdgiParams = ReadSimpleDdgiParams(
         uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
     bool simpleDdgiConfigured =
+        (pc.Push.Flags & (1u << 5u)) == 0u &&
         (simpleDdgiParams.flags &
             (SIMPLE_DDGI_FLAG_ENABLED |
              SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) ==

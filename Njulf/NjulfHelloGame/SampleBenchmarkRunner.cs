@@ -1261,6 +1261,13 @@ public sealed class SampleBenchmarkAnalyzer
             BudgetMetrics: budgetMetrics,
             LastDiagnostics: last)
         {
+            DdgiAuditLifecycleEvents = _samples
+                .SelectMany(static d => d.SimpleDdgiTransportConvergence.TailAuditLifecycleEvents)
+                .DistinctBy(static e => e.Sequence)
+                .OrderBy(static e => e.Sequence)
+                .ToArray(),
+            DdgiAuditActiveGpuFrameMilliseconds = BuildAuditFrameStats(auditActive: true),
+            DdgiAuditIdleGpuFrameMilliseconds = BuildAuditFrameStats(auditActive: false),
             AccuracyOracleResults = SampleGiAccuracyOracleEvaluator.Evaluate(scenario, _samples),
             CaptureContract = captureContract,
             GpuIndependentPassSumMilliseconds = gpuPassSum,
@@ -3453,6 +3460,13 @@ public sealed class SampleBenchmarkAnalyzer
         SampleBenchmarkTimingStats Pipeline,
         bool CompileExact,
         bool UploadExact);
+
+    private SampleBenchmarkTimingStats BuildAuditFrameStats(bool auditActive) =>
+        BuildStats(auditActive ? "GPU frame with DDGI audit" : "GPU frame without DDGI audit",
+            _samples.Where(d => d.GpuTimingValid != 0 &&
+                d.SimpleDdgiCompletedFrameEvidence is { Valid: true, GpuTimingPassSetAligned: true } completed &&
+                ((completed.Submitted.IntendedGpuPasses & SimpleDdgiGpuPassMask.TransportAudit) != 0) == auditActive)
+            .Select(static d => MicrosecondsToMilliseconds(d.GpuFrameMicroseconds)));
 
     internal static SampleBenchmarkTimingStats BuildStats(string name, IEnumerable<double> values)
     {

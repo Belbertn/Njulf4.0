@@ -25,7 +25,7 @@ namespace Njulf.Rendering.Data
     /// This type owns allocation, upload, bindless registration, growth, and synchronization
     /// for the scene buffer contract.
     /// </summary>
-    public sealed unsafe class SceneDataBuilder : IDisposable
+    public sealed unsafe partial class SceneDataBuilder : IDisposable
     {
         private const int TileSize = RenderingConstants.ForwardClusterTileSize;
         private const int ClusterDepthSliceCount =
@@ -278,22 +278,6 @@ namespace Njulf.Rendering.Data
         }
 
         public bool CaptureCpuSnapshots { get; set; }
-
-        private bool _retainAutomaticPlanarDrawRecords;
-        internal bool RetainAutomaticPlanarDrawRecords
-        {
-            get => _retainAutomaticPlanarDrawRecords;
-            set
-            {
-                lock (_lock)
-                {
-                    if (_retainAutomaticPlanarDrawRecords == value)
-                        return;
-                    _retainAutomaticPlanarDrawRecords = value;
-                    _hasCachedPayload = false;
-                }
-            }
-        }
 
         public SceneDataBuilder(
             VulkanContext context,
@@ -554,6 +538,7 @@ namespace Njulf.Rendering.Data
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
+            _secondaryScene = scene;
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
             if (uploadCommandBuffer.Handle == 0)
@@ -572,6 +557,8 @@ namespace Njulf.Rendering.Data
             {
                 _meshletNormalConeCullingEnabled =
                     meshletNormalConeCullingEnabled;
+                _secondaryGeometryDecalsEnabled = geometryDecalsEnabled;
+                _secondaryIsolatedDecalMaterialIndex = isolatedDecalMaterialIndex;
                 long buildStart = Stopwatch.GetTimestamp();
                 int frameIndex = _stagingRing.CurrentFrameIndex;
                 _meshletResidencyResolutionCache.Clear();
@@ -620,14 +607,10 @@ namespace Njulf.Rendering.Data
                     : inverseViewMatrix;
                 bool previousHiZFrameValid = _hasPreviousHiZFrameData &&
                     IsPreviousHiZCameraHistoryUsable(viewProjectionMatrix, previousHiZViewProjectionMatrix);
-                // Auxiliary views consume these raw records, never the main
-                // camera's compacted stream or its capacity. Keep their source
-                // geometry independent of main-view frustum and LOD selection.
-                useCpuMeshletFrustumCulling &= !RetainAutomaticPlanarDrawRecords;
-                bool cameraDependentCpuPayload = !RetainAutomaticPlanarDrawRecords && (
+                bool cameraDependentCpuPayload =
                     useCameraDependentCpuPayload ||
                     useCpuMeshletFrustumCulling ||
-                    CaptureCpuSnapshots);
+                    CaptureCpuSnapshots;
                 long signatureStart = Stopwatch.GetTimestamp();
                 StaticScenePayloadSignature staticPayloadSignature = StaticScenePayloadSignature.Create(
                     scene,
@@ -784,7 +767,6 @@ namespace Njulf.Rendering.Data
                         buildGpuInstanceCandidates: buildGpuInstanceCandidates,
                         retainCpuOpaqueMeshletCommands:
                             !buildGpuInstanceCandidates ||
-                            RetainAutomaticPlanarDrawRecords ||
                             captureSceneSubmissionValidationLists ||
                             CaptureCpuSnapshots,
                         gpuLod1DistanceRatio: gpuLod1DistanceRatio,
@@ -1005,9 +987,6 @@ namespace Njulf.Rendering.Data
                 sceneData.SimpleOpaqueMeshletCount = simpleOpaqueMeshletCount;
                 sceneData.SimpleNormalOpaqueMeshletCount = simpleNormalOpaqueMeshletCount;
                 sceneData.FullOpaqueMeshletCount = fullOpaqueMeshletCount;
-                sceneData.AutomaticPlanarSimpleMeshletCount = _meshletDrawCommands.Count;
-                sceneData.AutomaticPlanarSimpleFullInputMeshletCount = _simpleNormalOpaqueMeshletDrawCommands.Count;
-                sceneData.AutomaticPlanarFullMeshletCount = _fullOpaqueMeshletDrawCommands.Count;
                 sceneData.SolidMeshletCount = solidDepthMeshletCount;
                 sceneData.MaskedMeshletCount = maskedDepthMeshletCount;
                 sceneData.TransparentMeshletCount = _transparentMeshletDrawCommands.Count;
