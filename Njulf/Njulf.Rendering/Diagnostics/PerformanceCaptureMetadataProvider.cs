@@ -25,6 +25,7 @@ internal sealed class PerformanceCaptureMetadataProvider
     }
 
     internal string SceneKind { get; set; } = string.Empty;
+    internal ShaderModuleIdentityRegistry? ShaderModuleIdentities { get; init; }
     internal string Scenario { get; set; } = string.Empty;
     internal PerformanceCaptureBuildIdentity BuildIdentity =>
         Volatile.Read(ref _buildIdentity);
@@ -141,6 +142,7 @@ internal sealed class PerformanceCaptureMetadataProvider
                 build.ShaderBundleHash),
             settingsSchemaVersion)
         {
+            LoadedShaderIdentity = ShaderModuleIdentities?.Snapshot(),
             ExecutableHash = build.ExecutableHash,
             DirtyWorktreeState = build.DirtyWorktreeState
         };

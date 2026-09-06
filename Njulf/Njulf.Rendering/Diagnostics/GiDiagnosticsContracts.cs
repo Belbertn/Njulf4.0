@@ -1129,6 +1129,7 @@ namespace Njulf.Rendering.Diagnostics
             0);
 
         public string ExecutableHash { get; init; } = "unknown-executable";
+        public LoadedShaderIdentity? LoadedShaderIdentity { get; init; }
         public string DirtyWorktreeState { get; init; } = "unknown-dirty-state";
     }
 

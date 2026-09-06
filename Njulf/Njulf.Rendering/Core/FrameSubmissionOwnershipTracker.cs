@@ -7,6 +7,8 @@ namespace Njulf.Rendering.Core;
 /// indices. Submission serials start at one; zero is the never-submitted
 /// sentinel. Graphics submissions are ordered on one queue, so observing a
 /// later serial complete also proves every earlier serial complete.
+/// Frame-resource contexts cycle in submission order so slot-indexed temporal
+/// histories retain the immediately preceding frame in a different bank.
 /// </summary>
 internal sealed class FrameSubmissionOwnershipTracker
 {
@@ -86,46 +88,28 @@ internal sealed class FrameSubmissionOwnershipTracker
     {
         ArgumentNullException.ThrowIfNull(isFenceSignaled);
 
-        int oldestContext = -1;
-        ulong oldestSerial = ulong.MaxValue;
-        for (int offset = 0; offset < _frameContextOwners.Length; offset++)
+        int context = _preferredFrameContext;
+        ulong owner = _frameContextOwners[context];
+        if (owner == 0UL || owner <= _completedSubmissionSerial)
         {
-            int context = (_preferredFrameContext + offset) %
-                _frameContextOwners.Length;
-            ulong owner = _frameContextOwners[context];
-            if (owner == 0UL || owner <= _completedSubmissionSerial)
-            {
-                return new FrameResourceContextSelection(
-                    context,
-                    owner,
-                    RequiresWait: false);
-            }
-
-            if (isFenceSignaled(context))
-            {
-                ObserveContextCompleted(context);
-                return new FrameResourceContextSelection(
-                    context,
-                    owner,
-                    RequiresWait: false);
-            }
-
-            if (owner < oldestSerial)
-            {
-                oldestSerial = owner;
-                oldestContext = context;
-            }
+            return new FrameResourceContextSelection(
+                context,
+                owner,
+                RequiresWait: false);
         }
 
-        if (oldestContext < 0)
+        if (isFenceSignaled(context))
         {
-            throw new InvalidOperationException(
-                "No frame-resource context has an owner or reusable fence state.");
+            ObserveContextCompleted(context);
+            return new FrameResourceContextSelection(
+                context,
+                owner,
+                RequiresWait: false);
         }
 
         return new FrameResourceContextSelection(
-            oldestContext,
-            oldestSerial,
+            context,
+            owner,
             RequiresWait: true);
     }
 

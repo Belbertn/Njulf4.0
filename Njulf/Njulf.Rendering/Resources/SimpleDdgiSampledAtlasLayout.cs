@@ -92,8 +92,15 @@ public sealed record SimpleDdgiSampledAtlasLayout(
 public static class SimpleDdgiSampledAtlasLayoutCompiler
 {
     public const int CapacityQuantum = 256;
-    public const ulong IrradianceBytesPerProbe = 8UL * 8UL * 8UL;
-    public const ulong VisibilityBytesPerProbe = 16UL * 16UL * 4UL;
+    public const int BorderTexels = 1;
+    public const int IrradianceImageTexels =
+        SimpleDdgiVolumeManager.IrradianceTexelsPerProbe + 2 * BorderTexels;
+    public const int VisibilityImageTexels =
+        SimpleDdgiVolumeManager.VisibilityTexelsPerProbe + 2 * BorderTexels;
+    public const ulong IrradianceBytesPerProbe =
+        (ulong)IrradianceImageTexels * IrradianceImageTexels * 8UL;
+    public const ulong VisibilityBytesPerProbe =
+        (ulong)VisibilityImageTexels * VisibilityImageTexels * 4UL;
     internal const ulong InitialFingerprint = 14695981039346656037UL;
     private const ulong FingerprintPrime = 1099511628211UL;
 
@@ -200,7 +207,7 @@ public static class SimpleDdgiSampledAtlasLayoutCompiler
                     0UL,
                     requests.Select(static request => request.Identity ?? string.Empty).ToArray(),
                     "full-canonical-budget-exhausted",
-                    Add(InitialFingerprint, (uint)coverageMode));
+                    AddCoverageModeToFingerprint(coverageMode));
             }
         }
 
@@ -243,7 +250,7 @@ public static class SimpleDdgiSampledAtlasLayoutCompiler
         ulong irradianceBytes = checked((ulong)provisionedProbeCount * IrradianceBytesPerProbe);
         ulong visibilityBytes = checked((ulong)provisionedProbeCount * VisibilityBytesPerProbe);
         ulong totalBytes = checked(irradianceBytes + visibilityBytes);
-        ulong fingerprint = Add(InitialFingerprint, (uint)coverageMode);
+        ulong fingerprint = AddCoverageModeToFingerprint(coverageMode);
         foreach (SimpleDdgiSampledAtlasRange range in ranges)
         {
             fingerprint = Add(fingerprint, checked((uint)range.VolumeIndex));
@@ -353,7 +360,8 @@ public static class SimpleDdgiSampledAtlasLayoutCompiler
 
     internal static ulong AddCoverageModeToFingerprint(
         SimpleDdgiSampledAtlasCoverageMode mode) =>
-        Add(InitialFingerprint, (uint)mode.Sanitize());
+        Add(Add(Add(InitialFingerprint, (uint)mode.Sanitize()),
+            IrradianceImageTexels), VisibilityImageTexels);
 
     private static ulong AddString(ulong hash, string value)
     {

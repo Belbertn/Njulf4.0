@@ -25,6 +25,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'loaded-shader-identity.ps1')
 $Iterations = 1
 
 $script:SolutionRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -366,7 +367,7 @@ function Get-CanonicalPathFingerprint {
 function Get-ProtectedFingerprints {
     param($Manifest)
     $fingerprints = [ordered]@{}
-    foreach ($path in @($Manifest.protectedPaths)) {
+    foreach ($path in (@($Manifest.protectedPaths) + @('tools/loaded-shader-identity.ps1'))) {
         $fingerprints[[string]$path] = Get-CanonicalPathFingerprint ([string]$path)
     }
     return $fingerprints
@@ -3631,6 +3632,11 @@ function Assert-QualitySequenceCaptureRun {
 
 function Assert-QualityCaptureRunEqual {
     param($Actual, $Expected, [bool]$CrossBuild, [string]$Label)
+    Assert-LoadedShaderIdentity $Actual.LoadedShaderIdentity "$Label actual"
+    Assert-LoadedShaderIdentity $Expected.LoadedShaderIdentity "$Label expected"
+    if (-not $CrossBuild) {
+        Assert-LoadedShaderPair $Actual.LoadedShaderIdentity $Expected.LoadedShaderIdentity $true $Label
+    }
     $pairs = @(
         @("scene", [string]$Actual.SceneKind, [string]$Expected.SceneKind),
         @("scenario", [string]$Actual.Scenario, [string]$Expected.Scenario),
@@ -4587,6 +4593,7 @@ function ConvertTo-QualityCaptureRunContract {
         applicationVersion = [string]$Run.ApplicationVersion
         commit = [string]$Run.Commit
         shaderBundleHash = [string]$Run.ShaderBundleHash
+        loadedShaderIdentity = $Run.LoadedShaderIdentity
         settingsSchemaVersion = [int]$Run.SettingsSchemaVersion
         executableHash = [string]$Run.ExecutableHash
         dirtyWorktreeState = [string]$Run.DirtyWorktreeState
@@ -5947,6 +5954,7 @@ function Assert-BenchmarkReport {
         [string]$Report.Schema -ne "njulf-renderer-benchmark/v5") {
         throw "$Label has unexpected report kind/schema '$($Report.Kind)'/'$($Report.Schema)'."
     }
+    Assert-LoadedShaderMeasurement $Report $Label
     if ([int]$Report.MeasurementFrameCount -ne [int]$Workload.measureFrames) {
         throw "$Label measured $($Report.MeasurementFrameCount) frames, expected $($Workload.measureFrames)."
     }
@@ -7471,6 +7479,7 @@ function Assert-WithinPhaseIdentity {
         @("settings schema", [string]$Expected.LastDiagnostics.CaptureRun.SettingsSchemaVersion, [string]$Actual.LastDiagnostics.CaptureRun.SettingsSchemaVersion),
         @("executable", [string]$Expected.LastDiagnostics.CaptureRun.ExecutableHash, [string]$Actual.LastDiagnostics.CaptureRun.ExecutableHash),
         @("shader bundle", [string]$Expected.LastDiagnostics.CaptureRun.ShaderBundleHash, [string]$Actual.LastDiagnostics.CaptureRun.ShaderBundleHash),
+        @("loaded shaders", [string]$Expected.LastDiagnostics.CaptureRun.LoadedShaderIdentity.Fingerprint, [string]$Actual.LastDiagnostics.CaptureRun.LoadedShaderIdentity.Fingerprint),
         @("scene asset", [string]$Expected.LastDiagnostics.CaptureSceneAssetHash, [string]$Actual.LastDiagnostics.CaptureSceneAssetHash),
         @("scene state", [string]$Expected.LastDiagnostics.CaptureSceneStateHash, [string]$Actual.LastDiagnostics.CaptureSceneStateHash),
         @("GI settings", [string]$Expected.LastDiagnostics.ResolvedGiSettings.StableHash, [string]$Actual.LastDiagnostics.ResolvedGiSettings.StableHash),

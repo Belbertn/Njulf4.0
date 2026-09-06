@@ -228,6 +228,8 @@ namespace Njulf.Rendering.Resources
         // detailed atomics isolated from hot renderer counters and avoids making
         // native-driver code generation depend on a growing heterogeneous SSBO.
         public const ulong SimpleDdgiStorageValidationBufferSize = 256;
+        // Dedicated physical bank extension; does not shift logical diagnostics.
+        public const int SimpleDdgiMirrorBoundaryImageHitWord = 23;
         private const int SimpleDdgiStorageValidationSentinelWord =
             (int)(SimpleDdgiStorageValidationBufferSize / sizeof(uint)) - 1;
         private const uint SimpleDdgiStorageValidationSentinel = 0x51dda11du;
@@ -851,7 +853,9 @@ namespace Njulf.Rendering.Resources
                             InvalidSourceEpochCount: storageValidationCounters[21],
                             InvalidHitKindCount: storageValidationCounters[22])
                         {
-                            FrameSerial = _diagnosticFrameSerials[frameIndex]
+                            FrameSerial = _diagnosticFrameSerials[frameIndex],
+                            MirrorBoundaryImageHitCount = storageValidationCounters[
+                                SimpleDdgiMirrorBoundaryImageHitWord]
                         }
                         : SimpleDdgiStorageValidationCounters.Empty,
                     NearVisibility = DecodeSimpleDdgiNearVisibilityCounters(

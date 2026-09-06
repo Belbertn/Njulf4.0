@@ -83,6 +83,8 @@ This is the clearest measured slowdown associated with the recent work. However,
 
 Recommended first A/B: the complete shared producer/seed-writing path versus its retained legacy directional validation path, with transport settled and the same workload. Optimize or gate the whole producer/consumer contract rather than benchmarking only the final temporal filter.
 
+Implementation follow-up: [surface-input reuse and local qualification](SurfaceInputReuse-20260906.md) disables the costly shared producer, measures opt-in depth/motion fusion including identity storage/copy costs, and rejects CSM normal reuse below the benefit threshold. Effect-specific temporal rejection remains separate.
+
 Evidence: [before](../.perf-loop-runs/temporal-validity-plan9-12-20260904/baseline.json), [after](../.perf-loop-runs/temporal-validity-plan9-12-20260904/candidate.json), [implementation record](Complete/OrderedPerformancePlansEvidence-20260904.md). Source: [motion seed writer](../Njulf.Shaders/motion_vector.frag), [four-word codec](../Njulf.Shaders/temporal_surface_validity.glsl), [directional consumer](../Njulf.Rendering/Pipeline/DirectionalShadowScreenPasses.cs).
 
 ### 4–8. Smaller targets and useful exclusions

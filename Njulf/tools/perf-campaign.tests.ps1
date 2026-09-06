@@ -3,6 +3,8 @@ param()
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'loaded-shader-identity.ps1')
+$script:LoadedShaderFixture = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../Njulf.Tests/Fixtures/loaded-shader-identity-v1.json') -Raw | ConvertFrom-Json
 
 $solutionRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $driver = Join-Path $PSScriptRoot "perf-campaign.ps1"
@@ -93,6 +95,7 @@ function Invoke-SyntheticHealthReportCase {
         DirtyWorktreeState = "clean"
         ExecutableHash = $executableHash
         ShaderBundleHash = $shaderHash
+        LoadedShaderIdentity = $script:LoadedShaderFixture
         ApplicationVersion = "1.0.0+synthetic"
         SettingsSchemaVersion = 1
         SceneKind = "Bistro"
@@ -356,6 +359,7 @@ function Invoke-SyntheticQualityHealthBudgetCase {
         ApplicationVersion = "1.0.0+synthetic"
         Commit = $commit
         ShaderBundleHash = $shaderHash
+        LoadedShaderIdentity = $script:LoadedShaderFixture
         SettingsSchemaVersion = 1
         ExecutableHash = $executableHash
         DirtyWorktreeState = "clean"
@@ -1030,6 +1034,7 @@ function Invoke-SyntheticQualityAnimationContractCase {
             ApplicationVersion = "1.0.0+synthetic"
             Commit = "9" * 40
             ShaderBundleHash = "sha256:" + ("a" * 64)
+            LoadedShaderIdentity = $script:LoadedShaderFixture
             SettingsSchemaVersion = 1
             ExecutableHash = "sha256:" + ("b" * 64)
             DirtyWorktreeState = "clean"

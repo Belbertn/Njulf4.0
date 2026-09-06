@@ -53,6 +53,7 @@ namespace Njulf.Rendering.Resources
         private const int CapacityGrowthQuantum = 256;
         private const ulong IrradianceTexelStride = 8;
         private const ulong VisibilityTexelStride = 4;
+        // Canonical source strides, excluding the sampled image's border.
         internal const ulong IrradianceBytesPerProbe =
             (ulong)SimpleDdgiVolumeManager.IrradianceTexelsPerProbe *
             SimpleDdgiVolumeManager.IrradianceTexelsPerProbe *
@@ -600,7 +601,7 @@ namespace Njulf.Rendering.Resources
         {
             group = new AtlasGroup(layerCount);
             if (!TryCreateImage(
-                    SimpleDdgiVolumeManager.IrradianceTexelsPerProbe,
+                    SimpleDdgiSampledAtlasLayoutCompiler.IrradianceImageTexels,
                     layerCount,
                     Format.R16G16B16A16Sfloat,
                     "Simple DDGI Sampled Irradiance",
@@ -614,7 +615,7 @@ namespace Njulf.Rendering.Resources
             }
 
             if (!TryCreateImage(
-                    SimpleDdgiVolumeManager.VisibilityTexelsPerProbe,
+                    SimpleDdgiSampledAtlasLayoutCompiler.VisibilityImageTexels,
                     layerCount,
                     Format.R16G16Sfloat,
                     "Simple DDGI Sampled Visibility",
@@ -743,6 +744,62 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        // One interior region plus one region for each border texel. Each
+        // region spans the whole contiguous layer chunk, not one CPU call per
+        // probe. Explicit source pitches retain the unpadded canonical stride.
+        internal static int BuildCopyRegions(
+            Span<BufferImageCopy> regions,
+            int texelsPerProbe,
+            ulong texelStride,
+            int firstSourceProbe,
+            int firstLayer,
+            int layerCount)
+        {
+            int n = texelsPerProbe;
+            ulong sourceOffset = checked((ulong)firstSourceProbe * (ulong)n * (ulong)n * texelStride);
+            var copy = new BufferImageCopy
+            {
+                BufferOffset = sourceOffset,
+                BufferRowLength = checked((uint)n),
+                BufferImageHeight = checked((uint)n),
+                ImageSubresource = new ImageSubresourceLayers
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    MipLevel = 0,
+                    BaseArrayLayer = checked((uint)firstLayer),
+                    LayerCount = checked((uint)layerCount)
+                },
+                ImageOffset = new Offset3D(1, 1, 0),
+                ImageExtent = new Extent3D(checked((uint)n), checked((uint)n), 1)
+            };
+            regions[0] = copy;
+            copy.ImageExtent = new Extent3D(1, 1, 1);
+            int count = 1;
+            for (int y = 0; y < n + 2; y++)
+            for (int x = 0; x < n + 2; x++)
+            {
+                if (x > 0 && x <= n && y > 0 && y <= n)
+                    continue;
+                // Same X-then-Y fold as SimpleDdgiMirrorOctTexelIndex in GLSL;
+                // applying both folds gives the opposite interior corner.
+                int sx = x - 1, sy = y - 1;
+                if (sx < 0 || sx >= n)
+                {
+                    sx = sx < 0 ? -sx - 1 : 2 * n - sx - 1;
+                    sy = n - 1 - sy;
+                }
+                if (sy < 0 || sy >= n)
+                {
+                    sy = sy < 0 ? -sy - 1 : 2 * n - sy - 1;
+                    sx = n - 1 - sx;
+                }
+                copy.BufferOffset = checked(sourceOffset + (ulong)(sy * n + sx) * texelStride);
+                copy.ImageOffset = new Offset3D(x, y, 0);
+                regions[count++] = copy;
+            }
+            return count;
+        }
+
         private void CopyContiguousRange(
             CommandBuffer commandBuffer,
             VkBuffer source,
@@ -752,9 +809,9 @@ namespace Njulf.Rendering.Resources
             int texelsPerProbe = irradiance
                 ? SimpleDdgiVolumeManager.IrradianceTexelsPerProbe
                 : SimpleDdgiVolumeManager.VisibilityTexelsPerProbe;
-            ulong bytesPerProbe = irradiance
-                ? IrradianceBytesPerProbe
-                : VisibilityBytesPerProbe;
+            ulong texelStride = irradiance ? IrradianceTexelStride : VisibilityTexelStride;
+            int copyCapacity = 1 + 4 * texelsPerProbe + 4;
+            BufferImageCopy* copies = stackalloc BufferImageCopy[copyCapacity];
             int sourceProbe = range.CanonicalFirstProbe;
             int compactLayer = range.CompactFirstLayer;
             int remaining = range.ProbeCount;
@@ -764,33 +821,16 @@ namespace Njulf.Rendering.Resources
                 int groupLayer = compactLayer - groupIndex * _layersPerTexture;
                 AtlasGroup group = _groups[groupIndex];
                 int layerCount = Math.Min(remaining, group.LayerCount - groupLayer);
-                var copy = new BufferImageCopy
-                {
-                    BufferOffset = checked((ulong)sourceProbe * bytesPerProbe),
-                    BufferRowLength = 0,
-                    BufferImageHeight = 0,
-                    ImageSubresource = new ImageSubresourceLayers
-                    {
-                        AspectMask = ImageAspectFlags.ColorBit,
-                        MipLevel = 0,
-                        BaseArrayLayer = checked((uint)groupLayer),
-                        LayerCount = checked((uint)layerCount)
-                    },
-                    ImageOffset = new Offset3D { X = 0, Y = 0, Z = 0 },
-                    ImageExtent = new Extent3D
-                    {
-                        Width = checked((uint)texelsPerProbe),
-                        Height = checked((uint)texelsPerProbe),
-                        Depth = 1
-                    }
-                };
+                int copyCount = BuildCopyRegions(
+                    new Span<BufferImageCopy>(copies, copyCapacity),
+                    texelsPerProbe, texelStride, sourceProbe, groupLayer, layerCount);
                 _context.Api.CmdCopyBufferToImage(
                     commandBuffer,
                     source,
                     irradiance ? group.IrradianceImage : group.VisibilityImage,
                     ImageLayout.TransferDstOptimal,
-                    1,
-                    &copy);
+                    checked((uint)copyCount),
+                    copies);
                 sourceProbe = checked(sourceProbe + layerCount);
                 compactLayer = checked(compactLayer + layerCount);
                 remaining -= layerCount;
@@ -1188,8 +1228,8 @@ namespace Njulf.Rendering.Resources
             {
                 if (group == null)
                     continue;
-                bytes = checked(bytes + (ulong)group.LayerCount * IrradianceBytesPerProbe);
-                bytes = checked(bytes + (ulong)group.LayerCount * VisibilityBytesPerProbe);
+                bytes = checked(bytes + (ulong)group.LayerCount * SimpleDdgiSampledAtlasLayoutCompiler.IrradianceBytesPerProbe);
+                bytes = checked(bytes + (ulong)group.LayerCount * SimpleDdgiSampledAtlasLayoutCompiler.VisibilityBytesPerProbe);
             }
 
             return bytes;
@@ -1246,7 +1286,8 @@ namespace Njulf.Rendering.Resources
                 return 0;
 
             return checked((ulong)probeCapacity *
-                (IrradianceBytesPerProbe + VisibilityBytesPerProbe));
+                (SimpleDdgiSampledAtlasLayoutCompiler.IrradianceBytesPerProbe +
+                    SimpleDdgiSampledAtlasLayoutCompiler.VisibilityBytesPerProbe));
         }
 
         internal static int CalculateSafeCopyProbeCount(

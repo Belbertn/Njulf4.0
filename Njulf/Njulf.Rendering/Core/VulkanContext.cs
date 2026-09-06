@@ -20,6 +20,8 @@ namespace Njulf.Rendering.Core
     /// </summary>
     public unsafe class VulkanContext : IDisposable
     {
+        internal ShaderModuleIdentityRegistry ShaderModuleIdentities { get; } = new();
+
         private static readonly string[] ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
         private const string MemoryBudgetExtensionName = "VK_EXT_memory_budget";
         private const string ImageCompressionControlExtensionName = "VK_EXT_image_compression_control";

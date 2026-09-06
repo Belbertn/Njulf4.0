@@ -951,6 +951,7 @@ public sealed class SampleBenchmarkPairComparerTests
         {
             CaptureRun = RendererDiagnostics.Empty.CaptureRun with
             {
+                LoadedShaderIdentity = LoadedShaderTestEvidence.Identity,
                 Scenario = scenario.ToString()
             }
         };
@@ -999,6 +1000,7 @@ public sealed class SampleBenchmarkPairComparerTests
                 Mismatches: [])
             {
                 FullIdentityHash = identityHash + ":" + variant,
+                LoadedShaders = LoadedShaderTestEvidence.Measurement,
                 Trajectory = SampleBenchmarkTrajectory.GetName(trajectory),
                 TrajectoryFingerprint = trajectoryFingerprint,
                 TrajectoryFrameCount = 1,

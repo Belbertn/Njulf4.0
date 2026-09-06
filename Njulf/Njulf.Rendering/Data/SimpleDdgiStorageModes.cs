@@ -80,6 +80,9 @@ public readonly record struct SimpleDdgiStorageValidationCounters(
 {
     public ulong FrameSerial { get; init; }
 
+    /// <summary>Image hits whose unpadded bilinear footprint crosses an octahedral boundary.</summary>
+    public uint MirrorBoundaryImageHitCount { get; init; }
+
     public static SimpleDdgiStorageValidationCounters Empty { get; } = new(
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0f, 0.0f, 0, 0, 0.0f,
         Array.Empty<uint>(), 0, 0);

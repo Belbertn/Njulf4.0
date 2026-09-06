@@ -82,26 +82,6 @@ public sealed class SimpleDdgiProbePagingShaderContractTests
     }
 
     [Test]
-    public void PrimaryGraphicsFrameBoundary_OrdersSharedResourcesAcrossFrames()
-    {
-        string renderer = ReadRepoText(
-            "Njulf.Rendering",
-            "VulkanRenderer.cs");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(renderer, Does.Contain(
-                "_currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);\n            InsertInterFrameSharedResourceDependency(_currentCommandBuffer);"));
-            Assert.That(renderer, Does.Contain(
-                "SrcStageMask = PipelineStageFlags2.AllCommandsBit"));
-            Assert.That(renderer, Does.Contain(
-                "SrcAccessMask = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit"));
-            Assert.That(renderer, Does.Contain(
-                "DstAccessMask = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit"));
-        });
-    }
-
-    [Test]
     public void FeedbackReadback_IsTransferVisibleToTheHostBeforeFenceLateConsumption()
     {
         string cache = ReadRepoText(

@@ -170,6 +170,8 @@ namespace Njulf.Rendering.Data
         /// </summary>
         internal bool OpaqueVisibilityCompleted { get; set; }
         public bool DepthPrePassCompleted { get; set; }
+        internal bool DepthMotionFusionCompleted { get; set; }
+        internal bool HasCurrentDepthMotion => DepthMotionFusionCompleted && HasCurrentDepthPrePass;
         public ulong DepthPrePassFrameSerial { get; set; }
         public bool HasCurrentDepthPrePass =>
             DepthPrePassCompleted && DepthPrePassFrameSerial == DdgiFrameSerial;
@@ -2389,6 +2391,7 @@ namespace Njulf.Rendering.Data
             PreviousHiZTested = 0;
             PreviousHiZCulled = 0;
             DepthPrePassCompleted = false;
+            DepthMotionFusionCompleted = false;
             OpaqueVisibilityCompleted = false;
             DepthPrePassFrameSerial = 0;
             TiledLightCullingCompleted = false;

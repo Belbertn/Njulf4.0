@@ -238,7 +238,11 @@ internal sealed class ProductionRenderPipelineDeclaration
         return declarations;
     }
 
-    public IReadOnlyList<RenderGraphPassResourceDeclaration> CreatePassResourceDeclarations()
+    public IReadOnlyList<RenderGraphPassResourceDeclaration> CreatePassResourceDeclarations() =>
+        CreatePassResourceDeclarations(SurfaceInputPolicy.DepthMotionFusionRequested);
+
+    internal IReadOnlyList<RenderGraphPassResourceDeclaration> CreatePassResourceDeclarations(
+        bool depthMotionFusion)
     {
         var declarations = new List<RenderGraphPassResourceDeclaration>
         {
@@ -246,24 +250,24 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
                 WriteComputeBuffer(RenderGraphResourceId.SceneSubmissionBuffers)),
             Pass("DirectionalShadowPass",
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                Read(RenderGraphResourceId.FoliageBuffers),
+                ReadGraphicsInputs(RenderGraphResourceId.SceneSubmissionBuffers),
+                ReadGraphicsInputs(RenderGraphResourceId.FoliageBuffers),
                 Write(RenderGraphResourceId.DirectionalShadowMap)),
             Pass("SpotShadowPass",
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                Read(RenderGraphResourceId.FoliageBuffers),
+                ReadGraphicsInputs(RenderGraphResourceId.SceneSubmissionBuffers),
+                ReadGraphicsInputs(RenderGraphResourceId.FoliageBuffers),
                 Write(RenderGraphResourceId.SpotShadowAtlas)),
             Pass("PointShadowPass",
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                Read(RenderGraphResourceId.FoliageBuffers),
+                ReadGraphicsInputs(RenderGraphResourceId.SceneSubmissionBuffers),
+                ReadGraphicsInputs(RenderGraphResourceId.FoliageBuffers),
                 Write(RenderGraphResourceId.PointShadowCubemapArray)),
             Pass("DepthPrePass",
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                Read(RenderGraphResourceId.FoliageBuffers),
+                ReadGraphicsInputs(RenderGraphResourceId.SceneSubmissionBuffers),
+                ReadGraphicsInputs(RenderGraphResourceId.FoliageBuffers),
                 WriteDepthAttachment(RenderGraphResourceId.SceneDepth)),
             Pass("MotionVectorPass",
                 ReadDepth(RenderGraphResourceId.SceneDepth),
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
+                ReadGraphicsInputs(RenderGraphResourceId.SceneSubmissionBuffers),
                 WriteGraphicsStorage(
                     RenderGraphResourceId.DirectionalShadowScratch,
                     RenderGraphHistoryBindingSelection.Current),
@@ -1034,6 +1038,40 @@ internal sealed class ProductionRenderPipelineDeclaration
 
         if (OpaqueVisibilityComputePolicy.Requested)
             AddOpaqueVisibilityUsages(declarations);
+        if (depthMotionFusion)
+        {
+            int depthIndex = declarations.FindIndex(pass => pass.PassName == "DepthPrePass");
+            var depth = declarations[depthIndex];
+            declarations[depthIndex] = depth with
+            {
+                Usages = depth.Usages.Concat(new[]
+                {
+                    WriteColorAttachment(RenderGraphResourceId.MotionVectors),
+                    new RenderGraphResourceUsage(RenderGraphResourceId.SurfaceReceiverIdentity,
+                        RenderGraphResourceAccess.Write,
+                        PipelineStageFlags2.ColorAttachmentOutputBit | PipelineStageFlags2.TransferBit,
+                        AccessFlags2.ColorAttachmentWriteBit | AccessFlags2.TransferReadBit,
+                        ImageLayout.ColorAttachmentOptimal, RenderGraphQueueIntent.Graphics,
+                        FinalImageLayout: ImageLayout.TransferSrcOptimal),
+                    new RenderGraphResourceUsage(RenderGraphResourceId.DirectionalShadowScratch,
+                        RenderGraphResourceAccess.Write, PipelineStageFlags2.TransferBit,
+                        AccessFlags2.TransferWriteBit, ImageLayout.Undefined,
+                        RenderGraphQueueIntent.Graphics, HistoryBinding: RenderGraphHistoryBindingSelection.Current)
+                }).ToArray()
+            };
+        }
+        if (!SurfaceInputPolicy.SharedValidityEnabled)
+        {
+            for (int index = 0; index < declarations.Count; index++)
+            {
+                var declaration = declarations[index];
+                declarations[index] = declaration with
+                {
+                    Usages = declaration.Usages.Where(usage => usage.Resource !=
+                        RenderGraphResourceId.TemporalSurfaceValidityHistory).ToArray()
+                };
+            }
+        }
         return declarations;
     }
 
@@ -1440,6 +1478,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 RenderTargetManager.LdrSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
             ImageResource(RenderGraphResourceId.SceneDepth, "Scene depth", depthFormat,
                 RenderGraphResourceSizePolicy.SceneResolution),
+            OwnedImageResource(RenderGraphResourceId.SurfaceReceiverIdentity, "Depth/motion receiver identity",
+                Format.R32Uint, RenderGraphResourceSizePolicy.SceneResolution),
             OwnedImageResource(RenderGraphResourceId.MotionVectors, "Motion vectors",
                 RenderTargetManager.MotionVectorFormat, RenderGraphResourceSizePolicy.Swapchain),
             OwnedImageResource(
@@ -2456,6 +2496,17 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphQueueIntent.Graphics,
             HistoryBinding: historyBinding);
     }
+
+    private static RenderGraphResourceUsage ReadGraphicsInputs(RenderGraphResourceId resource) =>
+        ReadGraphicsStorage(resource) with
+        {
+            StageMask = PipelineStageFlags2.DrawIndirectBit | PipelineStageFlags2.VertexInputBit |
+                PipelineStageFlags2.VertexShaderBit | PipelineStageFlags2.TaskShaderBitExt |
+                PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.FragmentShaderBit,
+            AccessMask = AccessFlags2.IndirectCommandReadBit | AccessFlags2.IndexReadBit |
+                AccessFlags2.VertexAttributeReadBit | AccessFlags2.UniformReadBit |
+                AccessFlags2.ShaderStorageReadBit
+        };
 
     private static RenderGraphResourceUsage ReadFragmentAccelerationStructure(
         RenderGraphResourceId resource)

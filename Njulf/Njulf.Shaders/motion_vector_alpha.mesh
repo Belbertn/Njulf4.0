@@ -42,8 +42,6 @@ layout(location = 4) out vec4 meshVertexColor[];
 layout(location = 5) flat out uint meshMaterialIndex[];
 layout(location = 6) flat out uint meshReceiverSignature[];
 layout(location = 7) flat out uint meshHistoryFrameAndFlags[];
-layout(location = 8) out vec3 meshCurrentWorldPosition[];
-layout(location = 9) out vec2 meshViewDepths[];
 
 layout(push_constant) uniform MotionVectorPushConstantBlock
 {
@@ -147,10 +145,6 @@ void main()
         meshHistoryFrameAndFlags[vertexSlot] =
             (pc.Push.CurrentFrameIndex & 0xffu) |
             ((pc.Push.PreviousFrameValid & 6u) << 7u);
-        meshCurrentWorldPosition[vertexSlot] = currentWorldPosition.xyz;
-        meshViewDepths[vertexSlot] = vec2(
-            abs(currentClip.w),
-            abs(previousClip.w));
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

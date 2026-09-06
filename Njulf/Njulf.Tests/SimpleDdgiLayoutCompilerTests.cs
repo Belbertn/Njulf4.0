@@ -56,10 +56,10 @@ public sealed class SimpleDdgiLayoutCompilerTests
             // params-header ABI, the 192-byte per-volume scroll-transaction
             // scheduler policy, the 512-byte fail-closed counter/control arena,
             // and the current transport-audit summary.
-            Assert.That(dense.LiveBytes, Is.EqualTo(135_144_936UL));
-            Assert.That(sparse.LiveBytes, Is.EqualTo(108_236_024UL));
+            Assert.That(dense.LiveBytes, Is.EqualTo(143_889_928UL));
+            Assert.That(sparse.LiveBytes, Is.EqualTo(115_117_336UL));
             Assert.That(dense.LiveBytes - sparse.LiveBytes,
-                Is.EqualTo(26_908_912UL));
+                Is.EqualTo(28_772_592UL));
             Assert.That(sparse.VirtualProbeCount, Is.EqualTo(15_368));
             Assert.That(sparse.DensePayloadProbeCount, Is.EqualTo(4_392));
             Assert.That(sparse.SparseVirtualPageCount, Is.EqualTo(1_372));
@@ -69,7 +69,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(sparse.SampledAtlasPhysicalProbeCapacity, Is.EqualTo(12_288));
             Assert.That(sparse.SampledAtlasPaddingProbeCount, Is.EqualTo(216));
             Assert.That(sparse.SampledAtlasPaddingBytes,
-                Is.EqualTo(216UL * (512UL + 1_024UL)));
+                Is.EqualTo(216UL * (800UL + 1_296UL)));
             Assert.That(sparse.ResidencyArenaBytes,
                 Is.LessThanOrEqualTo(SimpleDdgiProbePageLayout.CurrentProfileOverheadGateBytes));
             Assert.That(sparse.ResidencyArenaBytes, Is.EqualTo(139_024UL));
@@ -206,7 +206,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(plan.SampledAtlasCoverageMode,
                 Is.EqualTo(SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant));
             Assert.That(plan.SampledAtlasProbeCapacity, Is.EqualTo(1_024));
-            Assert.That(plan.SampledAtlasImageBytes, Is.EqualTo(1_024UL * 1_536UL));
+            Assert.That(plan.SampledAtlasImageBytes, Is.EqualTo(1_024UL * 2_096UL));
             Assert.That(plan.SchedulerMode, Is.EqualTo(SimpleDdgiSchedulerMode.CpuReference));
             Assert.That(plan.SchedulerBufferBytes, Is.Zero);
             Assert.That(
@@ -280,7 +280,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(plan.SampledAtlasPhysicalProbeCapacity, Is.EqualTo(256));
             Assert.That(plan.SampledAtlasPaddingProbeCount, Is.EqualTo(235));
             Assert.That(plan.SampledAtlasPaddingBytes,
-                Is.EqualTo(235UL * (512UL + 1_024UL)));
+                Is.EqualTo(235UL * (800UL + 1_296UL)));
         });
     }
 

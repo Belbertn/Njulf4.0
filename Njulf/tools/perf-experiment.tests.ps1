@@ -3,6 +3,8 @@ param()
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'loaded-shader-identity.ps1')
+$script:LoadedShaderFixture = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../Njulf.Tests/Fixtures/loaded-shader-identity-v1.json') -Raw | ConvertFrom-Json
 
 $driver = Join-Path $PSScriptRoot "perf-experiment.ps1"
 $tokens = $null
@@ -51,6 +53,13 @@ function New-TestManifest {
 function New-TestReport {
     param([double]$Frame, [double]$Target, [double]$Other = 1.0)
     return [pscustomobject]@{
+        LastDiagnostics = [pscustomobject]@{ CaptureRun = [pscustomobject]@{ LoadedShaderIdentity = $script:LoadedShaderFixture } }
+        CaptureContract = [pscustomobject]@{ LoadedShaders = [pscustomobject]@{
+            StartFingerprint = $script:LoadedShaderFixture.Fingerprint
+            EndFingerprint = $script:LoadedShaderFixture.Fingerprint
+            StartGeneration = $script:LoadedShaderFixture.Generation
+            EndGeneration = $script:LoadedShaderFixture.Generation
+        } }
         CpuFrameMilliseconds = [pscustomobject]@{
             P95Milliseconds = $Frame - 1.0
             P99Milliseconds = $Frame - 0.5
@@ -87,10 +96,8 @@ function New-PretargetCapture {
     $report | Add-Member -NotePropertyName GpuTimingValidSampleCount -NotePropertyValue 1
     $report.GpuFrameMilliseconds | Add-Member -NotePropertyName Count -NotePropertyValue 1
     $report | Add-Member -NotePropertyName SettlingWaitTimedOut -NotePropertyValue $false
-    $report | Add-Member -NotePropertyName CaptureContract -NotePropertyValue ([pscustomobject]@{
-        Comparable = $true
-        Mismatches = @()
-    })
+    $report.CaptureContract | Add-Member -NotePropertyName Comparable -NotePropertyValue $true
+    $report.CaptureContract | Add-Member -NotePropertyName Mismatches -NotePropertyValue @()
     $report | Add-Member -NotePropertyName DdgiProductionGate -NotePropertyValue $null
     $report | Add-Member -NotePropertyName BudgetMetrics -NotePropertyValue @(
         [pscustomobject]@{

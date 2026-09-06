@@ -615,6 +615,7 @@ public sealed class SampleBenchmarkControlledIsolationTests
             Mismatches: Array.Empty<string>())
         {
             FullIdentityHash = Identity('2'),
+            LoadedShaders = LoadedShaderTestEvidence.Measurement,
             Trajectory = SampleBenchmarkTrajectory.SponzaLowName,
             TrajectoryFingerprint = trajectoryFingerprint,
             TrajectoryFrameCount = 1,
@@ -984,6 +985,7 @@ public sealed class SampleBenchmarkControlledIsolationTests
         SettingsSchemaVersion: 1)
     {
         ExecutableHash = Identity('3'),
+        LoadedShaderIdentity = LoadedShaderTestEvidence.Identity,
         DirtyWorktreeState = "clean"
     };
 

@@ -269,7 +269,8 @@ namespace Njulf.Rendering.Resources
 
         public ulong SampledAtlasPaddingBytes => checked(
             (ulong)SampledAtlasPaddingProbeCount *
-            (IrradianceBytesPerProbe + VisibilityBytesPerProbe));
+            (SimpleDdgiSampledAtlasLayoutCompiler.IrradianceBytesPerProbe +
+                SimpleDdgiSampledAtlasLayoutCompiler.VisibilityBytesPerProbe));
 
         public ulong CanonicalAtlasBytes =>
             checked(IrradianceAtlasBytes + VisibilityAtlasBytes);
@@ -518,11 +519,11 @@ namespace Njulf.Rendering.Resources
                 guidingTraceDirectionScratchBytes));
             ulong sampledIrradianceBytes = sampledAtlasRequested
                 ? sampledAtlasLayout?.IrradianceImageBytes ?? checked(
-                    (ulong)sampledCapacity * IrradianceBytesPerProbe)
+                    (ulong)sampledCapacity * SimpleDdgiSampledAtlasLayoutCompiler.IrradianceBytesPerProbe)
                 : 0UL;
             ulong sampledVisibilityBytes = sampledAtlasRequested
                 ? sampledAtlasLayout?.VisibilityImageBytes ?? checked(
-                    (ulong)sampledCapacity * VisibilityBytesPerProbe)
+                    (ulong)sampledCapacity * SimpleDdgiSampledAtlasLayoutCompiler.VisibilityBytesPerProbe)
                 : 0UL;
             ulong sampledImageBytes = checked(
                 sampledIrradianceBytes + sampledVisibilityBytes);

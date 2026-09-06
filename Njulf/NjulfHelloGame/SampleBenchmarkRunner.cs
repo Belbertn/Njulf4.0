@@ -57,6 +57,9 @@ public sealed class SampleBenchmarkRunner
         "unavailable";
     private bool _movingTrajectoryMeasurementStarted;
     private bool _measurementActivationArmed;
+    private LoadedShaderIdentity? _lastObservedLoadedShaders;
+
+    public Func<LoadedShaderIdentity>? GetLoadedShaderIdentity { private get; init; }
 
     public SampleBenchmarkRunner(
         SampleBenchmarkOptions options,
@@ -228,6 +231,9 @@ public sealed class SampleBenchmarkRunner
         if (budget == null)
             throw new ArgumentNullException(nameof(budget));
 
+        LoadedShaderIdentity? previousLoadedShaders = _lastObservedLoadedShaders;
+        _lastObservedLoadedShaders = GetLoadedShaderIdentity?.Invoke();
+
         if (_waitingForHdrCapture)
         {
             PollHdrCapture();
@@ -357,6 +363,7 @@ public sealed class SampleBenchmarkRunner
             RendererDiagnostics baseline =
                 _lastPreMeasurementDiagnostics ?? diagnostics;
             _analyzer.SetMeasurementBaseline(baseline);
+            _analyzer.SetLoadedShaderMeasurementStart(previousLoadedShaders);
             _activationObserver.BeginMeasurement(baseline);
         }
         _lastMeasurementFrame = frameIndex;
@@ -387,6 +394,7 @@ public sealed class SampleBenchmarkRunner
         // permissions and must not make an otherwise identical timing run look
         // like it used different render settings.
         _measurementSettingsFingerprint = _getSettingsFingerprint();
+        _analyzer.SetLoadedShaderMeasurementEnd(GetLoadedShaderIdentity?.Invoke());
         if (SampleBenchmarkActivation.RequiresDeterministicAnimation(
                 _options.Activation))
         {
@@ -1116,6 +1124,14 @@ public sealed class SampleBenchmarkAnalyzer
     ];
 
     private readonly List<RendererDiagnostics> _samples;
+    private LoadedShaderIdentity? _loadedShaderMeasurementStart;
+    private LoadedShaderIdentity? _loadedShaderMeasurementEnd;
+
+    internal void SetLoadedShaderMeasurementStart(LoadedShaderIdentity? identity) =>
+        _loadedShaderMeasurementStart = identity;
+
+    internal void SetLoadedShaderMeasurementEnd(LoadedShaderIdentity? identity) =>
+        _loadedShaderMeasurementEnd = identity;
     private readonly Dictionary<string, BudgetMetric> _worstBudgetMetrics =
         new(StringComparer.Ordinal);
     private RendererDiagnostics? _measurementBaseline;
@@ -3810,6 +3826,14 @@ public sealed class SampleBenchmarkAnalyzer
 
         RendererDiagnostics first = _samples[0];
         var mismatches = new List<string>();
+        var loadedShaders = new LoadedShaderMeasurementEvidence(
+            _loadedShaderMeasurementStart?.Fingerprint ?? "unavailable",
+            _loadedShaderMeasurementStart?.Generation ?? 0,
+            _loadedShaderMeasurementEnd?.Fingerprint ?? "unavailable",
+            _loadedShaderMeasurementEnd?.Generation ?? 0);
+        string? loadedFailure = LoadedShaderMeasurementEvidence.Validate(
+            first.CaptureRun.LoadedShaderIdentity, loadedShaders);
+        if (loadedFailure != null) mismatches.Add(loadedFailure);
         bool movingTrajectory =
             SampleBenchmarkTrajectory.IsMoving(options.Trajectory);
         bool namedTrajectory = options.Trajectory !=
@@ -3952,6 +3976,12 @@ public sealed class SampleBenchmarkAnalyzer
             CompareInvariant(mismatches, index, "commit", first.CaptureRun.Commit, sample.CaptureRun.Commit);
             CompareInvariant(mismatches, index, "dirty state", first.CaptureRun.DirtyWorktreeState, sample.CaptureRun.DirtyWorktreeState);
             CompareInvariant(mismatches, index, "shader bundle", first.CaptureRun.ShaderBundleHash, sample.CaptureRun.ShaderBundleHash);
+            CompareInvariant(mismatches, index, "loaded shaders",
+                first.CaptureRun.LoadedShaderIdentity?.Fingerprint,
+                sample.CaptureRun.LoadedShaderIdentity?.Fingerprint);
+            CompareInvariant(mismatches, index, "loaded shader generation",
+                first.CaptureRun.LoadedShaderIdentity?.Generation,
+                sample.CaptureRun.LoadedShaderIdentity?.Generation);
             CompareInvariant(mismatches, index, "timestamp period", first.GpuTimestampPeriodNanoseconds, sample.GpuTimestampPeriodNanoseconds);
             if (!movingTrajectory && !string.Equals(
                     first.ResolvedGiSettings.StableHash,
@@ -4143,6 +4173,7 @@ public sealed class SampleBenchmarkAnalyzer
             Array.AsReadOnly(mismatches.Distinct(StringComparer.Ordinal).ToArray()))
         {
             FullIdentityHash = fullIdentityHash,
+            LoadedShaders = loadedShaders,
             Trajectory = SampleBenchmarkTrajectory.GetName(options.Trajectory),
             TrajectoryFingerprint = expectedTrajectoryFingerprint,
             TrajectoryFrameCount = trajectoryFrameCount,
@@ -4305,6 +4336,7 @@ public sealed class SampleBenchmarkAnalyzer
         };
         if (includeTargetState)
         {
+            parts.Add(diagnostics.CaptureRun.LoadedShaderIdentity?.Fingerprint ?? "unavailable:loaded-shaders");
             parts.Add(diagnostics.CaptureSceneStateHash);
         }
         string canonical = string.Join("|", parts);

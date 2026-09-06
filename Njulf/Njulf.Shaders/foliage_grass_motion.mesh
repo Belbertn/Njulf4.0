@@ -20,8 +20,6 @@ layout(location = 6) flat out uint meshClusterIndex[];
 layout(location = 7) flat out uint meshLodBand[];
 layout(location = 8) flat out uint meshGeometryMode[];
 layout(location = 9) flat out uint meshImpostorMetadataIndex[];
-layout(location = 10) out vec3 meshCurrentWorldPosition[];
-layout(location = 11) out vec2 meshViewDepths[];
 
 layout(push_constant) uniform MotionVectorPushConstantBlock
 {
@@ -93,10 +91,6 @@ void EmitMotionVertex(
     meshLodBand[vertexIndex] = lodBand;
     meshGeometryMode[vertexIndex] = geometryMode;
     meshImpostorMetadataIndex[vertexIndex] = impostorMetadataIndex;
-    meshCurrentWorldPosition[vertexIndex] = currentPosition;
-    meshViewDepths[vertexIndex] = vec2(
-        abs(currentClip.w),
-        abs(previousClip.w));
 }
 
 void EmitMotionVertex(

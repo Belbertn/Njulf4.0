@@ -10,6 +10,41 @@ SHA-256 of every embedded SPIR-V artifact. The 2026-09-01 Release inventory is
 shader-bundle fingerprint
 `sha256:6b8884b2d08200a4402e2742632a5d782f7acb22f441a230ae821f970845b0bf`.
 
+## Runtime shader identities
+
+`CaptureRun.ShaderBundleHash` and `producerIdentity.shaderFingerprint` retain
+their whole-bundle meaning for startup admission, caches, and release evidence.
+The runtime loader and override bundle hashing share the same resolver: runtime
+filenames end in `.spv`; extensionless embedded-name aliases are not overrides.
+Resolution checks the explicit override, then embedded resources, then the
+existing application-directory fallbacks. An absent override uses that same
+fallback policy in both callers.
+
+`CaptureRun.LoadedShaderIdentity` separately records successful module creations
+in the current Vulkan context. Each entry contains the canonical filename,
+SHA-256 of the exact buffer passed to Vulkan, byte length, and first-observed
+source. Records survive shader-module destruction because compiled pipelines
+can remain alive. This cumulative inventory includes prewarmed modules; it is
+not per-draw execution evidence or an identity for specialization constants.
+
+The `njulf-loaded-shaders/v1` aggregate hashes the length-framed UTF-8 schema,
+the Int32 entry count, and ordinally sorted entries: length-framed UTF-8 filename,
+Int32 byte length, and raw 32-byte SHA-256. Integers use little-endian encoding.
+Paths, source kind, load order, and generation are excluded. Identical repeated
+loads are deduplicated; conflicting contents for one name invalidate verification.
+
+`CaptureContract.LoadedShaders` pins the live start/end fingerprints and
+generations. Changes during measurement, including after the final diagnostics
+snapshot, make the capture non-comparable. Repeat runs require identical loaded
+inventories; feature-isolation pairs may differ in membership but must agree on
+shared modules. Cross-build optimization comparisons validate each side without
+requiring the candidate's shader bytes to equal the baseline's.
+
+Legacy reports remain readable, but current benchmark verification requires this
+versioned evidence and independently recomputes its aggregate. Missing evidence
+requires recapture; the bundle hash is never substituted. The outer benchmark
+and producer schemas retain their existing field meanings.
+
 ## Build properties
 
 | Property | Default | Purpose |

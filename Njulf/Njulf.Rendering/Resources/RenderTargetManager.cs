@@ -519,6 +519,18 @@ namespace Njulf.Rendering.Resources
 
         public RenderTarget SceneColor { get; }
         public RenderTarget SceneDepth { get; }
+        internal RenderTarget? SurfaceReceiverIdentity { get; private set; }
+
+        internal void EnsureSurfaceReceiverIdentity()
+        {
+            if (SurfaceReceiverIdentity != null)
+                return;
+            SurfaceReceiverIdentity = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.SurfaceReceiverIdentity,
+                "Depth/motion receiver identity", Format.R32Uint, SceneDepth.Extent,
+                new RenderTargetDescriptor(colorAttachment: true, sampled: false, transferSource: true));
+        }
+
         public RenderTarget FoggedSceneColor { get; }
         public RenderTarget AmbientOcclusionRaw { get; }
         public RenderTarget AmbientOcclusionBlurred { get; }
@@ -580,6 +592,7 @@ namespace Njulf.Rendering.Resources
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
         public int ResizeCount { get; private set; }
         public int RenderTargetCount => 24 + _bloomMipChain.Count +
+            (SurfaceReceiverIdentity is null ? 0 : 1) +
             (NearFieldDirectSource is null ? 0 :
                 14 + (NearFieldSourceLuminance is null ? 0 : 1) +
                 (NearFieldTraceRasterDepth is null ? 0 : 1) +
@@ -589,6 +602,7 @@ namespace Njulf.Rendering.Resources
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
             SceneDepth.EstimatedByteSize +
+            (SurfaceReceiverIdentity?.EstimatedByteSize ?? 0UL) +
             (OpaqueVisibility?.EstimatedByteSize ?? 0UL) +
             SumEnabledBytes(FoggedSceneColor) +
             AmbientOcclusionRenderTargetBytes +
@@ -1128,6 +1142,8 @@ namespace Njulf.Rendering.Resources
             ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
             RecreateIfDifferent(SceneDepth, extent);
+            if (SurfaceReceiverIdentity != null)
+                RecreateGraphOwnedTarget(RenderGraphResourceId.SurfaceReceiverIdentity, SurfaceReceiverIdentity, extent);
             if (OpaqueVisibility != null) RecreateIfDifferent(OpaqueVisibility, extent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.FogOutput, FoggedSceneColor, CalculateFoggedSceneColorExtent(extent, fogEnabled));
             RecreateAmbientOcclusionTargets(
@@ -1717,6 +1733,7 @@ namespace Njulf.Rendering.Resources
             SceneColor.Dispose();
             OpaqueVisibility?.Dispose();
             SceneDepth.Dispose();
+            DisposeIfManagerOwned(RenderGraphResourceId.SurfaceReceiverIdentity, SurfaceReceiverIdentity);
             DisposeIfManagerOwned(RenderGraphResourceId.FogOutput, FoggedSceneColor);
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionRaw, AmbientOcclusionRaw);
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionBlurred, AmbientOcclusionBlurred);

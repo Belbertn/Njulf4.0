@@ -36,8 +36,6 @@ layout(location = 6) flat out uint meshClusterIndex[];
 layout(location = 7) flat out uint meshLodBand[];
 layout(location = 8) flat out uint meshGeometryMode[];
 layout(location = 9) flat out uint meshImpostorMetadataIndex[];
-layout(location = 10) out vec3 meshCurrentWorldPosition[];
-layout(location = 11) out vec2 meshViewDepths[];
 
 layout(push_constant) uniform MotionVectorPushConstantBlock
 {
@@ -177,10 +175,6 @@ void main()
                 command.Flags);
         meshGeometryMode[vertexSlot] = 1u;
         meshImpostorMetadataIndex[vertexSlot] = 0xffffffffu;
-        meshCurrentWorldPosition[vertexSlot] = currentWorldPosition;
-        meshViewDepths[vertexSlot] = vec2(
-            abs(currentClip.w),
-            abs(previousClip.w));
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

@@ -1232,6 +1232,8 @@ internal static class SampleBenchmarkQualitySequenceReferenceLoader
         string role)
     {
         ArgumentNullException.ThrowIfNull(run);
+        string? shaderFailure = LoadedShaderIdentity.Validate(run.LoadedShaderIdentity);
+        if (shaderFailure != null) throw new InvalidDataException($"{role}: {shaderFailure}");
         RequireText(run.SceneKind, $"{role} scene");
         RequireText(run.Scenario, $"{role} scenario");
         RequireText(run.BuildConfiguration, $"{role} build configuration");
@@ -1281,7 +1283,8 @@ internal static class SampleBenchmarkQualitySequenceReferenceLoader
         PerformanceCaptureRunMetadata expected,
         string role)
     {
-        if (actual != expected)
+        if (actual with { LoadedShaderIdentity = null } != expected with { LoadedShaderIdentity = null } ||
+            LoadedShaderIdentity.Compare(actual.LoadedShaderIdentity, expected.LoadedShaderIdentity, true) != null)
             throw new InvalidDataException($"{role} changed.");
     }
 

@@ -61,7 +61,7 @@ public sealed class SimpleDdgiSampledAtlasTests
     [Test]
     public void ProvisionedCapacity_AndImageBytesUseTheSameAdmissionBoundary()
     {
-        const ulong bytesPerProbe = 8UL * 8UL * 8UL + 16UL * 16UL * 4UL;
+        const ulong bytesPerProbe = 10UL * 10UL * 8UL + 18UL * 18UL * 4UL;
         int capacity = SimpleDdgiSampledAtlas.CalculateProvisionedProbeCapacity(257, 2_048);
 
         Assert.Multiple(() =>

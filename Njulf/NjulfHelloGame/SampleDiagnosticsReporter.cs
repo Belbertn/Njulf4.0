@@ -29,6 +29,12 @@ internal sealed class SampleDiagnosticsReporter
     private SampleDiagnosticsFilter _filter = SampleDiagnosticsFilter.FullFrame;
     private bool _printedFrameDiagnostics;
     private int _diagnosticFrameCounter;
+#if NJULF_DETAILED_INVESTIGATION
+    private ulong _lastMirrorSampleFrame = ulong.MaxValue;
+    private int _mirrorSampleFrames;
+    private ulong _mirrorImageSamples;
+    private ulong _mirrorBoundarySamples;
+#endif
     private readonly PerformanceSampleWindow _movingFrameMs = new(180);
     private readonly PerformanceSampleWindow _stillFrameMs = new(180);
     private readonly PerformanceSampleWindow _movingCpuDrawMs = new(180);
@@ -144,6 +150,9 @@ internal sealed class SampleDiagnosticsReporter
             return;
 
         RendererDiagnostics diagnostics = vulkanRenderer.LastDiagnostics;
+#if NJULF_DETAILED_INVESTIGATION
+        RecordMirrorBoundarySamples(diagnostics.SimpleDdgiStorage.ValidationCounters);
+#endif
         PrintDebugOverlayTransition(diagnostics);
         if (_filter == SampleDiagnosticsFilter.DdgiOnly)
         {
@@ -572,7 +581,7 @@ internal sealed class SampleDiagnosticsReporter
                 $"scratch stride/bytes={storage.RayScratchStrideBytes}/{storage.RayScratchBytes}, " +
                 $"mirror mode requested/eligible/admitted/provisioned={storage.MirrorCoverageMode}/{storage.MirrorRequestedProbeCount}/{storage.MirrorEligibleProbeCount}/{storage.MirrorAdmittedProbeCount}/{storage.MirrorProvisionedProbeCount}, " +
                 $"mirror logical/allocated={storage.MirrorTotalBytes}/{storage.MirrorAllocatedBytes}, " +
-                $"mirrorSamples valid/frame/opportunity/hit/seam/unmirrored/invalidMap={validation.ReadbackValid}/{validation.FrameSerial}/{validation.MirrorInteriorOpportunityCount}/{validation.MirrorImageHitCount}/{validation.MirrorSeamFallbackCount}/{validation.MirrorUnmirroredFallbackCount}/{validation.MirrorInvalidMapFallbackCount}, " +
+                $"mirrorSamples valid/frame/opportunity/hit/boundaryHit/seam/unmirrored/invalidMap={validation.ReadbackValid}/{validation.FrameSerial}/{validation.MirrorInteriorOpportunityCount}/{validation.MirrorImageHitCount}/{validation.MirrorBoundaryImageHitCount}/{validation.MirrorSeamFallbackCount}/{validation.MirrorUnmirroredFallbackCount}/{validation.MirrorInvalidMapFallbackCount}, " +
                 $"pack attempts/nonfinite/saturated/maxRadianceError/maxDistanceError={validation.CachePackAttemptCount}/{validation.CachePackNonFiniteCount}/{validation.CachePackRadianceSaturationCount}/{validation.CachePackMaximumRadianceError:G6}/{validation.CachePackMaximumDistanceError:G6}, " +
                 $"direction samples/epochMismatch/invalidEpoch/invalidHitKind/max/p99={validation.DirectionComparisonSampleCount}/{validation.DirectionEpochMismatchCount}/{validation.InvalidSourceEpochCount}/{validation.InvalidHitKindCount}/{validation.DirectionMaximumAngularErrorRadians:G6}/{validation.DirectionAngularErrorP99UpperBoundRadians:G6}, " +
                 $"generation storage/mirror/allocation={storage.StorageLayoutFingerprint}/{storage.MirrorLayoutFingerprint}/{storage.MirrorAllocationGeneration}, " +
@@ -1150,6 +1159,24 @@ internal sealed class SampleDiagnosticsReporter
         else
             result.Append(value);
     }
+
+#if NJULF_DETAILED_INVESTIGATION
+    private void RecordMirrorBoundarySamples(SimpleDdgiStorageValidationCounters counters)
+    {
+        if (counters.ReadbackValid == 0 || counters.FrameSerial == _lastMirrorSampleFrame)
+            return;
+        _lastMirrorSampleFrame = counters.FrameSerial;
+        _mirrorImageSamples += counters.MirrorImageHitCount;
+        _mirrorBoundarySamples += counters.MirrorBoundaryImageHitCount;
+        if (++_mirrorSampleFrames < 64)
+            return;
+        Console.WriteLine(
+            $"DDGI mirror boundary samples: frames={_mirrorSampleFrames}, image={_mirrorImageSamples}, boundary={_mirrorBoundarySamples}.");
+        _mirrorSampleFrames = 0;
+        _mirrorImageSamples = 0;
+        _mirrorBoundarySamples = 0;
+    }
+#endif
 
     public void PrintMovementFrameDiagnostics(IRenderer renderer, FirstPersonCamera camera)
     {

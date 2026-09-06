@@ -188,36 +188,40 @@ void main()
         CompleteSampledPublication(update);
         return;
     }
+    uint irradianceImageTexels = params.irradianceTexels + 2u;
+    uint visibilityImageTexels = params.visibilityTexels + 2u;
     ivec3 irradianceDimensions = imageSize(
         IrradianceImages[nonuniformEXT(groupIndex)]);
     ivec3 visibilityDimensions = imageSize(
         VisibilityImages[nonuniformEXT(groupIndex)]);
     if (layerIndex >= uint(max(irradianceDimensions.z, 0)) ||
         layerIndex >= uint(max(visibilityDimensions.z, 0)) ||
-        any(notEqual(irradianceDimensions.xy, ivec2(params.irradianceTexels))) ||
-        any(notEqual(visibilityDimensions.xy, ivec2(params.visibilityTexels))))
+        any(notEqual(irradianceDimensions.xy, ivec2(irradianceImageTexels))) ||
+        any(notEqual(visibilityDimensions.xy, ivec2(visibilityImageTexels))))
     {
         CompleteSampledPublication(update);
         return;
     }
 
-    uint irradianceTexelCount = params.irradianceTexels * params.irradianceTexels;
+    uint irradianceTexelCount = irradianceImageTexels * irradianceImageTexels;
     for (uint texel = gl_LocalInvocationID.x;
          texel < irradianceTexelCount;
          texel += gl_WorkGroupSize.x)
     {
-        uint x = texel % params.irradianceTexels;
-        uint y = texel / params.irradianceTexels;
+        uint x = texel % irradianceImageTexels;
+        uint y = texel / irradianceImageTexels;
+        uint sourceTexel = SimpleDdgiMirrorOctTexelIndex(
+            ivec2(int(x), int(y)) - ivec2(1), params.irradianceTexels);
         vec4 value = residentTransaction && !urgentRelight
             ? ReadSimpleDdgiIrradianceTexel(
                 pc.TransportIrradianceAtlasBufferIndex,
                 update.physicalProbeIndex,
-                texel,
+                sourceTexel,
                 params.irradianceTexels)
             : ReadSimpleDdgiIrradianceTexel(
                 pc.IrradianceAtlasBufferIndex,
                 update.physicalProbeIndex,
-                texel,
+                sourceTexel,
                 params.irradianceTexels);
         imageStore(
             IrradianceImages[nonuniformEXT(groupIndex)],
@@ -225,24 +229,26 @@ void main()
             value);
     }
 
-    uint visibilityTexelCount = params.visibilityTexels * params.visibilityTexels;
+    uint visibilityTexelCount = visibilityImageTexels * visibilityImageTexels;
     for (uint texel = gl_LocalInvocationID.x;
          texel < visibilityTexelCount;
          texel += gl_WorkGroupSize.x)
     {
-        uint x = texel % params.visibilityTexels;
-        uint y = texel / params.visibilityTexels;
+        uint x = texel % visibilityImageTexels;
+        uint y = texel / visibilityImageTexels;
+        uint sourceTexel = SimpleDdgiMirrorOctTexelIndex(
+            ivec2(int(x), int(y)) - ivec2(1), params.visibilityTexels);
         vec2 moments = residentTransaction && !urgentRelight
             ? ReadSimpleDdgiVisibilityMomentsAtOffset(
                 pc.TransportIrradianceAtlasBufferIndex,
                 pc.PrivateVisibilityAtlasOffsetWords,
                 update.physicalProbeIndex,
-                texel,
+                sourceTexel,
                 params.visibilityTexels)
             : ReadSimpleDdgiVisibilityMoments(
                 pc.VisibilityAtlasBufferIndex,
                 update.physicalProbeIndex,
-                texel,
+                sourceTexel,
                 params.visibilityTexels);
         imageStore(
             VisibilityImages[nonuniformEXT(groupIndex)],

@@ -933,6 +933,9 @@ public static class SampleBenchmarkControlledIsolationComparer
                     $"{role} producer identity is absent.");
             PerformanceCaptureRunMetadata run =
                 report.LastDiagnostics.CaptureRun;
+            string? shaderFailure = LoadedShaderMeasurementEvidence.Validate(
+                run.LoadedShaderIdentity, report.CaptureContract.LoadedShaders);
+            if (shaderFailure != null) failures.Add($"{role}: {shaderFailure}");
             SampleBenchmarkQualitySequenceReferenceLoader.ValidateProducer(
                 producer,
                 $"{role} producer");
@@ -1002,6 +1005,7 @@ public static class SampleBenchmarkControlledIsolationComparer
     private static bool CaptureRunEqual(
         PerformanceCaptureRunMetadata left,
         PerformanceCaptureRunMetadata right) =>
+        LoadedShaderIdentity.Compare(left.LoadedShaderIdentity, right.LoadedShaderIdentity, false) == null &&
         string.Equals(left.SceneKind, right.SceneKind, StringComparison.Ordinal) &&
         string.Equals(left.Scenario, right.Scenario, StringComparison.Ordinal) &&
         string.Equals(

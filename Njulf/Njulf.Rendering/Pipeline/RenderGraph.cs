@@ -42,6 +42,15 @@ namespace Njulf.Rendering.Pipeline
         private readonly List<RenderGraphPlannedBarrier> _framePlannedBarriers = new();
         private readonly StringBuilder _barrierSummaryBuilder = new();
         private ulong _resourceAllocationGeneration;
+        private readonly InterFrameAccessTracker _interFrameAccesses = new();
+        private readonly HashSet<InterFrameAccessTracker.Allocation> _interFrameLiveAllocations = new();
+        private readonly HashSet<InterFrameAccessTracker.Allocation> _interFrameExternalAllocations = new();
+        private RenderGraphResourcePlan? _interFrameResourcePlan;
+        private bool _interFrameDependenciesEnabled;
+        private bool _interFrameHistoryValid;
+        internal bool NeedsInterFramePriming => _interFrameDependenciesEnabled && !_interFrameHistoryValid;
+        internal int InterFrameConservativePassCount { get; private set; }
+        internal int InterFrameBarrierCount { get; private set; }
         private bool _cleanedUp;
         private bool _disposed;
 
@@ -66,6 +75,124 @@ namespace Njulf.Rendering.Pipeline
         /// change. Frame rotation does not invalidate an immutable concrete resource plan.
         /// </summary>
         public ulong ResourceAllocationGeneration => _resourceAllocationGeneration;
+
+        internal void BeginInterFrameRecording(bool enabled)
+        {
+            _interFrameDependenciesEnabled = enabled;
+            _interFrameAccesses.BeginRecording();
+            InterFrameConservativePassCount = 0;
+            InterFrameBarrierCount = 0;
+        }
+
+        internal void CommitInterFrameSubmission()
+        {
+            if (_interFrameDependenciesEnabled)
+            {
+                _interFrameAccesses.CommitSubmission();
+                _interFrameHistoryValid = true;
+            }
+            else
+            {
+                _interFrameAccesses.Clear();
+                _interFrameHistoryValid = false;
+            }
+        }
+
+        private static InterFrameAccessTracker.Allocation InterFrameAllocation(
+            RenderGraphConcreteResourceBinding binding) => new(
+                binding.Kind,
+                binding.Kind == RenderGraphConcreteResourceKind.Image ? binding.Image.Handle : binding.Buffer.Handle,
+                binding.AllocationGeneration);
+
+        private unsafe void ExecuteInterFrameBarriers(
+            CommandBuffer cmd, RenderPassBase pass, int frameIndex)
+        {
+            if (PlanInterFrameBarrier(pass.Name, frameIndex) is not { } barrier)
+                return;
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                MemoryBarrierCount = 1,
+                PMemoryBarriers = &barrier
+            };
+            pass.Context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
+        }
+
+        internal void CoverInterFrameAccesses(PipelineStageFlags2 stages) =>
+            _interFrameAccesses.CoverSubmittedAccesses(stages);
+
+        internal MemoryBarrier2? PlanInterFrameBarrier(string passName, int frameIndex)
+        {
+            if (!_interFrameDependenciesEnabled)
+                return null;
+
+            if (!ReferenceEquals(_interFrameResourcePlan, _concreteResourceBindings.CurrentPlan))
+            {
+                _interFrameResourcePlan = _concreteResourceBindings.CurrentPlan;
+                _interFrameLiveAllocations.Clear();
+                _interFrameExternalAllocations.Clear();
+                foreach (RenderGraphConcreteResourceBinding binding in _interFrameResourcePlan.Bindings)
+                {
+                    _interFrameLiveAllocations.Add(InterFrameAllocation(binding));
+                    if (binding.Lifetime == RenderGraphResourceLifetime.Imported)
+                        _interFrameExternalAllocations.Add(InterFrameAllocation(binding));
+                }
+                _interFrameAccesses.RetainAllocations(_interFrameLiveAllocations);
+            }
+
+            var barrier = new MemoryBarrier2 { SType = StructureType.MemoryBarrier2 };
+            bool conservative = false;
+            foreach (RenderGraphResourceUsage usage in _passResourceUsages[passName])
+            {
+                var bindings = _concreteResourceBindings.GetBindings(usage.Resource, frameIndex, usage.HistoryBinding);
+                bool write = IsWriteAccess(usage.Access);
+                var destination = new InterFrameAccessTracker.Scope(
+                    usage.StageMask == PipelineStageFlags2.None ? PipelineStageFlags2.AllCommandsBit : usage.StageMask,
+                    usage.AccessMask == AccessFlags2.None
+                        ? (write ? AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit : AccessFlags2.MemoryReadBit)
+                        : usage.AccessMask);
+                if (bindings.Count == 0)
+                {
+                    AddConservativeDependency(destination.Stages);
+                    continue;
+                }
+                foreach (RenderGraphConcreteResourceBinding binding in bindings)
+                {
+                    var allocation = InterFrameAllocation(binding);
+                    if (_interFrameExternalAllocations.Contains(allocation))
+                    {
+                        // The graph does not observe the complete access history of imported
+                        // resources. Keep their source conservative without inventing history.
+                        AddConservativeDependency(destination.Stages);
+                        continue;
+                    }
+                    MemoryBarrier2? dependency = _interFrameAccesses.Access(allocation, destination, write);
+                    if (dependency is not { } next)
+                        continue;
+                    barrier.SrcStageMask |= next.SrcStageMask;
+                    barrier.SrcAccessMask |= next.SrcAccessMask;
+                    barrier.DstStageMask |= next.DstStageMask;
+                    barrier.DstAccessMask |= next.DstAccessMask;
+                }
+            }
+            if (conservative)
+                InterFrameConservativePassCount++;
+            if (barrier.SrcStageMask == PipelineStageFlags2.None)
+                return null;
+            InterFrameBarrierCount++;
+            return barrier;
+
+            void AddConservativeDependency(PipelineStageFlags2 stages)
+            {
+                if (_interFrameAccesses.RequireConservativeDependency(stages) is not { } dependency)
+                    return;
+                barrier.SrcStageMask |= dependency.SrcStageMask;
+                barrier.SrcAccessMask |= dependency.SrcAccessMask;
+                barrier.DstStageMask |= dependency.DstStageMask;
+                barrier.DstAccessMask |= dependency.DstAccessMask;
+                conservative = true;
+            }
+        }
 
         public RenderGraphDiagnostics CreateDiagnostics(
             RenderFeatureIsolationMode featureIsolation,
@@ -861,6 +988,7 @@ namespace Njulf.Rendering.Pipeline
                 }
 
                 pass.IsRecordingOnComputeQueue = isComputeQueue;
+                ExecuteInterFrameBarriers(cmd, pass, frameIndex);
                 ExecuteGraphPlannedBarriers(
                     cmd,
                     pass.Name,

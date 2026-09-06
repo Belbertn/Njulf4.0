@@ -5093,10 +5093,8 @@ vec3 ForwardEvaluateThickTerminalRadiance(
         ForwardTerminalDdgiSample terminalDdgi =
             ForwardSampleSimpleDdgiTerminalReadOnly(
             params, hit.Position, normal, viewDirection);
-        float visibilityConfidence = smoothstep(
-            SIMPLE_DDGI_VISIBILITY_SELECTION_LOW,
-            SIMPLE_DDGI_VISIBILITY_SELECTION_HIGH,
-            terminalDdgi.TransportVisibility);
+        float visibilityConfidence = clamp(
+            terminalDdgi.TransportVisibility, 0.0, 1.0);
         float leak = clamp(
             mix(
                 1.0,

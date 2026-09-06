@@ -864,8 +864,15 @@ void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint
         float d = max(visibilityHit.x, 0.0);
         if (visibilityHit.y >= 0.5)
         {
-            broadHitMean += d * broadWeight;
-            broadHitMean2 += d * d * broadWeight;
+            // An authored reverse face is not free-space support. Give it zero
+            // distance in the visibility moments so probes behind floors or
+            // walls cannot illuminate receivers just beyond that shell. Keep
+            // the physical distance for relocation and coherent depth layers.
+            float momentDistance = SimpleDdgiRayHitKindIsOneSidedBackFace(visibilityHit.y)
+                ? 0.0
+                : d;
+            broadHitMean += momentDistance * broadWeight;
+            broadHitMean2 += momentDistance * momentDistance * broadWeight;
             broadHitWeightSum += broadWeight;
             narrowHitWeightSum += narrowWeight;
             // The nearest depth only seeds a cluster. Confidence is computed in

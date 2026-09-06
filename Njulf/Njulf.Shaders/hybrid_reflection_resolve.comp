@@ -235,13 +235,15 @@ void main()
     }
     uint source = HybridMetadataSource(metadata.x);
     float confidence = HybridMetadataConfidence(metadata.x);
-    if (!planarEnabled &&
-        HybridMetadataValid(metadata.x) &&
+    if (HybridMetadataValid(metadata.x) &&
         HybridMetadataReason(metadata.x) ==
             HYBRID_REFLECTION_REASON_RESOLUTION_SKIP)
     {
         // Classification copied an already shaded, validated temporal value.
-        // Do not apply the BRDF a second time during the cheap carry path.
+        // This is outgoing radiance in every hybrid mode, including the
+        // planar-capable mode when this receiver has no planar reflection.
+        // Applying the BRDF again makes stationary history darken recursively.
+        // Planar generation changes reject the carry in classification.
         imageStore(HybridRawRadiance, pixel,
             vec4(max(raw.rgb, vec3(0.0)), confidence));
         return;

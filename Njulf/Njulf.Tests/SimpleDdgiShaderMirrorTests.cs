@@ -165,11 +165,11 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(blockedSelection, Is.EqualTo(0.05f).Within(1.0e-6f));
-                Assert.That(leakProneSelection, Is.EqualTo(0.05f).Within(1.0e-6f));
+                Assert.That(blockedSelection, Is.EqualTo(0.00001f).Within(1.0e-7f));
+                Assert.That(leakProneSelection, Is.EqualTo(0.008f).Within(1.0e-6f));
                 Assert.That(partialSelection, Is.EqualTo(0.125f).Within(1.0e-6f));
                 Assert.That(fullSelection, Is.EqualTo(1.0f).Within(1.0e-6f));
-                Assert.That(leakProneSelection * 0.2f, Is.EqualTo(0.01f).Within(1.0e-6f),
+                Assert.That(leakProneSelection * 0.2f, Is.EqualTo(0.0016f).Within(1.0e-6f),
                     "A twenty-percent-visible probe must not regain full selection authority before normalization.");
                 Assert.That(SimpleDdgiLeakAttenuation(0.0f, 1.0f), Is.EqualTo(0.05f).Within(1.0e-6f),
                     "Receiver composition, rather than gather normalization, suppresses fully blocked transport.");
@@ -188,8 +188,8 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(visibilitySelection, Is.EqualTo(0.05f).Within(1.0e-6f),
-                    "Visibility must retain its conservative probe-selection floor.");
+                Assert.That(visibilitySelection, Is.EqualTo(0.00001f).Within(1.0e-7f),
+                    "Visibility retains only a numerical floor; availability owns coverage.");
                 Assert.That(radiometricOwnership, Is.EqualTo(1.0f).Within(1.0e-6f),
                     "State-valid probe data must retain receiver ownership even when visibility is low.");
                 Assert.That(effectiveOwnership, Is.EqualTo(0.1f).Within(1.0e-6f),
@@ -283,8 +283,11 @@ namespace Njulf.Tests
                 transportVisibility: 0.04f,
                 thinWallLeakClampStrength: 0.9f);
             float admitted = SimpleDdgiLeakAttenuation(
-                transportVisibility: 0.08f,
+                transportVisibility: 1.0f,
                 thinWallLeakClampStrength: 0.9f);
+            float doorwayResidual = SimpleDdgiLeakAttenuation(
+                transportVisibility: 0.13032092f,
+                thinWallLeakClampStrength: 1.0f);
             float policyDisabled = SimpleDdgiLeakAttenuation(
                 transportVisibility: 0.0f,
                 thinWallLeakClampStrength: 0.0f);
@@ -294,6 +297,8 @@ namespace Njulf.Tests
                 Assert.That(blocked, Is.EqualTo(0.1f).Within(1.0e-6f));
                 Assert.That(transition, Is.GreaterThan(blocked).And.LessThan(admitted));
                 Assert.That(admitted, Is.EqualTo(1.0f).Within(1.0e-6f));
+                Assert.That(doorwayResidual, Is.EqualTo(0.13032092f).Within(1.0e-6f),
+                    "Weak cross-wall visibility must not become full radiance at composition.");
                 Assert.That(policyDisabled, Is.EqualTo(1.0f).Within(1.0e-6f));
             });
         }
@@ -615,45 +620,6 @@ namespace Njulf.Tests
             {
                 Assert.That(IsInteriorAtlasQuad(direction, texelsPerProbe), Is.True);
                 Assert.That(Vector4.Distance(canonical, sampledImage), Is.LessThan(1.0e-6f));
-            });
-        }
-
-        [Test]
-        public void SampledAtlasSeams_UseWrappedImageFetchesAndRetainCanonicalFiltering()
-        {
-            const uint texelsPerProbe = 8;
-            Vector3 seamDirection = SimpleDdgiOctDecode(new Vector2(0.01f, 0.50f));
-            Vector4 canonical = SampleSyntheticAtlasBilinear(
-                seamDirection,
-                texelsPerProbe);
-            Vector4 clampedImage = SampleSyntheticAtlasImageBilinear(
-                seamDirection,
-                texelsPerProbe);
-            string shared = ReadRepoText(
-                "Njulf.Shaders",
-                "ddgi_simple_shared.glsl");
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(
-                    IsInteriorAtlasQuad(seamDirection, texelsPerProbe),
-                    Is.False);
-                Assert.That(
-                    Vector4.Distance(canonical, clampedImage),
-                    Is.GreaterThan(1.0e-4f),
-                    "Sampler clamping is not the canonical octahedral seam rule.");
-                Assert.That(
-                    shared,
-                    Does.Contain(
-                        "SampleSimpleDdgiAtlasImageWrappedBilinearAtAddress("));
-                Assert.That(
-                    shared,
-                    Does.Contain(
-                        "SimpleDdgiMirrorOctTexelIndex(coord, texelsPerProbe)"));
-                Assert.That(
-                    shared,
-                    Does.Contain(
-                        "return interior\n            ? SampleSimpleDdgiAtlasImageAtAddress("));
             });
         }
 
@@ -2049,7 +2015,6 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_ATLAS_ADDRESS_LAYER_BASE_DECLARED_BIT"));
                 Assert.That(shared, Does.Contain("bool completeMirrorPayloadPair = mirrorPayloadBits =="));
                 Assert.That(shared, Does.Contain("vec4 SampleSimpleDdgiAtlasImageAtAddress("));
-                Assert.That(shared, Does.Contain("vec4 SampleSimpleDdgiAtlasImageWrappedBilinearAtAddress("));
                 Assert.That(shared, Does.Contain("vec4 SampleSimpleDdgiIrradianceBilinearAtAddress("));
                 Assert.That(shared, Does.Contain("vec2 SampleSimpleDdgiVisibilityBilinearAtAddress("));
                 Assert.That(shared, Does.Contain("SimpleDdgiMirrorOctTexelIndex(base"));
@@ -2075,7 +2040,6 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_UPDATE_SOURCE_REFRESH"));
                 Assert.That(shared,
                     Does.Contain("vec4 SimpleDdgiPerProbeRayRotation(uint probeIndex, vec4 frameRotation)"));
-                Assert.That(shared, Does.Contain("SIMPLE_DDGI_VISIBILITY_SELECTION_FLOOR = 0.05"));
                 Assert.That(shared,
                     Does.Contain("float SimpleDdgiVisibilitySelectionWeight(float transportVisibility)"));
                 Assert.That(shared, Does.Contain("visibility * visibility * visibility"));
@@ -3657,7 +3621,7 @@ namespace Njulf.Tests
         private static float SimpleDdgiVisibilitySelectionWeight(float transportVisibility) =>
             Math.Max(
                 MathF.Pow(Math.Clamp(transportVisibility, 0.0f, 1.0f), 3.0f),
-                0.05f);
+                0.00001f);
 
         private static CpuSimpleDdgiCascadeBlend BlendCascadeAvailability(
             float innerSpatialCoverage,
@@ -3802,7 +3766,7 @@ namespace Njulf.Tests
             Math.Clamp(
                 Lerp(
                     1.0f,
-                    SmoothStep(0.01f, 0.08f, Math.Clamp(transportVisibility, 0.0f, 1.0f)),
+                    Math.Clamp(transportVisibility, 0.0f, 1.0f),
                     Math.Clamp(thinWallLeakClampStrength, 0.0f, 1.0f)),
                 0.05f,
                 1.0f);

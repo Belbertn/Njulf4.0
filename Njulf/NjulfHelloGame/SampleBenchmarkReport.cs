@@ -276,6 +276,7 @@ public sealed record SampleBenchmarkCaptureContract(
     string IdentityHash,
     IReadOnlyList<string> Mismatches)
 {
+    public LoadedShaderMeasurementEvidence? LoadedShaders { get; init; }
     /// <summary>Exact rendered-state identity for this individual run.</summary>
     public string FullIdentityHash { get; init; } = "unavailable";
     /// <summary>Named stationary or deterministic moving camera program.</summary>

@@ -37,6 +37,34 @@ namespace Njulf.Rendering.Pipeline
         private bool _hasPreviousViewProjectionMatrix;
         private ulong _previousSceneContentRevision = ulong.MaxValue;
         private ulong _previousCameraCutSerial = ulong.MaxValue;
+        private ulong _previousMotionFrameSerial = ulong.MaxValue;
+        private bool _recordingFusedDepth;
+        internal DirectionalShadowHistoryResources? DirectionalHistoryResources { get; set; }
+
+        internal bool TryExecuteFusedDepth(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            if (!SurfaceInputPolicy.DepthMotionFusionRequested ||
+                !RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, Name))
+                return false;
+            SurfaceHistoryConsumer consumers = ResolveHistoryConsumers(sceneData);
+            bool identity = sceneData.DirectionalShadowFramePlan.UsesScreenHistory;
+            bool targetsReady = _renderTargets.SceneDepth.Extent.Width == _renderTargets.MotionVectors.Extent.Width &&
+                _renderTargets.SceneDepth.Extent.Height == _renderTargets.MotionVectors.Extent.Height &&
+                _meshPipeline.GetDepthMotionPipeline(false, identity).Handle != 0 &&
+                _meshPipeline.GetDepthMotionPipeline(true, identity).Handle != 0 &&
+                (!identity || (_renderTargets.SurfaceReceiverIdentity?.Extent.Equals(_renderTargets.SceneDepth.Extent) == true &&
+                    DirectionalHistoryResources?.IsAllocated == true &&
+                    DirectionalHistoryResources.Width == _renderTargets.SceneDepth.Extent.Width &&
+                    DirectionalHistoryResources.Height == _renderTargets.SceneDepth.Extent.Height));
+            if (!SurfaceInputPolicy.CanFuse(sceneData, SurfaceInputPolicy.DepthMotionFusionRequested,
+                    CanUseSceneCompactedMotionVectors(sceneData), targetsReady,
+                    consumers.RequiresMotionVectors(), ShouldUseCameraOnlyReprojection(consumers, sceneData),
+                    _renderTargets.OpaqueVisibility != null))
+                return false;
+            Record(cmd, frameIndex, sceneData, fused: true);
+            return sceneData.DepthMotionFusionCompleted;
+        }
+
 
         public MotionVectorPass(
             VulkanContext context,
@@ -68,6 +96,8 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
+            if (sceneData.HasCurrentDepthMotion)
+                return false;
             SurfaceHistoryConsumer consumers = ResolveHistoryConsumers(sceneData);
             sceneData.SurfaceHistoryConsumers = consumers;
             bool cameraOnly = ShouldUseCameraOnlyReprojection(
@@ -84,6 +114,13 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            if (!sceneData.HasCurrentDepthMotion)
+                Record(cmd, frameIndex, sceneData, fused: false);
+        }
+
+        private void Record(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData, bool fused)
+        {
+            _recordingFusedDepth = fused;
             SurfaceHistoryConsumer consumers = ResolveHistoryConsumers(sceneData);
             sceneData.SurfaceHistoryConsumers = consumers;
             bool cameraOnly = ShouldUseCameraOnlyReprojection(
@@ -104,6 +141,8 @@ namespace Njulf.Rendering.Pipeline
             long start = Stopwatch.GetTimestamp();
             bool previousFrameValid =
                 _hasPreviousViewProjectionMatrix &&
+                sceneData.DdgiFrameSerial > _previousMotionFrameSerial &&
+                sceneData.DdgiFrameSerial - _previousMotionFrameSerial == 1 &&
                 sceneData.HiZPolicyCameraCut == 0 &&
                 sceneData.HiZPolicySceneChanged == 0 &&
                 _previousSceneContentRevision == sceneData.SceneContentRevision &&
@@ -115,7 +154,12 @@ namespace Njulf.Rendering.Pipeline
                 : sceneData.ViewProjectionMatrix;
             float previousTime = previousFrameValid ? _previousTime : sceneData.Time;
 
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
+            if (fused)
+                _renderTargets.SceneDepth.TransitionToDepthAttachment(cmd);
+            else
+                _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
+            _renderTargets.MotionVectors.TransitionToColorAttachment(cmd);
+            bool identityAttachment = fused && sceneData.DirectionalShadowFramePlan.UsesScreenHistory;
             Extent2D renderExtent = _renderTargets.MotionVectors.Extent;
             if (IsSharedValidityActive(sceneData, renderExtent))
             {
@@ -179,19 +223,33 @@ namespace Njulf.Rendering.Pipeline
             {
                 SType = StructureType.RenderingAttachmentInfo,
                 ImageView = _renderTargets.SceneDepth.View,
-                ImageLayout = ImageLayout.DepthStencilReadOnlyOptimal,
-                LoadOp = AttachmentLoadOp.Load,
+                ImageLayout = fused ? ImageLayout.DepthStencilAttachmentOptimal : ImageLayout.DepthStencilReadOnlyOptimal,
+                LoadOp = fused ? AttachmentLoadOp.Clear : AttachmentLoadOp.Load,
                 StoreOp = AttachmentStoreOp.Store,
                 ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
             };
 
+            RenderingAttachmentInfo* colorAttachments = stackalloc RenderingAttachmentInfo[2];
+            colorAttachments[0] = colorAttachment;
+            if (identityAttachment)
+            {
+                _renderTargets.SurfaceReceiverIdentity!.TransitionToColorAttachment(cmd);
+                colorAttachments[1] = new RenderingAttachmentInfo
+                {
+                    SType = StructureType.RenderingAttachmentInfo,
+                    ImageView = _renderTargets.SurfaceReceiverIdentity.View,
+                    ImageLayout = ImageLayout.ColorAttachmentOptimal,
+                    LoadOp = AttachmentLoadOp.Clear, StoreOp = AttachmentStoreOp.Store,
+                    ClearValue = new ClearValue(new ClearColorValue(0u, 0u, 0u, 0u))
+                };
+            }
             var renderingInfo = new RenderingInfo
             {
                 SType = StructureType.RenderingInfo,
                 RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = renderExtent },
                 LayerCount = 1,
-                ColorAttachmentCount = 1,
-                PColorAttachments = &colorAttachment,
+                ColorAttachmentCount = identityAttachment ? 2u : 1u,
+                PColorAttachments = colorAttachments,
                 PDepthAttachment = &depthAttachment,
                 PStencilAttachment = null
             };
@@ -205,7 +263,7 @@ namespace Njulf.Rendering.Pipeline
                     previousViewProjection,
                     previousTime,
                     previousFrameValid,
-                    _meshPipeline.CompactedMotionVectorPipeline,
+                    fused ? _meshPipeline.GetDepthMotionPipeline(false, identityAttachment) : _meshPipeline.CompactedMotionVectorPipeline,
                     SceneOpaqueCompactionPass.ResolveCompactedDrawStreamCapacity(
                         sceneData.SceneSubmissionGpuDepthSolidCandidateCount,
                         sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity,
@@ -223,7 +281,7 @@ namespace Njulf.Rendering.Pipeline
                     previousViewProjection,
                     previousTime,
                     previousFrameValid,
-                    _meshPipeline.CompactedMaskedMotionVectorPipeline,
+                    fused ? _meshPipeline.GetDepthMotionPipeline(true, identityAttachment) : _meshPipeline.CompactedMaskedMotionVectorPipeline,
                     SceneOpaqueCompactionPass.ResolveCompactedDrawStreamCapacity(
                         sceneData.SceneSubmissionGpuDepthMaskedCandidateCount,
                         sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity,
@@ -260,6 +318,8 @@ namespace Njulf.Rendering.Pipeline
             DrawFoliageMotionVectors(cmd, sceneData, previousViewProjection, previousTime, previousFrameValid);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
 
+            if (identityAttachment)
+                CopyReceiverIdentity(cmd, frameIndex);
             _renderTargets.MotionVectors.TransitionToShaderRead(cmd);
             _previousViewProjectionMatrix = sceneData.ViewProjectionMatrix;
             _previousCameraPosition = sceneData.CameraPosition;
@@ -267,8 +327,44 @@ namespace Njulf.Rendering.Pipeline
             _previousSceneContentRevision = sceneData.SceneContentRevision;
             _previousCameraCutSerial = sceneData.CaptureCameraCutSerial;
             _hasPreviousViewProjectionMatrix = true;
+            _previousMotionFrameSerial = sceneData.DdgiFrameSerial;
+            sceneData.DepthMotionFusionCompleted = fused;
             sceneData.MotionVectorsEnabled = previousFrameValid ? 1 : 0;
-            sceneData.CpuMotionVectorRecordMicroseconds = ElapsedMicroseconds(start);
+            // RenderGraph accounts the fused recording under DepthPrePass.
+            sceneData.CpuMotionVectorRecordMicroseconds = fused ? 0 : ElapsedMicroseconds(start);
+        }
+
+        private void CopyReceiverIdentity(CommandBuffer cmd, int frameIndex)
+        {
+            RenderTarget identity = _renderTargets.SurfaceReceiverIdentity!;
+            DirectionalShadowHistoryResources history = DirectionalHistoryResources!;
+            VkBuffer destination = _bufferManager!.GetBuffer(history.GetScratch(frameIndex));
+            identity.TransitionToTransferSource(cmd);
+            BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
+                destination, PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TransferBit, AccessFlags2.TransferWriteBit, 0, history.ScratchBufferBytes);
+            var dependency = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = 1, PBufferMemoryBarriers = &barrier
+            };
+            _context.Api.CmdPipelineBarrier2(cmd, &dependency);
+            var copy = new BufferImageCopy
+            {
+                ImageSubresource = new ImageSubresourceLayers
+                {
+                    AspectMask = ImageAspectFlags.ColorBit, LayerCount = 1
+                },
+                ImageExtent = new Extent3D(identity.Extent.Width, identity.Extent.Height, 1)
+            };
+            _context.Api.CmdCopyImageToBuffer(cmd, identity.Image, ImageLayout.TransferSrcOptimal,
+                destination, 1, &copy);
+            barrier = BarrierBuilder.BufferBarrier(destination,
+                PipelineStageFlags2.TransferBit, AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit,
+                0, history.ScratchBufferBytes);
+            _context.Api.CmdPipelineBarrier2(cmd, &dependency);
         }
 
         private void DrawMotionVectorBucket(
@@ -478,6 +574,8 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUMotionVectorPushConstants>(),
                 &pushConstants);
 
+            if (_recordingFusedDepth)
+                sceneData.DepthMeshOnlyIndirectDrawCount++;
             VkBuffer indirect = bufferManager.GetBuffer(
                 sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
             _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
@@ -728,6 +826,7 @@ namespace Njulf.Rendering.Pipeline
         private bool IsSharedValidityActive(
             SceneRenderingData sceneData,
             Extent2D extent) =>
+            SurfaceInputPolicy.SharedValidityEnabled &&
             TemporalSurfaceValidityCodec.RequiresProducer(
                 sceneData.SurfaceHistoryConsumers) &&
             _temporalSurfaceValidityResources?.IsCompatible(

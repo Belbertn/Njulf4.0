@@ -117,6 +117,8 @@ namespace Njulf.Rendering
 
         private readonly IWindow _window;
         private readonly VulkanContext _context;
+
+        public LoadedShaderIdentity GetLoadedShaderIdentity() => _context.ShaderModuleIdentities.Snapshot();
         private readonly RendererStartupLog? _startupLog;
         private readonly SwapchainManager _swapchain;
         private readonly SynchronizationManager _sync;
@@ -343,6 +345,11 @@ namespace Njulf.Rendering
 
         // State
         private int _currentFrame = 0;
+        // Use consumer dependencies on the graphics-only path by default. Set the
+        // environment variable to 0 to restore the full frame-boundary dependency.
+        private readonly bool _preciseInterFrameDependenciesRequested =
+            Environment.GetEnvironmentVariable("NJULF_PRECISE_INTERFRAME_DEPENDENCIES") != "0";
+        private bool _preciseInterFrameDependenciesActive;
         private uint _allocatorFrameIndex;
         private uint _temporalSampleIndex;
         private ulong _ddgiFrameSerial;
@@ -1300,7 +1307,10 @@ namespace Njulf.Rendering
             _performanceCaptureMetadataProvider = new(
                 new PerformanceCaptureHostIdentityResolver(
                     typeof(VulkanRenderer).Assembly,
-                    typeof(ShaderLibrary).Assembly));
+                    typeof(ShaderLibrary).Assembly))
+            {
+                ShaderModuleIdentities = _context.ShaderModuleIdentities
+            };
             _iesPhotometricProfileManager = new IesPhotometricProfileManager(
                 _textureManager,
                 _bindlessHeap);
@@ -2035,6 +2045,8 @@ namespace Njulf.Rendering
                 _foliageManager,
                 ResolveSurfaceHistoryConsumers,
                 _temporalSurfaceValidityResources);
+            motionVectorPass.DirectionalHistoryResources = _directionalShadowHistoryResources;
+            depthPrePass.MotionVectorProducer = motionVectorPass;
             AddPassInstance(motionVectorPass);
 
             var hizBuildPass = new HiZBuildPass(
@@ -3616,7 +3628,24 @@ namespace Njulf.Rendering
                     _context.WaitIdle));
 
             _currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
-            InsertInterFrameSharedResourceDependency(_currentCommandBuffer);
+            _preciseInterFrameDependenciesActive = _preciseInterFrameDependenciesRequested &&
+                Settings.AsyncCompute.Mode == AsyncComputeMode.Disabled;
+            _renderGraph.BeginInterFrameRecording(_preciseInterFrameDependenciesActive);
+            if (_preciseInterFrameDependenciesActive && !_renderGraph.NeedsInterFramePriming)
+            {
+                // Uploads and owner-managed compute/AS work precede the graph. Their consumers
+                // still require ordering; this does not block unrelated graphics stages.
+                PipelineStageFlags2 preludeStages = PipelineStageFlags2.TransferBit | PipelineStageFlags2.ComputeShaderBit;
+                if (_context.RayQuerySupported)
+                    preludeStages |= PipelineStageFlags2.AccelerationStructureBuildBitKhr;
+                if (_context.OpacityMicromapExtCommandApi != null)
+                    preludeStages |= PipelineStageFlags2.MicromapBuildBitExt;
+                InsertInterFrameSharedResourceDependency(_currentCommandBuffer, preludeStages);
+            }
+            else
+            {
+                InsertInterFrameSharedResourceDependency(_currentCommandBuffer);
+            }
             _meshletPhysicalResidencyResources?.RecordFrameUploads(
                 _currentCommandBuffer,
                 _currentFrame,
@@ -3813,6 +3842,10 @@ namespace Njulf.Rendering
                 throw new VulkanException("Failed to submit queue", result);
             }
 
+            _renderGraph.CommitInterFrameSubmission();
+            if (_preciseInterFrameDependenciesActive && _ddgiFrameSerial % 240UL == 0UL)
+                Console.WriteLine($"Inter-frame dependencies: {_renderGraph.InterFrameBarrierCount} consumer barriers, " +
+                    $"{_renderGraph.InterFrameConservativePassCount} passes retain incomplete-contract fallbacks; graphics queue only.");
             _submittedGraphicsFrameFenceValues[_currentFrame] =
                 _ddgiFrameSerial == ulong.MaxValue
                     ? ulong.MaxValue
@@ -3899,8 +3932,8 @@ namespace Njulf.Rendering
             // the renderer-facing request only after that frame presented.
             _renderDocCaptureService.EndFrame(IntPtr.Zero, IntPtr.Zero);
 
-            // Keep external frame-index consumers on the preferred context;
-            // BeginFrame may choose a different already-completed context.
+            // Keep external frame-index consumers on the next cyclic context;
+            // BeginFrame establishes completion before reusing that context.
             _currentFrame = _submissionOwnership.PreferredFrameContext;
             _sync.SetCurrentFrame(_currentFrame);
             _temporalSampleIndex++;
@@ -4070,6 +4103,11 @@ namespace Njulf.Rendering
             var vk = _context.Api;
             var khrDynamicRendering = _context.KhrDynamicRendering;
 
+            if (_preciseInterFrameDependenciesActive)
+                InsertInterFrameSharedResourceDependency(_currentCommandBuffer,
+                    PipelineStageFlags2.ColorAttachmentOutputBit |
+                    PipelineStageFlags2.EarlyFragmentTestsBit |
+                    PipelineStageFlags2.LateFragmentTestsBit);
             _renderTargets!.SceneColor.TransitionToColorAttachment(_currentCommandBuffer);
             _renderTargets.SceneDepth.TransitionToDepthAttachment(_currentCommandBuffer);
 
@@ -5658,6 +5696,7 @@ namespace Njulf.Rendering
             // but must never suppress the producer that establishes this frame's depth.
             sceneData.DepthPrePassEnabled = true;
             sceneData.DepthPrePassCompleted = false;
+            sceneData.DepthMotionFusionCompleted = false;
             sceneData.DepthPrePassFrameSerial = 0;
             sceneData.TiledLightCullingCompleted = false;
             sceneData.TiledLightCullingFrameSerial = 0;
@@ -5985,7 +6024,7 @@ namespace Njulf.Rendering
             sceneData.SecondaryCommandBufferEnabled = Settings.UseSecondaryCommandBuffers ? 1 : 0;
             bool asyncTimelineAvailable =
                 _cmd.AsyncComputeTimelineSemaphore.Handle != 0;
-            if (_asyncComputeCoordinator.RequiresConcreteResourceBindings(
+            if (_preciseInterFrameDependenciesActive || _asyncComputeCoordinator.RequiresConcreteResourceBindings(
                     Settings.AsyncCompute.Mode,
                     _context.HasIndependentComputeQueue,
                     asyncTimelineAvailable))
@@ -6286,7 +6325,15 @@ namespace Njulf.Rendering
                     asyncComputeSnapshot);
             RendererDiagnosticsAssemblyResult diagnosticsResult =
                 _diagnosticsAssembler.Assemble(diagnosticsInput);
-            _lastDiagnostics = diagnosticsResult.Diagnostics;
+            _lastDiagnostics = diagnosticsResult.Diagnostics with
+            {
+                SurfaceInputProducer = sceneData.DepthMotionFusionCompleted ? "fused" :
+                    sceneData.CameraOnlyMotionReprojectionEnabled != 0 ? "camera-only" :
+                    sceneData.SurfaceHistoryConsumers.RequiresMotionVectors() ? "separate" : "depth-only",
+                DepthMotionFusionRequested = SurfaceInputPolicy.DepthMotionFusionRequested,
+                SurfaceInputIdentityAllocatedBytes = _renderTargets?.SurfaceReceiverIdentity?.AllocationByteSize ?? 0UL,
+                SharedSurfaceValidityAllocatedBytes = _temporalSurfaceValidityResources?.EstimatedBytes ?? 0UL
+            };
             _lastBudgetSnapshot = diagnosticsResult.Budget;
             _debugOverlayBuilder.ClearFrame();
         }
@@ -7227,7 +7274,18 @@ namespace Njulf.Rendering
                 sceneData.DirectionalShadowFramePlan.UsesScreenHistory
                     ? _directionalShadowHistoryResources?.EstimatedBytes ?? 0UL
                     : 0UL;
-            if (sceneData.DirectionalShadowFramePlan.UsesScreenHistory)
+            if (SurfaceInputPolicy.DepthMotionFusionRequested &&
+                sceneData.DirectionalShadowFramePlan.UsesScreenHistory &&
+                sceneData.FoliageClusterCount == 0 && sceneData.SkinnedObjectCount == 0)
+            {
+                try { _renderTargets?.EnsureSurfaceReceiverIdentity(); }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Depth/motion fusion unavailable: {exception.Message}");
+                }
+            }
+            if (SurfaceInputPolicy.SharedValidityEnabled &&
+                sceneData.DirectionalShadowFramePlan.UsesScreenHistory)
             {
                 try
                 {
@@ -13229,18 +13287,19 @@ namespace Njulf.Rendering
                 changes.Add($"{name}:{previous}->{current}");
         }
 
-        private void InsertInterFrameSharedResourceDependency(CommandBuffer commandBuffer)
+        private void InsertInterFrameSharedResourceDependency(
+            CommandBuffer commandBuffer,
+            PipelineStageFlags2 destinationStages = PipelineStageFlags2.AllCommandsBit)
         {
             // Several long-lived renderer buffers and images are intentionally shared between
-            // frames-in-flight. Queue submission order supplies execution order, but those shared
-            // writes still require an explicit memory dependency before the next frame consumes or
-            // overwrites them. Keep this at the start of every primary graphics command buffer.
+            // frames-in-flight. Submission order alone supplies neither an execution nor a memory
+            // dependency. Keep the full dependency for priming, async compute and the opt-out.
             var memoryBarrier = new MemoryBarrier2
             {
                 SType = StructureType.MemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.AllCommandsBit,
                 SrcAccessMask = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit,
-                DstStageMask = PipelineStageFlags2.AllCommandsBit,
+                DstStageMask = destinationStages,
                 DstAccessMask = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit
             };
             var dependencyInfo = new DependencyInfo
@@ -13251,6 +13310,8 @@ namespace Njulf.Rendering
             };
 
             _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+            if (_preciseInterFrameDependenciesActive)
+                _renderGraph.CoverInterFrameAccesses(destinationStages);
         }
 
         private void TransitionSwapchainImage(CommandBuffer cmd, ImageLayout newLayout)
@@ -13268,6 +13329,12 @@ namespace Njulf.Rendering
                 out AccessFlags2 srcAccess,
                 out PipelineStageFlags2 dstStage,
                 out AccessFlags2 dstAccess);
+
+            // The acquire semaphore is waited at COLOR_ATTACHMENT_OUTPUT. Even a discarded
+            // image's layout transition must follow that wait; NONE leaves it unordered.
+            if (newLayout == ImageLayout.ColorAttachmentOptimal &&
+                oldLayout is ImageLayout.Undefined or ImageLayout.PresentSrcKhr)
+                srcStage |= PipelineStageFlags2.ColorAttachmentOutputBit;
 
             var barrier = new ImageMemoryBarrier2
             {

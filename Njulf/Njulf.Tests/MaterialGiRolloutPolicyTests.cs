@@ -3445,7 +3445,8 @@ internal sealed class SyntheticMaterialGiQualification : IDisposable
             CaptureRun = PerformanceCaptureRunMetadata.Unknown with
             {
                 Commit = BuildCommit,
-                ShaderBundleHash = $"sha256:{ShaderFingerprint}"
+                ShaderBundleHash = $"sha256:{ShaderFingerprint}",
+                LoadedShaderIdentity = LoadedShaderTestEvidence.Identity
             },
             ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
             ActiveBudgetProfile = profile.Kind,
@@ -3569,6 +3570,7 @@ internal sealed class SyntheticMaterialGiQualification : IDisposable
             GpuFrameMilliseconds = new { Count = 120 },
             BudgetMetrics = budget.Metrics,
             LastDiagnostics = diagnostics,
+            CaptureContract = new { LoadedShaders = LoadedShaderTestEvidence.Measurement },
             DdgiTransientRawEvidence = new
             {
                 Schema = MaterialGiReleaseEvidenceContract

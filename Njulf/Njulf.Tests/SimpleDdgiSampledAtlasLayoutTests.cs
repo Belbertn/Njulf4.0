@@ -157,7 +157,7 @@ public sealed class SimpleDdgiSampledAtlasLayoutTests
         Assert.Multiple(() =>
         {
             Assert.That(provisioned, Is.EqualTo(2_304));
-            Assert.That(bytes, Is.EqualTo(2_304UL * 1_536UL));
+            Assert.That(bytes, Is.EqualTo(2_304UL * 2_096UL));
             Assert.That(SimpleDdgiSampledAtlas.TryResolveProbeLayer(
                 2_048, 2_048, 2, out int group, out int layer), Is.True);
             Assert.That(group, Is.EqualTo(1));
@@ -192,7 +192,7 @@ public sealed class SimpleDdgiSampledAtlasLayoutTests
             Assert.That(plan.SampledAtlasAdmittedProbeCount, Is.EqualTo(100));
             Assert.That(plan.SampledAtlasPhysicalProbeCapacity, Is.EqualTo(256));
             Assert.That(plan.SampledAtlasPaddingProbeCount, Is.EqualTo(156));
-            Assert.That(plan.SampledAtlasPaddingBytes, Is.EqualTo(156UL * 1_536UL));
+            Assert.That(plan.SampledAtlasPaddingBytes, Is.EqualTo(156UL * 2_096UL));
         });
     }
 

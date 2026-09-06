@@ -58,12 +58,15 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
             "directional_csm_resolve.comp.spv",
             (uint)Marshal.SizeOf<GPUDirectionalRayShadowPushConstants>(),
             _cacheService);
-        _surfaceValidity = new DirectionalShadowComputePipeline(
-            _context,
-            _bindlessHeap,
-            "temporal_surface_validity.comp.spv",
-            (uint)Marshal.SizeOf<GPUTemporalSurfaceValidityPushConstants>(),
-            _cacheService);
+        if (SurfaceInputPolicy.SharedValidityEnabled)
+        {
+            _surfaceValidity = new DirectionalShadowComputePipeline(
+                _context,
+                _bindlessHeap,
+                "temporal_surface_validity.comp.spv",
+                (uint)Marshal.SizeOf<GPUTemporalSurfaceValidityPushConstants>(),
+                _cacheService);
+        }
         _temporal = new DirectionalShadowComputePipeline(
             _context,
             _bindlessHeap,
@@ -87,7 +90,7 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
     {
         if (!ShouldExecute(frameIndex, sceneData))
             return;
-        if (_temporal == null || _csmResolve == null || _surfaceValidity == null)
+        if (_temporal == null || _csmResolve == null)
             throw new InvalidOperationException("Directional shadow temporal pipelines are unavailable.");
 
         _renderTargets.SceneDepth.TransitionToDepthReadOnly(commandBuffer);
@@ -119,8 +122,7 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
             sceneData,
             resetReasons);
 
-        int previousFrame = (frameIndex + RenderingConstants.FramesInFlight - 1) %
-            RenderingConstants.FramesInFlight;
+        var previousFrame = GetPreviousHistoryFrameIndex(frameIndex);
         uint currentHistory = checked((uint)
             (BindlessIndex.DirectionalShadowHistoryBufferBase + frameIndex));
         uint previousHistory = checked((uint)
@@ -190,22 +192,28 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
             _resources.MarkCountersSubmitted(frameIndex);
     }
 
+    internal static int GetPreviousHistoryFrameIndex(int frameIndex)
+    {
+        int previousFrame = (frameIndex + RenderingConstants.FramesInFlight - 1) %
+                            RenderingConstants.FramesInFlight;
+        return previousFrame;
+    }
+
     private bool ProduceSurfaceValidity(
         CommandBuffer commandBuffer,
         int frameIndex,
         SceneRenderingData sceneData,
         DirectionalShadowHistoryResetReason resetReasons)
     {
-        if (!_surfaceValidityResources.IsCompatible(
+        if (!SurfaceInputPolicy.SharedValidityEnabled ||
+            !_surfaceValidityResources.IsCompatible(
                 _resources.Width,
                 _resources.Height))
         {
             return false;
         }
 
-        int previousFrame =
-            (frameIndex + RenderingConstants.FramesInFlight - 1) %
-            RenderingConstants.FramesInFlight;
+        int previousFrame = GetPreviousHistoryFrameIndex(frameIndex);
         uint currentBufferIndex = checked((uint)
             (BindlessIndex.TemporalSurfaceValidityBufferBase + frameIndex));
         var push = new GPUTemporalSurfaceValidityPushConstants

@@ -217,7 +217,8 @@ namespace Njulf.Rendering.Pipeline
         // Appended to preserve every established graph resource identity.
         TemporalSurfaceValidityHistory,
         OpaqueVisibility,
-        OpaqueVisibilityWork
+        OpaqueVisibilityWork,
+        SurfaceReceiverIdentity
     }
 
     public enum RenderGraphResourceKind

@@ -9,6 +9,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'loaded-shader-identity.ps1')
 
 $script:SolutionRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $script:ManifestPath = [System.IO.Path]::GetFullPath(
@@ -617,6 +618,7 @@ function Assert-AutomaticPlanarCaptureEvidence {
 function Assert-CaptureReport {
     param($Report, $Health, $Workload, $Build, $Variant,
         [string]$PairId, [string]$Label, [bool]$AutomaticPlanarClaim)
+    Assert-LoadedShaderMeasurement $Report $Label
     $preTargetFindings = @(Get-PretargetOperationalFindings `
         $Manifest $Report $Health $Label)
     if ([string]$Report.Kind -cne "njulf-renderer-benchmark" -or
@@ -752,6 +754,7 @@ function Compare-ExperimentReports {
     if ($OrderedReports.Count -ne ([int]$Manifest.capture.abbaCycles * 4)) {
         throw "ABBA report topology is incomplete for '$($Claim.workloadId)'."
     }
+    Assert-LoadedShaderCaptureSeries $OrderedReports ([string]$Mode -ceq 'aa')
     $baselineReports = @()
     $candidateReports = @()
     $frameDifferences = @()
@@ -833,6 +836,7 @@ function Compare-ControlReports {
     if ($OrderedReports.Count -ne ([int]$Manifest.capture.abbaCycles * 4)) {
         throw "ABBA report topology is incomplete for control '$WorkloadId'."
     }
+    Assert-LoadedShaderCaptureSeries $OrderedReports
     $baselineReports = @()
     $candidateReports = @()
     for ($cycle = 0; $cycle -lt [int]$Manifest.capture.abbaCycles; $cycle++) {
@@ -852,6 +856,14 @@ function Compare-ControlReports {
 function Invoke-PairValidation {
     param($VerifierBuild, [string]$BaselineReport, [string]$CandidateReport,
         [string]$OutputPath, [string]$LogPath, [bool]$AbComparison)
+    $left = Read-JsonFile $BaselineReport 'Baseline report'
+    $right = Read-JsonFile $CandidateReport 'Candidate report'
+    Assert-LoadedShaderMeasurement $left 'Baseline report'
+    Assert-LoadedShaderMeasurement $right 'Candidate report'
+    if (-not $AbComparison) {
+        Assert-LoadedShaderPair $left.LastDiagnostics.CaptureRun.LoadedShaderIdentity `
+            $right.LastDiagnostics.CaptureRun.LoadedShaderIdentity $true 'Repeat captures'
+    }
     $arguments = @(
         "--compare-benchmark-pair", $BaselineReport, $CandidateReport,
         "--benchmark-pair-report", $OutputPath)
@@ -908,6 +920,7 @@ Write-JsonFile (Join-Path $experimentRoot "experiment.identity.json") ([ordered]
     manifestSha256 = Get-Sha256 $script:ManifestPath
     campaignDriverPath = $script:CampaignDriverPath
     campaignDriverSha256 = Get-Sha256 $script:CampaignDriverPath
+    loadedShaderVerifierSha256 = Get-Sha256 (Join-Path $PSScriptRoot 'loaded-shader-identity.ps1')
     campaignLockPath = $lockPath
     campaignLockSha256 = Get-Sha256 $lockPath
     baselineCommit = [string]$Spec.baseline.commit

@@ -59,9 +59,19 @@ DDGI diagnostics distinguish geometric coverage from usable lighting support.
 
 Detailed validation builds additionally populate `ValidationCounters`. The logical counters are backed by a dedicated, double-buffered 256-byte validation bank, and each completed bank carries a transfer-written frame sentinel; a report is valid only when that sentinel and the completed-frame slot agree. This keeps validation atomics at low physical offsets without consuming production diagnostic-buffer space. Normal Release/ShippingPerformance shaders compile these atomics out. Ordinary pack, direction, and mirror-path observations use the same deterministic 1/64 sampling stride; non-finite, saturation, invalid-epoch, invalid-hit-kind, and invalid-map failures are counted exactly so a zero-error gate cannot miss an exception.
 
-- `MirrorInteriorOpportunityCount`, `MirrorImageHitCount`, `MirrorSeamFallbackCount`, `MirrorUnmirroredFallbackCount`, and `MirrorInvalidMapFallbackCount` classify every sampled-mirror opportunity. Seam and policy fallbacks are normal; invalid-map fallback must remain zero.
+- `MirrorInteriorOpportunityCount`, `MirrorImageHitCount`, `MirrorSeamFallbackCount`, `MirrorUnmirroredFallbackCount`, and `MirrorInvalidMapFallbackCount` classify sampled-mirror opportunities. Image hits include both interior and octahedral-boundary samples. Seam and policy fallbacks are normal; invalid-map fallback must remain zero.
+- `MirrorBoundaryImageHitCount` is the subset of image hits whose original, unpadded bilinear footprint crosses an octahedral boundary. Divide it by `MirrorImageHitCount` to estimate boundary traffic; `MirrorSeamFallbackCount` counts missing-image boundary samples instead. Both hit counters use the same 1/64 selection. Detailed builds log accumulated hit/boundary counts every 64 distinct valid readback frames. These observations are not production timing measurements.
 - `CachePackAttemptCount`, non-finite/saturation counts, and maximum radiance/distance errors qualify FP16 writes. `InvalidSourceEpochCount` and `InvalidHitKindCount` prove that malformed scratch/cache metadata failed closed. All four failure/saturation counts must be zero for promotion.
 - Direction comparison samples, epoch mismatches, maximum angular error, histogram, and the conservative P99 bucket bound qualify the codebook while `Validate` retains the stored direction. Epoch mismatches must be zero.
+
+Sampled irradiance and visibility images retain 8x8 and 16x16 interiors inside
+10x10 RGBA16F and 18x18 RG16F array layers. The one-texel borders use the canonical
+octahedral mirror rule, including opposite corners, and are populated during
+both queued publication and full synchronization. Sampling uses the interior
+coordinate transformed by `(uv * N + 1) / (N + 2)` and hardware bilinear filtering
+at LOD zero. Canonical SSBO payloads remain unpadded. Sampled payload is 2,096
+bytes per provisioned probe (previously 1,536); allocated-byte reporting also
+includes device alignment. Existing mirror budgets and SSBO fallback still apply.
 
 `MirrorAllocatedBytes` may exceed logical payload bytes only because of explicit allocator alignment. A zero allocated value with nonzero admitted bytes means image creation fell back; inspect `MirrorFallbackReason`. Budget evaluation uses these explicit resources and prefers actual mirror allocation bytes when available.
 

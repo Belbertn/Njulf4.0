@@ -302,6 +302,31 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _maskedMotionVectorPipeline;
         private VkPipeline _compactedMotionVectorPipeline;
         private VkPipeline _compactedMaskedMotionVectorPipeline;
+        private readonly VkPipeline[] _depthMotionPipelines = new VkPipeline[4];
+
+        internal VkPipeline GetDepthMotionPipeline(bool masked, bool identity) =>
+            _depthMotionPipelines[(masked ? 2 : 0) + (identity ? 1 : 0)];
+
+        private void CreateDepthMotionPipelines(Format depthFormat)
+        {
+            if (!SurfaceInputPolicy.DepthMotionFusionRequested)
+                return;
+            for (int index = 0; index < _depthMotionPipelines.Length; index++)
+            {
+                bool masked = (index & 2) != 0;
+                bool identity = (index & 1) != 0;
+                string fragment = "motion_vector" + (masked ? "_alpha" : "") +
+                    "_depth" + (identity ? "_identity" : "") + ".frag.spv";
+                _depthMotionPipelines[index] = CreateGraphicsPipeline(
+                    null,
+                    masked ? _compactedMotionVectorAlphaMeshShaderName : _compactedMotionVectorMeshShaderName,
+                    fragment, RenderTargetManager.MotionVectorFormat, depthFormat,
+                    true, true, false, CullModeFlags.None, false,
+                    secondaryColorFormat: identity ? Format.R32Uint : null);
+                _context.SetDebugName(_depthMotionPipelines[index].Handle,
+                    ObjectType.Pipeline, $"Fused depth/motion {(masked ? "masked" : "solid")} identity={identity}");
+            }
+        }
         private VkPipeline _sceneOpaqueCompactionFlatPipeline;
         private VkPipeline _sceneOpaqueCompactionInstancePipeline;
         private VkPipeline _sceneOpaqueCompactionFlatDiagnosticsPipeline;
@@ -3690,6 +3715,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         ObjectType.Pipeline,
                         "Compacted Mesh-Only Masked Motion Vector Pipeline");
                 }));
+            CreateDepthMotionPipelines(depthFormat);
 
         }
 
@@ -6213,6 +6239,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _motionVectorPipeline = default;
             }
 
+            for (int index = 0; index < _depthMotionPipelines.Length; index++)
+            {
+                if (_depthMotionPipelines[index].Handle != 0)
+                    _context.Api.DestroyPipeline(_context.Device, _depthMotionPipelines[index], null);
+                _depthMotionPipelines[index] = default;
+            }
             if (_maskedMotionVectorPipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(_context.Device, _maskedMotionVectorPipeline, null);

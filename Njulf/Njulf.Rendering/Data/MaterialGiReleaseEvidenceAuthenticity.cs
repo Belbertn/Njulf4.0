@@ -1267,6 +1267,12 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             captureRun,
             "ShaderBundleHash",
             producer.ShaderFingerprint);
+        string? loadedShaderFailure = Diagnostics.LoadedShaderMeasurementEvidence.Validate(
+            JsonSerializer.Deserialize<Diagnostics.LoadedShaderIdentity>(
+                RequireObject(captureRun, "LoadedShaderIdentity").GetRawText()),
+            JsonSerializer.Deserialize<Diagnostics.LoadedShaderMeasurementEvidence>(
+                RequireObject(RequireObject(root, "CaptureContract"), "LoadedShaders").GetRawText()));
+        if (loadedShaderFailure != null) throw new InvalidDataException(loadedShaderFailure);
 
         long budgetAvailable =
             TryGetInt64(diagnostics, "ActualGpuMemoryBudgetBytes", out long actual)

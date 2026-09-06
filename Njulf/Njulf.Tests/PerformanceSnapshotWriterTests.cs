@@ -218,7 +218,8 @@ public sealed class PerformanceSnapshotWriterTests
                     SimpleDdgiStorageValidationCounters.Empty with
                     {
                         ReadbackValid = 1,
-                        MirrorImageHitCount = 31u
+                        MirrorImageHitCount = 31u,
+                        MirrorBoundaryImageHitCount = 11u
                     }
             };
         RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
@@ -244,6 +245,8 @@ public sealed class PerformanceSnapshotWriterTests
                 Is.EqualTo(1));
             Assert.That(snapshot.SimpleDdgiStorage.ValidationCounters.MirrorImageHitCount,
                 Is.EqualTo(31u));
+            Assert.That(snapshot.SimpleDdgiStorage.ValidationCounters.MirrorBoundaryImageHitCount,
+                Is.EqualTo(11u));
             Assert.That(audit.CanonicalDdgiAtlasBytes, Is.EqualTo(300UL));
             Assert.That(audit.SampledAtlasMirrorBytes, Is.EqualTo(550UL));
             Assert.That(audit.TransportBytes, Is.EqualTo(700UL));

@@ -22,4 +22,8 @@
       <ProjectReference Include="..\NjulfHelloGame\NjulfHelloGame.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <None Update="Fixtures\loaded-shader-identity-v1.json" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+
 </Project>

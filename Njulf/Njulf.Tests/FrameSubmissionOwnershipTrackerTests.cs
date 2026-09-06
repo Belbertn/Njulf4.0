@@ -1,5 +1,7 @@
 using System;
+using Njulf.Rendering;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Pipeline;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -56,24 +58,51 @@ public sealed class FrameSubmissionOwnershipTrackerTests
         Assert.That(tracker.SelectAcquireSemaphore(), Is.EqualTo(0));
     }
 
-    [Test]
-    public void AnySignaledContext_IsRecycledAndAdvancesOrderedCompletion()
+    [TestCase(false)]
+    [TestCase(true)]
+    public void CyclicContextReuse_SelectsImmediatelyPrecedingHistory(
+        bool preferredFenceSignaled)
     {
         var tracker = CreateTwoFrameTracker();
-        tracker.MarkSubmitted(0, 0, 0, 1);
-        tracker.MarkSubmitted(1, 1, 1, 2);
+        var historySubmissions = new ulong[RenderingConstants.FramesInFlight];
+        for (ulong serial = 1; serial <= 2; serial++)
+        {
+            int acquire = tracker.SelectAcquireSemaphore();
+            FrameResourceContextSelection frame =
+                tracker.SelectFrameResourceContext(_ => false);
+            tracker.MarkSubmitted(frame.FrameContext, (uint)(serial - 1), acquire, serial);
+            historySubmissions[frame.FrameContext] = serial;
+        }
 
+        int acquire2 = tracker.SelectAcquireSemaphore();
         FrameResourceContextSelection selected =
             tracker.SelectFrameResourceContext(
-                context => context == 1);
+                context => context == 1 || preferredFenceSignaled);
+        int previousHistoryFrame =
+            DirectionalShadowTemporalPass.GetPreviousHistoryFrameIndex(
+                selected.FrameContext);
 
         Assert.Multiple(() =>
         {
-            Assert.That(selected.FrameContext, Is.EqualTo(1));
-            Assert.That(selected.RequiresWait, Is.False);
-            Assert.That(tracker.CompletedSubmissionSerial, Is.EqualTo(2UL));
-            Assert.That(tracker.GetSwapchainImageOwner(0).Completed, Is.True,
-                "A later graphics-queue fence proves all earlier submissions complete.");
+            Assert.That(selected.FrameContext, Is.EqualTo(0));
+            Assert.That(selected.PreviousSubmissionSerial, Is.EqualTo(1UL));
+            Assert.That(selected.RequiresWait, Is.EqualTo(!preferredFenceSignaled));
+            Assert.That(previousHistoryFrame, Is.Not.EqualTo(selected.FrameContext));
+            Assert.That(historySubmissions[previousHistoryFrame], Is.EqualTo(2UL),
+                "Motion vectors for submission 3 refer to submission 2's history.");
+        });
+
+        if (selected.RequiresWait)
+            tracker.ObserveContextCompleted(selected.FrameContext);
+        tracker.MarkSubmitted(selected.FrameContext, 2, acquire2, 3);
+        historySubmissions[selected.FrameContext] = 3;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tracker.GetSwapchainImageOwner(2).SubmissionSerial, Is.EqualTo(3UL));
+            Assert.That(tracker.PreferredFrameContext, Is.EqualTo(1));
+            Assert.That(historySubmissions[previousHistoryFrame], Is.EqualTo(2UL),
+                "Writing the current history must preserve the preceding submission's bank.");
         });
     }
 

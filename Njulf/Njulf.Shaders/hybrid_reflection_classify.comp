@@ -26,6 +26,11 @@ shared uint TileAppendIndex;
 
 bool HybridClassifySourceInvalidated(uint source)
 {
+    // A planar capture can replace any previous source when it first becomes
+    // available, or expose a fallback when it disappears. Refresh all carried
+    // receivers on that generation change before resolve bypasses shading.
+    if ((pc.SourceInvalidations & (1u << 5u)) != 0u)
+        return true;
     if (source == HYBRID_REFLECTION_SOURCE_SSR ||
         source == HYBRID_REFLECTION_SOURCE_RAY_QUERY)
     {

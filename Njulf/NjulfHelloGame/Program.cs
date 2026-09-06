@@ -1179,7 +1179,10 @@ internal sealed class HelloGame : Game
                 getControlledIsolationSettingsFingerprint: () =>
                     SampleRenderSettingsFingerprint
                         .CaptureDirectionalIsolationFamily(
-                            renderer.Settings));
+                            renderer.Settings))
+            {
+                GetLoadedShaderIdentity = renderer.GetLoadedShaderIdentity
+            };
             Console.WriteLine(
                 $"Benchmark armed: warmup={_smokeOptions.Benchmark.WarmupFrameCount}, " +
                 $"measure={_smokeOptions.Benchmark.MeasureFrameCount}, " +

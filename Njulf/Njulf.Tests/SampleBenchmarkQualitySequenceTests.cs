@@ -894,6 +894,7 @@ public sealed class SampleBenchmarkQualitySequenceTests
             1)
         {
             ExecutableHash = HashA,
+            LoadedShaderIdentity = LoadedShaderTestEvidence.Identity,
             DirtyWorktreeState = "clean"
         };
         return RendererDiagnostics.Empty with

@@ -42,30 +42,12 @@ public sealed class TemporalSurfaceValidityTests
     }
 
     [Test]
-    public void RenderGraph_OrdersMotionSeedBeforeDirectionalConsumer()
+    public void DormantSharedProducerHasNoGraphTraffic()
     {
-        var declaration = ProductionRenderPipelineDeclaration.Instance;
-        var order = declaration.PassOrder.ToList();
-        var passes = declaration.CreatePassResourceDeclarations()
-            .ToDictionary(pass => pass.PassName);
-        RenderGraphResourceUsage motion = passes["MotionVectorPass"].Usages
-            .Single(usage => usage.Resource ==
-                RenderGraphResourceId.TemporalSurfaceValidityHistory);
-        RenderGraphResourceUsage temporal = passes["DirectionalShadowTemporalPass"].Usages
-            .Single(usage => usage.Resource ==
-                RenderGraphResourceId.TemporalSurfaceValidityHistory &&
-                usage.HistoryBinding == RenderGraphHistoryBindingSelection.Current);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(motion.Access, Is.EqualTo(RenderGraphResourceAccess.Write));
-            Assert.That(motion.HistoryBinding,
-                Is.EqualTo(RenderGraphHistoryBindingSelection.Current));
-            Assert.That(temporal.Access,
-                Is.EqualTo(RenderGraphResourceAccess.ReadWrite));
-            Assert.That(order.IndexOf("MotionVectorPass"),
-                Is.LessThan(order.IndexOf("DirectionalShadowTemporalPass")));
-        });
+        Assert.That(SurfaceInputPolicy.SharedValidityEnabled, Is.False);
+        Assert.That(ProductionRenderPipelineDeclaration.Instance.CreatePassResourceDeclarations()
+            .SelectMany(pass => pass.Usages)
+            .Any(usage => usage.Resource == RenderGraphResourceId.TemporalSurfaceValidityHistory), Is.False);
     }
 
     [Test]

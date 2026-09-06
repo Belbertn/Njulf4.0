@@ -908,6 +908,19 @@ public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
             0,
             bytes,
             value);
+        // Headers and populated ranges are copied over the clear below. The final
+        // transfer-to-shader barrier is too late to order these overlapping writes.
+        BarrierBuilder.ExecuteBarrier(commandBuffer, bufferBarriers:
+        [
+            BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(handle),
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                0,
+                bytes)
+        ]);
     }
 
     private void Retire(BufferHandle handle, Fence fence)

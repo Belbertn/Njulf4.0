@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -73,7 +72,7 @@ internal sealed class PerformanceCaptureGitStatusProbe :
 
 internal sealed class PerformanceCaptureHostIdentityResolver
 {
-    private const string ShaderResourcePrefix = "Njulf.Shaders.";
+    private const string ShaderResourcePrefix = ShaderArtifactResolver.ResourcePrefix;
     private const string ShaderBundleHashMetadataKey =
         "NjulfShaderBundleHash";
     internal const string ShaderOverrideDirectoryEnvironmentVariable =
@@ -311,8 +310,6 @@ internal sealed class PerformanceCaptureHostIdentityResolver
         try
         {
             overrideDirectory = Path.GetFullPath(overrideDirectory);
-            if (!Directory.Exists(overrideDirectory))
-                return "unavailable:shader-override-directory-not-found";
 
             string[] resourceNames = shaderAssembly.GetManifestResourceNames();
             Array.Sort(resourceNames, StringComparer.Ordinal);
@@ -332,16 +329,10 @@ internal sealed class PerformanceCaptureHostIdentityResolver
                 }
 
                 string shaderFileName = resourceName[ShaderResourcePrefix.Length..];
-                using Stream? stream = OpenEffectiveShaderStream(
-                    shaderAssembly,
-                    resourceName,
-                    shaderFileName,
-                    overrideDirectory);
-                if (stream == null)
-                    return "unavailable:shader-resource-missing";
-
+                ResolvedShaderArtifact artifact = ShaderArtifactResolver.Resolve(
+                    shaderAssembly, shaderFileName, overrideDirectory, AppContext.BaseDirectory);
                 AppendHashText(hash, shaderFileName);
-                AppendHashStream(hash, stream);
+                hash.AppendData(SHA256.HashData(artifact.Bytes));
                 shaderResourceCount++;
             }
 
@@ -420,23 +411,6 @@ internal sealed class PerformanceCaptureHostIdentityResolver
             "unavailable:target-framework-not-embedded");
     }
 
-    private static Stream? OpenEffectiveShaderStream(
-        Assembly shaderAssembly,
-        string resourceName,
-        string shaderFileName,
-        string overrideDirectory)
-    {
-        string candidate = Path.Combine(overrideDirectory, shaderFileName);
-        if (File.Exists(candidate))
-            return new FileStream(
-                candidate,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read);
-
-        return shaderAssembly.GetManifestResourceStream(resourceName);
-    }
-
     private static void AppendHashText(IncrementalHash hash, string value)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(value);
@@ -444,25 +418,6 @@ internal sealed class PerformanceCaptureHostIdentityResolver
         BinaryPrimitives.WriteInt32LittleEndian(length, bytes.Length);
         hash.AppendData(length);
         hash.AppendData(bytes);
-    }
-
-    private static void AppendHashStream(IncrementalHash hash, Stream stream)
-    {
-        using IncrementalHash shaderHash =
-            IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        byte[] buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
-        try
-        {
-            int bytesRead;
-            while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
-                shaderHash.AppendData(buffer.AsSpan(0, bytesRead));
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-        }
-
-        hash.AppendData(shaderHash.GetHashAndReset());
     }
 
     private static string ResolveBuildConfiguration()

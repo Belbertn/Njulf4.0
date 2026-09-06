@@ -24,6 +24,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferManager? _bufferManager;
         private readonly FoliageManager? _foliageManager;
         private readonly RenderTargetManager _renderTargets;
+        internal MotionVectorPass? MotionVectorProducer { get; set; }
         
         public DepthPrePass(
             VulkanContext context,
@@ -57,6 +58,13 @@ namespace Njulf.Rendering.Pipeline
             // completion marker satisfy a consumer if recording this prepass fails partway through.
             sceneData.DepthPrePassCompleted = false;
             sceneData.OpaqueVisibilityCompleted = false;
+            sceneData.DepthMotionFusionCompleted = false;
+            if (MotionVectorProducer?.TryExecuteFusedDepth(cmd, frameIndex, sceneData) == true)
+            {
+                sceneData.DepthPrePassFrameSerial = sceneData.DdgiFrameSerial;
+                sceneData.DepthPrePassCompleted = true;
+                return;
+            }
             bool visibility = _renderTargets.OpaqueVisibility != null && sceneData.FoliageClusterCount == 0;
             var solidPipeline = visibility ? _meshPipeline.VisibilityDepthPipeline : _meshPipeline.DepthPipeline;
             var maskedPipeline = visibility ? _meshPipeline.VisibilityMaskedDepthPipeline : _meshPipeline.MaskedDepthPipeline;

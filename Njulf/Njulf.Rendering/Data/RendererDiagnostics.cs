@@ -2522,6 +2522,10 @@ namespace Njulf.Rendering.Data
         public ResolvedGiSettingsMetadata ResolvedGiSettings { get; init; } = ResolvedGiSettingsMetadata.Unknown;
         public GiMeasurementMetadata GiMeasurement { get; init; } = GiMeasurementMetadata.Unknown;
         public IReadOnlyList<GiFeatureState> GiFeatureStates { get; init; } = [];
+        public string SurfaceInputProducer { get; init; } = "unavailable";
+        public bool DepthMotionFusionRequested { get; init; }
+        public ulong SurfaceInputIdentityAllocatedBytes { get; init; }
+        public ulong SharedSurfaceValidityAllocatedBytes { get; init; }
         public IReadOnlyList<GiDiagnosticWarning> GiWarnings { get; init; } = [];
         public GiBlackFrameMetrics GiBlackFrameMetrics { get; init; } = GiBlackFrameMetrics.Unavailable("Not evaluated.");
         /// <summary>Requested/accepted Simple-DDGI layout, including rejected source volumes.</summary>

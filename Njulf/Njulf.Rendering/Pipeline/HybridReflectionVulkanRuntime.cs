@@ -1340,7 +1340,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit |
                 AccessFlags2.ShaderStorageWriteBit,
-            PipelineStageFlags2.CopyBit,
+            PipelineStageFlags2.ClearBit,
             AccessFlags2.TransferWriteBit,
             0UL,
             TaskHeaderBytes);
@@ -1362,7 +1362,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             AccessFlags2.ShaderStorageReadBit |
                 AccessFlags2.ShaderStorageWriteBit |
                 AccessFlags2.IndirectCommandReadBit,
-            PipelineStageFlags2.CopyBit,
+            PipelineStageFlags2.ClearBit,
             AccessFlags2.TransferWriteBit,
             0UL,
             IndirectBytes);
@@ -1371,14 +1371,14 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit |
                 AccessFlags2.ShaderStorageWriteBit,
-            PipelineStageFlags2.CopyBit,
+            PipelineStageFlags2.ClearBit,
             AccessFlags2.TransferWriteBit,
             0UL,
             _bufferManager.GetBufferSize(_tileBuffers[bank]));
         ExecuteBufferBarriers(commandBuffer, beforeReset);
 
-        // Stamp each heterogeneous header in one update. Overlapping fills do
-        // not establish ordering and previously produced transfer WAW hazards.
+        // vkCmdUpdateBuffer executes in CLEAR, not COPY. Stamp each header in one
+        // update: overlapping fills need ordering to avoid transfer WAW hazards.
         Span<uint> taskHeader = stackalloc uint[4]
         {
             0u,
@@ -1420,7 +1420,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             stackalloc BufferMemoryBarrier2[4];
         afterReset[0] = BarrierBuilder.BufferBarrier(
             task,
-            PipelineStageFlags2.CopyBit,
+            PipelineStageFlags2.ClearBit,
             AccessFlags2.TransferWriteBit,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit |
@@ -1438,7 +1438,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             CounterBytes);
         afterReset[2] = BarrierBuilder.BufferBarrier(
             indirect,
-            PipelineStageFlags2.CopyBit,
+            PipelineStageFlags2.ClearBit,
             AccessFlags2.TransferWriteBit,
             PipelineStageFlags2.ComputeShaderBit |
                 PipelineStageFlags2.DrawIndirectBit,
@@ -1449,7 +1449,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             IndirectBytes);
         afterReset[3] = BarrierBuilder.BufferBarrier(
             tiles,
-            PipelineStageFlags2.CopyBit,
+            PipelineStageFlags2.ClearBit,
             AccessFlags2.TransferWriteBit,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit |

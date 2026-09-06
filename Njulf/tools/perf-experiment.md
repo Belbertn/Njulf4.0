@@ -17,6 +17,12 @@ pwsh -NoProfile -File ./tools/perf-experiment.ps1 `
 Use `-ValidateOnly` before a run. `-AnalyzeOnly` recomputes a decision from an
 existing immutable experiment directory and refuses missing capture evidence.
 
+Current verification also requires `njulf-loaded-shaders/v1` evidence and stable
+measurement-boundary fingerprints. Repeated captures within each A/B role must
+agree; A/A additionally requires agreement across roles. These checks run during
+`-AnalyzeOnly` and before a frozen comparer is invoked. Older reports without
+loaded-module evidence require recapture; their bundle hashes are not substitutes.
+
 ## Specification
 
 The strict `njulf-perf-experiment/v1` JSON object contains:

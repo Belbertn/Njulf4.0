@@ -1,0 +1,22 @@
+{
+  "Schema": "njulf-loaded-shaders/v1",
+  "Fingerprint": "sha256:da32cd2c760f645e4ee53faad7f07026dba813be5339c4a2dc3b18bc1cc2a136",
+  "Generation": 2,
+  "Modules": [
+    {
+      "FileName": "alpha.comp.spv",
+      "Sha256": "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a",
+      "ByteLength": 4,
+      "SourceKind": "embedded",
+      "SourceIdentity": "Njulf.Shaders.alpha.comp"
+    },
+    {
+      "FileName": "beta.vert.spv",
+      "Sha256": "55e5509f8052998294266ee5b50cb592938191fb5d67f73cac2e60b0276b1bdd",
+      "ByteLength": 4,
+      "SourceKind": "override",
+      "SourceIdentity": "fixture/beta.vert.spv"
+    }
+  ],
+  "FailureReason": ""
+}

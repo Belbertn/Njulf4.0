@@ -361,13 +361,10 @@ const uint SIMPLE_DDGI_VOLUME_KIND_REFINEMENT = 3u;
 const float SIMPLE_DDGI_OWNERSHIP_SUPPORT_RAMP = 0.15;
 // The low/high interval is reserved for the late all-occluded leak safeguard.
 // Normalized probe selection uses the cubic Chebyshev confidence below.
-const float SIMPLE_DDGI_VISIBILITY_SELECTION_LOW = 0.01;
-const float SIMPLE_DDGI_VISIBILITY_SELECTION_HIGH = 0.08;
-// State-valid probes retain a small interpolation share even when conservative
-// visibility moments are temporarily over-occluded. Transport visibility still
-// suppresses their radiance, while this floor prevents every corner in a dense
-// architectural cell from disappearing at once.
-const float SIMPLE_DDGI_VISIBILITY_SELECTION_FLOOR = 0.05;
+// Keep only a numerical floor in radiance selection. Probe availability owns
+// coverage independently; a radiometric floor gives occluded bright probes
+// authority whenever another corner keeps the cell's final leak clamp open.
+const float SIMPLE_DDGI_VISIBILITY_SELECTION_FLOOR = 0.00001;
 // Keep wrap shading from collapsing at a probe's back-facing pole. The
 // reference DDGI estimator adds 0.2 before normalization; normalizing the
 // range here preserves [0, 1] support diagnostics and receiver-feedback scale
@@ -652,7 +649,7 @@ struct SimpleDdgiParams
     float hysteresisStepThreshold;
     uint volumeCount;
     // Optional sampled-image mirror metadata. The SSBO remains canonical and
-    // handles octahedral seam filtering, while images accelerate interior taps.
+    // handles unmirrored probes, while bordered images filter every footprint.
     uint sampledAtlasLayersPerTexture;
     uint sampledAtlasTextureGroupCount;
     uint sampledAtlasEnabled;
@@ -880,6 +877,14 @@ void RecordSimpleDdgiMirrorSamplingPath(
     {
         if (sampled)
         {
+            if (imageHit)
+            {
+                // Dedicated validation-bank word 23; keep established logical
+                // counter offsets unchanged. Mirrored seams are image hits too.
+                uint bufferIndex = uint(SIMPLE_DDGI_STORAGE_VALIDATION_BUFFER_BASE_INDEX) +
+                    diagnosticFrame;
+                atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[23u], 1u);
+            }
             AddSimpleDdgiStorageValidationDiagnostic(
                 diagnosticFrame,
                 imageHit
@@ -4733,58 +4738,21 @@ bool SimpleDdgiCanSampleAtlasImageAtAddress(
         address.sampledGroupIndex < uint(SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT);
 }
 
+// The image has a one-texel octahedrally wrapped border. Preserve the
+// canonical texel footprint while allowing hardware filtering at every UV.
 vec4 SampleSimpleDdgiAtlasImageAtAddress(
     int textureBaseIndex,
     SimpleDdgiAtlasAddress address,
-    vec2 encodedDirection)
-{
-    int textureIndex = textureBaseIndex + int(address.sampledGroupIndex);
-    return texture(
-        BindlessArrayTextures[nonuniformEXT(textureIndex)],
-        vec3(
-            clamp(encodedDirection, vec2(0.0), vec2(1.0)),
-            float(address.sampledLayerIndex)));
-}
-
-// The sampled mirror stores the same octahedral texels as the canonical SSBO.
-// Hardware bilinear filtering is exact for quads wholly inside a layer, but a
-// quad that crosses an octahedral boundary needs the canonical mirror-wrap
-// rule rather than sampler clamping. Fetch those four image texels explicitly;
-// this retains bit-identical source values without falling back to scattered
-// SSBO reads for common axis-aligned floor and wall normals.
-vec4 LoadSimpleDdgiAtlasImageTexelAtAddress(
-    int textureBaseIndex,
-    SimpleDdgiAtlasAddress address,
-    ivec2 coord,
+    vec2 encodedDirection,
     uint texelsPerProbe)
 {
-    uint texelIndex = SimpleDdgiMirrorOctTexelIndex(coord, texelsPerProbe);
-    ivec2 wrappedCoord = ivec2(
-        int(texelIndex % texelsPerProbe),
-        int(texelIndex / texelsPerProbe));
     int textureIndex = textureBaseIndex + int(address.sampledGroupIndex);
-    return texelFetch(
+    vec2 sampleUv = (clamp(encodedDirection, vec2(0.0), vec2(1.0)) *
+        float(texelsPerProbe) + vec2(1.0)) / float(texelsPerProbe + 2u);
+    return textureLod(
         BindlessArrayTextures[nonuniformEXT(textureIndex)],
-        ivec3(wrappedCoord, int(address.sampledLayerIndex)),
-        0);
-}
-
-vec4 SampleSimpleDdgiAtlasImageWrappedBilinearAtAddress(
-    int textureBaseIndex,
-    SimpleDdgiAtlasAddress address,
-    ivec2 base,
-    vec2 fraction,
-    uint texelsPerProbe)
-{
-    vec4 s00 = LoadSimpleDdgiAtlasImageTexelAtAddress(
-        textureBaseIndex, address, base, texelsPerProbe);
-    vec4 s10 = LoadSimpleDdgiAtlasImageTexelAtAddress(
-        textureBaseIndex, address, base + ivec2(1, 0), texelsPerProbe);
-    vec4 s01 = LoadSimpleDdgiAtlasImageTexelAtAddress(
-        textureBaseIndex, address, base + ivec2(0, 1), texelsPerProbe);
-    vec4 s11 = LoadSimpleDdgiAtlasImageTexelAtAddress(
-        textureBaseIndex, address, base + ivec2(1, 1), texelsPerProbe);
-    return mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y);
+        vec3(sampleUv, float(address.sampledLayerIndex)),
+        0.0);
 }
 
 vec4 SampleSimpleDdgiIrradianceBilinearAtAddress(
@@ -4795,15 +4763,15 @@ vec4 SampleSimpleDdgiIrradianceBilinearAtAddress(
     SimpleDdgiParams p)
 {
     vec2 encodedDirection = SimpleDdgiOctEncode(direction);
-    vec2 texelUv = encodedDirection * float(texelsPerProbe) - vec2(0.5);
-    ivec2 base = ivec2(floor(texelUv));
-    vec2 f = fract(texelUv);
-    bool interior = all(greaterThanEqual(base, ivec2(0))) &&
-        all(lessThan(base + ivec2(1), ivec2(int(texelsPerProbe))));
     bool imageHit = SimpleDdgiCanSampleAtlasImageAtAddress(
         p,
         SIMPLE_DDGI_CACHE_IRRADIANCE_MIRROR_BIT,
         address);
+#if NJULF_DDGI_DETAILED_COUNTERS
+    ivec2 diagnosticBase = ivec2(floor(
+        encodedDirection * float(texelsPerProbe) - vec2(0.5)));
+    bool interior = all(greaterThanEqual(diagnosticBase, ivec2(0))) &&
+        all(lessThan(diagnosticBase + ivec2(1), ivec2(int(texelsPerProbe))));
     RecordSimpleDdgiMirrorSamplingPath(
         p,
         address.irradianceBaseWord ^ 0x49525241u,
@@ -4814,21 +4782,19 @@ vec4 SampleSimpleDdgiIrradianceBilinearAtAddress(
                 SIMPLE_DDGI_ATLAS_ADDRESS_LAYER_BASE_DECLARED_BIT,
             address.sampledStatusFlags,
             SIMPLE_DDGI_CACHE_IRRADIANCE_MIRROR_BIT));
+#endif
     if (imageHit)
     {
-        return interior
-            ? SampleSimpleDdgiAtlasImageAtAddress(
-                SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX,
-                address,
-                encodedDirection)
-            : SampleSimpleDdgiAtlasImageWrappedBilinearAtAddress(
-                SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX,
-                address,
-                base,
-                f,
-                texelsPerProbe);
+        return SampleSimpleDdgiAtlasImageAtAddress(
+            SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX,
+            address,
+            encodedDirection,
+            texelsPerProbe);
     }
 
+    vec2 texelUv = encodedDirection * float(texelsPerProbe) - vec2(0.5);
+    ivec2 base = ivec2(floor(texelUv));
+    vec2 f = fract(texelUv);
     vec4 s00 = ReadSimpleDdgiIrradianceTexelAtBase(
         bufferIndex, address.irradianceBaseWord,
         SimpleDdgiMirrorOctTexelIndex(base, texelsPerProbe));
@@ -4852,15 +4818,15 @@ vec2 SampleSimpleDdgiVisibilityBilinearAtAddress(
     SimpleDdgiParams p)
 {
     vec2 encodedDirection = SimpleDdgiOctEncode(direction);
-    vec2 texelUv = encodedDirection * float(texelsPerProbe) - vec2(0.5);
-    ivec2 base = ivec2(floor(texelUv));
-    vec2 f = fract(texelUv);
-    bool interior = all(greaterThanEqual(base, ivec2(0))) &&
-        all(lessThan(base + ivec2(1), ivec2(int(texelsPerProbe))));
     bool imageHit = SimpleDdgiCanSampleAtlasImageAtAddress(
         p,
         SIMPLE_DDGI_CACHE_VISIBILITY_MIRROR_BIT,
         address);
+#if NJULF_DDGI_DETAILED_COUNTERS
+    ivec2 diagnosticBase = ivec2(floor(
+        encodedDirection * float(texelsPerProbe) - vec2(0.5)));
+    bool interior = all(greaterThanEqual(diagnosticBase, ivec2(0))) &&
+        all(lessThan(diagnosticBase + ivec2(1), ivec2(int(texelsPerProbe))));
     RecordSimpleDdgiMirrorSamplingPath(
         p,
         address.visibilityBaseWord ^ 0x56495349u,
@@ -4871,21 +4837,19 @@ vec2 SampleSimpleDdgiVisibilityBilinearAtAddress(
                 SIMPLE_DDGI_ATLAS_ADDRESS_LAYER_BASE_DECLARED_BIT,
             address.sampledStatusFlags,
             SIMPLE_DDGI_CACHE_VISIBILITY_MIRROR_BIT));
+#endif
     if (imageHit)
     {
-        return (interior
-            ? SampleSimpleDdgiAtlasImageAtAddress(
-                SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX,
-                address,
-                encodedDirection)
-            : SampleSimpleDdgiAtlasImageWrappedBilinearAtAddress(
-                SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX,
-                address,
-                base,
-                f,
-                texelsPerProbe)).xy;
+        return SampleSimpleDdgiAtlasImageAtAddress(
+            SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX,
+            address,
+            encodedDirection,
+            texelsPerProbe).xy;
     }
 
+    vec2 texelUv = encodedDirection * float(texelsPerProbe) - vec2(0.5);
+    ivec2 base = ivec2(floor(texelUv));
+    vec2 f = fract(texelUv);
     vec2 s00 = ReadSimpleDdgiVisibilityMomentsAtBase(
         bufferIndex, address.visibilityBaseWord,
         SimpleDdgiMirrorOctTexelIndex(base, texelsPerProbe));
@@ -5554,13 +5518,11 @@ float SimpleDdgiLeakAttenuation(SimpleDdgiGatherResult gather, SimpleDdgiParams 
     // gathered irradiance removes its absolute magnitude. That is desirable for
     // ordinary interpolation, but it lets a cell whose every probe is behind a
     // wall promote a tiny residual weight back to full radiance. Convert the
-    // existing admission interval into a bounded confidence only at composition
-    // time. The authored thin-wall control determines how much of that confidence
+    // measured visibility into absolute attenuation only at composition time.
+    // An admission ramp must not turn a weak cross-wall residual into full
+    // radiance. The authored thin-wall control determines how much attenuation
     // is applied; disabling the policy leaves the normalized estimator unchanged.
-    float visibilityConfidence = smoothstep(
-        SIMPLE_DDGI_VISIBILITY_SELECTION_LOW,
-        SIMPLE_DDGI_VISIBILITY_SELECTION_HIGH,
-        clamp(gather.transportVisibility, 0.0, 1.0));
+    float visibilityConfidence = clamp(gather.transportVisibility, 0.0, 1.0);
     return clamp(
         mix(1.0, visibilityConfidence, p.thinWallLeakClampStrength),
         0.05,

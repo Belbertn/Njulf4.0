@@ -151,6 +151,11 @@ public static class SampleBenchmarkPairComparer
             left.Variant,
             right.Variant,
             StringComparison.Ordinal);
+        string? shaderFailure = LoadedShaderIdentity.Compare(
+            baseline.LastDiagnostics.CaptureRun.LoadedShaderIdentity,
+            variant.LastDiagnostics.CaptureRun.LoadedShaderIdentity,
+            requireRepeatability || sameVariant);
+        if (shaderFailure != null) failures.Add(shaderFailure);
         if ((sameVariant || requireRepeatability) &&
             !string.Equals(
                 baseline.ActivationEvidence.ActivationExecutionSequenceHash,
@@ -268,6 +273,9 @@ public static class SampleBenchmarkPairComparer
     {
         ArgumentNullException.ThrowIfNull(report);
         var failures = new List<string>();
+        string? shaderFailure = LoadedShaderMeasurementEvidence.Validate(
+            report.LastDiagnostics.CaptureRun.LoadedShaderIdentity, report.CaptureContract.LoadedShaders);
+        if (shaderFailure != null) failures.Add(shaderFailure);
         if (!string.Equals(
                 report.Kind,
                 "njulf-renderer-benchmark",
