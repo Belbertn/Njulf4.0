@@ -52,14 +52,17 @@ public sealed class ForwardPlusReflectionProbeCaptureSceneRenderer : IReflection
         ImageView colorView,
         ImageView depthView)
     {
-        _forwardPass.RecordReflectionCapture(
-            commandBuffer,
-            frameIndex,
-            sceneData,
-            view,
-            colorView,
-            depthView);
-        return true;
+        try
+        {
+            _forwardPass.RecordReflectionCapture(
+                commandBuffer, frameIndex, sceneData, view, colorView, depthView);
+            return true;
+        }
+        catch (SecondaryViewLodUnavailableException)
+        {
+            // The existing scheduler retries private scratch; published faces remain intact.
+            return false;
+        }
     }
 
     public void CompleteCaptureBatch(

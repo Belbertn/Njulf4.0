@@ -83,6 +83,8 @@ public static class SampleBenchmarkQualityCheckpointCatalog
         Array.AsReadOnly<int>([0]);
     private static readonly ReadOnlyCollection<int> Bistro =
         Array.AsReadOnly<int>([0, 59, 60, 61, 68, 76, 179, 180, 181, 239]);
+    private static readonly ReadOnlyCollection<int> ReflectionLod =
+        Array.AsReadOnly<int>([0, 59, 60, 61, 119, 120, 121, 179, 180, 181, 239]);
     private static readonly ReadOnlyCollection<int> SponzaHorizontal =
         Array.AsReadOnly<int>(
             [0, 1, 118, 119, 120, 121, 178, 179, 180, 181, 298, 299]);
@@ -92,6 +94,7 @@ public static class SampleBenchmarkQualityCheckpointCatalog
     public static IReadOnlyList<int> GetCheckpointIndices(
         SampleBenchmarkTrajectoryKind trajectory) => trajectory switch
         {
+            SampleBenchmarkTrajectoryKind.ReflectionLod => ReflectionLod,
             SampleBenchmarkTrajectoryKind.BistroLoop => Bistro,
             SampleBenchmarkTrajectoryKind.SponzaHorizontal => SponzaHorizontal,
             SampleBenchmarkTrajectoryKind.SponzaVertical => SponzaVertical,

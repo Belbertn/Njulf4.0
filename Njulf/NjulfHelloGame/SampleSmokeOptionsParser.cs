@@ -1853,6 +1853,12 @@ public static class SampleSmokeOptionsParser
                 enableBenchmarkQualitySequence
                     ? benchmarkQualitySequenceTrajectory
                     : benchmarkTrajectory;
+            if (controlledTrajectory == SampleBenchmarkTrajectoryKind.ReflectionLod)
+            {
+                if (sceneSpecified && sceneKind != SampleSceneKind.ReflectionLod)
+                    throw new ArgumentException("The reflection-lod trajectory requires the ReflectionLod scene.");
+                sceneKind = SampleSceneKind.ReflectionLod;
+            }
             if (SampleBenchmarkTrajectory.RequiresBistro(controlledTrajectory))
             {
                 if (performanceScenario ==

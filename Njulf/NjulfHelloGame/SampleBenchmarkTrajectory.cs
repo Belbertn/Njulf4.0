@@ -24,7 +24,8 @@ public enum SampleBenchmarkTrajectoryKind : byte
     SponzaVertical,
     BistroSnapshotIncident,
     SponzaSnapshotIncident,
-    BistroFoliageIncident
+    BistroFoliageIncident,
+    ReflectionLod
 }
 
 public sealed record SampleBenchmarkCameraPose(
@@ -63,6 +64,7 @@ public static class SampleBenchmarkTrajectory
             : value.Trim().ToLowerInvariant();
         return normalized switch
         {
+            "reflection-lod" => SampleBenchmarkTrajectoryKind.ReflectionLod,
             StationaryName => SampleBenchmarkTrajectoryKind.Stationary,
             BistroPresentationName =>
                 SampleBenchmarkTrajectoryKind.BistroPresentation,
@@ -81,7 +83,7 @@ public static class SampleBenchmarkTrajectory
             SponzaVerticalName => SampleBenchmarkTrajectoryKind.SponzaVertical,
             _ => throw new ArgumentException(
                 $"Unknown benchmark trajectory '{value}'. Valid values: " +
-                $"{StationaryName}, {BistroPresentationName}, " +
+                $"{StationaryName}, reflection-lod, {BistroPresentationName}, " +
                 $"{BistroSnapshotIncidentName}, {BistroFoliageIncidentName}, " +
                 $"{BistroLoopName}, " +
                 $"{SponzaLowName}, {SponzaHighName}, " +
@@ -94,6 +96,7 @@ public static class SampleBenchmarkTrajectory
 
     public static string GetName(SampleBenchmarkTrajectoryKind kind) => kind switch
     {
+        SampleBenchmarkTrajectoryKind.ReflectionLod => "reflection-lod",
         SampleBenchmarkTrajectoryKind.Stationary => StationaryName,
         SampleBenchmarkTrajectoryKind.BistroPresentation => BistroPresentationName,
         SampleBenchmarkTrajectoryKind.BistroSnapshotIncident =>
@@ -113,6 +116,7 @@ public static class SampleBenchmarkTrajectory
     };
 
     public static bool IsMoving(SampleBenchmarkTrajectoryKind kind) => kind is
+        SampleBenchmarkTrajectoryKind.ReflectionLod or
         SampleBenchmarkTrajectoryKind.BistroLoop or
         SampleBenchmarkTrajectoryKind.SponzaHorizontal or
         SampleBenchmarkTrajectoryKind.SponzaVertical;
@@ -135,6 +139,7 @@ public static class SampleBenchmarkTrajectory
 
     public static int GetFrameCount(SampleBenchmarkTrajectoryKind kind) => kind switch
     {
+        SampleBenchmarkTrajectoryKind.ReflectionLod => 240,
         SampleBenchmarkTrajectoryKind.BistroLoop =>
             SampleBistroQualityCaptureContract.LoopFrameCount,
         SampleBenchmarkTrajectoryKind.SponzaHorizontal =>
@@ -198,6 +203,7 @@ public static class SampleBenchmarkTrajectory
     {
         string contractFingerprint = kind switch
         {
+            SampleBenchmarkTrajectoryKind.ReflectionLod => "reflection-lod-near-far/v1|6..22|240",
             SampleBenchmarkTrajectoryKind.BistroPresentation or
                 SampleBenchmarkTrajectoryKind.BistroSnapshotIncident or
                 SampleBenchmarkTrajectoryKind.BistroFoliageIncident or
@@ -277,6 +283,14 @@ public static class SampleBenchmarkTrajectory
     {
         if (kind == SampleBenchmarkTrajectoryKind.Stationary)
             return null;
+
+        if (kind == SampleBenchmarkTrajectoryKind.ReflectionLod)
+        {
+            int frame = ValidateFrameIndex(kind, trajectoryFrameIndex);
+            float distance = 6 + 8 * (1 - MathF.Cos(MathF.Tau * frame / 240));
+            return new("reflection-lod", new(0, 2.15f, distance), 0, -0.08f,
+                MathF.PI / 3.2f, 0.05f, 120);
+        }
 
         if (RequiresBistro(kind))
         {

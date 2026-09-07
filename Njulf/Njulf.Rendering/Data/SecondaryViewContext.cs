@@ -21,6 +21,12 @@ internal readonly record struct SecondaryViewContext(
     public int MaximumTransparentMeshlets { get; init; } = int.MaxValue;
     public Matrix4x4 CullingViewProjection => Region.Crop(ViewProjection, Width, Height);
     public bool IsPlanar => (CaptureLayer & 0x1000) != 0;
+    public SecondaryViewLodHistory? LodHistory { get; init; }
+    public bool LodEnabled { get; init; }
+    public float LodTargetPixelError { get; init; } = 1f;
+    public ulong LodCaptureSerial { get; init; }
+    public uint LodResourceGeneration { get; init; }
+    public ulong LodCameraCutSerial { get; init; }
 }
 
 internal readonly record struct SecondaryViewTransparentDraw(
@@ -35,6 +41,11 @@ internal sealed class SecondaryViewDrawLists
     internal int ExcludedObjects;
     internal int CulledObjects;
     internal int CulledMeshlets;
+    internal readonly int[] RequestedLods = new int[3];
+    internal readonly int[] EffectiveLods = new int[3];
+    internal int LodTransitions;
+    internal long CommandBytes => ((long)Opaque[0].Count + Opaque[1].Count + Opaque[2].Count +
+        TransparentCommands.Count) * System.Runtime.InteropServices.Marshal.SizeOf<GPUMeshletDrawCommand>();
 
     internal void Clear()
     {
@@ -42,6 +53,9 @@ internal sealed class SecondaryViewDrawLists
         Transparent.Clear();
         TransparentCommands.Clear();
         CandidateMeshlets = ExcludedObjects = CulledObjects = CulledMeshlets = 0;
+        Array.Clear(RequestedLods);
+        Array.Clear(EffectiveLods);
+        LodTransitions = 0;
     }
 
     internal void SortTransparency()

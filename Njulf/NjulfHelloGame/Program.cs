@@ -1270,6 +1270,9 @@ internal sealed class HelloGame : Game
             renderer.Settings.ApplyQualityPreset(
                 _smokeOptions.QualityPresetOverride.Value);
         }
+        // The qualification fixture owns probe admission, independent of visual preset.
+        if (_sceneKind == SampleSceneKind.ReflectionLod)
+            SampleReflectionLodScene.ConfigureSettings(renderer.Settings);
         RenderBudgetProfileKind? benchmarkBudgetProfile =
             _smokeOptions.Benchmark.Enabled
                 ? _smokeOptions.Benchmark.BudgetProfileOverride
@@ -1287,6 +1290,10 @@ internal sealed class HelloGame : Game
             renderer.Settings.SceneSubmission.IndirectMeshletDispatchEnabled = true;
         if (_smokeOptions.EnableSceneGpuLodSelection)
             renderer.Settings.SceneSubmission.GpuLodSelectionEnabled = true;
+        // Capture comparison control is applied to real settings so capture fingerprints
+        // describe the selected policy, including a full-detail reference run.
+        if (Environment.GetEnvironmentVariable("NJULF_SECONDARY_VIEW_LOD") == "0")
+            renderer.Settings.Reflections.CaptureLodEnabled = false;
         if (_smokeOptions.EnableSceneGpuShadowCompaction)
             renderer.Settings.SceneSubmission.GpuShadowCompactionEnabled = true;
         if (_smokeOptions.EnableSceneSubmissionValidation)
@@ -1909,6 +1916,7 @@ internal sealed class HelloGame : Game
             ? _smokeOptions.Benchmark.TrajectoryBistroVariant
             : _smokeOptions.BenchmarkQualitySequence.TrajectoryBistroVariant;
         bool hasAuthoredCamera =
+            trajectory == SampleBenchmarkTrajectoryKind.ReflectionLod ||
             SampleBenchmarkTrajectory.RequiresSponza(trajectory) ||
             SampleBenchmarkTrajectory.RequiresBistro(trajectory);
         if (!(timingEnabled || qualityEnabled) ||
@@ -2562,11 +2570,18 @@ internal sealed class HelloGame : Game
                     $"injectedC4HeroObjects={rig.C4HeroRenderObjectCount}, " +
                     $"scale={rig.FixtureScale:R}.");
             }
-            SampleReflectionPolicy.EnsureProbeFree(targetScene);
+            if (sceneKind != SampleSceneKind.ReflectionLod)
+                SampleReflectionPolicy.EnsureProbeFree(targetScene);
             return new SampleSceneBuild(
                 model,
                 sceneLoader,
                 sampleVfxEffects);
+        }
+
+        if (sceneKind == SampleSceneKind.ReflectionLod)
+        {
+            SampleReflectionLodScene.Build(targetScene, meshManager, materialManager);
+            return Finish(new Model { Name = "Reflection LOD Qualification" });
         }
 
         if (sceneKind == SampleSceneKind.MaterialShowcase)
@@ -2767,6 +2782,10 @@ internal sealed class HelloGame : Game
         {
             SampleKhronosMaterialGiRenderedGateRunner.ApplyLockedSettings(settings);
         }
+        else if (_sceneKind == SampleSceneKind.ReflectionLod)
+        {
+            SampleReflectionLodScene.ConfigureSettings(settings);
+        }
         else if (_sceneKind == SampleSceneKind.MaterialShowcase)
         {
             SampleMaterialShowcaseScene.ConfigureRenderSettings(settings);
@@ -2852,7 +2871,10 @@ internal sealed class HelloGame : Game
                         SampleSponzaFixtureMode.C5ResidualValidation);
         }
 
-        SampleReflectionPolicy.Apply(settings);
+        if (_sceneKind == SampleSceneKind.ReflectionLod)
+            SampleReflectionLodScene.ConfigureSettings(settings);
+        else
+            SampleReflectionPolicy.Apply(settings);
     }
 
     private void RestoreSceneRenderSettings(VulkanRenderer renderer)
@@ -5039,6 +5061,7 @@ internal sealed class HelloGame : Game
         return sceneKind switch
         {
             SampleSceneKind.GlobalIlluminationTest => (new CoreVector3(0f, 1.7f, 1.15f), 0f, -0.08f, 80f),
+            SampleSceneKind.ReflectionLod => (new CoreVector3(0f, 2.15f, 6f), 0f, -0.08f, 120f),
             SampleSceneKind.Bistro =>
                 (new CoreVector3(-16.003326f, 2.5132222f, 1.2387409f), 1.6121571f, 0.0660575f, 500f),
             SampleSceneKind.MaterialShowcase => (new CoreVector3(0f, 2.15f, 9.0f), 0f, -0.17f, 120f),
@@ -5057,6 +5080,7 @@ internal sealed class HelloGame : Game
         return sceneKind switch
         {
             SampleSceneKind.GlobalIlluminationTest => "GI Test Scene",
+            SampleSceneKind.ReflectionLod => "Reflection LOD Qualification",
             SampleSceneKind.Bistro => "Bistro",
             SampleSceneKind.MaterialShowcase => "Material Showcase",
             SampleSceneKind.AnalyticalAreaLights => "Analytical Area Light Room",

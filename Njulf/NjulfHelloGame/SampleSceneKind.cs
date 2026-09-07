@@ -8,5 +8,6 @@ public enum SampleSceneKind
     MaterialShowcase,
     AnalyticalAreaLights,
     FoliageShowcase,
-    VfxShowcase
+    VfxShowcase,
+    ReflectionLod
 }

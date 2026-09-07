@@ -48,7 +48,12 @@ public readonly record struct ReflectionCaptureViewContext(
     uint ResourceGeneration,
     uint SceneRevision,
     ReflectionCaptureVersion Version,
-    bool IncludesDdgi);
+    bool IncludesDdgi)
+{
+    // Init properties preserve the existing public constructor and standalone face factory.
+    public Guid ProbeId { get; init; }
+    public ulong CaptureSerial { get; init; }
+}
 
 public static class ReflectionCaptureViewFactory
 {

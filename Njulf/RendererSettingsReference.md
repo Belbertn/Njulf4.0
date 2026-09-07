@@ -85,7 +85,7 @@ has no matching certificate or measured benefit.
 
 | Setting | Purpose |
 | --- | --- |
-| `Enabled` | Enables dynamic resolution scaling. |
+| `Enabled` | Opt-in dynamic resolution scaling; disabled by default in every quality preset and when omitted from settings files. |
 | `MinimumScale` | Lowest allowed render scale. |
 | `MaximumScale` | Highest allowed render scale. |
 | `TargetFrameMilliseconds` | Target frame time used for scaling decisions. |
@@ -264,6 +264,19 @@ Environment debug views:
 - `AmbientOcclusion`
 
 ## Reflections
+
+Capture mesh LOD uses the secondary camera and the actual capture resolution. Its pixel-error
+budget is 4 for Low, 2 for Medium, 1 for High/DdgiHigh, and 0.5 for Ultra. Higher presets
+retain more nearby detail while preserving the same material colors, lighting, and reflection
+filtering. Selection uses 15% hysteresis; each cubemap ticket keeps consistent LODs across its
+six faces. Skinned geometry and geometry decals retain LOD-0 requests.
+
+`CaptureLodEnabled` enables this policy (default true); disabling it requests LOD 0.
+`CaptureLodTargetPixelError` overrides the preset budget, clamped to 0.125–8 capture pixels.
+Both properties are saved in `Reflections`; older files inherit their selected preset's defaults.
+The sample's `NJULF_SECONDARY_VIEW_LOD=0` diagnostic control disables the setting for a
+full-detail comparison. `NJULF_SECONDARY_VIEW_TRACE=1` reports requested/effective LOD
+counts, transitions, meshlet counts, and per-view draw-command bytes.
 
 | Setting | Purpose |
 | --- | --- |

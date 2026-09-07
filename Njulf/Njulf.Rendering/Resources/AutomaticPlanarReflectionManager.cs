@@ -83,6 +83,7 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
     private ulong _lastSelectionSignature;
     private ulong _lastCameraCutSerial;
     private ulong _lastSceneMutationSerial;
+    private uint _lastCaptureLodSignature;
     private uint _captureGeneration;
     private int _metadataBankHighWaterMark;
     private bool _deterministicCapturePhaseResetPending;
@@ -390,6 +391,9 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         _lastCameraCutSerial = sceneData.CaptureCameraCutSerial;
         bool sceneChanged = scene.MutationSerial != _lastSceneMutationSerial;
         _lastSceneMutationSerial = scene.MutationSerial;
+        uint lodSignature = _settings.Reflections.CaptureLodSignature;
+        sceneChanged |= lodSignature != _lastCaptureLodSignature;
+        _lastCaptureLodSignature = lodSignature;
 
         int captureCount = 0;
         int reprojectionCount = 0;

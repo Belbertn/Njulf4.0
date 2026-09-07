@@ -1505,7 +1505,7 @@ namespace Njulf.Rendering.Data
         private float _targetFrameMilliseconds = 16.67f;
         private float _adjustmentRate = 0.05f;
 
-        public bool Enabled { get; set; } = true;
+        public bool Enabled { get; set; }
 
         public float MinimumScale
         {
@@ -2240,6 +2240,27 @@ namespace Njulf.Rendering.Data
 
     public sealed class ReflectionSettings
     {
+        private float _captureLodTargetPixelError = 1f;
+
+        /// <summary>Select capture mesh LOD using error measured in capture pixels.</summary>
+        public bool CaptureLodEnabled { get; set; } = true;
+        public float CaptureLodTargetPixelError
+        {
+            get => _captureLodTargetPixelError;
+            set => _captureLodTargetPixelError = float.IsFinite(value) ? Math.Clamp(value, 0.125f, 8f) : 1f;
+        }
+
+        internal uint CaptureLodSignature => BitConverter.SingleToUInt32Bits(CaptureLodTargetPixelError) |
+            (CaptureLodEnabled ? 0x80000000u : 0u);
+
+        internal static float CaptureLodErrorFor(RenderQualityPreset preset) => preset switch
+        {
+            RenderQualityPreset.Low => 4f,
+            RenderQualityPreset.Medium => 2f,
+            RenderQualityPreset.Ultra => 0.5f,
+            _ => 1f
+        };
+
         public const int ShaderMaxProbesPerPixel = 4;
         public const uint ReceiverPayloadAbiVersion = 5;
         public const uint HistoryMetadataAbiVersion = 2;
@@ -5661,7 +5682,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 27;
+        public const int SerializationVersion = 28;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5881,6 +5902,8 @@ namespace Njulf.Rendering.Data
                 RenderQualityPreset.Ultra => 0.5f,
                 _ => 1.0f
             };
+            Reflections.CaptureLodEnabled = true;
+            Reflections.CaptureLodTargetPixelError = ReflectionSettings.CaptureLodErrorFor(preset);
             Materials.SpecularAntialiasingMode = preset ==
                 RenderQualityPreset.Low
                     ? SpecularAntialiasingMode.Off
@@ -5907,7 +5930,7 @@ namespace Njulf.Rendering.Data
             {
                 case RenderQualityPreset.Low:
                     ResolutionScale = 0.75f;
-                    DynamicResolution.Enabled = true;
+                    DynamicResolution.Enabled = false;
                     DynamicResolution.MinimumScale = 0.5f;
                     DynamicResolution.MaximumScale = 0.85f;
                     Bloom.Enabled = false;
@@ -5969,7 +5992,7 @@ namespace Njulf.Rendering.Data
                     break;
                 case RenderQualityPreset.Medium:
                     ResolutionScale = 0.9f;
-                    DynamicResolution.Enabled = true;
+                    DynamicResolution.Enabled = false;
                     DynamicResolution.MinimumScale = 0.65f;
                     DynamicResolution.MaximumScale = 1.0f;
                     Bloom.Enabled = true;
@@ -6937,6 +6960,8 @@ namespace Njulf.Rendering.Data
 
         private sealed record ReflectionSettingsFile
         {
+            public bool? CaptureLodEnabled { get; init; }
+            public float? CaptureLodTargetPixelError { get; init; }
             public bool Enabled { get; init; } = true;
             public ReflectionMode Mode { get; init; } = ReflectionMode.StaticProbes;
             public ReflectionImplementationMode ImplementationMode { get; init; } =
@@ -6961,6 +6986,8 @@ namespace Njulf.Rendering.Data
 
             public static ReflectionSettingsFile FromSettings(ReflectionSettings settings) => new()
             {
+                CaptureLodEnabled = settings.CaptureLodEnabled,
+                CaptureLodTargetPixelError = settings.CaptureLodTargetPixelError,
                 Enabled = settings.Enabled,
                 Mode = settings.Mode,
                 ImplementationMode = settings.ImplementationMode,
@@ -6985,6 +7012,9 @@ namespace Njulf.Rendering.Data
 
             public void ApplyTo(ReflectionSettings settings)
             {
+                // Missing fields inherit the preset already applied by the parent settings file.
+                settings.CaptureLodEnabled = CaptureLodEnabled ?? settings.CaptureLodEnabled;
+                settings.CaptureLodTargetPixelError = CaptureLodTargetPixelError ?? settings.CaptureLodTargetPixelError;
                 settings.Enabled = Enabled;
                 settings.Mode = Enum.IsDefined(Mode) ? Mode : ReflectionMode.StaticProbes;
                 settings.ImplementationMode = Enum.IsDefined(ImplementationMode)
@@ -8831,7 +8861,7 @@ namespace Njulf.Rendering.Data
 
         private sealed record DynamicResolutionFile
         {
-            public bool Enabled { get; init; } = true;
+            public bool Enabled { get; init; }
             public float MinimumScale { get; init; } = 0.7f;
             public float MaximumScale { get; init; } = 1.0f;
             public float TargetFrameMilliseconds { get; init; } = 16.67f;

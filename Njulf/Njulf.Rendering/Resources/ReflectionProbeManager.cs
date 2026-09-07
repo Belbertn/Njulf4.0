@@ -104,6 +104,7 @@ namespace Njulf.Rendering.Resources
         private bool _resourceResizeDeferred;
         private ReflectionCaptureVersion _captureVersion;
         private bool _captureVersionInitialized;
+        private uint _captureLodSignature;
         private int _deferredRecaptureHead;
         private int _deferredRecaptureTail;
         private int _deferredRecaptureCount;
@@ -583,6 +584,10 @@ namespace Njulf.Rendering.Resources
 
         public void UpdateCaptureVersions(in LightingVersionSnapshot versions)
         {
+            uint lodSignature = _settings.Reflections.CaptureLodSignature;
+            if (_captureVersionInitialized && lodSignature != _captureLodSignature)
+                RequestRecaptureAll(ReflectionCaptureReason.ResourceChanged);
+            _captureLodSignature = lodSignature;
             ReflectionCaptureVersion nextVersion = BuildCaptureVersion(
                 versions,
                 _settings.Reflections.CaptureIncludesDdgi);
@@ -1089,7 +1094,11 @@ namespace Njulf.Rendering.Resources
                 work.Ticket.ResourceGeneration,
                 work.Ticket.SceneRevision,
                 work.Ticket.Version,
-                includesDdgi);
+                includesDdgi) with
+            {
+                ProbeId = work.Ticket.ProbeId,
+                CaptureSerial = work.Ticket.Serial
+            };
         }
 
         /// <summary>

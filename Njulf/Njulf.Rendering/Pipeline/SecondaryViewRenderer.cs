@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Njulf.Core.Math;
+using Njulf.Core.Scene;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -34,6 +35,10 @@ internal sealed unsafe class SecondaryViewRenderer : IDisposable
     private readonly Njulf.Rendering.Debug.RenderDocCaptureService? _captureInspection =
         Environment.GetEnvironmentVariable("NJULF_SECONDARY_VIEW_RENDERDOC") == "1" ? new() : null;
     private bool _inspectionRequested;
+    private readonly Dictionary<(Guid Probe, ulong Planar), SecondaryViewLodHistory> _lodHistories = [];
+    private readonly List<(Guid Probe, ulong Planar)> _retiredLodViews = [];
+    private Scene? _lodScene;
+    private ulong _lodFrame;
 
     internal SecondaryViewRenderer(VulkanContext context, BindlessHeap heap, MeshPipeline mesh,
         FoliagePipeline? foliage, FoliageManager? foliageManager, FoliageCullPass foliageCull,
@@ -62,6 +67,11 @@ internal sealed unsafe class SecondaryViewRenderer : IDisposable
             (uint)view.Slot)), true, _settings.Transparency.Enabled, view.ClipPlane, capture.ExcludedObjectIndices)
         {
             Region = view.Region,
+            LodHistory = GetLodHistory(scene, Guid.Empty, capture.ClusterIdentity),
+            LodEnabled = _settings.Reflections.CaptureLodEnabled,
+            LodTargetPixelError = _settings.Reflections.CaptureLodTargetPixelError,
+            LodCaptureSerial = capture.CaptureGeneration,
+            LodCameraCutSerial = scene.CaptureCameraCutSerial,
             MaximumTransparentMeshlets = Math.Max(0, _settings.Transparency.MaxTransparentMeshlets),
             ClipTolerance = MathF.Max(0.0005f, capture.WorldDiagonal * 0.0001f)
         };
@@ -78,12 +88,20 @@ internal sealed unsafe class SecondaryViewRenderer : IDisposable
         }
         var secondary = new SecondaryViewContext(view.View, view.Projection, view.Position,
             view.Resolution, view.Resolution, view.CubemapArrayLayer, view.IncludesDdgi,
-            false, default, Array.Empty<uint>());
+            false, default, Array.Empty<uint>())
+        {
+            LodHistory = view.ProbeId == Guid.Empty ? null : GetLodHistory(scene, view.ProbeId, 0),
+            LodEnabled = _settings.Reflections.CaptureLodEnabled,
+            LodTargetPixelError = _settings.Reflections.CaptureLodTargetPixelError,
+            LodCaptureSerial = view.CaptureSerial,
+            LodResourceGeneration = view.ResourceGeneration
+        };
         bool feedback = _feedback.BeginSecondaryProbeFeedback(frameIndex, scene, view);
         bool completed = false;
         try
         {
             Record(cmd, frameIndex, scene, secondary, _nextProbeSlot++, color, depth, feedback);
+            if (view.Face == 5) secondary.LodHistory?.Commit();
             completed = true;
         }
         finally { _feedback.EndSecondaryProbeFeedback(completed); }
@@ -95,6 +113,9 @@ internal sealed unsafe class SecondaryViewRenderer : IDisposable
         if (colorView.Handle == 0 || depthView.Handle == 0)
             throw new InvalidOperationException("Secondary capture attachments are unavailable.");
         long start = Stopwatch.GetTimestamp();
+        view.LodHistory?.Begin(new SecondaryLodHistoryContract(!view.IsPlanar, view.Width, view.Height,
+            view.Projection, view.LodEnabled, view.LodTargetPixelError, view.LodResourceGeneration,
+            view.LodCameraCutSerial), view.LodCaptureSerial);
         SecondaryViewResources.ViewResources resources = _resources.Acquire(frameIndex, slot, scene.DdgiFrameSerial);
         _scene.BuildSecondaryDrawLists(view, frameIndex, resources.Draws, _cull);
         _resources.Prepare(resources, view, frameIndex, _foliageManager?.GetBuffers(frameIndex) ?? default);
@@ -105,7 +126,10 @@ internal sealed unsafe class SecondaryViewRenderer : IDisposable
                 $"{resources.Draws.Opaque[1].Count}/{resources.Draws.Opaque[2].Count}/{resources.Draws.TransparentCommands.Count} " +
                 $"excluded={resources.Draws.ExcludedObjects} culledObjects={resources.Draws.CulledObjects} " +
                 $"culledMeshlets={resources.Draws.CulledMeshlets} region={view.Region.Resolve(view.Width, view.Height)} " +
-                $"prepareUs={Stopwatch.GetElapsedTime(start).TotalMicroseconds:F0}");
+                $"prepareUs={Stopwatch.GetElapsedTime(start).TotalMicroseconds:F0} " +
+                $"requestedLods={string.Join('/', resources.Draws.RequestedLods)} " +
+                $"effectiveLods={string.Join('/', resources.Draws.EffectiveLods)} " +
+                $"lodTransitions={resources.Draws.LodTransitions} commandBytes={resources.Draws.CommandBytes}");
 
         var viewport = new Viewport(0, 0, view.Width, view.Height, 0, 1);
         var scissor = new Rect2D(new Offset2D(0, 0), new Extent2D(view.Width, view.Height));
@@ -173,6 +197,33 @@ internal sealed unsafe class SecondaryViewRenderer : IDisposable
             }
         }
         finally { _context.KhrDynamicRendering.CmdEndRendering(cmd); }
+        if (view.IsPlanar) view.LodHistory?.Commit();
+    }
+
+    private SecondaryViewLodHistory? GetLodHistory(SceneRenderingData scene, Guid probe, ulong planar)
+    {
+        if (!ReferenceEquals(_lodScene, _scene.SecondaryScene))
+        {
+            _lodHistories.Clear();
+            _lodScene = _scene.SecondaryScene;
+        }
+        if (_lodFrame != scene.DdgiFrameSerial)
+        {
+            _lodFrame = scene.DdgiFrameSerial;
+            _retiredLodViews.Clear();
+            foreach (var key in _lodHistories.Keys)
+            {
+                bool live = key.Probe == Guid.Empty
+                    ? _planar.PreparedCaptures.Any(capture => capture.ClusterIdentity == key.Planar)
+                    : _lodScene?.ReflectionProbes.Any(authored => authored.Id == key.Probe) == true;
+                if (!live) _retiredLodViews.Add(key);
+            }
+            foreach (var key in _retiredLodViews) _lodHistories.Remove(key);
+        }
+        var identity = (probe, planar);
+        if (!_lodHistories.TryGetValue(identity, out SecondaryViewLodHistory? history))
+            _lodHistories.Add(identity, history = new());
+        return history;
     }
 
     private void DrawOpaque(CommandBuffer cmd, SceneRenderingData scene, in SecondaryViewContext view,
@@ -285,5 +336,10 @@ internal sealed unsafe class SecondaryViewRenderer : IDisposable
         _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, layout, 0, 2, sets, 0, null);
     }
 
-    public void Dispose() => _resources.Dispose();
+    public void Dispose()
+    {
+        _lodHistories.Clear();
+        _lodScene = null;
+        _resources.Dispose();
+    }
 }
