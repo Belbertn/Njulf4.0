@@ -14,6 +14,10 @@ public sealed class EditorImGuiPanels
 {
     private const float MaximumEditableEmissionStrength = 65_504f;
     private string _filter = string.Empty;
+    private string _lightFilter = string.Empty;
+    private LightType _newLightType = LightType.Point;
+    private Guid _iesEditingLight;
+    private string _iesProfilePath = string.Empty;
     private string _saveAsPath = string.Empty;
     private string? _lastError;
     private int _selectedDependency;
@@ -31,6 +35,7 @@ public sealed class EditorImGuiPanels
         RenderMainMenu(editor);
         RenderHierarchy(editor);
         RenderInspector(editor);
+        RenderSceneLights(editor);
         _renderingSettingsPanel.Render(editor);
         _globalIlluminationPanel.Render(editor);
         _materialPanel.Render(editor);
@@ -97,9 +102,10 @@ public sealed class EditorImGuiPanels
         ImGui.SeparatorText("Imported model lights");
         ImportedModelLightEditorStatus importedLights =
             editor.GetImportedModelLightStatus();
+        RenderImportedShadowToggle(editor);
         bool importedLightsEnabled = importedLights.Enabled;
         if (ImGui.Checkbox(
-                "Enable all imported model lights",
+                "Enable all imported model lights (except directional)",
                 ref importedLightsEnabled))
         {
             Run(() => editor.SetImportedModelLightsEnabled(
@@ -108,8 +114,31 @@ public sealed class EditorImGuiPanels
         if (ImGui.IsItemHovered())
         {
             ImGui.SetTooltip(
-                "Enables or disables every light embedded in placed model assets. " +
-                "Authored scene lights are unaffected.");
+                "Enables or disables imported lights except directional lights. " +
+                "Use the separate directional light toggle to replace the scene sun.");
+        }
+        bool importedDirectionalEnabled = importedLights.DirectionalEnabled;
+        ImGui.BeginDisabled(importedLights.DirectionalDefinitionCount == 0 &&
+            !importedDirectionalEnabled);
+        if (ImGui.Checkbox("Use imported directional light", ref importedDirectionalEnabled))
+            Run(() => editor.SetImportedDirectionalLightEnabled(importedDirectionalEnabled));
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "Replaces the existing directional light with one imported directional light. " +
+                "Turning this off restores the existing light. Independent of the bulk toggle.");
+        }
+        ImGui.EndDisabled();
+        if (importedLights.DirectionalDefinitionCount > 1)
+            ImGui.TextDisabled("Multiple imported directional lights found; only one is used.");
+        if (importedLights.ZeroIntensityDefinitionCount > 0)
+        {
+            ImGui.TextDisabled(
+                $"{importedLights.ZeroIntensityDefinitionCount} lights have zero source intensity; " +
+                "enabling uses default brightness.");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Default intensity: local lights 100, directional light 1. " +
+                    "Positive source intensities are preserved.");
         }
         ImGui.TextDisabled(
             $"{importedLights.ActiveLightCount} active lights across " +
@@ -160,13 +189,13 @@ public sealed class EditorImGuiPanels
         RenderEntities(editor, "Particle Effects", EditorSelectionKind.ParticleEffect, editor.Scene.ParticleEffects);
         RenderEntities(editor, "Instance Batches", EditorSelectionKind.InstanceBatch, editor.Scene.StaticInstanceBatches);
         IReadOnlyList<LightRecord> lights = editor.GetLights();
-        if (ImGui.CollapsingHeader($"Authored Lights ({lights.Count})"))
+        if (ImGui.CollapsingHeader($"Scene Lights ({lights.Count})"))
         {
             foreach (LightRecord light in lights)
             {
                 string name = light.Name ?? "Light";
                 if (!MatchesFilter(name, light.Id)) continue;
-                bool selected = editor.Selection.Kind == EditorSelectionKind.Light && editor.Selection.LightHandle == light.Handle;
+                bool selected = editor.Selection.Kind == EditorSelectionKind.Light && editor.Selection.Id == light.Id;
                 if (ImGui.Selectable($"{name}##{light.Id}", selected))
                     editor.SelectEntity(EditorSelectionKind.Light, light.Id);
                 ShowIdTooltip(light.Id);
@@ -217,8 +246,11 @@ public sealed class EditorImGuiPanels
         if (!editor.Selection.IsEmpty)
         {
             ImGui.Separator();
+            ImGui.BeginDisabled(editor.Selection.Kind == EditorSelectionKind.Light &&
+                (editor.SelectedLightIsImported || editor.IsSceneLightSuspended(editor.Selection.Id)));
             if (ImGui.Button("Delete Selected"))
                 editor.DeleteSelection();
+            ImGui.EndDisabled();
         }
         ImGui.End();
     }
@@ -356,19 +388,141 @@ public sealed class EditorImGuiPanels
         }
     }
 
+    private void RenderImportedShadowToggle(EditorController editor)
+    {
+        bool enabled = editor.GetImportedModelLightStatus().ShadowsEnabled;
+        if (ImGui.Checkbox("Enable shadows on all imported lights", ref enabled))
+            Run(() => editor.SetImportedModelLightShadowsEnabled(enabled));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Enables shadows for current and subsequently enabled imported lights, including the imported sun. " +
+                "Also enables the required renderer passes, respecting configured point/spot count and memory limits. " +
+                "Turning this off restores individual shadow settings and the previous renderer gates.");
+        if (enabled && editor.RendererDiagnostics is { } diagnostics)
+        {
+            ImGui.TextDisabled($"Scene shadow selection: point {diagnostics.PointShadowSelectedCount}/{diagnostics.PointShadowCandidateCount}, " +
+                $"spot {diagnostics.SpotShadowSelectedCount}/{diagnostics.SpotShadowCandidateCount}, " +
+                $"area {diagnostics.AreaShadowSelectedCount}/{diagnostics.AreaShadowCandidateCount}");
+            if (diagnostics.PointShadowRejectedByBudgetCount + diagnostics.SpotShadowRejectedByBudgetCount > 0)
+                ImGui.TextWrapped("Some lights exceed the configured count or memory budget. Adjust the limits in Shadows; per-light status shows the reason.");
+            ImGui.TextDisabled($"{diagnostics.LocalShadowDowngradedCount} reduced resolutions; {diagnostics.LocalShadowCacheHitCount} cached maps reused.");
+        }
+    }
+
+    private void RenderSceneLights(EditorController editor)
+    {
+        ImGui.Begin("Scene Lights");
+        RenderImportedShadowToggle(editor);
+        IReadOnlyList<LightRecord> lights = editor.GetLights();
+        ImGui.Text($"{lights.Count} lights in the scene");
+        ImGui.InputText("Filter lights", ref _lightFilter, (nuint)256);
+        if (ImGui.BeginCombo("New light type", _newLightType.ToString()))
+        {
+            foreach (LightType type in Enum.GetValues<LightType>())
+                if (ImGui.Selectable(type.ToString(), type == _newLightType))
+                    _newLightType = type;
+            ImGui.EndCombo();
+        }
+        if (ImGui.Button("Add light at camera"))
+            Run(() => editor.AddLightAtCamera(_newLightType));
+        if (ImGui.BeginTable("SceneLightList", 5,
+                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
+                new System.Numerics.Vector2(0f, 220f)))
+        {
+            ImGui.TableSetupColumn("Name");
+            ImGui.TableSetupColumn("Type");
+            ImGui.TableSetupColumn("Source");
+            ImGui.TableSetupColumn("Intensity");
+            ImGui.TableSetupColumn("Shadows");
+            ImGui.TableHeadersRow();
+            foreach (LightRecord record in lights)
+            {
+                string name = record.Name ?? "Light";
+                string source = editor.IsSceneLightImported(record.Id) ? "Imported" :
+                    editor.IsSceneLightSuspended(record.Id) ? "Suspended" : "Scene";
+                string searchable = $"{name} {record.Light.Type} {source} {record.Id}";
+                if (!string.IsNullOrWhiteSpace(_lightFilter) &&
+                    !searchable.Contains(_lightFilter, StringComparison.OrdinalIgnoreCase)) continue;
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                if (ImGui.Selectable($"{name}##{record.Id}",
+                        editor.Selection.Kind == EditorSelectionKind.Light && editor.Selection.Id == record.Id,
+                        ImGuiSelectableFlags.SpanAllColumns))
+                    editor.SelectEntity(EditorSelectionKind.Light, record.Id);
+                ShowIdTooltip(record.Id);
+                ImGui.TableNextColumn(); ImGui.TextUnformatted(record.Light.Type.ToString());
+                ImGui.TableNextColumn(); ImGui.TextUnformatted(source);
+                ImGui.TableNextColumn(); ImGui.Text($"{record.Light.Intensity:G5}");
+                ImGui.TableNextColumn();
+                var shadowState = editor.RendererDiagnostics?.LocalShadowLights.FirstOrDefault(x => x.Identity == LightManager.GetStableIdentity(record.Handle));
+                ImGui.TextUnformatted(shadowState == null ? (record.Light.CastsShadows ? "On" : "Off") :
+                    shadowState.Resident ? $"{shadowState.EffectiveResolution}px - {shadowState.Status}" : shadowState.Status);
+            }
+            ImGui.EndTable();
+        }
+        if (editor.RendererSettings is { } settings && settings.Environment.Enabled)
+        {
+            if (ImGui.BeginCombo("Sun control", settings.Environment.SunDriver.ToString()))
+            {
+                foreach (ProceduralSkySunDriver driver in Enum.GetValues<ProceduralSkySunDriver>())
+                    if (ImGui.Selectable(driver.ToString(), settings.Environment.SunDriver == driver))
+                        settings.Environment.SunDriver = driver;
+                ImGui.EndCombo();
+            }
+            if (settings.Environment.SunDriver != ProceduralSkySunDriver.SceneDirectionalLight)
+                ImGui.TextWrapped("The procedural sky drives sun and moon brightness and direction. " +
+                    "Choose SceneDirectionalLight for manual sun control. The imported sun toggle takes precedence.");
+        }
+        ImGui.SeparatorText("Selected light");
+        if (editor.TryGetSelectedLight(out Light light))
+        {
+            RenderLightInspector(editor, light);
+            if (!editor.SelectedLightIsImported && !editor.IsSceneLightSuspended(editor.Selection.Id) &&
+                ImGui.Button("Delete light"))
+                Run(() => editor.DeleteSelection());
+        }
+        else
+            ImGui.TextWrapped("Select a light above. Imported lights appear when enabled in the imported model lights controls.");
+        if (!string.IsNullOrWhiteSpace(_lastError))
+            ImGui.TextColored(new System.Numerics.Vector4(1f, 0.35f, 0.25f, 1f), _lastError);
+        ImGui.End();
+    }
+
     private void RenderLightInspector(EditorController editor, Light light)
     {
-        string name = editor.GetLights().FirstOrDefault(item => item.Handle == editor.Selection.LightHandle).Name ?? "Light";
+        string name = editor.GetLights().FirstOrDefault(item => item.Id == editor.Selection.Id).Name ?? "Light";
+        if (editor.IsSceneLightSuspended(editor.Selection.Id))
+            ImGui.TextWrapped("Temporarily replaced by the imported sun. Edits apply when you turn off " +
+                "Use imported directional light. Restore it before changing its type or deleting it.");
+        if (editor.SelectedLightIsImported)
+        {
+            ImGui.TextWrapped("Imported light: edits are saved with the scene. Set intensity to zero to turn it off. " +
+                "Edited positions and directions are in world space.");
+            if (editor.SelectedLightHasOverrides && ImGui.Button("Reset imported light to asset values"))
+            {
+                Run(editor.ResetSelectedLightOverrides);
+                return;
+            }
+        }
         if (ImGui.InputText("Name", ref name, (nuint)256))
-            editor.SetSelectedLightName(name);
+            Run(() => editor.SetSelectedLightName(name));
 
         if (ImGui.BeginCombo("Type", light.Type.ToString()))
         {
             foreach (LightType type in Enum.GetValues<LightType>())
             {
+                if (editor.IsSceneLightSuspended(editor.Selection.Id) && type != LightType.Directional) continue;
+                if (editor.SelectedLightIsImported &&
+                    (type == LightType.Directional) != (light.Type == LightType.Directional)) continue;
                 if (ImGui.Selectable(type.ToString(), type == light.Type))
                 {
                     light.Type = type;
+                    if (!AnalyticalLightGeometry.IsPunctual(type))
+                        light.PhotometricProfile = default;
+                    if (type == LightType.Spot)
+                    {
+                        light.SpotAngle = Math.Clamp(light.SpotAngle, 0.01f, MathF.PI / 2f - 0.001f);
+                        light.InnerSpotAngle = Math.Clamp(light.InnerSpotAngle, 0f, light.SpotAngle);
+                    }
                     if (AnalyticalLightGeometry.IsArea(type))
                     {
                         System.Numerics.Vector2 defaults = type == LightType.Tube
@@ -406,7 +560,7 @@ public sealed class EditorImGuiPanels
                             light.Up = frameUp;
                         }
                     }
-                    editor.UpdateSelectedLight(light);
+                    Run(() => editor.UpdateSelectedLight(light));
                 }
             }
             ImGui.EndCombo();
@@ -420,6 +574,14 @@ public sealed class EditorImGuiPanels
         float intensity = light.Intensity;
         float range = light.Range;
         float spotDegrees = light.SpotAngle * 180f / MathF.PI;
+        float innerSpotDegrees = light.InnerSpotAngle * 180f / MathF.PI;
+        LightAttenuationMode attenuation = light.AttenuationMode;
+        float attenuationConstant = light.AttenuationConstant;
+        float attenuationLinear = light.AttenuationLinear;
+        float attenuationQuadratic = light.AttenuationQuadratic;
+        int shadowResolution = (int)light.ShadowMapSizeOverride;
+        int shadowPriority = light.ShadowPriority;
+        float iesRotationDegrees = light.IesRotationRadians * 180f / MathF.PI;
         float shadowStrength = light.ShadowStrength;
         float shadowNear = light.ShadowNearPlane;
         float shadowFar = light.ShadowFarPlane;
@@ -427,7 +589,7 @@ public sealed class EditorImGuiPanels
         bool twoSided = light.TwoSided;
         bool changed = ImGui.DragFloat3("Position", ref position, 0.05f);
         changed |= ImGui.DragFloat3("Direction", ref direction, 0.01f);
-        if (light.Type is LightType.Rectangle or LightType.Disk)
+        if (AnalyticalLightGeometry.IsArea(light.Type))
             changed |= ImGui.DragFloat3("Up", ref up, 0.01f);
         if (ImGui.Button("Set from camera") && editor.Camera != null)
         {
@@ -437,9 +599,30 @@ public sealed class EditorImGuiPanels
         }
         changed |= ImGui.ColorEdit3("Color", ref color);
         changed |= ImGui.DragFloat("Intensity", ref intensity, 0.05f, 0f, 100000f);
-        changed |= ImGui.DragFloat("Range", ref range, 0.05f, 0.01f, 100000f);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Set to zero to turn off this light's output.");
+        if (light.Type != LightType.Directional)
+            changed |= ImGui.DragFloat("Range", ref range, 0.05f, 0.01f, 100000f);
         if (light.Type == LightType.Spot)
-            changed |= ImGui.DragFloat("Spot angle", ref spotDegrees, 0.25f, 1f, 179f);
+        {
+            changed |= ImGui.DragFloat("Outer cone half-angle (degrees)", ref spotDegrees, 0.25f, 0.01f, 89.9f);
+            changed |= ImGui.DragFloat("Inner cone half-angle (degrees)", ref innerSpotDegrees, 0.25f, 0f, spotDegrees);
+        }
+        if (AnalyticalLightGeometry.IsPunctual(light.Type))
+        {
+            if (ImGui.BeginCombo("Attenuation", attenuation.ToString()))
+            {
+                foreach (LightAttenuationMode mode in Enum.GetValues<LightAttenuationMode>())
+                    if (ImGui.Selectable(mode.ToString(), mode == attenuation))
+                    { attenuation = mode; changed = true; }
+                ImGui.EndCombo();
+            }
+            if (attenuation == LightAttenuationMode.Polynomial)
+            {
+                changed |= ImGui.DragFloat("Constant attenuation", ref attenuationConstant, 0.01f, 0f, 100000f);
+                changed |= ImGui.DragFloat("Linear attenuation", ref attenuationLinear, 0.01f, 0f, 100000f);
+                changed |= ImGui.DragFloat("Quadratic attenuation", ref attenuationQuadratic, 0.01f, 0f, 100000f);
+            }
+        }
         if (AnalyticalLightGeometry.IsArea(light.Type))
         {
             string sizeLabel = light.Type switch
@@ -454,10 +637,51 @@ public sealed class EditorImGuiPanels
             if (light.Type is LightType.Rectangle or LightType.Disk)
                 changed |= ImGui.Checkbox("Two-sided", ref twoSided);
         }
+        bool forcedImportedShadows = editor.SelectedLightIsImported &&
+            editor.GetImportedModelLightStatus().ShadowsEnabled;
+        ImGui.BeginDisabled(forcedImportedShadows);
         changed |= ImGui.Checkbox("Casts shadows", ref shadows);
+        ImGui.EndDisabled();
+        if (forcedImportedShadows)
+            ImGui.TextDisabled("Shadows are enabled by the imported lights toggle.");
         changed |= ImGui.DragFloat("Shadow strength", ref shadowStrength, 0.01f, 0f, 1f);
         changed |= ImGui.DragFloat("Shadow near", ref shadowNear, 0.01f, 0.001f, 1000f);
         changed |= ImGui.DragFloat("Shadow far", ref shadowFar, 0.1f, 0.01f, 100000f);
+        if (light.Type is LightType.Point or LightType.Spot)
+        {
+            if (ImGui.BeginCombo("Shadow map resolution", shadowResolution == 0 ? "Use default" : $"{shadowResolution}px"))
+            {
+                foreach (int resolution in new[] { 0, 128, 256, 512, 1024, 2048 })
+                    if (ImGui.Selectable(resolution == 0 ? "Use default" : $"{resolution}px", shadowResolution == resolution))
+                    { shadowResolution = resolution; changed = true; }
+                ImGui.EndCombo();
+            }
+            var selectedRecord = editor.GetLights().FirstOrDefault(x => x.Id == editor.Selection.Id);
+            var state = editor.RendererDiagnostics?.LocalShadowLights.FirstOrDefault(x => x.Identity == LightManager.GetStableIdentity(selectedRecord.Handle));
+            if (state != null)
+                ImGui.TextWrapped($"Requested {state.RequestedResolution}px; effective {state.EffectiveResolution}px. {state.Status}" +
+                    (state.Resident && state.EffectiveResolution < state.RequestedResolution ? " (reduced to fit memory budget)" : ""));
+        }
+        else changed |= ImGui.DragInt("Shadow map resolution (0 = default)", ref shadowResolution, 64f, 0, 16384);
+        changed |= ImGui.DragInt("Shadow priority", ref shadowPriority, 1f, -10000, 10000);
+        if (AnalyticalLightGeometry.IsPunctual(light.Type))
+        {
+            if (_iesEditingLight != editor.Selection.Id)
+            {
+                _iesEditingLight = editor.Selection.Id;
+                _iesProfilePath = editor.GetSelectedLightDocument()?.IesProfile?.Path ?? string.Empty;
+            }
+            ImGui.InputText("IES profile path", ref _iesProfilePath, (nuint)1024);
+            if (ImGui.Button("Load IES profile"))
+                Run(() => editor.SetSelectedLightIesProfile(_iesProfilePath));
+            ImGui.SameLine();
+            if (ImGui.Button("Clear IES profile"))
+            {
+                Run(() => editor.SetSelectedLightIesProfile(null));
+                _iesProfilePath = string.Empty;
+            }
+            changed |= ImGui.DragFloat("IES rotation (degrees)", ref iesRotationDegrees, 1f, -360f, 360f);
+        }
         if (changed)
         {
             light.Position = position;
@@ -493,12 +717,23 @@ public sealed class EditorImGuiPanels
             light.Color = color;
             light.Intensity = Math.Max(0f, intensity);
             light.Range = Math.Max(0.01f, range);
-            light.SpotAngle = spotDegrees * MathF.PI / 180f;
+            light.SpotAngle = Math.Clamp(spotDegrees, 0.01f, 89.9f) * MathF.PI / 180f;
+            light.InnerSpotAngle = Math.Clamp(innerSpotDegrees, 0f, Math.Clamp(spotDegrees, 0.01f, 89.9f)) * MathF.PI / 180f;
+            light.AttenuationMode = attenuation;
+            light.AttenuationConstant = Math.Max(0f, attenuationConstant);
+            light.AttenuationLinear = Math.Max(0f, attenuationLinear);
+            light.AttenuationQuadratic = Math.Max(0f, attenuationQuadratic);
+            if (attenuation == LightAttenuationMode.Polynomial &&
+                light.AttenuationConstant + light.AttenuationLinear + light.AttenuationQuadratic == 0f)
+                light.AttenuationConstant = 1f;
             light.CastsShadows = shadows;
             light.ShadowStrength = Math.Clamp(shadowStrength, 0f, 1f);
             light.ShadowNearPlane = Math.Max(0.001f, shadowNear);
             light.ShadowFarPlane = Math.Max(light.ShadowNearPlane + 0.001f, shadowFar);
-            editor.UpdateSelectedLight(light);
+            light.ShadowMapSizeOverride = (uint)Math.Clamp(shadowResolution, 0, 16384);
+            light.ShadowPriority = shadowPriority;
+            light.IesRotationRadians = iesRotationDegrees * MathF.PI / 180f;
+            Run(() => editor.UpdateSelectedLight(light));
         }
     }
 

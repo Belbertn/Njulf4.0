@@ -37,12 +37,8 @@ internal static class SampleLighting
             SampleLightingMode.VolumetricShowcase;
         settings.Shadows.SpotShadowsEnabled = spotShadows;
         settings.Shadows.PointShadowsEnabled = pointShadows;
-        settings.Shadows.MaxShadowedSpotLights = spotShadows
-            ? Math.Max(settings.Shadows.MaxShadowedSpotLights, 2)
-            : 0;
-        settings.Shadows.MaxShadowedPointLights = pointShadows
-            ? Math.Max(settings.Shadows.MaxShadowedPointLights, 1)
-            : 0;
+        // Enablement is separate from capacity: imported lights can opt into these passes later.
+        // Preserve the configured limits, including an explicitly chosen zero.
         settings.Shadows.AreaShadowsEnabled = areaLightShowcase;
         settings.Shadows.MaxShadowedAreaLights = areaLightShowcase ? 3 : 0;
         settings.Shadows.AreaShadowSampleCount = areaLightShowcase ? 2 : 1;

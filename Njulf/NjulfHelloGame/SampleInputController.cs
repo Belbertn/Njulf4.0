@@ -2591,6 +2591,14 @@ internal sealed class SampleInputController
     {
         switch (scenario)
         {
+            case SamplePerformanceScenario.LocalShadowCapacity:
+            case SamplePerformanceScenario.LocalShadowCapacityUncached:
+                ApplyPerformanceScenario(scenario);
+                MoveCamera(new Njulf.Core.Math.Vector3(0f, 2f, 1f), 0f, 0f);
+                _renderer!.Settings.Shadows.PointShadowsEnabled = true;
+                _renderer.Settings.Shadows.SpotShadowsEnabled = true;
+                _renderer.Settings.Shadows.LocalShadowCacheEnabled = scenario == SamplePerformanceScenario.LocalShadowCapacity;
+                break;
             case SamplePerformanceScenario.Normal:
                 ApplyPerformanceScenario(SamplePerformanceScenario.Normal);
                 MoveCamera(InteriorPosition, InteriorYaw, InteriorPitch);
@@ -2826,6 +2834,10 @@ internal sealed class SampleInputController
 
         SceneSubmissionSettings submission = _renderer.Settings.SceneSubmission;
         RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
+        string tileStatistics = diagnostics.TiledLightDiagnosticsValid
+            ? $"tileLights={diagnostics.AverageLightsPerNonEmptyTile:F1}/{diagnostics.MaxLightsInAnyTile}/{diagnostics.LightTileSaturationCount}, " +
+              $"lightCullRejected={diagnostics.LightCullRejectedPointCount}/{diagnostics.LightCullRejectedSpotCount}, "
+            : "tileStatistics=not collected, ";
         Console.WriteLine(
             $"{prefix}: compaction={(submission.GpuCompactionEnabled ? "on" : "off")}, " +
             $"indirect={(submission.IndirectMeshletDispatchEnabled ? "on" : "off")}, " +
@@ -2838,8 +2850,7 @@ internal sealed class SampleInputController
             $"cpuCandidates={diagnostics.SceneSubmissionCpuCandidateCount}, " +
             $"gpuEmitted={diagnostics.SceneSubmissionGpuEmittedCount}, indirectTasks={diagnostics.SceneSubmissionIndirectTaskCount}, " +
             $"forwardBuckets={diagnostics.ForwardSimpleMeshletCount}/{diagnostics.ForwardFullMaterialMeshletCount}/{diagnostics.ForwardLocalProbeMeshletCount}, " +
-            $"tileLights={diagnostics.AverageLightsPerNonEmptyTile:F1}/{diagnostics.MaxLightsInAnyTile}/{diagnostics.LightTileSaturationCount}, " +
-            $"lightCullRejected={diagnostics.LightCullRejectedPointCount}/{diagnostics.LightCullRejectedSpotCount}, " +
+            tileStatistics +
             $"tileClearBytes={diagnostics.TiledLightHeaderBufferClearBytes}/{diagnostics.TiledLightIndexBufferClearBytes}, " +
             $"fallback='{diagnostics.SceneSubmissionFallbackReason}', compactionSkip='{diagnostics.SceneSubmissionCompactionSkipReason}', " +
             $"indirectSkip='{diagnostics.SceneSubmissionIndirectDispatchSkipReason}', " +

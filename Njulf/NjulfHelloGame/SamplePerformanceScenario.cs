@@ -34,7 +34,9 @@ public enum SamplePerformanceScenario
     GiVerticalityRings,
     GiInstancedCityStress,
     UploadBurst,
-    CombinedWorstCase
+    CombinedWorstCase,
+    LocalShadowCapacity,
+    LocalShadowCapacityUncached
 }
 
 internal sealed record SamplePerformanceScenarioSummary(

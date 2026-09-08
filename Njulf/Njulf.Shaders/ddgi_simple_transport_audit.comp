@@ -1261,8 +1261,7 @@ void SimpleDdgiAuditRunReducePhase()
             }
         }
         if (SharedAuditGuidingValidCount != context.sourceRayCount ||
-            SharedAuditGuidingMaintenanceCount == 0u ||
-            SharedAuditGuidingMixtureCount == 0u)
+            SharedAuditGuidingMaintenanceCount == 0u)
         {
             SharedAuditScratchInvalid = 1u;
         }

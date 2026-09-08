@@ -72,6 +72,7 @@ internal sealed class SampleStressSceneBuilder
         SamplePerformanceScenarioSummary summary = scenario switch
         {
             SamplePerformanceScenario.ManyLights => BuildManyLights(),
+            SamplePerformanceScenario.LocalShadowCapacity or SamplePerformanceScenario.LocalShadowCapacityUncached => BuildLocalShadowCapacity(scenario),
             SamplePerformanceScenario.ManyMaterials => BuildManyMaterials(128),
             SamplePerformanceScenario.ManyTransparentObjects => BuildTransparentObjects(256),
             SamplePerformanceScenario.LargeMeshletCount => BuildLargeMeshletCount(512),
@@ -120,6 +121,25 @@ internal sealed class SampleStressSceneBuilder
 
         SampleReflectionPolicy.EnsureProbeFree(_scene);
         return summary;
+    }
+
+    private SamplePerformanceScenarioSummary BuildLocalShadowCapacity(SamplePerformanceScenario scenario)
+    {
+        BuildGiCornellRoom(includePointLight: false);
+        // A small mixed-resolution fixture; renderer capacity is configured independently.
+        for (int i = 0; i < 16; i++)
+        {
+            _lightManager.AddLight(new Light
+            {
+                Type = i < 8 ? LightType.Point : LightType.Spot,
+                Position = new System.Numerics.Vector3(-2.1f + (i % 4) * 1.4f, 3.2f, -3.8f - (i % 2) * 3f),
+                Direction = -System.Numerics.Vector3.UnitY,
+                Color = System.Numerics.Vector3.One, Intensity = 2f, Range = 8f,
+                SpotAngle = 1.5f, CastsShadows = true, ShadowStrength = 1f,
+                ShadowMapSizeOverride = (uint)(128 << (i % 3))
+            });
+        }
+        return ValidationSummary(scenario, "Eight point and eight spot shadows with 128/256/512 pixel requests");
     }
 
     private SamplePerformanceScenarioSummary BuildManyLights()

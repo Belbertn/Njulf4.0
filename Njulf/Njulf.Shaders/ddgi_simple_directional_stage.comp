@@ -291,8 +291,8 @@ void main()
                 SharedGuidingState = SIMPLE_DDGI_DIRECTIONAL_STAGE_INVALID;
             }
         }
-        if (SharedGuidingMaintenanceCount == 0u ||
-            SharedGuidingMixtureCount == 0u)
+        // The maintenance-only spatial tier is a valid uniform estimator.
+        if (SharedGuidingMaintenanceCount == 0u)
         {
             SharedGuidingState = SIMPLE_DDGI_DIRECTIONAL_STAGE_INVALID;
         }

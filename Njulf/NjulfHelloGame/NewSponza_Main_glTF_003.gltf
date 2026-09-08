@@ -4,7 +4,10 @@
     "generator": "babylon.js glTF exporter for 3dsmax 2024 v20240125.3"
   },
   "extensionsUsed": [
-    "KHR_lights_punctual"
+    "KHR_lights_punctual",
+    "KHR_materials_transmission",
+    "KHR_materials_ior",
+    "KHR_materials_specular"
   ],
   "scene": 0,
   "scenes": [
@@ -31141,16 +31144,22 @@
     },
     {
       "pbrMetallicRoughness": {
-        "baseColorFactor": [
-          0.609999955,
-          0.609999955,
-          0.609999955,
-          1.0
-        ],
+        "baseColorFactor": [0.96, 0.97, 0.98, 1.0],
         "metallicFactor": 0.0,
-        "roughnessFactor": 0.39
+        "roughnessFactor": 0.18
       },
+      "alphaMode": "BLEND",
       "doubleSided": true,
+      "extensions": {
+        "KHR_materials_transmission": { "transmissionFactor": 0.92 },
+        "KHR_materials_ior": { "ior": 1.52 },
+        "KHR_materials_specular": { "specularFactor": 0.0 }
+      },
+      "extras": {
+        "NJULF_thin_glass": true,
+        "NJULF_gi_transmission_policy": "ThinSurface",
+        "NJULF_thin_transmission_tint": [0.96, 0.97, 0.98]
+      },
       "name": "lamp_glass_01"
     },
     {

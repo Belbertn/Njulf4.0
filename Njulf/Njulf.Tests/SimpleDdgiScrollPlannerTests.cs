@@ -8,6 +8,49 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SimpleDdgiScrollPlannerTests
 {
+    [TestCase(-1)]
+    [TestCase(1)]
+    public void SponzaVerticalPlane_FitsPersistentCapacityAndSpatialRayBudget(int direction)
+    {
+        var settings = new RenderSettings();
+        NjulfHelloGame.SampleSponzaGlobalIlluminationProfile.Configure(settings);
+        GlobalIlluminationSettings gi = settings.GlobalIllumination;
+        int capacity = SimpleDdgiVolumeManager.ResolveScrollPlanningRequestCapacity(
+            gi, SimpleDdgiSchedulerMode.GpuResident, 16_266);
+        Span<uint> buckets = stackalloc uint[SimpleDdgiSchedulerAbi.MaxRayBucketCount];
+        SimpleDdgiRayBucketPolicy.Build(gi, buckets);
+
+        bool planned = SimpleDdgiScrollPlanner.TryPlanIncrementalStep(
+            0, direction, 0, 34, 15, 23,
+            gi.SimpleDdgiNearMaintenanceRaysPerProbe, gi.SimpleDdgiNearFullRaysPerProbe,
+            buckets, capacity, SimpleDdgiScrollPlanner.MaximumSpatialRecoveryPrimaryRays,
+            out SimpleDdgiScrollStep step);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(capacity, Is.EqualTo(782));
+            Assert.That(planned, Is.True);
+            Assert.That(step.ExposedProbeCount, Is.EqualTo(782));
+            Assert.That(step.BootstrapRaysPerProbe, Is.EqualTo(32));
+            Assert.That(step.ReservedPrimaryRays, Is.EqualTo(25_024UL));
+            Assert.That(SimpleDdgiVolumeManager.ResolveTransportV2SchedulerRequestCapacity(
+                6_144, 128, true, true), Is.EqualTo(640),
+                "Provisioning a scroll plane must not raise ordinary solve work.");
+        });
+    }
+
+    [Test]
+    public void ScrollCapacity_DoesNotExceedTheAuthoredRequestLimit()
+    {
+        var settings = new RenderSettings();
+        NjulfHelloGame.SampleSponzaGlobalIlluminationProfile.Configure(settings);
+        settings.GlobalIllumination.SimpleDdgiProbeUpdatesPerFrame = 100;
+        settings.GlobalIllumination.SimpleDdgiLightingDirtyBoostEnabled = false;
+        Assert.That(SimpleDdgiVolumeManager.ResolveScrollPlanningRequestCapacity(
+            settings.GlobalIllumination, SimpleDdgiSchedulerMode.GpuResident, 16_266),
+            Is.EqualTo(100));
+    }
+
     [Test]
     public void CameraCutTransition_DetectsFirstCutAfterZeroBaseline()
     {

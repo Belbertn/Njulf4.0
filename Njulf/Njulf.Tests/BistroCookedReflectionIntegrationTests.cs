@@ -200,7 +200,11 @@ public sealed class BistroCookedReflectionIntegrationTests
                 Is.EqualTo(expectedImportContract));
             Assert.That(manifest.ImportSettingsHash,
                 Is.EqualTo(expectedImportContract));
-            Assert.That(thinGlass, Has.Length.EqualTo(4));
+            Assert.That(thinGlass, Has.Length.EqualTo(5));
+            Assert.That(thinGlass.Any(material =>
+                (material.AlbedoTexturePath ?? material.BaseColorTexture?.Source?.FilePath ?? string.Empty)
+                    .Contains("Vespa_Headlight", StringComparison.OrdinalIgnoreCase)), Is.True,
+                "The headlight lens must survive cooking as transmitting glass.");
             Assert.That(thinGlass.All(material =>
                     material.AlphaMode == ModelAlphaMode.Blend),
                 Is.True);

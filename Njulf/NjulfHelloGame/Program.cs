@@ -433,8 +433,10 @@ internal sealed class HelloGame : Game
         }
         else
         {
-            WindowWidth = controlledProductionRun ? 1920 : 1600;
-            WindowHeight = controlledProductionRun ? 1080 : 900;
+            bool hiZIncident = _smokeOptions.Benchmark.Trajectory ==
+                SampleBenchmarkTrajectoryKind.SponzaHiZIncident;
+            WindowWidth = controlledProductionRun && !hiZIncident ? 1920 : 1600;
+            WindowHeight = controlledProductionRun && !hiZIncident ? 1080 : 900;
         }
         WindowBorderStyle = controlledProductionRun ||
                             sponzaTemporalCapture ||
@@ -1269,6 +1271,12 @@ internal sealed class HelloGame : Game
         {
             renderer.Settings.ApplyQualityPreset(
                 _smokeOptions.QualityPresetOverride.Value);
+        }
+        if (_smokeOptions.PerformanceScenario is SamplePerformanceScenario.LocalShadowCapacity or SamplePerformanceScenario.LocalShadowCapacityUncached)
+        {
+            renderer.Settings.Shadows.PointShadowsEnabled = true;
+            renderer.Settings.Shadows.SpotShadowsEnabled = true;
+            renderer.Settings.Shadows.LocalShadowCacheEnabled = _smokeOptions.PerformanceScenario == SamplePerformanceScenario.LocalShadowCapacity;
         }
         // The qualification fixture owns probe admission, independent of visual preset.
         if (_sceneKind == SampleSceneKind.ReflectionLod)
@@ -5232,6 +5240,12 @@ internal sealed class HelloGame : Game
             _inputController == null)
             return;
 
+        // Material captures must observe the scene, never the progressive startup screen.
+        if (Renderer is VulkanRenderer captureRenderer && !captureRenderer.StartupSnapshot.FullQualityPresented)
+            return;
+        if (_smokeOptions.PerformanceScenario is SamplePerformanceScenario.LocalShadowCapacity or SamplePerformanceScenario.LocalShadowCapacityUncached &&
+            Renderer is VulkanRenderer shadowRenderer && shadowRenderer.LastDiagnostics.PointShadowSelectedCount == 0)
+            return;
         _baselineScenarioRenderedFrames++;
         int requiredFrames = _sceneKind == SampleSceneKind.VfxShowcase
             ? VolumetricBaselineCaptureFrameCount
@@ -5250,6 +5264,8 @@ internal sealed class HelloGame : Game
     {
         return _smokeOptions.PerformanceScenario switch
         {
+            SamplePerformanceScenario.LocalShadowCapacity => SamplePerformanceScenario.LocalShadowCapacity,
+            SamplePerformanceScenario.LocalShadowCapacityUncached => SamplePerformanceScenario.LocalShadowCapacityUncached,
             SamplePerformanceScenario.ForestFoliage => SamplePerformanceScenario.ForestFoliage,
             SamplePerformanceScenario.GiSponzaRightWallStationary => SamplePerformanceScenario.GiSponzaRightWallStationary,
             SamplePerformanceScenario.GiQualityInterior => SamplePerformanceScenario.GiQualityInterior,

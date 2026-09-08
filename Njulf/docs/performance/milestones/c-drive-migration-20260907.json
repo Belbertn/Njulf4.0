@@ -1,0 +1,29 @@
+{
+  "DateUtc": "2026-09-07T16:27:17.8862849Z",
+  "Destination": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\artifacts\\c-drive-migration-20260907",
+  "Manifest": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\artifacts\\c-drive-migration-20260907\\migration-manifest.json",
+  "Provenance": {
+    "NjulfSecondarySnapshot": "2026-09-07T07-54-05-01a07a6e-533b-7d91-b001-4352a2f2cbd5; creation 2026-09-07T15:15:38Z",
+    "NjulfReflectionLod": "2026-09-07T07-53-22-01a07a6d-ab20-7040-9fc8-ecccd0cccaf5; build output 2026-09-07T07:13:59Z",
+    "njulf-wall-leak-20260906": "2026-09-06T15-09-44-01a076d6-d086-7d13-8694-e3e2ce22f26a; creation 2026-09-06T13:18:30Z",
+    "njulf-shadow-motion-20260906": "2026-09-06T14-14-36-01a076a4-5330-7743-858c-e97bf407126f; creation 2026-09-06T12:45:44Z",
+    "njulf-interframe-20260906": "2026-09-06T16-45-55-01a0772e-db48-7821-ae8c-5cea957834f6; creation 2026-09-06T17:35:44Z",
+    "njulf-curtain-diagnosis-20260906": "2026-09-06T14-14-36-01a076a4-5330-7743-858c-e97bf407126f; creation 2026-09-06T12:22:57Z"
+  },
+  "MigratedFiles": 2176,
+  "MigratedBytes": 7670667200.0,
+  "DiscardedFiles": 318,
+  "DiscardedBytes": 4158366547.0,
+  "FreeBytesBefore": 5598572544,
+  "FreeBytesAfter": 17430765568,
+  "SkippedReparsePoints": [
+    "C:\\Users\\njaal\\AppData\\Local\\Temp\\NjulfReflectionLod\\app\\Assets",
+    "C:\\Users\\njaal\\AppData\\Local\\Temp\\NjulfReflectionLod\\app\\Cooked",
+    "C:\\Users\\njaal\\AppData\\Local\\Temp\\NjulfReflectionLod\\app\\PipelineBinarySeeds",
+    "C:\\Users\\njaal\\AppData\\Local\\Temp\\NjulfReflectionLod\\app\\PipelineCacheSeeds",
+    "C:\\Users\\njaal\\AppData\\Local\\Temp\\NjulfReflectionLod\\app\\runtimes",
+    "C:\\Users\\njaal\\AppData\\Local\\Temp\\NjulfReflectionLod\\app\\Scenes",
+    "C:\\Users\\njaal\\AppData\\Local\\Temp\\NjulfReflectionLod\\app\\Shaders",
+    "C:\\Users\\njaal\\AppData\\Local\\Temp\\NjulfReflectionLod\\app\\textures"
+  ]
+}

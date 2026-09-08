@@ -1,0 +1,2322 @@
+{
+  "DateUtc": "2026-09-07T16:18:54.3769699Z",
+  "Applied": true,
+  "KeepDays": 2,
+  "TotalBytes": 405389852472,
+  "TotalFiles": 120019.0,
+  "FreeBytesBefore": 5747834880,
+  "FreeBytesAfter": 328896999424,
+  "Groups": [
+    {
+      "Path": "artifacts/area-room-verify",
+      "Files": 13727,
+      "Bytes": 54877498189
+    },
+    {
+      "Path": ".codex-tmp/renderdoc-bounce",
+      "Files": 2180,
+      "Bytes": 27318453014
+    },
+    {
+      "Path": ".codex-tmp/hybrid-reflection-analysis",
+      "Files": 315,
+      "Bytes": 27270296049
+    },
+    {
+      "Path": ".perf-loop-runs/forward-quick-baseline-124c86f5",
+      "Files": 2119,
+      "Bytes": 16116190295
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-simplified-sdf-gpu-6g-20260903",
+      "Files": 8718,
+      "Bytes": 10959754545
+    },
+    {
+      "Path": ".codex-tmp/plaza-lighting",
+      "Files": 1772,
+      "Bytes": 10843040407
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-simplified-sdf-gpu-6g-phase-20260903",
+      "Files": 8391,
+      "Bytes": 10403857013
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-simplified-sdf-gpu-6g-warmup-20260903",
+      "Files": 8391,
+      "Bytes": 10403856321
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-1320b09f",
+      "Files": 7916,
+      "Bytes": 9904102028
+    },
+    {
+      "Path": ".tmp/ddgi-publish-tests",
+      "Files": 1277,
+      "Bytes": 8157356763
+    },
+    {
+      "Path": "artifacts/scene-transition-smoke",
+      "Files": 1374,
+      "Bytes": 7221435742
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-1a2cb703",
+      "Files": 1804,
+      "Bytes": 7047357626
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-85f18751",
+      "Files": 1804,
+      "Bytes": 7047357614
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-a6cc5bdf",
+      "Files": 1803,
+      "Bytes": 7022474318
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-6dd3aef6",
+      "Files": 1796,
+      "Bytes": 6848290606
+    },
+    {
+      "Path": ".tmp/surface-image-check",
+      "Files": 957,
+      "Bytes": 5824306426
+    },
+    {
+      "Path": ".codex-tmp/material-adaptive-reflections",
+      "Files": 93,
+      "Bytes": 5808456681
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-5a93dc18",
+      "Files": 3804,
+      "Bytes": 4854918453
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-4c283620",
+      "Files": 3495,
+      "Bytes": 4707311563
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-46aea429",
+      "Files": 3499,
+      "Bytes": 4672677900
+    },
+    {
+      "Path": ".tmp/hallway-hotspot-final",
+      "Files": 982,
+      "Bytes": 4571848684
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-a7601488",
+      "Files": 3267,
+      "Bytes": 4540550353
+    },
+    {
+      "Path": ".codex-tmp/second-floor-candidate-tests",
+      "Files": 11153,
+      "Bytes": 4497853264
+    },
+    {
+      "Path": ".codex-tmp/second-floor-harness-candidate",
+      "Files": 394,
+      "Bytes": 4426092064
+    },
+    {
+      "Path": ".codex-tmp/second-floor-harness-control",
+      "Files": 394,
+      "Bytes": 4426091552
+    },
+    {
+      "Path": ".codex-tmp/second-floor-replay-game",
+      "Files": 382,
+      "Bytes": 4357381624
+    },
+    {
+      "Path": ".codex-tmp/c1-test-bin",
+      "Files": 464,
+      "Bytes": 4007909316
+    },
+    {
+      "Path": "artifacts/quality",
+      "Files": 935,
+      "Bytes": 3931513957
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-611ed334",
+      "Files": 901,
+      "Bytes": 3498770307
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-ee9133bf",
+      "Files": 899,
+      "Bytes": 3449003659
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-41934847",
+      "Files": 1053,
+      "Bytes": 3434841176
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-c37b8027",
+      "Files": 1053,
+      "Bytes": 3434841176
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-7ab63539",
+      "Files": 1053,
+      "Bytes": 3434841176
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-a29e6217",
+      "Files": 1052,
+      "Bytes": 3409957872
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-fd7722a4",
+      "Files": 896,
+      "Bytes": 3374353747
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-080250fd",
+      "Files": 896,
+      "Bytes": 3374349143
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-f000d130",
+      "Files": 893,
+      "Bytes": 3299699231
+    },
+    {
+      "Path": "artifacts/test-out",
+      "Files": 394,
+      "Bytes": 3228898337
+    },
+    {
+      "Path": "artifacts/verify-hellogame",
+      "Files": 296,
+      "Bytes": 3213083849
+    },
+    {
+      "Path": ".codex-tmp/nsight-bistro-final-20260818",
+      "Files": 7,
+      "Bytes": 2881731025
+    },
+    {
+      "Path": ".codex-tmp/renderdoc-bistro-final",
+      "Files": 1,
+      "Bytes": 2682163909
+    },
+    {
+      "Path": ".codex-tmp/renderdoc-receiver-map-fix",
+      "Files": 2,
+      "Bytes": 2657531682
+    },
+    {
+      "Path": "artifacts/bistro-fixed-renderdoc-material-final",
+      "Files": 8,
+      "Bytes": 2555290954
+    },
+    {
+      "Path": "artifacts/bistro-fixed-renderdoc-final",
+      "Files": 2,
+      "Bytes": 2550754987
+    },
+    {
+      "Path": "artifacts/bistro-renderdoc-after",
+      "Files": 3,
+      "Bytes": 2541098137
+    },
+    {
+      "Path": ".perf-loop-runs/bistro-1080p-ddgihigh-revision",
+      "Files": 5,
+      "Bytes": 2530041803
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-aligned-presentation-20260815-r1",
+      "Files": 113,
+      "Bytes": 2242834432
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-renderdoc-active-baseline-20260815",
+      "Files": 113,
+      "Bytes": 2229087474
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-radial-presentation-20260815-r2",
+      "Files": 113,
+      "Bytes": 2221715852
+    },
+    {
+      "Path": ".codex-tmp/rdoc-v9-variance-20260814-0630",
+      "Files": 122,
+      "Bytes": 2077485884
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-renderdoc-baseline-20260815",
+      "Files": 57,
+      "Bytes": 2051364043
+    },
+    {
+      "Path": ".codex-tmp/rdoc-v3-tail-before-20260814-1055",
+      "Files": 57,
+      "Bytes": 2006085935
+    },
+    {
+      "Path": ".codex-tmp/rdoc-fix1-20260814-0510",
+      "Files": 14,
+      "Bytes": 1971373043
+    },
+    {
+      "Path": ".codex-tmp/rdoc-fix5-current-20260814-0830",
+      "Files": 1,
+      "Bytes": 1889388791
+    },
+    {
+      "Path": ".codex-tmp/rdoc-v3-two-brick-20260814-105029",
+      "Files": 1,
+      "Bytes": 1885911408
+    },
+    {
+      "Path": ".codex-tmp/rdoc-v3-two-brick-prerecovery-20260814-105819",
+      "Files": 1,
+      "Bytes": 1885760541
+    },
+    {
+      "Path": ".codex-tmp/rdoc-final-correctness-20260814-114915",
+      "Files": 1,
+      "Bytes": 1884960439
+    },
+    {
+      "Path": ".codex-tmp/rdoc-tail-quota-fix-20260814-112121",
+      "Files": 1,
+      "Bytes": 1877581379
+    },
+    {
+      "Path": ".codex-tmp/rdoc-fix5-ssgi-off-20260814-0835",
+      "Files": 1,
+      "Bytes": 1867216915
+    },
+    {
+      "Path": ".codex-tmp/rdoc-baseline-20260814-0505",
+      "Files": 5,
+      "Bytes": 1833081142
+    },
+    {
+      "Path": ".perf-loop-runs/quality-pass",
+      "Files": 385,
+      "Bytes": 1775485906
+    },
+    {
+      "Path": ".perf-loop-runs/receiver-static-split-warm-20260901",
+      "Files": 20,
+      "Bytes": 1333437791
+    },
+    {
+      "Path": ".codex-tmp/FlaxEngine-src",
+      "Files": 259,
+      "Bytes": 1306689755
+    },
+    {
+      "Path": ".codex-tmp/nsight-bistro-final",
+      "Files": 5,
+      "Bytes": 1270682268
+    },
+    {
+      "Path": "artifacts/render-quality-20260825",
+      "Files": 233,
+      "Bytes": 1171392754
+    },
+    {
+      "Path": "artifacts/render-quality-20260826",
+      "Files": 230,
+      "Bytes": 1141125118
+    },
+    {
+      "Path": "artifacts/optimization-pass-20260831",
+      "Files": 1710,
+      "Bytes": 1018068657
+    },
+    {
+      "Path": "artifacts/tail-ddgi-runtime",
+      "Files": 40,
+      "Bytes": 995332160
+    },
+    {
+      "Path": "artifacts/material-gi",
+      "Files": 68,
+      "Bytes": 814734044
+    },
+    {
+      "Path": ".perf-loop-runs/experiments",
+      "Files": 239,
+      "Bytes": 807298125
+    },
+    {
+      "Path": ".tmp/nsight-ddgi",
+      "Files": 31,
+      "Bytes": 771382424
+    },
+    {
+      "Path": "artifacts/tail-ddgi-qualification",
+      "Files": 25,
+      "Bytes": 622082600
+    },
+    {
+      "Path": "artifacts",
+      "Files": 53,
+      "Bytes": 601987460
+    },
+    {
+      "Path": ".perf-loop-runs/diagnostic-bistro-firefly-20260903",
+      "Files": 302,
+      "Bytes": 543368350
+    },
+    {
+      "Path": ".perf-loop-runs/planar-depth-20260905",
+      "Files": 154,
+      "Bytes": 514221890
+    },
+    {
+      "Path": ".codex-tmp/motion-lobe-baseline",
+      "Files": 80,
+      "Bytes": 504744989
+    },
+    {
+      "Path": "artifacts/diagnostics",
+      "Files": 34,
+      "Bytes": 487876433
+    },
+    {
+      "Path": ".perf-loop-runs/campaign-97417958",
+      "Files": 213,
+      "Bytes": 419292393
+    },
+    {
+      "Path": "artifacts/cold-final-frame-20260830-e",
+      "Files": 124,
+      "Bytes": 415341545
+    },
+    {
+      "Path": "artifacts/cold-final-frame-20260830-c",
+      "Files": 94,
+      "Bytes": 409142703
+    },
+    {
+      "Path": "artifacts/cold-final-frame-20260830-d",
+      "Files": 94,
+      "Bytes": 409142691
+    },
+    {
+      "Path": ".codex-tmp/motion-lobe-l1-stable-normal",
+      "Files": 48,
+      "Bytes": 391743311
+    },
+    {
+      "Path": ".codex-tmp/residual-motion-head",
+      "Files": 45,
+      "Bytes": 375824427
+    },
+    {
+      "Path": ".codex-tmp/gi-loop-20260817",
+      "Files": 115,
+      "Bytes": 359259569
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-presentation-20260815-r1",
+      "Files": 112,
+      "Bytes": 357341173
+    },
+    {
+      "Path": "artifacts/reflection-qualification",
+      "Files": 61,
+      "Bytes": 355808600
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-presentation-20260815-r3",
+      "Files": 112,
+      "Bytes": 355776497
+    },
+    {
+      "Path": ".codex-tmp/motion-lobe-surface-stable",
+      "Files": 40,
+      "Bytes": 355640289
+    },
+    {
+      "Path": ".codex-tmp/residual-motion-ddgi-exact-clean",
+      "Files": 40,
+      "Bytes": 337834232
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-radial-production-20260815-r5",
+      "Files": 112,
+      "Bytes": 328781439
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-presentation-20260815-r5-final-policy",
+      "Files": 112,
+      "Bytes": 325548334
+    },
+    {
+      "Path": ".codex-tmp/residual-motion-surface-stable-bias",
+      "Files": 32,
+      "Bytes": 324919474
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-rollback-production-20260815-r1",
+      "Files": 112,
+      "Bytes": 324398513
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-production-20260815-final",
+      "Files": 112,
+      "Bytes": 321742313
+    },
+    {
+      "Path": ".perf-loop-runs/quality-sync-97417958",
+      "Files": 310,
+      "Bytes": 309642686
+    },
+    {
+      "Path": ".codex-tmp/residual-motion-l1-stable",
+      "Files": 20,
+      "Bytes": 308935787
+    },
+    {
+      "Path": "artifacts/tail-ddgi-final",
+      "Files": 12,
+      "Bytes": 298599648
+    },
+    {
+      "Path": ".codex-tmp/motion-lobe-l1-stable",
+      "Files": 12,
+      "Bytes": 298599648
+    },
+    {
+      "Path": ".perf-loop-runs/forward-enabled-contract-stage",
+      "Files": 41,
+      "Bytes": 287809828
+    },
+    {
+      "Path": ".perf-loop-runs/bistro-1080p-ddgihigh",
+      "Files": 14,
+      "Bytes": 283225723
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-presentation-20260815-r2",
+      "Files": 112,
+      "Bytes": 274921968
+    },
+    {
+      "Path": ".tmp/nsight-analysis-20260905",
+      "Files": 4,
+      "Bytes": 270899047
+    },
+    {
+      "Path": ".codex-tmp/pfm-preview",
+      "Files": 104,
+      "Bytes": 240490818
+    },
+    {
+      "Path": "artifacts/extraction-checkpoints",
+      "Files": 37,
+      "Bytes": 217295105
+    },
+    {
+      "Path": ".codex-tmp/ddgi-residual-isolation",
+      "Files": 24,
+      "Bytes": 193181650
+    },
+    {
+      "Path": "artifacts/renderdoc-volumetric-fix-final",
+      "Files": 2,
+      "Bytes": 181541542
+    },
+    {
+      "Path": "artifacts/startup-cornell-cache-migration-20260827-01",
+      "Files": 1,
+      "Bytes": 179634042
+    },
+    {
+      "Path": "artifacts/startup-release-seeded-cache-20260827-01",
+      "Files": 1,
+      "Bytes": 179634010
+    },
+    {
+      "Path": "artifacts/renderdoc-volumetric-fix",
+      "Files": 2,
+      "Bytes": 174219037
+    },
+    {
+      "Path": ".codex-tmp/second-floor-hybrid-shaders",
+      "Files": 12,
+      "Bytes": 169019956
+    },
+    {
+      "Path": ".perf-loop-runs/quality-sync-02861b13",
+      "Files": 155,
+      "Bytes": 154821343
+    },
+    {
+      "Path": ".perf-loop-runs/quality-sync-b9f6762b",
+      "Files": 155,
+      "Bytes": 154821343
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-presentation-20260815-r4-single-brick",
+      "Files": 56,
+      "Bytes": 154648655
+    },
+    {
+      "Path": ".codex-tmp/grazing-bounce-baseline-20260816",
+      "Files": 114,
+      "Bytes": 150590458
+    },
+    {
+      "Path": ".codex-tmp/grazing-bounce-fixed-20260816-r2",
+      "Files": 114,
+      "Bytes": 150589118
+    },
+    {
+      "Path": ".codex-tmp/grazing-bounce-fixed-20260816-r3",
+      "Files": 114,
+      "Bytes": 150476919
+    },
+    {
+      "Path": "artifacts/renderdoc-volumetric-white-repro",
+      "Files": 2,
+      "Bytes": 150117109
+    },
+    {
+      "Path": ".perf-loop-runs/forward-exact-live-range-report-20260903",
+      "Files": 6,
+      "Bytes": 149299824
+    },
+    {
+      "Path": ".perf-loop-runs/microdispatch-scene-compaction-20260904",
+      "Files": 6,
+      "Bytes": 149299824
+    },
+    {
+      "Path": ".codex-tmp/hybrid-reflection-quality-pass",
+      "Files": 24,
+      "Bytes": 136346696
+    },
+    {
+      "Path": ".perf-loop-runs/bistro-1080p-ddgihigh-final",
+      "Files": 5,
+      "Bytes": 124416520
+    },
+    {
+      "Path": ".perf-loop-runs/bistro-1080p-ddgihigh-final2",
+      "Files": 5,
+      "Bytes": 124416520
+    },
+    {
+      "Path": ".codex-tmp/gi-rdoc-fix5-ssgi-off-20260814-0835",
+      "Files": 56,
+      "Bytes": 120841727
+    },
+    {
+      "Path": ".codex-tmp/gi-rdoc-fix5-current-20260814-0830",
+      "Files": 56,
+      "Bytes": 119561784
+    },
+    {
+      "Path": ".codex-tmp/gi-fix5-cache-c5-20260814-0810",
+      "Files": 56,
+      "Bytes": 119250864
+    },
+    {
+      "Path": ".perf-loop-runs/ddgi-bordered-atlas-20260906",
+      "Files": 197,
+      "Bytes": 116718848
+    },
+    {
+      "Path": ".codex-tmp/bistro-camera-dump",
+      "Files": 93,
+      "Bytes": 114745555
+    },
+    {
+      "Path": ".codex-tmp/bistro-material-dump",
+      "Files": 93,
+      "Bytes": 114729435
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-detailed-20260815-r5",
+      "Files": 112,
+      "Bytes": 114667210
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-detailed-20260815-r1",
+      "Files": 112,
+      "Bytes": 113408187
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-detailed-20260815-r2",
+      "Files": 112,
+      "Bytes": 113257973
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-detailed-20260815-r4",
+      "Files": 112,
+      "Bytes": 113229286
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-fix-detailed-20260815-r3",
+      "Files": 112,
+      "Bytes": 112947672
+    },
+    {
+      "Path": ".codex-tmp/second-floor-scheduler-hybrid-r12",
+      "Files": 10,
+      "Bytes": 112770990
+    },
+    {
+      "Path": "artifacts/quality-locked-gpu-backpressure-20260831",
+      "Files": 2,
+      "Bytes": 112399056
+    },
+    {
+      "Path": ".codex-tmp/gi-refresh-fix-20260815",
+      "Files": 112,
+      "Bytes": 111240827
+    },
+    {
+      "Path": ".codex-tmp/gi-refresh-fix-20260815-r2",
+      "Files": 112,
+      "Bytes": 111240046
+    },
+    {
+      "Path": ".codex-tmp/gi-refresh-fix-20260815-r3",
+      "Files": 112,
+      "Bytes": 110977389
+    },
+    {
+      "Path": ".codex-tmp/gi-fix4-v10-20260814-0700",
+      "Files": 112,
+      "Bytes": 110413420
+    },
+    {
+      "Path": ".codex-tmp/cornell-correctness-fix7-20260814-1040",
+      "Files": 11,
+      "Bytes": 107822015
+    },
+    {
+      "Path": ".perf-loop-runs/planar-quick-20260902-225212",
+      "Files": 306,
+      "Bytes": 103334974
+    },
+    {
+      "Path": ".perf-loop-runs/forward-stationary-remediated-20260903-002330",
+      "Files": 154,
+      "Bytes": 101512284
+    },
+    {
+      "Path": ".codex-tmp/omm-bridge-static-build",
+      "Files": 47,
+      "Bytes": 100579675
+    },
+    {
+      "Path": ".perf-loop-runs/gtao-math-quick-20260904",
+      "Files": 5,
+      "Bytes": 99555200
+    },
+    {
+      "Path": "artifacts/stale-shader-fallback-probe-20260823-1704",
+      "Files": 41,
+      "Bytes": 99469784
+    },
+    {
+      "Path": ".codex-tmp/omm-sdk-build",
+      "Files": 51,
+      "Bytes": 97625394
+    },
+    {
+      "Path": ".perf-loop-runs/opaque-compute-20260905",
+      "Files": 7,
+      "Bytes": 91126295
+    },
+    {
+      "Path": "artifacts/ddgi-fix1-zerosupport-attribution",
+      "Files": 88,
+      "Bytes": 90448008
+    },
+    {
+      "Path": "artifacts/ddgi-fix2-convergence-gate",
+      "Files": 88,
+      "Bytes": 90417814
+    },
+    {
+      "Path": "artifacts/ddgi-fix3-backface-passthrough",
+      "Files": 88,
+      "Bytes": 90254035
+    },
+    {
+      "Path": "artifacts/ddgi-fix1-probe-deactivation",
+      "Files": 88,
+      "Bytes": 89902846
+    },
+    {
+      "Path": "artifacts/ddgi-source-energy-20260731-final-unoccluded",
+      "Files": 88,
+      "Bytes": 87926114
+    },
+    {
+      "Path": "artifacts/ddgi-source-energy-20260731-unoccluded",
+      "Files": 88,
+      "Bytes": 87899632
+    },
+    {
+      "Path": "artifacts/ddgi-fix2b-split-readout",
+      "Files": 88,
+      "Bytes": 86580848
+    },
+    {
+      "Path": ".perf-loop-runs/transparency-raymask-quick-20260903-015547",
+      "Files": 154,
+      "Bytes": 84151739
+    },
+    {
+      "Path": ".perf-loop-runs/forward-stationary-quick-20260902-235000",
+      "Files": 175,
+      "Bytes": 83909758
+    },
+    {
+      "Path": "artifacts/ddgi-source-energy-20260731-production-timing-repeat",
+      "Files": 88,
+      "Bytes": 83858694
+    },
+    {
+      "Path": ".codex-tmp/grazing-bounce-fixed-20260816-r1",
+      "Files": 57,
+      "Bytes": 83680020
+    },
+    {
+      "Path": "artifacts/ddgi-source-energy-20260731-production-timing",
+      "Files": 88,
+      "Bytes": 83409552
+    },
+    {
+      "Path": "artifacts/ddgi-source-energy-20260731-production-baseline-ea4",
+      "Files": 88,
+      "Bytes": 83371559
+    },
+    {
+      "Path": "artifacts/ddgi-source-energy-20260731-final-physical",
+      "Files": 88,
+      "Bytes": 82981843
+    },
+    {
+      "Path": "artifacts/ddgi-workclass-abi-fix-verify",
+      "Files": 88,
+      "Bytes": 82937552
+    },
+    {
+      "Path": "artifacts/ddgi-source-energy-20260731-physical",
+      "Files": 88,
+      "Bytes": 82826415
+    },
+    {
+      "Path": "artifacts/ddgi-cascade-rayfloor-verify",
+      "Files": 88,
+      "Bytes": 82763480
+    },
+    {
+      "Path": ".perf-loop-runs/ddgi-audit-onechunk-20260903-012237",
+      "Files": 154,
+      "Bytes": 81228459
+    },
+    {
+      "Path": ".perf-loop-runs/ddgi-exact-quick-20260903-011509",
+      "Files": 154,
+      "Bytes": 81228459
+    },
+    {
+      "Path": ".tmp/ddgi-publish-build",
+      "Files": 248,
+      "Bytes": 80976388
+    },
+    {
+      "Path": "artifacts/gi-flat-brightness-fixed",
+      "Files": 52,
+      "Bytes": 80364439
+    },
+    {
+      "Path": "artifacts/SponzaCasterCullingTest",
+      "Files": 52,
+      "Bytes": 76448894
+    },
+    {
+      "Path": ".perf-loop-runs/gtao-spatial-plan5-20260904",
+      "Files": 3,
+      "Bytes": 74649912
+    },
+    {
+      "Path": ".tmp/transparent-ray-mask-20260903",
+      "Files": 3,
+      "Bytes": 74649912
+    },
+    {
+      "Path": ".perf-loop-runs/motion-vector-plan10-20260904",
+      "Files": 3,
+      "Bytes": 74649912
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-20260818",
+      "Files": 3,
+      "Bytes": 74649912
+    },
+    {
+      "Path": ".perf-loop-runs/timeout-diagnosis",
+      "Files": 3,
+      "Bytes": 74649912
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-final-locked",
+      "Files": 3,
+      "Bytes": 74649912
+    },
+    {
+      "Path": ".perf-loop-runs/forward-fragment-interface-20260904",
+      "Files": 3,
+      "Bytes": 74649912
+    },
+    {
+      "Path": "artifacts/receiver-cache-qualification-20260827",
+      "Files": 3,
+      "Bytes": 74649912
+    },
+    {
+      "Path": ".perf-loop-runs/hybrid-ddgi-cache-unlock-20260904",
+      "Files": 3,
+      "Bytes": 74649912
+    },
+    {
+      "Path": ".codex-tmp/ddgi-dark-baseline-20260811",
+      "Files": 108,
+      "Bytes": 73100305
+    },
+    {
+      "Path": "artifacts/shadow-iter-002-range250",
+      "Files": 52,
+      "Bytes": 72588372
+    },
+    {
+      "Path": "artifacts/shadow-iter-001",
+      "Files": 52,
+      "Bytes": 72556975
+    },
+    {
+      "Path": "artifacts/SponzaShadowDepthDiagnostics",
+      "Files": 52,
+      "Bytes": 72556975
+    },
+    {
+      "Path": ".codex-tmp/ddgi-oct-pole-fix-20260811",
+      "Files": 108,
+      "Bytes": 72449688
+    },
+    {
+      "Path": "artifacts/gi-audit-postfix",
+      "Files": 52,
+      "Bytes": 71922612
+    },
+    {
+      "Path": ".codex-tmp/ddgi-wrap-fix-dense3-20260811",
+      "Files": 108,
+      "Bytes": 71683417
+    },
+    {
+      "Path": ".codex-tmp/ddgi-ring-affine-fix-dense-20260811",
+      "Files": 108,
+      "Bytes": 71524716
+    },
+    {
+      "Path": ".codex-tmp/quality-plan",
+      "Files": 10,
+      "Bytes": 66162668
+    },
+    {
+      "Path": "artifacts/SponzaCasterCullingTest-Courtyard90",
+      "Files": 52,
+      "Bytes": 66076983
+    },
+    {
+      "Path": "artifacts/gi-audit-production-final-v4b",
+      "Files": 52,
+      "Bytes": 63751545
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-audit-scroll-preempt-motion-20260818",
+      "Files": 10,
+      "Bytes": 62737572
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-depth-aware-c5-off-motion-20260818",
+      "Files": 10,
+      "Bytes": 62686670
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-moving-3",
+      "Files": 10,
+      "Bytes": 62621525
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-audit-scroll-preempt-reflection-ab-20260818",
+      "Files": 10,
+      "Bytes": 62621118
+    },
+    {
+      "Path": ".codex-tmp/gi-floor-radial-detailed-20260815-r4",
+      "Files": 56,
+      "Bytes": 62598796
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-indirect165-motion-20260818",
+      "Files": 10,
+      "Bytes": 62587198
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-audit-scroll-preempt-sun-scale-20260818",
+      "Files": 10,
+      "Bytes": 62438890
+    },
+    {
+      "Path": "artifacts/gi-audit-production-final",
+      "Files": 52,
+      "Bytes": 62381766
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-audit-scroll-preempt-sun-direction-20260818",
+      "Files": 10,
+      "Bytes": 62351594
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-sun-scale-step-20260818",
+      "Files": 10,
+      "Bytes": 61982887
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-receiver-map-fix-v5-a",
+      "Files": 10,
+      "Bytes": 61914288
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-steady-motion-20260818",
+      "Files": 10,
+      "Bytes": 61884328
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-motion-renderdoc",
+      "Files": 10,
+      "Bytes": 61856160
+    },
+    {
+      "Path": ".codex-tmp/gi-ab-ssgi-off-20260814-0615",
+      "Files": 56,
+      "Bytes": 61844769
+    },
+    {
+      "Path": ".codex-tmp/gi-fix6-probe-liveness-20260814-0945",
+      "Files": 56,
+      "Bytes": 61842082
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-sun-scale-passed-v2-20260818",
+      "Files": 10,
+      "Bytes": 61815909
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-sun-scale-passed-20260818",
+      "Files": 10,
+      "Bytes": 61807143
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-receiver-map-fix-v5-renderdoc",
+      "Files": 10,
+      "Bytes": 61792722
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-sun-scale-fast-relight-20260818",
+      "Files": 10,
+      "Bytes": 61761397
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-reflection-source-ab-20260818",
+      "Files": 10,
+      "Bytes": 61738433
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-convergence-diagnostic-20260818-0050",
+      "Files": 10,
+      "Bytes": 61714313
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-tail-diagnostic-20260818-0056",
+      "Files": 10,
+      "Bytes": 61711634
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-steady-topology-fix-20260818-0037",
+      "Files": 10,
+      "Bytes": 61694953
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-motion-final",
+      "Files": 10,
+      "Bytes": 61693441
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-local-scroll-fix-20260818-0131",
+      "Files": 10,
+      "Bytes": 61670003
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-post-refactor-motion-20260818",
+      "Files": 10,
+      "Bytes": 61591913
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-sun-direction-20260818",
+      "Files": 10,
+      "Bytes": 61525867
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-audit2x-20260818-0214",
+      "Files": 10,
+      "Bytes": 61415703
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-convergence-v3-20260818-0230",
+      "Files": 10,
+      "Bytes": 61343347
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-steady-motion-investigation",
+      "Files": 10,
+      "Bytes": 60700824
+    },
+    {
+      "Path": "artifacts/advanced-gi-source-validation-20260811",
+      "Files": 704,
+      "Bytes": 60558209
+    },
+    {
+      "Path": ".codex-tmp/gi-fix3-v9-20260814-0605",
+      "Files": 56,
+      "Bytes": 60550932
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-current-1",
+      "Files": 10,
+      "Bytes": 60150615
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-live-scroll-v4-final-d",
+      "Files": 10,
+      "Bytes": 58839594
+    },
+    {
+      "Path": "artifacts/gi-audit-fixed",
+      "Files": 52,
+      "Bytes": 58641535
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-live-scroll-v4-final-c",
+      "Files": 10,
+      "Bytes": 58630919
+    },
+    {
+      "Path": "artifacts/gi-audit-final",
+      "Files": 52,
+      "Bytes": 58386786
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-live-scroll-v4-final-a",
+      "Files": 10,
+      "Bytes": 58072735
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-live-scroll-v4-final-b",
+      "Files": 10,
+      "Bytes": 58067377
+    },
+    {
+      "Path": "artifacts/shadow-iter-003-direct-only",
+      "Files": 52,
+      "Bytes": 57999099
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-local-repair-20260818-0335",
+      "Files": 10,
+      "Bytes": 57843934
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-moving-2",
+      "Files": 10,
+      "Bytes": 57673867
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-cell-follow-20260818-0250",
+      "Files": 10,
+      "Bytes": 56941945
+    },
+    {
+      "Path": ".codex-tmp/second-floor-candidate-shaders",
+      "Files": 2,
+      "Bytes": 56380896
+    },
+    {
+      "Path": ".perf-loop-runs/gtao-fix-20260904",
+      "Files": 13,
+      "Bytes": 56176426
+    },
+    {
+      "Path": ".perf-loop-runs/final-quality-locked-20260901",
+      "Files": 10,
+      "Bytes": 56145256
+    },
+    {
+      "Path": "artifacts/gi-audit-current",
+      "Files": 52,
+      "Bytes": 56054101
+    },
+    {
+      "Path": ".perf-loop-runs/forward-quick-20260902-234000",
+      "Files": 140,
+      "Bytes": 54786479
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-retained-epoch-20260818-0310",
+      "Files": 10,
+      "Bytes": 54768786
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-relax-090-20260818-0153",
+      "Files": 10,
+      "Bytes": 54195286
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-fast-convergence-20260818-0144",
+      "Files": 10,
+      "Bytes": 54163673
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-audit512-only-20260818-0200",
+      "Files": 10,
+      "Bytes": 54156649
+    },
+    {
+      "Path": ".perf-loop-runs/hybrid-forward-ddgi-permutation-20260904",
+      "Files": 7,
+      "Bytes": 53811460
+    },
+    {
+      "Path": ".perf-loop-runs/ddgi-audit-twochunk-control-20260903-012526",
+      "Files": 153,
+      "Bytes": 51667487
+    },
+    {
+      "Path": "artifacts/startup-fix-bistro",
+      "Files": 1,
+      "Bytes": 51576928
+    },
+    {
+      "Path": ".perf-loop-runs/temporal-validity-plan9-12-20260904",
+      "Files": 4,
+      "Bytes": 49801440
+    },
+    {
+      "Path": "artifacts/forward-pipeline-promotion-20260904",
+      "Files": 2,
+      "Bytes": 49766608
+    },
+    {
+      "Path": ".perf-loop-runs/ddgi-audit-motion-plan13-20260904",
+      "Files": 2,
+      "Bytes": 49766608
+    },
+    {
+      "Path": "artifacts/snapshot-fix-probe",
+      "Files": 2,
+      "Bytes": 49766608
+    },
+    {
+      "Path": ".perf-loop-runs/scene-compaction-plan8-20260904",
+      "Files": 2,
+      "Bytes": 49766608
+    },
+    {
+      "Path": ".perf-loop-runs/meshlet-plan11-20260904",
+      "Files": 2,
+      "Bytes": 49766608
+    },
+    {
+      "Path": ".perf-loop-runs/transparency-plan6-20260904",
+      "Files": 2,
+      "Bytes": 49766608
+    },
+    {
+      "Path": ".codex-tmp/rdoc-fix5-ssgi-off-20260814-0835-analysis",
+      "Files": 8,
+      "Bytes": 48982179
+    },
+    {
+      "Path": ".codex-tmp/rdoc-fix5-current-20260814-0830-analysis",
+      "Files": 8,
+      "Bytes": 48943136
+    },
+    {
+      "Path": ".codex-tmp/sponza-high-reflections-off",
+      "Files": 6,
+      "Bytes": 48271420
+    },
+    {
+      "Path": ".codex-tmp/sponza-high-l1-stable",
+      "Files": 6,
+      "Bytes": 47916854
+    },
+    {
+      "Path": ".codex-tmp/sponza-high-surface-stable-bias",
+      "Files": 6,
+      "Bytes": 47397827
+    },
+    {
+      "Path": ".codex-tmp/ddgi-oct-pole-fix-all-dense-20260811",
+      "Files": 108,
+      "Bytes": 47279588
+    },
+    {
+      "Path": ".codex-tmp/sponza-high-ddgi-exact",
+      "Files": 6,
+      "Bytes": 47075236
+    },
+    {
+      "Path": ".codex-tmp/omm-sdk-audit",
+      "Files": 380,
+      "Bytes": 46790260
+    },
+    {
+      "Path": ".codex-tmp/sponza-high-baseline",
+      "Files": 5,
+      "Bytes": 45108014
+    },
+    {
+      "Path": ".codex-tmp/sponza-high-receiver-material",
+      "Files": 5,
+      "Bytes": 44905910
+    },
+    {
+      "Path": ".tmp",
+      "Files": 72,
+      "Bytes": 43195174
+    },
+    {
+      "Path": ".codex-tmp/texture-window-2048",
+      "Files": 6,
+      "Bytes": 40251490
+    },
+    {
+      "Path": ".codex-tmp/ddgi-reconstruction-after-temporal-normal",
+      "Files": 5,
+      "Bytes": 39252884
+    },
+    {
+      "Path": "artifacts/startup-fix-sponza",
+      "Files": 114,
+      "Bytes": 38661944
+    },
+    {
+      "Path": ".codex-tmp/rdoc-v9-forward-probe-fixed",
+      "Files": 6,
+      "Bytes": 35864229
+    },
+    {
+      "Path": ".codex-tmp/bistro-renderdoc-analysis",
+      "Files": 16,
+      "Bytes": 33793853
+    },
+    {
+      "Path": "artifacts/approved-plan-baseline-20260827",
+      "Files": 3,
+      "Bytes": 31948243
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-nsight-final-v2-20260818",
+      "Files": 5,
+      "Bytes": 31197574
+    },
+    {
+      "Path": "artifacts/startup-fix-gpu",
+      "Files": 102,
+      "Bytes": 29118268
+    },
+    {
+      "Path": "artifacts/pipeline-cache-cold-fast-20260822",
+      "Files": 1,
+      "Bytes": 28885041
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-nsight-final-20260818",
+      "Files": 4,
+      "Bytes": 25124385
+    },
+    {
+      "Path": ".codex-tmp/renderdoc_textures",
+      "Files": 8,
+      "Bytes": 24939794
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-ao-legacy",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/material-reflection-diagnosis",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/texture-window-1024-ab",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-final-cold-2",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/ddgi-reconstruction-after-late-sh-clamp",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/residual-motion-ddgi-exact",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/ddgi-stable-scroll-611ed334",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-motion-legacy",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/sponza-high-lobe-l1-stable",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-as-uncached",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-ddgi-compat",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/trace-recipe-rollback-probe-20260901",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-blur-strip",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/ddgi-reconstruction-after-hoist",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-final-cold-1",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-final-cold-3",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-final-v2-cold-1",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-shared-uniforms",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/trace-recipe-steady-state-20260901",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/runtime-prime-probe4-a29e6217",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/planar-activation",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-final-v2-cold-3",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/bistro-foliage-incident-verified-20260901",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/reflection-cleanup-20260903-after-repeat",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-final-v2-cold-2",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/receiver-cache-exact-probe-20260901",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/texture-window-2048-ab",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/ddgi-motion-final",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/ddgi-reconstruction-after-hdr",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/ddgi-transient-repro-shipping-1",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/ddgi-reconstruction-before-hdr",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-receiver-global",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/renderer-hotpaths-final-instrumented",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/bistro-foliage-incident-20260901",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/ddgi-reconstruction-final-candidate",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/runtime-prime-probe2-a29e6217",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/reflection-cleanup-20260903-after",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/forward-enabled-contract-check",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/trace-recipe-warm-probe-20260901",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".perf-loop-runs/reflection-cleanup-20260903-before-reused",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp",
+      "Files": 100,
+      "Bytes": 24850879
+    },
+    {
+      "Path": "artifacts/black-screen-repro-20260830-b",
+      "Files": 133,
+      "Bytes": 21891769
+    },
+    {
+      "Path": "artifacts/startup-fix-seed-check",
+      "Files": 87,
+      "Bytes": 21280471
+    },
+    {
+      "Path": ".codex-tmp/dark-patch-capture-20260811",
+      "Files": 54,
+      "Bytes": 20886674
+    },
+    {
+      "Path": "artifacts/cold-final-frame-20260830-i",
+      "Files": 123,
+      "Bytes": 20718726
+    },
+    {
+      "Path": "artifacts/cold-final-frame-20260830-h",
+      "Files": 123,
+      "Bytes": 20718726
+    },
+    {
+      "Path": "artifacts/cold-final-frame-20260830-f",
+      "Files": 123,
+      "Bytes": 20718726
+    },
+    {
+      "Path": "artifacts/cold-final-frame-20260830-g",
+      "Files": 123,
+      "Bytes": 20718726
+    },
+    {
+      "Path": "artifacts/startup-visible-gate-20260830-3",
+      "Files": 118,
+      "Bytes": 20314416
+    },
+    {
+      "Path": "artifacts/startup-visible-gate-20260830-2",
+      "Files": 118,
+      "Bytes": 20314416
+    },
+    {
+      "Path": "artifacts/pipeline-cache-cold-lazy-20260822",
+      "Files": 1,
+      "Bytes": 20313409
+    },
+    {
+      "Path": "artifacts/startup-visible-gate-20260830-1",
+      "Files": 117,
+      "Bytes": 18719326
+    },
+    {
+      "Path": "artifacts/pipeline-cache-cold-lazy-weighted-20260822",
+      "Files": 1,
+      "Bytes": 18464913
+    },
+    {
+      "Path": "artifacts/startup-cold-cache-validation-20260827",
+      "Files": 1,
+      "Bytes": 15965446
+    },
+    {
+      "Path": "artifacts/shader-fix-investigation",
+      "Files": 9,
+      "Bytes": 15902664
+    },
+    {
+      "Path": ".codex-tmp/gi-fix2-20260814-0550",
+      "Files": 5,
+      "Bytes": 15136827
+    },
+    {
+      "Path": ".tmp/bin",
+      "Files": 11,
+      "Bytes": 14251128
+    },
+    {
+      "Path": ".codex-tmp/nvidia-bistro-reference",
+      "Files": 7,
+      "Bytes": 13702672
+    },
+    {
+      "Path": "artifacts/startup-cold-cache-validation-20260827-03",
+      "Files": 1,
+      "Bytes": 12595466
+    },
+    {
+      "Path": "artifacts/startup-cold-cache-validation-20260827-02",
+      "Files": 1,
+      "Bytes": 12595466
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-motion-nsight",
+      "Files": 2,
+      "Bytes": 12419485
+    },
+    {
+      "Path": "artifacts/c3-compact-check",
+      "Files": 22,
+      "Bytes": 11871116
+    },
+    {
+      "Path": ".codex-tmp/omm-bridge-pinned-build",
+      "Files": 28,
+      "Bytes": 11655903
+    },
+    {
+      "Path": ".codex-tmp/second-floor-replay-rendering",
+      "Files": 2,
+      "Bytes": 10410804
+    },
+    {
+      "Path": "artifacts/black-screen-repro-20260830",
+      "Files": 103,
+      "Bytes": 10335217
+    },
+    {
+      "Path": ".tmp/obj",
+      "Files": 18,
+      "Bytes": 8681255
+    },
+    {
+      "Path": "artifacts/cold-final-frame-20260830-b",
+      "Files": 33,
+      "Bytes": 8330670
+    },
+    {
+      "Path": "artifacts/bistro-texture-restoration",
+      "Files": 4,
+      "Bytes": 8109031
+    },
+    {
+      "Path": "artifacts/gi-audit-production-verified",
+      "Files": 2,
+      "Bytes": 7742086
+    },
+    {
+      "Path": "artifacts/gi-audit-production-final-v4",
+      "Files": 2,
+      "Bytes": 7742086
+    },
+    {
+      "Path": ".codex-tmp/shader-probes",
+      "Files": 18,
+      "Bytes": 6986980
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-debug-final-indirect-20260818",
+      "Files": 1,
+      "Bytes": 6567384
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-skyvis-off-presentation-20260818",
+      "Files": 1,
+      "Bytes": 6371872
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-diagnostic-c5-profile-off-20260818",
+      "Files": 1,
+      "Bytes": 6357617
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-depth-aware-presentation-20260818",
+      "Files": 1,
+      "Bytes": 6357543
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-audit-scroll-preempt-presentation-20260818",
+      "Files": 1,
+      "Bytes": 6357404
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-depth-aware-c5-preinit-off-presentation-20260818",
+      "Files": 1,
+      "Bytes": 6356799
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-depth-aware-c5-off-presentation-20260818",
+      "Files": 1,
+      "Bytes": 6356489
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-c5-restored-presentation-20260818",
+      "Files": 1,
+      "Bytes": 6356358
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-depth-aware-c5-disabled-presentation-20260818",
+      "Files": 1,
+      "Bytes": 6355344
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-indirect165-presentation-repeat-20260818",
+      "Files": 1,
+      "Bytes": 6309542
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-indirect165-presentation-20260818",
+      "Files": 1,
+      "Bytes": 6309531
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-isolate-c5-off-20260818",
+      "Files": 1,
+      "Bytes": 6309344
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-isolate-exact-beauty-20260818",
+      "Files": 1,
+      "Bytes": 6299598
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-presentation-2",
+      "Files": 1,
+      "Bytes": 6252583
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-presentation-3",
+      "Files": 1,
+      "Bytes": 6230492
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-presentation-20260818",
+      "Files": 1,
+      "Bytes": 6228332
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-presentation-guiding-off-20260818",
+      "Files": 1,
+      "Bytes": 6228330
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-presentation-passed-20260818",
+      "Files": 1,
+      "Bytes": 6226657
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-presentation-certified-publication-20260818",
+      "Files": 1,
+      "Bytes": 6226652
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-presentation-epoch-bind-20260818",
+      "Files": 1,
+      "Bytes": 6226616
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-final-presentation-ray-repair-20260818",
+      "Files": 1,
+      "Bytes": 6226611
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-presentation-final-candidate",
+      "Files": 1,
+      "Bytes": 6190148
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-presentation-hdr-tuned",
+      "Files": 1,
+      "Bytes": 6144026
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-presentation-hdr-parallax",
+      "Files": 1,
+      "Bytes": 6016877
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-presentation-hdr10",
+      "Files": 1,
+      "Bytes": 6012762
+    },
+    {
+      "Path": ".codex-tmp/sponza-v3-direct-20260814-1025",
+      "Files": 2,
+      "Bytes": 5889944
+    },
+    {
+      "Path": ".codex-tmp/sponza-static-source-fix-20260814-114152",
+      "Files": 2,
+      "Bytes": 5877994
+    },
+    {
+      "Path": ".codex-tmp/sponza-certified-proxy-20260814-1140",
+      "Files": 2,
+      "Bytes": 5870335
+    },
+    {
+      "Path": "artifacts/verify-build",
+      "Files": 85,
+      "Bytes": 5760596
+    },
+    {
+      "Path": ".codex-tmp/sponza-adaptive-default-visual-20260814-1350",
+      "Files": 2,
+      "Bytes": 5508260
+    },
+    {
+      "Path": ".codex-tmp/advanced-gi-spirv-original",
+      "Files": 9,
+      "Bytes": 5446456
+    },
+    {
+      "Path": ".codex-tmp/advanced-gi-spirv-opt",
+      "Files": 9,
+      "Bytes": 5423872
+    },
+    {
+      "Path": "artifacts/bistro-final-exact",
+      "Files": 1,
+      "Bytes": 4511522
+    },
+    {
+      "Path": "artifacts/bistro-final",
+      "Files": 1,
+      "Bytes": 4504798
+    },
+    {
+      "Path": "artifacts/bistro-final-debug",
+      "Files": 1,
+      "Bytes": 4456078
+    },
+    {
+      "Path": ".perf-loop-runs/forward-shader-remediated-124c86f5",
+      "Files": 3,
+      "Bytes": 4366708
+    },
+    {
+      "Path": ".codex-tmp/second-floor-path-check",
+      "Files": 1,
+      "Bytes": 4284375
+    },
+    {
+      "Path": "artifacts/bistro-fixed-run-4",
+      "Files": 1,
+      "Bytes": 4249844
+    },
+    {
+      "Path": ".codex-tmp/baseline-hook-check",
+      "Files": 1,
+      "Bytes": 4241793
+    },
+    {
+      "Path": ".codex-tmp/b1-umul",
+      "Files": 6,
+      "Bytes": 4233364
+    },
+    {
+      "Path": ".perf-loop-runs/forward-exact-live-range-probe",
+      "Files": 3,
+      "Bytes": 4193308
+    },
+    {
+      "Path": "artifacts/bistro-fixed-final-clean",
+      "Files": 1,
+      "Bytes": 4146436
+    },
+    {
+      "Path": "artifacts/bistro-fixed-run-3",
+      "Files": 1,
+      "Bytes": 4123795
+    },
+    {
+      "Path": ".codex-tmp/image-diff",
+      "Files": 20,
+      "Bytes": 4027447
+    },
+    {
+      "Path": "artifacts/bistro-fixed-run-2",
+      "Files": 1,
+      "Bytes": 3982023
+    },
+    {
+      "Path": ".codex-tmp/grazing-bounce-side-fixed-20260816-r2b",
+      "Files": 1,
+      "Bytes": 3833657
+    },
+    {
+      "Path": ".codex-tmp/second-floor-control-300c",
+      "Files": 1,
+      "Bytes": 3826426
+    },
+    {
+      "Path": ".codex-tmp/second-floor-yphase-control-1570",
+      "Files": 1,
+      "Bytes": 3813604
+    },
+    {
+      "Path": ".codex-tmp/second-floor-hybrid-candidate-1730-v2",
+      "Files": 1,
+      "Bytes": 3811896
+    },
+    {
+      "Path": ".codex-tmp/second-floor-reload-control-1730",
+      "Files": 1,
+      "Bytes": 3811772
+    },
+    {
+      "Path": ".codex-tmp/second-floor-transition-sponza-control-1570",
+      "Files": 1,
+      "Bytes": 3800884
+    },
+    {
+      "Path": ".codex-tmp/second-floor-forced-origin-control-renderer-1730",
+      "Files": 1,
+      "Bytes": 3797730
+    },
+    {
+      "Path": ".codex-tmp/second-floor-forced-origin-candidate-1730",
+      "Files": 1,
+      "Bytes": 3797212
+    },
+    {
+      "Path": ".codex-tmp/second-floor-adjacent-ring-candidate-r6-1730",
+      "Files": 1,
+      "Bytes": 3795578
+    },
+    {
+      "Path": ".codex-tmp/second-floor-control-framebuffer-r7-1730",
+      "Files": 1,
+      "Bytes": 3795568
+    },
+    {
+      "Path": ".codex-tmp/second-floor-normal-recovery-r10-1730",
+      "Files": 1,
+      "Bytes": 3795526
+    },
+    {
+      "Path": ".codex-tmp/second-floor-same-ring-candidate-r5-1730",
+      "Files": 1,
+      "Bytes": 3795526
+    },
+    {
+      "Path": ".codex-tmp/second-floor-bias-domain-r11-1730",
+      "Files": 1,
+      "Bytes": 3795505
+    },
+    {
+      "Path": ".codex-tmp/grazing-bounce-side-fixed-20260816-r3",
+      "Files": 1,
+      "Bytes": 3785956
+    },
+    {
+      "Path": ".codex-tmp/second-floor-scheduler-remap-r12-1730",
+      "Files": 1,
+      "Bytes": 3778460
+    },
+    {
+      "Path": ".codex-tmp/second-floor-control-down-1570",
+      "Files": 1,
+      "Bytes": 3775830
+    },
+    {
+      "Path": ".codex-tmp/second-floor-control-down-300",
+      "Files": 1,
+      "Bytes": 3767009
+    },
+    {
+      "Path": ".codex-tmp/first-floor-regression-scheduler-r14-1730",
+      "Files": 1,
+      "Bytes": 3681286
+    },
+    {
+      "Path": ".perf-loop-runs/forward-shader-check-124c86f5",
+      "Files": 3,
+      "Bytes": 3508464
+    },
+    {
+      "Path": ".codex-tmp/cornell-final-interactive-20260814-132430",
+      "Files": 5,
+      "Bytes": 2511368
+    },
+    {
+      "Path": "artifacts/volumetric-resolution-temporal-final",
+      "Files": 6,
+      "Bytes": 2492151
+    },
+    {
+      "Path": "artifacts/volumetric-resolution-flicker-fixed-final",
+      "Files": 6,
+      "Bytes": 2451521
+    },
+    {
+      "Path": ".codex-tmp/decal-regression-validation-20260830-final",
+      "Files": 1,
+      "Bytes": 2328517
+    },
+    {
+      "Path": "artifacts/shadow-user-view-003-authored-sun-visual",
+      "Files": 1,
+      "Bytes": 2081687
+    },
+    {
+      "Path": ".codex-tmp/advanced-gi-glslc",
+      "Files": 3,
+      "Bytes": 1959428
+    },
+    {
+      "Path": ".codex-tmp/advanced-gi-base-full-probe",
+      "Files": 3,
+      "Bytes": 1938972
+    },
+    {
+      "Path": ".codex-tmp/startup-diagnosis",
+      "Files": 2,
+      "Bytes": 1718380
+    },
+    {
+      "Path": "artifacts/sparse-ddgi-final",
+      "Files": 5,
+      "Bytes": 1635708
+    },
+    {
+      "Path": ".codex-tmp/refinement-base-boundary-shader-check",
+      "Files": 2,
+      "Bytes": 1588812
+    },
+    {
+      "Path": ".codex-tmp/shader-compile-bench",
+      "Files": 1,
+      "Bytes": 1153956
+    },
+    {
+      "Path": ".codex-tmp/omm-bridge-build",
+      "Files": 7,
+      "Bytes": 1041956
+    },
+    {
+      "Path": ".codex-tmp/cornell-v3-final-20260814-1020",
+      "Files": 2,
+      "Bytes": 1028375
+    },
+    {
+      "Path": ".codex-tmp/cornell-static-source-fix-20260814-114550",
+      "Files": 2,
+      "Bytes": 1015256
+    },
+    {
+      "Path": ".codex-tmp/bistro-quality-debug-skyvis-20260818",
+      "Files": 1,
+      "Bytes": 983649
+    },
+    {
+      "Path": ".codex-tmp/cornell-ab-fibonacci-20260814-0945",
+      "Files": 2,
+      "Bytes": 973548
+    },
+    {
+      "Path": "artifacts/volumetric-runtime-ultra",
+      "Files": 1,
+      "Bytes": 933245
+    },
+    {
+      "Path": ".codex-tmp/omm-sdk-install",
+      "Files": 2,
+      "Bytes": 907940
+    },
+    {
+      "Path": "artifacts/volumetric-resolution-temporal-fix",
+      "Files": 1,
+      "Bytes": 906407
+    },
+    {
+      "Path": "artifacts/volumetric-resolution-flicker-fixed-pixel9",
+      "Files": 1,
+      "Bytes": 887431
+    },
+    {
+      "Path": "artifacts/bistro-fix",
+      "Files": 1,
+      "Bytes": 798589
+    },
+    {
+      "Path": "artifacts/release-volumetric-hardened",
+      "Files": 1,
+      "Bytes": 788918
+    },
+    {
+      "Path": "artifacts/volumetric-runtime-check-4",
+      "Files": 1,
+      "Bytes": 782979
+    },
+    {
+      "Path": "artifacts/volumetric-white-fix",
+      "Files": 1,
+      "Bytes": 775217
+    },
+    {
+      "Path": "artifacts/release-volumetric-after-rebuild",
+      "Files": 1,
+      "Bytes": 771250
+    },
+    {
+      "Path": ".codex-tmp/omm-bridge-pinned-artifacts",
+      "Files": 1,
+      "Bytes": 759296
+    },
+    {
+      "Path": "artifacts/volumetric-runtime-check-3",
+      "Files": 1,
+      "Bytes": 728478
+    },
+    {
+      "Path": "artifacts/volumetric-runtime-check-2",
+      "Files": 1,
+      "Bytes": 725118
+    },
+    {
+      "Path": ".codex-tmp/gi-roadmap-final-visual-foreground",
+      "Files": 1,
+      "Bytes": 547274
+    },
+    {
+      "Path": ".codex-tmp/gi-loop",
+      "Files": 3,
+      "Bytes": 535388
+    },
+    {
+      "Path": "artifacts/volumetric-fogged-scene-fix",
+      "Files": 1,
+      "Bytes": 508757
+    },
+    {
+      "Path": ".codex-tmp/ddgi-final-inspection",
+      "Files": 4,
+      "Bytes": 498865
+    },
+    {
+      "Path": ".codex-tmp/gi-b3-b4-visual",
+      "Files": 1,
+      "Bytes": 486688
+    },
+    {
+      "Path": ".codex-tmp/second-floor-forced-origin-control-1730",
+      "Files": 1,
+      "Bytes": 446451
+    },
+    {
+      "Path": ".codex-tmp/ddgi-reconstruction-before",
+      "Files": 1,
+      "Bytes": 389010
+    },
+    {
+      "Path": "artifacts/stale-shader-fallback-result",
+      "Files": 1,
+      "Bytes": 386137
+    },
+    {
+      "Path": "artifacts/gtao-texel-center-candidate-settled-20260904",
+      "Files": 1,
+      "Bytes": 342777
+    },
+    {
+      "Path": "artifacts/gtao-halfres-texel-center-candidate-20260904",
+      "Files": 1,
+      "Bytes": 318219
+    },
+    {
+      "Path": ".codex-tmp/c5-v6-packed",
+      "Files": 6,
+      "Bytes": 242904
+    },
+    {
+      "Path": "artifacts/volumetric-debug-density",
+      "Files": 1,
+      "Bytes": 225302
+    },
+    {
+      "Path": ".codex-tmp/second-floor-debug-residency-fallback-r9-1730",
+      "Files": 1,
+      "Bytes": 173312
+    },
+    {
+      "Path": ".codex-tmp/c5-v6",
+      "Files": 5,
+      "Bytes": 167844
+    },
+    {
+      "Path": ".perf-loop-runs/reflection-ao-20260905",
+      "Files": 3,
+      "Bytes": 156164
+    },
+    {
+      "Path": ".codex-tmp/c3-pipeline-test",
+      "Files": 6,
+      "Bytes": 147176
+    },
+    {
+      "Path": "artifacts/shader-iteration",
+      "Files": 3,
+      "Bytes": 132344
+    },
+    {
+      "Path": ".codex-tmp/second-floor-same-ring-candidate-r4-1730",
+      "Files": 1,
+      "Bytes": 111176
+    },
+    {
+      "Path": ".codex-tmp/second-floor-transition-control-1570",
+      "Files": 1,
+      "Bytes": 109774
+    },
+    {
+      "Path": ".codex-tmp/second-floor-debug-blend-r8-1730",
+      "Files": 1,
+      "Bytes": 102630
+    },
+    {
+      "Path": "artifacts/gtao-texel-center-candidate-20260904",
+      "Files": 1,
+      "Bytes": 87457
+    },
+    {
+      "Path": ".codex-tmp/c5-spv-validation",
+      "Files": 5,
+      "Bytes": 81228
+    },
+    {
+      "Path": ".codex-tmp/rdoc-fix5-reflection-state-20260814-0920",
+      "Files": 4,
+      "Bytes": 78944
+    },
+    {
+      "Path": ".codex-tmp/second-floor-scheduler-blend-r13-1730",
+      "Files": 1,
+      "Bytes": 74093
+    },
+    {
+      "Path": "artifacts/shader-validation",
+      "Files": 2,
+      "Bytes": 43736
+    },
+    {
+      "Path": ".codex-tmp/gi-roadmap-final-visual-client",
+      "Files": 1,
+      "Bytes": 7905
+    }
+  ],
+  "Failures": []
+}

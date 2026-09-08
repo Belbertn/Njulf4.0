@@ -177,13 +177,16 @@ internal sealed class SampleDiagnosticsReporter
             return;
 
         _printedFrameDiagnostics = true;
+        string tileStatistics = diagnostics.TiledLightDiagnosticsValid
+            ? $"tileLightsAvgMax={diagnostics.AverageLightsPerNonEmptyTile:F1}/{diagnostics.MaxLightsInAnyTile}, " +
+              $"tileSaturated={diagnostics.LightTileSaturationCount}, lightCullRejected={diagnostics.LightCullRejectedPointCount}/{diagnostics.LightCullRejectedSpotCount}, "
+            : "tileStatistics=not collected, ";
         Console.WriteLine(
             $"Frame diagnostics scene: visibleObjects={diagnostics.VisibleObjectCount}, visibleMeshlets={diagnostics.VisibleMeshletCount}, " +
             $"opaqueObjects={diagnostics.OpaqueObjectCount}, maskedObjects={diagnostics.MaskedObjectCount}, transparentObjects={diagnostics.TransparentObjectCount}, " +
             $"opaqueMeshlets={diagnostics.OpaqueMeshletCount}, transparentMeshlets={diagnostics.TransparentMeshletCount}, blendMaterials={diagnostics.BlendMaterialCount}, " +
             $"lights={diagnostics.LightCount}, tiles={diagnostics.TileCountX}x{diagnostics.TileCountY}, " +
-            $"tileLightsAvgMax={diagnostics.AverageLightsPerNonEmptyTile:F1}/{diagnostics.MaxLightsInAnyTile}, " +
-            $"tileSaturated={diagnostics.LightTileSaturationCount}, lightCullRejected={diagnostics.LightCullRejectedPointCount}/{diagnostics.LightCullRejectedSpotCount}, " +
+            tileStatistics +
             $"tileClearBytes={diagnostics.TiledLightHeaderBufferClearBytes}/{diagnostics.TiledLightIndexBufferClearBytes}, " +
             $"materials={diagnostics.MaterialCount}, textures={diagnostics.TextureCount}.");
         Console.WriteLine(

@@ -21,7 +21,7 @@ public sealed class EditorController
     private readonly IContentManager _content;
     private readonly LightManager _lightManager;
     private readonly MaterialManager _materialManager;
-    private readonly IMutableSceneLightStore _lightStore;
+    private readonly LightManagerSceneLightStore _lightStore;
     private readonly ISceneMaterialOverrideStore _materialStore;
     private readonly SceneDocumentWriter _writer = new();
     private readonly IEditorOverlayHost? _overlay;
@@ -208,7 +208,8 @@ public sealed class EditorController
             EditorSelectionKind.FoliagePrototype => Remove<Njulf.Core.Foliage.FoliagePrototype>(_scene.FindById(Selection.Id), _scene.Remove),
             EditorSelectionKind.ParticleEffect => Remove<ParticleEffectInstance>(_scene.FindById(Selection.Id), _scene.Remove),
             EditorSelectionKind.InstanceBatch => Remove<StaticInstanceBatch>(_scene.FindById(Selection.Id), _scene.Remove),
-            EditorSelectionKind.Light => _lightManager.RemoveLight(Selection.LightHandle),
+            EditorSelectionKind.Light when !IsImportedModelLight(Selection.Id) =>
+                _lightManager.TryGetLightHandle(Selection.Id, out var handle) && _lightManager.RemoveLight(handle),
             _ => false
         };
         if (!deleted)
@@ -220,9 +221,25 @@ public sealed class EditorController
 
     public bool UpdateSelectedLight(in Light light)
     {
-        if (Selection.Kind != EditorSelectionKind.Light ||
-            IsImportedModelLight(Selection.Id) ||
-            !_lightManager.UpdateLight(Selection.LightHandle, light))
+        if (Selection.Kind != EditorSelectionKind.Light)
+            return false;
+        if (IsSceneLightSuspended(Selection.Id))
+        {
+            var source = GetSelectedLightDocument()!;
+            if (!GetImportedModelLightController().TryUpdateSuspendedDirectionalLight(
+                    _lightStore.Describe(source.Id, source.Name, light))) return false;
+            IsDirty = true;
+            return true;
+        }
+        if (!_lightManager.TryGetLightHandle(Selection.Id, out var handle)) return false;
+        if (IsImportedModelLight(Selection.Id))
+        {
+            string? name = GetLights().First(item => item.Id == Selection.Id).Name;
+            var document = _lightStore.Describe(Selection.Id, name, light);
+            if (!GetImportedModelLightController().TryUpdateImportedLight(document))
+                return false;
+        }
+        else if (!_lightManager.UpdateLight(handle, light))
             return false;
         IsDirty = true;
         return true;
@@ -230,22 +247,64 @@ public sealed class EditorController
 
     public bool SetSelectedLightName(string name)
     {
-        if (Selection.Kind != EditorSelectionKind.Light ||
-            IsImportedModelLight(Selection.Id) ||
-            !_lightManager.SetLightName(Selection.LightHandle, name)) return false;
+        if (!TryGetSelectedLight(out var light)) return false;
+        if (IsSceneLightSuspended(Selection.Id))
+        {
+            if (!GetImportedModelLightController().TryUpdateSuspendedDirectionalLight(
+                    _lightStore.Describe(Selection.Id, name, light))) return false;
+        }
+        else if (IsImportedModelLight(Selection.Id))
+        {
+            var document = _lightStore.Describe(Selection.Id, name, light);
+            if (!GetImportedModelLightController().TryUpdateImportedLight(document)) return false;
+        }
+        else if (!_lightManager.TryGetLightHandle(Selection.Id, out var handle) ||
+                 !_lightManager.SetLightName(handle, name)) return false;
         IsDirty = true;
         return true;
     }
 
-    /// <summary>Returns authored lights only; model-imported lights are aggregate runtime state.</summary>
+    /// <summary>Returns scene lights, including imported lights and temporarily replaced scene suns.</summary>
     public IReadOnlyList<LightRecord> GetLights()
     {
-        IReadOnlyList<LightRecord> lights = _lightManager.GetLightRecords();
-        ModelLightRuntimeController? imported =
-            _scene.GetComponent<ModelLightRuntimeController>();
-        if (imported == null || imported.ActiveLightCount == 0)
-            return lights;
-        return lights.Where(light => !imported.IsImportedLight(light.Id)).ToArray();
+        var live = _lightManager.GetLightRecords();
+        var suspended = GetImportedModelLightController().GetSuspendedDirectionalLights();
+        if (suspended.Count == 0) return live;
+        return live.Concat(suspended.Select(light =>
+            new LightRecord(default, light.Id, light.Name, _lightStore.Resolve(light)))).ToArray();
+    }
+
+    public bool SelectedLightIsImported => IsImportedModelLight(Selection.Id);
+    public bool SelectedLightHasOverrides => GetImportedModelLightController().HasLightOverride(Selection.Id);
+    public bool IsSceneLightImported(Guid id) => IsImportedModelLight(id);
+    public bool IsSceneLightSuspended(Guid id) =>
+        GetImportedModelLightController().GetSuspendedDirectionalLights().Any(light => light.Id == id);
+
+    public void ResetSelectedLightOverrides()
+    {
+        if (GetImportedModelLightController().ResetLightOverride(Selection.Id))
+            IsDirty = true;
+    }
+
+    public SceneLightDocument? GetSelectedLightDocument() =>
+        _lightStore.Enumerate().FirstOrDefault(light => light.Id == Selection.Id) ??
+        GetImportedModelLightController().GetSuspendedDirectionalLights().FirstOrDefault(light => light.Id == Selection.Id);
+
+    public void SetSelectedLightIesProfile(string? path)
+    {
+        if (!TryGetSelectedLight(out var light)) return;
+        if (!AnalyticalLightGeometry.IsPunctual(light.Type))
+            throw new InvalidOperationException("IES profiles apply to point and spot lights.");
+        if (string.IsNullOrWhiteSpace(path))
+            light.PhotometricProfile = default;
+        else if (_lightManager.PhotometricProfiles is not { } profiles ||
+                 !profiles.TryResolve(new SceneAssetReferenceDocument(path), out light.PhotometricProfile))
+            throw new InvalidOperationException("Could not load the IES profile. Check the path and file format.");
+        UpdateSelectedLight(light);
+        // Keep serialization metadata in sync when clearing or replacing a profile.
+        var record = _lightStore.Describe(Selection.Id,
+            GetLights().First(item => item.Id == Selection.Id).Name, light);
+        _lightStore.TryUpdate(Selection.Id, record);
     }
 
     public ImportedModelLightEditorStatus GetImportedModelLightStatus()
@@ -257,7 +316,13 @@ public sealed class EditorController
             controller.ModelPlacementsWithLightsCount,
             controller.ImportedLightDefinitionCount,
             controller.ActiveLightCount,
-            controller.LastError);
+            controller.LastError)
+        {
+            DirectionalEnabled = controller.ImportedDirectionalLightEnabled,
+            ShadowsEnabled = controller.ImportedModelLightShadowsEnabled,
+            DirectionalDefinitionCount = controller.ImportedDirectionalLightDefinitionCount,
+            ZeroIntensityDefinitionCount = controller.ImportedZeroIntensityLightDefinitionCount
+        };
     }
 
     public void SetImportedModelLightsEnabled(bool enabled)
@@ -269,11 +334,33 @@ public sealed class EditorController
         IsDirty = true;
     }
 
+    public void SetImportedModelLightShadowsEnabled(bool enabled)
+    {
+        ModelLightRuntimeController controller = GetImportedModelLightController();
+        if (controller.ImportedModelLightShadowsEnabled == enabled) return;
+        controller.SetImportedModelLightShadowsEnabled(enabled);
+        IsDirty = true;
+    }
+
+    public void SetImportedDirectionalLightEnabled(bool enabled)
+    {
+        ModelLightRuntimeController controller = GetImportedModelLightController();
+        if (controller.ImportedDirectionalLightEnabled == enabled)
+            return;
+        controller.SetImportedDirectionalLightEnabled(enabled);
+        IsDirty = true;
+    }
+
     public bool TryGetSelectedLight(out Light light)
     {
+        if (Selection.Kind == EditorSelectionKind.Light && IsSceneLightSuspended(Selection.Id))
+        {
+            light = _lightStore.Resolve(GetSelectedLightDocument()!);
+            return true;
+        }
         if (Selection.Kind == EditorSelectionKind.Light &&
-            !IsImportedModelLight(Selection.Id))
-            return _lightManager.TryGetLight(Selection.LightHandle, out light);
+            _lightManager.TryGetLightHandle(Selection.Id, out var handle))
+            return _lightManager.TryGetLight(handle, out light);
         light = default;
         return false;
     }
@@ -601,8 +688,7 @@ public sealed class EditorController
     {
         if (kind == EditorSelectionKind.Light)
         {
-            if (IsImportedModelLight(id) ||
-                !_lightManager.TryGetLightHandle(id, out LightHandle handle))
+            if (!_lightManager.TryGetLightHandle(id, out LightHandle handle) && !IsSceneLightSuspended(id))
                 return false;
             Select(EditorSelection.ForLight(id, handle));
             return true;
@@ -673,4 +759,10 @@ public readonly record struct ImportedModelLightEditorStatus(
     int ModelPlacementsWithLightsCount,
     int ImportedLightDefinitionCount,
     int ActiveLightCount,
-    string? Error);
+    string? Error)
+{
+    public bool DirectionalEnabled { get; init; }
+    public bool ShadowsEnabled { get; init; }
+    public int DirectionalDefinitionCount { get; init; }
+    public int ZeroIntensityDefinitionCount { get; init; }
+}

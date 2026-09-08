@@ -2053,7 +2053,7 @@ namespace Njulf.Rendering.Data
         public Vector4 PositionRange;
         public Vector4 BiasStrengthTexelSize;
         public int LightIndex;
-        public int CubemapIndex;
+        public int TextureIndex;
         public int PcfRadius;
         public int Enabled;
     }

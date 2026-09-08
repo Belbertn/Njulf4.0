@@ -1584,7 +1584,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 RenderGraphResourceSizePolicy.ShadowMap),
             ImageResource(RenderGraphResourceId.SpotShadowAtlas, "Spot shadow atlas", depthFormat,
                 RenderGraphResourceSizePolicy.ShadowMap),
-            ImageResource(RenderGraphResourceId.PointShadowCubemapArray, "Point shadow cubemap array", depthFormat,
+            ImageChainResource(RenderGraphResourceId.PointShadowCubemapArray, "Point shadow maps", depthFormat,
                 RenderGraphResourceSizePolicy.ShadowMap),
             ImageChainResource(RenderGraphResourceId.HiZPyramid, "Hi-Z pyramid", depthFormat,
                 RenderGraphResourceSizePolicy.HalfResolution),

@@ -16,6 +16,7 @@ internal sealed unsafe class ShadowEditorPanel
     [
         "Directional",
         "Static cache / debug",
+        "Local budget / cache",
         "Spot",
         "Point"
     ];
@@ -43,6 +44,12 @@ internal sealed unsafe class ShadowEditorPanel
     {
         ImGui.Begin("Shadows");
         RenderRuntimeSummary(editor.RendererDiagnostics);
+        if (editor.RendererDiagnostics is { } local)
+        {
+            ImGui.Text($"Local map memory: {(local.PointShadowBytes + local.SpotShadowAtlasBytes) / (1024f * 1024f):F1} MiB");
+            ImGui.Text($"Cached: {local.LocalShadowCacheHitCount}; static refreshes: {local.LocalShadowStaticRefreshCount}; dynamic updates: {local.LocalShadowDynamicUpdateCount}");
+            ImGui.Text($"Reduced resolutions: {local.LocalShadowDowngradedCount}; allocation failures: {local.LocalShadowAllocationFailureCount}");
+        }
 
         RenderSettings? renderSettings = editor.RendererSettings;
         if (renderSettings == null)
@@ -280,6 +287,7 @@ internal sealed unsafe class ShadowEditorPanel
             return "Static cache / debug";
         }
 
+        if (propertyName.StartsWith("LocalShadow", StringComparison.Ordinal)) return "Local budget / cache";
         if (propertyName.Contains("Spot", StringComparison.Ordinal))
             return "Spot";
         if (propertyName.Contains("Point", StringComparison.Ordinal))

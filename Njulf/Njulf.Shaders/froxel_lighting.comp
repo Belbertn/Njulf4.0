@@ -129,9 +129,9 @@ float FroxelPointShadow(uint lightIndex, vec3 worldPosition)
     vec2 uv = coordinate.xy * 0.5 + vec2(0.5);
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
         return 1.0;
-    float layer = float(shadow.CubemapIndex * 6 + int(face));
+    float layer = float(int(face));
     float sampled = texture(BindlessArrayTextures[nonuniformEXT(
-        POINT_SHADOW_CUBEMAP_ARRAY_TEXTURE_INDEX)], vec3(uv, layer)).r;
+        shadow.TextureIndex)], vec3(uv, layer)).r;
     float visibility = FroxelReverseDepthVisibility(
         coordinate.z, sampled, shadow.BiasStrengthTexelSize.y);
     return mix(1.0, visibility,

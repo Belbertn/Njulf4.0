@@ -26,7 +26,7 @@ namespace Njulf.Rendering.Data
         public static void FillSpotShadows(
             ReadOnlySpan<SelectedLocalShadow> selectedLights,
             ShadowSettings settings,
-            Span<GPUSpotShadow> destination)
+            Span<GPUSpotShadow> destination, LocalShadowAllocation[]? allocations = null, uint resolvedAtlasSize = 0)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
@@ -37,23 +37,24 @@ namespace Njulf.Rendering.Data
             {
                 SelectedLocalShadow selected = selectedLights[i];
                 Light light = selected.Light;
-                SpotShadowAtlasRect rect = LocalShadowAllocator.GetSpotTileRect(settings.SpotShadowAtlasSize, settings.SpotShadowTileSize, i);
-                float atlasSize = settings.SpotShadowAtlasSize;
-                float padding = 1f / atlasSize;
+                SpotShadowAtlasRect rect = allocations == null ? LocalShadowAllocator.GetSpotTileRect(settings.SpotShadowAtlasSize, settings.SpotShadowTileSize, i) : allocations[i].Region;
+                float atlasSize = resolvedAtlasSize == 0 ? settings.SpotShadowAtlasSize : resolvedAtlasSize;
+                const float border = 4f;
+                float padding = border / atlasSize;
                 CoreMatrix4x4 viewProjection = BuildSpotViewProjection(light);
                 destination[i] = new GPUSpotShadow
                 {
                     LightViewProjection = viewProjection,
                     AtlasScaleOffset = new CoreVector4(
-                        MathF.Max(rect.Width - 2f, 1f) / atlasSize,
-                        MathF.Max(rect.Height - 2f, 1f) / atlasSize,
+                        MathF.Max(rect.Width - 2f * border, 1f) / atlasSize,
+                        MathF.Max(rect.Height - 2f * border, 1f) / atlasSize,
                         rect.X / atlasSize + padding,
                         rect.Y / atlasSize + padding),
                     BiasStrengthTexelSize = new CoreVector4(
                         settings.SpotNormalBias,
                         settings.SpotConstantDepthBias,
                         GetShadowStrength(light),
-                        1f / MathF.Max(settings.SpotShadowAtlasSize, 1u)),
+                        1f / MathF.Max(atlasSize, 1f)),
                     LightIndex = selected.LightIndex,
                     AtlasTile = i,
                     PcfRadius = settings.SpotPcfRadius,
@@ -77,7 +78,7 @@ namespace Njulf.Rendering.Data
         public static void FillPointShadows(
             ReadOnlySpan<SelectedLocalShadow> selectedLights,
             ShadowSettings settings,
-            Span<GPUPointShadow> destination)
+            Span<GPUPointShadow> destination, LocalShadowAllocation[]? allocations = null)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
@@ -89,7 +90,8 @@ namespace Njulf.Rendering.Data
             {
                 SelectedLocalShadow selected = selectedLights[i];
                 Light light = selected.Light;
-                FillPointFaceViewProjections(light, settings, matrices);
+                uint resolution = allocations == null ? settings.PointShadowMapSize : allocations[i].Resolution;
+                FillPointFaceViewProjections(light, settings, matrices, resolution);
                 destination[i] = new GPUPointShadow
                 {
                     FaceViewProjection0 = matrices[0],
@@ -103,9 +105,9 @@ namespace Njulf.Rendering.Data
                         settings.PointNormalBias,
                         settings.PointConstantDepthBias,
                         GetShadowStrength(light),
-                        1f / MathF.Max(settings.PointShadowMapSize, 1u)),
+                        1f / MathF.Max(resolution, 1u)),
                     LightIndex = selected.LightIndex,
-                    CubemapIndex = i,
+                    TextureIndex = i,
                     PcfRadius = settings.PointPcfRadius,
                     Enabled = 1
                 };
@@ -224,13 +226,13 @@ namespace Njulf.Rendering.Data
         private static void FillPointFaceViewProjections(
             Light light,
             ShadowSettings settings,
-            Span<CoreMatrix4x4> destination)
+            Span<CoreMatrix4x4> destination, uint resolution = 0)
         {
             if (destination.Length < 6)
                 throw new ArgumentException("Destination must contain at least six matrices.", nameof(destination));
 
             CoreVector3 position = ToCore(light.Position);
-            CoreMatrix4x4 projection = CreatePointFaceProjection(light, settings);
+            CoreMatrix4x4 projection = CreatePointFaceProjection(light, settings, resolution);
             destination[0] = CoreMatrix4x4.CreateLookAt(position, position + CoreVector3.UnitX, -CoreVector3.UnitY) * projection;
             destination[1] = CoreMatrix4x4.CreateLookAt(position, position - CoreVector3.UnitX, -CoreVector3.UnitY) * projection;
             destination[2] = CoreMatrix4x4.CreateLookAt(position, position + CoreVector3.UnitY, CoreVector3.UnitZ) * projection;
@@ -239,16 +241,16 @@ namespace Njulf.Rendering.Data
             destination[5] = CoreMatrix4x4.CreateLookAt(position, position - CoreVector3.UnitZ, -CoreVector3.UnitY) * projection;
         }
 
-        private static CoreMatrix4x4 CreatePointFaceProjection(Light light, ShadowSettings settings)
+        private static CoreMatrix4x4 CreatePointFaceProjection(Light light, ShadowSettings settings, uint resolution = 0)
         {
-            float halfExtentScale = 1f + 2f * GetPointFaceOverlapTexels(settings) / MathF.Max(settings.PointShadowMapSize, 1u);
+            float halfExtentScale = 1f + 2f * GetPointFaceOverlapTexels(settings) / MathF.Max(resolution == 0 ? settings.PointShadowMapSize : resolution, 1u);
             float fieldOfView = MathF.Min(MathF.PI * 0.99f, 2f * MathF.Atan(halfExtentScale));
             return CoreMatrix4x4.CreatePerspectiveFieldOfView(fieldOfView, 1f, GetNearPlane(light), GetFarPlane(light));
         }
 
         private static float GetPointFaceOverlapTexels(ShadowSettings settings)
         {
-            return MathF.Max(PointShadowMinimumFaceOverlapTexels, settings.PointPcfRadius + 1f);
+            return MathF.Max(PointShadowMinimumFaceOverlapTexels, 4f);
         }
 
         private static float GetNearPlane(Light light)

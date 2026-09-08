@@ -419,9 +419,10 @@ void LoadSimpleRayCache(
                 SharedSimpleRayInvalid = 1u;
             }
         }
+        // A reduced spatial-recovery tier may contain only maintenance rays.
+        // Their authenticated uniform PDF still defines the complete kernel.
         if (SharedSimpleGuidingValidCount != rayCount ||
-            SharedSimpleGuidingMaintenanceCount == 0u ||
-            SharedSimpleGuidingMixtureCount == 0u)
+            SharedSimpleGuidingMaintenanceCount == 0u)
         {
             SharedSimpleRayInvalid = 1u;
         }

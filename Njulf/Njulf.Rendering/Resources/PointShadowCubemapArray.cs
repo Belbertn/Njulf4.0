@@ -13,7 +13,7 @@ namespace Njulf.Rendering.Resources
 {
     public sealed unsafe class PointShadowCubemapArray : IDisposable
     {
-        private const int MaxPointShadowRecords = 4;
+        private const int MaxPointShadowRecords = LightManager.MaxLights;
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
         private GpuAllocator.Allocation* _staticAllocation;
@@ -28,7 +28,7 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _shadowDataBuffer;
         private bool _disposed;
 
-        public PointShadowCubemapArray(VulkanContext context, BufferManager bufferManager, ShadowSettings settings)
+        public PointShadowCubemapArray(VulkanContext context, BufferManager bufferManager, ShadowSettings settings, bool createDataBuffer = true)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
@@ -37,6 +37,8 @@ namespace Njulf.Rendering.Resources
 
             Format = Format.D32Sfloat;
             CreateSampler();
+            if (createDataBuffer)
+            {
             _shadowDataBuffer = _bufferManager.CreateDeviceBuffer(
                 (ulong)(MaxPointShadowRecords * Marshal.SizeOf<GPUPointShadow>()),
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
@@ -44,8 +46,11 @@ namespace Njulf.Rendering.Resources
                 MemoryBudgetCategory.ShadowMaps,
                 "Point Shadow Data Buffer");
             _context.SetDebugName(_bufferManager.GetBuffer(_shadowDataBuffer).Handle, ObjectType.Buffer, "Point Shadow Data Buffer");
+            }
         }
 
+        internal ImageView SampledView => _workingSampledView;
+        internal Sampler MapSampler => _sampler;
         public uint MapSize { get; private set; }
         public int PointCapacity { get; private set; }
         public int LayerCount => PointCapacity * 6;
@@ -207,7 +212,7 @@ namespace Njulf.Rendering.Resources
                 pointShadows,
                 MaxPointShadowRecords,
                 barrierDescription: new UploadBarrierDescription(
-                    PipelineStageFlags2.FragmentShaderBit,
+                    PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageReadBit));
         }
 

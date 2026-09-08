@@ -103,9 +103,7 @@ internal static class SamplePlazaGlobalIllumination
         // atmosphere even when their GI backend has to degrade.
         SampleSponzaGlobalIlluminationProfile.ConfigureDynamicEnvironment(settings);
         settings.Shadows.SpotShadowsEnabled = false;
-        settings.Shadows.MaxShadowedSpotLights = 0;
         settings.Shadows.PointShadowsEnabled = false;
-        settings.Shadows.MaxShadowedPointLights = 0;
     }
 
     public static void ConfigureSceneLighting(Scene scene)

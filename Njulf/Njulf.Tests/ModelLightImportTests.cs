@@ -201,6 +201,459 @@ public sealed class ModelLightImportTests
         Assert.That(model.CreateInstance().Lights, Has.Count.EqualTo(1));
     }
 
+    [TestCase("High")]
+    [TestCase("Medium")]
+    [TestCase("Low")]
+    public void ImportedShadows_AfterSponzaSetupAdmitLightsWithinConfiguredCapacity(string profile)
+    {
+        using Model model = CreateRuntimeModel(lightCount: 7);
+        using var scene = new Scene();
+        var store = new MutableMemoryLightStore();
+        AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, new ModelContentManager(model), store);
+        var settings = new RenderSettings();
+        NjulfHelloGame.SampleLighting.ConfigureRenderSettings(settings, NjulfHelloGame.SampleLightingMode.DirectionalKey);
+        NjulfHelloGame.SamplePlazaGlobalIllumination.ConfigureRenderSettingsForMemoryProfile(settings,
+            Enum.Parse<NjulfHelloGame.SamplePlazaGpuMemoryProfile>(profile));
+        controller.SetImportedModelLightsEnabled(true);
+        controller.SetImportedModelLightShadowsEnabled(true);
+        new ImportedLightShadowPolicy().Apply(settings.Shadows, controller);
+        var lights = store.Items.Select(x => new Light
+        {
+            Type = LightType.Point, Intensity = x.Intensity, Range = x.Range,
+            CastsShadows = x.CastsShadows, Color = System.Numerics.Vector3.One
+        }).ToArray();
+        var camera = new Njulf.Core.Camera.FirstPersonCamera(new Vector3(0, 0, 8), 0, 0);
+        camera.Update();
+        var selected = new LocalShadowSelector().Select(lights, camera, settings.Shadows);
+        var admitted = new LocalShadowLayout().Plan(selected, default, settings.Shadows);
+        Assert.That(selected.PointCandidateCount, Is.EqualTo(7));
+        Assert.That(admitted.PointLights, Has.Length.EqualTo(7), "Scene setup must disable the gate without erasing its capacity.");
+        settings.Shadows.MaxShadowedPointLights = 0;
+        new ImportedLightShadowPolicy().Apply(settings.Shadows, controller);
+        Assert.That(new LocalShadowSelector().Select(lights, camera, settings.Shadows).PointLights, Is.Empty,
+            "An explicitly configured zero remains authoritative.");
+    }
+
+    [Test]
+    public void ImportedShadows_EnableRendererPassAndRespectConfiguredPointShadowCapacity()
+    {
+        using Model model = CreateRuntimeModel(lightCount: 23);
+        using var scene = new Scene();
+        var store = new MutableMemoryLightStore();
+        AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, new ModelContentManager(model), store);
+        controller.SetImportedModelLightsEnabled(true);
+        controller.SetImportedModelLightShadowsEnabled(true);
+        var settings = new ShadowSettings
+        {
+            PointShadowsEnabled = false, MaxShadowedPointLights = 4,
+            SpotShadowsEnabled = false, MaxShadowedSpotLights = 0,
+            PointShadowMapSize = 1024
+        };
+        Light[] lights = store.Items.Select(light => new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(light.Position.X, light.Position.Y, light.Position.Z),
+            Color = System.Numerics.Vector3.One, Intensity = light.Intensity,
+            Range = light.Range, CastsShadows = light.CastsShadows,
+            ShadowNearPlane = light.ShadowNearPlane, ShadowFarPlane = light.ShadowFarPlane
+        }).ToArray();
+        var camera = new Njulf.Core.Camera.FirstPersonCamera(new Vector3(0f, 0f, 8f), 0f, 0f);
+        camera.Update();
+        var selector = new LocalShadowSelector();
+        LocalShadowSelection before = selector.Select(lights, camera, settings);
+        Assert.That(before.PointCandidateCount, Is.EqualTo(23));
+        Assert.That(before.PointLights, Is.Empty, "The reported failure: flags alone cannot activate the renderer.");
+        var policy = new ImportedLightShadowPolicy();
+        policy.Apply(settings, controller);
+        LocalShadowSelection after = selector.Select(lights, camera, settings);
+        Assert.That(settings.PointShadowsEnabled, Is.True);
+        Assert.That(settings.MaxShadowedPointLights, Is.EqualTo(4));
+        Assert.That(settings.SpotShadowsEnabled, Is.False);
+        Assert.That(after.PointLights, Has.Length.EqualTo(4));
+        Assert.That(after.PointRejectedByBudgetCount, Is.EqualTo(19));
+        Assert.That(PointShadowCubemapArray.ShouldAllocateImage(settings, after.PointLights.Length), Is.True);
+        Assert.That(LocalShadowDataBuilder.BuildPointShadows(after.PointLights, settings), Has.Length.EqualTo(4));
+        var map = LocalShadowDataBuilder.BuildShadowIndexMap(lights.Length, [], after.PointLights, []);
+        Assert.That(map.Count(item => item.PointShadowIndex >= 0), Is.EqualTo(4));
+        policy.Apply(settings, controller);
+        controller.SetImportedModelLightShadowsEnabled(false);
+        policy.Apply(settings, controller);
+        Assert.That(settings.PointShadowsEnabled, Is.False);
+        Assert.That(settings.MaxShadowedPointLights, Is.EqualTo(4));
+        Assert.That(settings.PointShadowMapSize, Is.EqualTo(1024));
+    }
+
+    [TestCase(ModelLightType.Spot)]
+    [TestCase(ModelLightType.Rectangle)]
+    [TestCase(ModelLightType.Disk)]
+    [TestCase(ModelLightType.Tube)]
+    [TestCase(ModelLightType.Directional)]
+    public void ImportedShadows_ActivateRequiredPassWhenLightsArriveAndRestoreOnSceneExit(ModelLightType type)
+    {
+        using Model model = CreateRuntimeModel(lightCount: 0);
+        model.AddLights([new ModelLightDefinition { SourceIndex = 0, Type = type }]);
+        using var scene = new Scene();
+        AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, new ModelContentManager(model), new MutableMemoryLightStore());
+        controller.SetImportedModelLightShadowsEnabled(true);
+        var settings = new ShadowSettings
+        {
+            DirectionalShadowsEnabled = false, PointShadowsEnabled = false,
+            SpotShadowsEnabled = false, AreaShadowsEnabled = false,
+            MaxShadowedPointLights = 0, MaxShadowedSpotLights = type == ModelLightType.Spot ? 1 : 0, MaxShadowedAreaLights = 0
+        };
+        var policy = new ImportedLightShadowPolicy();
+        policy.Apply(settings, controller);
+        Assert.That(settings.DirectionalShadowsEnabled || settings.PointShadowsEnabled ||
+                    settings.SpotShadowsEnabled || settings.AreaShadowsEnabled, Is.False);
+
+        if (type == ModelLightType.Directional) controller.SetImportedDirectionalLightEnabled(true);
+        else controller.SetImportedModelLightsEnabled(true);
+        policy.Apply(settings, controller);
+        bool area = type is ModelLightType.Rectangle or ModelLightType.Disk or ModelLightType.Tube;
+        Assert.That(settings.DirectionalShadowsEnabled, Is.EqualTo(type == ModelLightType.Directional));
+        Assert.That(settings.PointShadowsEnabled, Is.False);
+        Assert.That(settings.SpotShadowsEnabled, Is.EqualTo(type == ModelLightType.Spot));
+        Assert.That(settings.AreaShadowsEnabled, Is.EqualTo(area));
+        Assert.That(settings.MaxShadowedSpotLights, Is.EqualTo(type == ModelLightType.Spot ? 1 : 0));
+        Assert.That(settings.MaxShadowedAreaLights, Is.EqualTo(area ? 1 : 0));
+
+        policy.Apply(settings, null);
+        Assert.That(settings.DirectionalShadowsEnabled || settings.PointShadowsEnabled ||
+                    settings.SpotShadowsEnabled || settings.AreaShadowsEnabled, Is.False);
+        Assert.That(settings.MaxShadowedPointLights + settings.MaxShadowedSpotLights +
+                    settings.MaxShadowedAreaLights, Is.EqualTo(type == ModelLightType.Spot ? 1 : 0));
+    }
+
+    [Test]
+    public void RuntimeController_BulkShadowsPreserveOverridesAndRoundTripBeforeLightsAreEnabled()
+    {
+        using Model model = CreateRuntimeModel(lightCount: 1, renderObjectCount: 1);
+        model.AddLights([new ModelLightDefinition
+        {
+            SourceIndex = 1, Type = ModelLightType.Directional, Name = "Imported sun"
+        }]);
+        var content = new ModelContentManager(model);
+        var store = new MutableMemoryLightStore();
+        var authored = CreateAuthoredLight(Guid.NewGuid());
+        store.Add(authored.Id, authored);
+        using var scene = new Scene();
+        RenderObject placement = AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, content, store);
+        controller.SetImportedModelLightShadowsEnabled(true);
+        controller.SetImportedModelLightsEnabled(true);
+        controller.SetImportedDirectionalLightEnabled(true);
+        SceneLightDocument point = store.Items.Single(light => controller.IsImportedLight(light.Id) && light.Type == "Point");
+        Assert.That(store.Items.Where(light => controller.IsImportedLight(light.Id)).All(light => light.CastsShadows), Is.True);
+        Assert.That(store.Items.Single(light => light.Id == authored.Id).CastsShadows, Is.False);
+
+        // Editing a forced-on light must not bake that forced flag into its
+        // independent settings. Explicit intensity zero must remain untouched.
+        controller.TryUpdateImportedLight(new SceneLightDocument
+        {
+            Id = point.Id, Name = "Edited while forced", Position = point.Position,
+            Type = "Point", Intensity = 0f, CastsShadows = true,
+            ShadowStrength = 0.7f, ShadowMapSizeOverride = 2048, ShadowPriority = 5
+        });
+        placement.Position = new Vector3(10f, 0f, 0f);
+        Assert.That(store.Items.Single(light => light.Id == point.Id).CastsShadows, Is.True);
+        controller.SetImportedModelLightShadowsEnabled(false);
+        SceneLightDocument edited = store.Items.Single(light => light.Id == point.Id);
+        Assert.That(edited.CastsShadows, Is.False);
+        Assert.That(edited.Intensity, Is.Zero);
+        Assert.That(edited.ShadowStrength, Is.EqualTo(0.7f));
+        Assert.That(edited.ShadowMapSizeOverride, Is.EqualTo(2048));
+        Assert.That(edited.ShadowPriority, Is.EqualTo(5));
+        controller.SetImportedModelLightShadowsEnabled(true);
+        controller.SetImportedModelLightsEnabled(false);
+        controller.SetImportedDirectionalLightEnabled(false);
+        SceneDocument saved = JsonSerializer.Deserialize<SceneDocument>(
+            SceneDocumentJson.Serialize(new SceneDocumentWriter().CreateDocument(scene, store)),
+            SceneDocumentJson.Options)!;
+        Assert.That(saved.ImportedModelLightShadowsEnabled, Is.True);
+        Assert.That(saved.ImportedModelLightsEnabled, Is.False);
+
+        var loadedStore = new MutableMemoryLightStore();
+        using Scene loaded = new SceneDocumentLoader(content).Load(saved, loadedStore);
+        var loadedController = loaded.GetComponent<ModelLightRuntimeController>()!;
+        Assert.That(loadedController.ImportedModelLightShadowsEnabled, Is.True);
+        loadedController.SetImportedModelLightsEnabled(true);
+        loadedController.SetImportedDirectionalLightEnabled(true);
+        Assert.That(loadedStore.Items.Where(light => loadedController.IsImportedLight(light.Id)).All(light => light.CastsShadows), Is.True);
+        loadedController.ResetLightOverride(point.Id);
+        Assert.That(loadedStore.Items.Single(light => light.Id == point.Id).CastsShadows, Is.True);
+        loadedController.SetImportedModelLightShadowsEnabled(false);
+        Assert.That(loadedStore.Items.Where(light => loadedController.IsImportedLight(light.Id)).Any(light => light.CastsShadows), Is.False);
+    }
+
+    [Test]
+    public void RuntimeController_BulkShadowFailureRollsBackPreviouslyUpdatedLights()
+    {
+        using Model model = CreateRuntimeModel(lightCount: 2);
+        using var scene = new Scene();
+        var store = new MutableMemoryLightStore();
+        AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, new ModelContentManager(model), store);
+        controller.SetImportedModelLightsEnabled(true);
+        store.FailUpdateAfter = 1;
+        Assert.Throws<InvalidOperationException>(() => controller.SetImportedModelLightShadowsEnabled(true));
+        Assert.That(controller.ImportedModelLightShadowsEnabled, Is.False);
+        Assert.That(store.Items.Any(light => light.CastsShadows), Is.False);
+        controller.SetImportedModelLightShadowsEnabled(true);
+        Assert.That(store.Items.All(light => light.CastsShadows), Is.True);
+    }
+
+    [Test]
+    public void RuntimeController_ImportedEditsSurviveMovementTogglesAndDisabledSceneRoundTrip()
+    {
+        using Model model = CreateRuntimeModel(lightCount: 1, renderObjectCount: 1);
+        var content = new ModelContentManager(model);
+        var store = new MutableMemoryLightStore();
+        using var scene = new Scene();
+        RenderObject placement = AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, content, store);
+        controller.SetImportedModelLightsEnabled(true);
+        SceneLightDocument original = store.Items.Single();
+        var edited = new SceneLightDocument
+        {
+            Id = original.Id, Name = "Custom fixture", Type = "Spot",
+            Position = original.Position, Direction = new SceneVector3(0f, -1f, 0f),
+            Up = new SceneVector3(0f, 0f, 1f), Size = new SceneVector2(2f, 3f), TwoSided = true,
+            Color = new SceneVector3(0.2f, 0.4f, 0.6f), Intensity = 0f, Range = 25f,
+            InnerSpotAngle = 0.2f, SpotAngle = 0.7f,
+            AttenuationMode = "Polynomial", AttenuationConstant = 0.3f,
+            AttenuationLinear = 0.4f, AttenuationQuadratic = 0.5f,
+            CastsShadows = true, ShadowStrength = 0.8f, ShadowMapSizeOverride = 2048,
+            ShadowNearPlane = 0.2f, ShadowFarPlane = 40f, ShadowPriority = 7,
+            IesProfile = new SceneAssetReferenceDocument("fixture.ies"), IesRotationRadians = 0.9f
+        };
+        Assert.That(controller.TryUpdateImportedLight(edited), Is.True);
+        placement.Position = new Vector3(10f, 0f, 0f);
+        Assert.That(store.Items.Single().Position.X, Is.EqualTo(11f));
+        Assert.That(store.Items.Single().Intensity, Is.Zero, "An intentional editor zero must stay off.");
+        controller.SetImportedModelLightsEnabled(false);
+        Assert.That(store.Items, Is.Empty);
+        string json = SceneDocumentJson.Serialize(new SceneDocumentWriter().CreateDocument(scene, store));
+        SceneDocument saved = JsonSerializer.Deserialize<SceneDocument>(json, SceneDocumentJson.Options)!;
+        Assert.That(saved.Lights, Is.Empty);
+        Assert.That(saved.ImportedLightOverrides, Has.Count.EqualTo(1));
+        Assert.That(saved.Dependencies.Any(item => item.Path == "fixture.ies"), Is.True);
+
+        var loadedStore = new MutableMemoryLightStore();
+        using Scene loaded = new SceneDocumentLoader(content).Load(saved, loadedStore);
+        var loadedController = loaded.GetComponent<ModelLightRuntimeController>()!;
+        loadedController.SetImportedModelLightsEnabled(true);
+        SceneLightDocument restored = loadedStore.Items.Single();
+        // Every serialized light setting must survive, while an untouched
+        // position continues to follow the model's new world transform.
+        foreach (var property in typeof(SceneLightDocument).GetProperties())
+        {
+            object? expected = property.Name == nameof(SceneLightDocument.Position)
+                ? new SceneVector3(11f, 0f, 0f) : property.GetValue(edited);
+            Assert.That(property.GetValue(restored), Is.EqualTo(expected), property.Name);
+        }
+        Assert.That(loadedController.ResetLightOverride(restored.Id), Is.True);
+        Assert.That(loadedStore.Items.Single().Name, Is.EqualTo(original.Name));
+        Assert.That(loadedStore.Items.Single().Intensity, Is.EqualTo(original.Intensity));
+        Assert.That(loadedStore.Items.Single().Position.X, Is.EqualTo(11f));
+        Assert.That(loadedController.LightOverrides, Is.Empty);
+    }
+
+    [Test]
+    public void RuntimeController_ImportedDirectionalEditsSurviveSwitchAndReset()
+    {
+        using var model = new Model();
+        model.AddLights([new ModelLightDefinition
+        {
+            Type = ModelLightType.Directional, Name = "Imported sun", Intensity = 1f
+        }]);
+        var store = new MutableMemoryLightStore();
+        var authored = new SceneLightDocument { Id = Guid.NewGuid(), Type = "Directional", Intensity = 3f };
+        store.Add(authored.Id, authored);
+        using var scene = new Scene();
+        AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, new ModelContentManager(model), store);
+        controller.SetImportedDirectionalLightEnabled(true);
+        Guid id = store.Items.Single().Id;
+        Assert.That(controller.TryUpdateImportedLight(new SceneLightDocument
+        {
+            Id = id, Type = "Directional", Intensity = 7f, CastsShadows = true,
+            Direction = new SceneVector3(1f, 0f, 0f)
+        }), Is.True);
+        controller.SetImportedDirectionalLightEnabled(false);
+        Assert.That(store.Items.Single(), Is.SameAs(authored));
+        controller.SetImportedDirectionalLightEnabled(true);
+        Assert.That(store.Items.Single().Intensity, Is.EqualTo(7f));
+        Assert.That(store.Items.Single().CastsShadows, Is.True);
+        Assert.Throws<InvalidOperationException>(() => controller.TryUpdateImportedLight(
+            new SceneLightDocument { Id = id, Type = "Point" }));
+        Assert.That(store.Items.Single().Type, Is.EqualTo("Directional"));
+        controller.ResetLightOverride(id);
+        Assert.That(store.Items.Single().Intensity, Is.EqualTo(1f));
+        Assert.That(controller.GetSuspendedDirectionalLights().Single(), Is.SameAs(authored));
+        Assert.That(controller.TryUpdateSuspendedDirectionalLight(new SceneLightDocument
+        {
+            Id = authored.Id, Name = "Edited original sun", Type = "Directional", Intensity = 9f
+        }), Is.True);
+        Assert.That(new SceneDocumentWriter().CreateDocument(scene, store).Lights.Single().Intensity,
+            Is.EqualTo(9f));
+        controller.SetImportedDirectionalLightEnabled(false);
+        Assert.That(store.Items.Single().Name, Is.EqualTo("Edited original sun"));
+        Assert.That(store.Items.Single().Intensity, Is.EqualTo(9f));
+    }
+
+    [Test]
+    public void RuntimeController_ExplicitActivationLightsZeroIntensityDefinitions()
+    {
+        using var model = new Model();
+        var offPoint = new ModelLightDefinition
+        {
+            Name = "Disabled point", Type = ModelLightType.Point, Intensity = 0f
+        };
+        var authoredPoint = new ModelLightDefinition
+        {
+            SourceIndex = 1, Name = "Authored point", Type = ModelLightType.Point, Intensity = 12f
+        };
+        var offSun = new ModelLightDefinition
+        {
+            SourceIndex = 2, Name = "Disabled sun", Type = ModelLightType.Directional, Intensity = 0f
+        };
+        model.AddLights([offPoint, authoredPoint, offSun]);
+        var store = new MutableMemoryLightStore();
+        using var scene = new Scene();
+        RenderObject placement = AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, new ModelContentManager(model), store);
+        controller.SetImportedModelLightsEnabled(true);
+        controller.SetImportedDirectionalLightEnabled(true);
+
+        Assert.That(store.Items.Single(light => light.Name == offPoint.Name).Intensity, Is.EqualTo(100f));
+        Assert.That(store.Items.Single(light => light.Name == offSun.Name).Intensity, Is.EqualTo(1f));
+        Assert.That(controller.ImportedZeroIntensityLightDefinitionCount, Is.EqualTo(2));
+        Assert.That(store.Items.Single(light => light.Name == authoredPoint.Name).Intensity, Is.EqualTo(12f));
+        Assert.That(offPoint.Intensity, Is.Zero);
+        Assert.That(offSun.Intensity, Is.Zero);
+
+        placement.Position = new Vector3(10f, 0f, 0f);
+        Assert.That(store.Items.Single(light => light.Name == offPoint.Name).Intensity, Is.GreaterThan(0f));
+        Assert.That(store.Items.Single(light => light.Name == offSun.Name).Intensity, Is.GreaterThan(0f));
+    }
+
+    [Test]
+    public void RuntimeController_BulkExcludesDirectionalAndSeparateToggleRestoresSceneSun()
+    {
+        using Model model = CreateRuntimeModel(lightCount: 1);
+        model.AddLights([
+            new ModelLightDefinition { Name = "Imported sun", Type = ModelLightType.Directional },
+            new ModelLightDefinition { Name = "Other sun", Type = ModelLightType.Directional }
+        ]);
+        var store = new MutableMemoryLightStore();
+        var sun = new SceneLightDocument
+        {
+            Id = Guid.NewGuid(), Name = "Scene sun", Type = "Directional",
+            Direction = new SceneVector3(0f, -1f, 0f), Intensity = 3f, CastsShadows = true
+        };
+        store.Add(sun.Id, sun);
+        var moon = new SceneLightDocument
+        {
+            Id = Guid.NewGuid(), Name = "Scene moon", Type = "Directional", Intensity = 0.1f
+        };
+        store.Add(moon.Id, moon);
+        using var scene = new Scene();
+        RenderObject placement = AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, new ModelContentManager(model), store);
+
+        controller.SetImportedModelLightsEnabled(true);
+        Assert.That(store.Items.Where(light => light.Type == "Directional"),
+            Is.EquivalentTo(new[] { sun, moon }));
+        Assert.That(controller.ActiveLightCount, Is.EqualTo(1));
+        Assert.That(controller.LastError, Is.Null);
+
+        controller.SetImportedDirectionalLightEnabled(true);
+        Guid importedSun = store.Items.Single(light => light.Type == "Directional").Id;
+        Assert.That(store.Items.Any(light => light.Id == sun.Id), Is.False);
+        Assert.That(controller.IsImportedLight(importedSun), Is.True);
+        Assert.That(controller.ActiveLightCount, Is.EqualTo(2));
+
+        controller.SetImportedModelLightsEnabled(false);
+        Assert.That(store.Items.Single().Id, Is.EqualTo(importedSun));
+        controller.SetImportedModelLightsEnabled(true);
+        placement.Position = new Vector3(10f, 0f, 0f);
+        Assert.That(store.Items.Single(light => light.Type == "Directional").Id, Is.EqualTo(importedSun));
+        controller.SetImportedDirectionalLightEnabled(false);
+        Assert.That(store.Items.Where(light => light.Type == "Directional"),
+            Is.EquivalentTo(new[] { sun, moon }));
+        Assert.That(controller.ActiveLightCount, Is.EqualTo(1));
+
+        controller.SetImportedDirectionalLightEnabled(true);
+        scene.Remove(placement);
+        controller.Refresh();
+        Assert.That(store.Items, Is.EquivalentTo(new[] { sun, moon }));
+        Assert.That(controller.ImportedDirectionalLightEnabled, Is.False);
+    }
+
+    [Test]
+    public void RuntimeController_DirectionalSwitchFailureRestoresPreviousLight()
+    {
+        using Model model = CreateRuntimeModel(lightCount: 0);
+        model.AddLights([new ModelLightDefinition { Name = "Imported sun", Type = ModelLightType.Directional }]);
+        var store = new MutableMemoryLightStore();
+        var sun = new SceneLightDocument { Id = Guid.NewGuid(), Name = "Scene sun", Type = "Directional" };
+        store.Add(sun.Id, sun);
+        using var scene = new Scene();
+        AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, new ModelContentManager(model), store);
+        store.FailNextAdd = true;
+        Assert.Throws<InvalidOperationException>(() => controller.SetImportedDirectionalLightEnabled(true));
+        Assert.That(store.Items.Single(), Is.SameAs(sun));
+        Assert.That(controller.ImportedDirectionalLightEnabled, Is.False);
+
+        controller.SetImportedDirectionalLightEnabled(true);
+        Guid importedId = store.Items.Single().Id;
+        store.FailNextAdd = true;
+        Assert.Throws<InvalidOperationException>(() => controller.SetImportedDirectionalLightEnabled(false));
+        Assert.That(store.Items.Single().Id, Is.EqualTo(importedId));
+        Assert.That(controller.ImportedDirectionalLightEnabled, Is.True);
+        controller.Dispose();
+        Assert.That(store.Items.Single(), Is.SameAs(sun));
+    }
+
+    [Test]
+    public void SceneDocument_RoundTripsIndependentDirectionalToggleAndOriginalSun()
+    {
+        using Model model = CreateRuntimeModel(lightCount: 1, renderObjectCount: 1);
+        model.AddLights([new ModelLightDefinition { Name = "Imported sun", Type = ModelLightType.Directional }]);
+        var content = new ModelContentManager(model);
+        var store = new MutableMemoryLightStore();
+        var sun = new SceneLightDocument
+        {
+            Id = Guid.NewGuid(), Name = "Original sun", Type = "Directional",
+            Direction = new SceneVector3(0f, -1f, 0f), Intensity = 7f, CastsShadows = true
+        };
+        store.Add(sun.Id, sun);
+        using var scene = new Scene();
+        AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, content, store);
+        controller.SetImportedDirectionalLightEnabled(true);
+        string json = SceneDocumentJson.Serialize(new SceneDocumentWriter().CreateDocument(scene, store));
+        var document = JsonSerializer.Deserialize<SceneDocument>(json, SceneDocumentJson.Options)!;
+        Assert.That(document.ImportedDirectionalLightEnabled, Is.True);
+        Assert.That(document.ImportedModelLightsEnabled, Is.False);
+        Assert.That(document.Lights.Single().Id, Is.EqualTo(sun.Id));
+
+        var loadedStore = new MutableMemoryLightStore();
+        using Scene loaded = new SceneDocumentLoader(content).Load(document, loadedStore);
+        var loadedController = loaded.GetComponent<ModelLightRuntimeController>()!;
+        Assert.That(loadedStore.Items.Single().Name, Is.EqualTo("Imported sun"));
+        loadedController.SetImportedDirectionalLightEnabled(false);
+        SceneLightDocument restored = loadedStore.Items.Single();
+        Assert.That(restored.Id, Is.EqualTo(sun.Id));
+        Assert.That(restored.Intensity, Is.EqualTo(7f));
+        Assert.That(restored.CastsShadows, Is.True);
+        Assert.That(restored.Direction, Is.EqualTo(sun.Direction));
+    }
+
     [Test]
     public void RuntimeController_TogglesAllImportedLightsWithoutTouchingAuthoredLights()
     {
@@ -1060,9 +1513,19 @@ public sealed class ModelLightImportTests
 
         public IReadOnlyCollection<SceneLightDocument> Items => _items.Values;
         public int? FailAfterSuccessfulAdds { get; set; }
+        public bool FailNextAdd { get; set; }
+        public int? FailUpdateAfter { get; set; }
         public void Clear() => _items.Clear();
         public void Add(Guid id, SceneLightDocument light)
         {
+            if (FailNextAdd)
+            {
+                FailNextAdd = false;
+                throw new InvalidOperationException("Injected one-shot light-store failure.");
+            }
+            if (light.Type == "Directional" && _items.Values.Count(item => item.Type == "Directional") >=
+                LightManager.MaxDirectionalLights)
+                throw new InvalidOperationException("Too many directional lights.");
             if (FailAfterSuccessfulAdds == 0)
                 throw new InvalidOperationException("Injected light-store failure.");
             if (FailAfterSuccessfulAdds is int remaining)
@@ -1072,6 +1535,12 @@ public sealed class ModelLightImportTests
         public IEnumerable<SceneLightDocument> Enumerate() => _items.Values;
         public bool TryUpdate(Guid id, SceneLightDocument light)
         {
+            if (FailUpdateAfter == 0)
+            {
+                FailUpdateAfter = null;
+                throw new InvalidOperationException("Injected light-update failure.");
+            }
+            if (FailUpdateAfter is int remaining) FailUpdateAfter = remaining - 1;
             if (!_items.ContainsKey(id))
                 return false;
             _items[id] = light;

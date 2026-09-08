@@ -7,46 +7,56 @@ namespace Njulf.Rendering.Data;
 public sealed unsafe partial class SceneDataBuilder
 {
     private Scene? _secondaryScene;
+    private SecondarySceneSnapshot? _secondarySnapshot;
     private bool _secondaryGeometryDecalsEnabled;
     private int _secondaryIsolatedDecalMaterialIndex;
     private readonly HashSet<uint> _secondaryResidencyDemand = [];
     internal Scene? SecondaryScene => _secondaryScene;
 
+    private void BeginSecondarySubmission(Scene scene)
+    {
+        _secondaryScene = scene;
+        if (_secondarySnapshot is null)
+        {
+            _secondarySnapshot = new(_materialManager.DefaultMaterialHandle, GetValidatedMeshInfo,
+                handle =>
+                {
+                    MaterialRenderMetadata metadata = _materialManager.GetMaterialMetadata(handle);
+                    return new(_materialManager.ResolveMaterialIndex(handle), metadata,
+                        MaterialForwardClassifier.Classify(_materialManager.GetMaterialData(handle), metadata));
+                }, handle => _materialManager.GetMaterialContentRevision(handle.Index));
+            _materialManager.MaterialChanged += _secondarySnapshot.OnMaterialChanged;
+        }
+        _secondarySnapshot.BeginSubmission(scene, _materialManager.MaterialDataRevision);
+    }
+
+    private void DisposeSecondarySnapshot()
+    {
+        if (_secondarySnapshot is not null)
+        {
+            _materialManager.MaterialChanged -= _secondarySnapshot.OnMaterialChanged;
+            _secondarySnapshot.Dispose();
+            _secondarySnapshot = null;
+        }
+        _secondaryScene = null;
+    }
+
     internal void BuildSecondaryDrawLists(in SecondaryViewContext view, int frameIndex,
         SecondaryViewDrawLists output, bool cull)
     {
-        Scene scene = _secondaryScene ??
+        SecondarySceneSnapshot snapshot = _secondarySnapshot ??
                       throw new InvalidOperationException("Scene submission must precede a secondary view.");
         output.Clear();
         _secondaryResidencyDemand.Clear();
         Frustum frustum = ExtractFrustum(view.CullingViewProjection);
-        uint instanceId = 0;
         try
         {
-            foreach (RenderObject obj in scene.RenderObjects)
-            {
-                if (!obj.Visible || obj.Mesh is not MeshHandle mesh || !mesh.IsValid) continue;
-                MaterialHandle material = ResolveRenderObjectMaterialHandle(obj.Material,
-                    _materialManager.DefaultMaterialHandle, obj.Name ?? string.Empty);
-                AppendSecondaryInstance(view, frustum, frameIndex, output, cull, instanceId++, mesh,
-                    material, GetCullingMatrix(obj), obj is SkinnedRenderObject { SkinningEnabled: true },
-                    new SecondaryLodInstanceKey(obj.Id, 0, mesh));
-            }
-
-            foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
-            {
-                if (!batch.Visible || batch.Mesh is not MeshHandle mesh || !mesh.IsValid) continue;
-                MaterialHandle material = ResolveRenderObjectMaterialHandle(batch.Material,
-                    _materialManager.DefaultMaterialHandle, batch.Name);
-                for (int ordinal = 0; ordinal < batch.WorldMatrices.Count; ordinal++)
-                    AppendSecondaryInstance(view, frustum, frameIndex, output, cull, instanceId++, mesh,
-                        material, batch.WorldMatrices[ordinal], false,
-                        new SecondaryLodInstanceKey(batch.Id, ordinal, mesh));
-            }
-
-            if (instanceId != _objectData.Count)
+            IReadOnlyList<SecondarySceneSnapshot.Instance> instances = snapshot.Prepare();
+            if (instances.Count != _objectData.Count)
                 throw new InvalidOperationException(
                     "Secondary view instance identities do not match the submitted scene.");
+            for (int index = 0; index < instances.Count; index++)
+                AppendSecondaryInstance(view, frustum, frameIndex, output, cull, instances[index]);
             view.LodHistory?.SealSnapshot();
             output.LodTransitions = view.LodHistory?.TransitionCount ?? 0;
             output.SortTransparency();
@@ -60,25 +70,29 @@ public sealed unsafe partial class SceneDataBuilder
     }
 
     private void AppendSecondaryInstance(in SecondaryViewContext view, in Frustum frustum,
-        int frameIndex, SecondaryViewDrawLists output, bool cull, uint instanceId, MeshHandle mesh,
-        MaterialHandle material, Matrix4x4 world, bool deforming, SecondaryLodInstanceKey lodKey)
+        int frameIndex, SecondaryViewDrawLists output, bool cull, SecondarySceneSnapshot.Instance instance)
     {
+        uint instanceId = instance.InstanceId;
         if (Array.BinarySearch(view.ExcludedObjects, instanceId) >= 0)
         {
             output.ExcludedObjects++;
             return;
         }
 
-        MaterialRenderMetadata metadata = _materialManager.GetMaterialMetadata(material);
-        int resolvedMaterialIndex = _materialManager.ResolveMaterialIndex(material);
+        SecondarySceneSnapshot.MaterialData material = instance.Material.Data;
+        MaterialRenderMetadata metadata = material.Metadata;
+        int resolvedMaterialIndex = material.Index;
         if (metadata.IsGeometryDecal && (!_secondaryGeometryDecalsEnabled ||
                                          (_secondaryIsolatedDecalMaterialIndex >= 0 &&
                                           _secondaryIsolatedDecalMaterialIndex != resolvedMaterialIndex))) return;
         bool transparent = metadata.RenderMode == MaterialRenderMode.Blend || metadata.IsGeometryDecal;
         if (transparent && !view.IncludesTransparency) return;
-        MeshInfo info = GetValidatedMeshInfo(mesh);
-        BoundingBox bounds = TransformBoundingBox(new BoundingBox(
-            ToCoreVector(info.BoundingBoxMin), ToCoreVector(info.BoundingBoxMax)), world);
+        MeshHandle mesh = instance.Mesh;
+        MeshInfo info = instance.Info;
+        Matrix4x4 world = instance.World;
+        BoundingBox bounds = instance.Bounds;
+        bool deforming = instance.Deforming;
+        SecondaryLodInstanceKey lodKey = instance.LodKey;
         if (info.MeshletCount == 0 && info.MeshletLod1Count == 0 && info.MeshletLod2Count == 0) return;
         SecondaryViewLodHistory? history = view.LodHistory;
         int requestedLod = history?.Select(lodKey, info, world, bounds, view.Position,
@@ -107,9 +121,7 @@ public sealed unsafe partial class SceneDataBuilder
 
         bool fullyInside = !cull || deforming || ContainsFrustum(bounds, frustum);
         uint materialIndex = checked((uint)resolvedMaterialIndex);
-        MaterialForwardClass family = MaterialForwardClassifier.Classify(
-            _materialManager.GetMaterialData(material), metadata);
-        int bucket = family switch
+        int bucket = material.Family switch
         {
             MaterialForwardClass.SimpleOpaque => 0,
             MaterialForwardClass.SimpleOpaqueNormal => 1,

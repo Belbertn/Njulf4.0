@@ -59,6 +59,8 @@ public sealed record SampleBenchmarkReport(
         SampleBenchmarkTimingStats.Empty("Simple DDGI transport + blend");
     public SampleDdgiSchedulerRefreshEvidence SimpleDdgiSchedulerRefresh { get; init; } =
         SampleDdgiSchedulerRefreshEvidence.Empty;
+    public IReadOnlyList<SampleBenchmarkDdgiMotionFrame> DdgiMotionFrames { get; init; } =
+        Array.Empty<SampleBenchmarkDdgiMotionFrame>();
     public int AdditionalSettlingFrameCount { get; init; }
     public bool SettlingWaitTimedOut { get; init; }
     public SampleBenchmarkHdrDifference HdrDifference { get; init; } =

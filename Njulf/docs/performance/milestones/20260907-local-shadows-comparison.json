@@ -1,0 +1,81 @@
+{
+  "cached": {
+    "snapshot": "artifacts\\local-shadows\\cached\\normal-sponza-interior\\performance-20260907-191722-5131672-6c5c6baf0b1b406eae473cc6b9cae11f.json",
+    "sampledCpuLocalRecordUs": [
+      12,
+      17,
+      7,
+      7,
+      7
+    ],
+    "snapshotCounters": {
+      "CpuSpotShadowRecordMicroseconds": 5,
+      "CpuPointShadowRecordMicroseconds": 2,
+      "PointShadowRenderedFaceCount": 0,
+      "GpuSpotShadowMicroseconds": 0,
+      "GpuPointShadowMicroseconds": 0,
+      "SpotShadowAtlasBytes": 8388608,
+      "LocalShadowCacheHitCount": 16,
+      "LocalShadowStaticRefreshCount": 0,
+      "LocalShadowCopyCount": 0,
+      "LocalShadowAllocationFailureCount": 0,
+      "PointShadowBytes": 36962304
+    },
+    "lastPacing": [
+      "120, frameMs avg/p95/max=17.88/19.62/21.38, cpuDrawMs avg/p95/max=4.43/5.73/7.80, rebuilds=0, avgUploadMiB=0.00; last sceneBuildUs=45, meshCullUs=0, uploadUs=23, primaryRecordUs=1367, validation=Standard, stall=FrameResourceRecycleWait:12226us."
+    ],
+    "validationErrors": 0
+  },
+  "uncached": {
+    "snapshot": "artifacts\\local-shadows\\uncached\\normal-sponza-interior\\performance-20260907-191952-8536271-bd9ee04397a74458a16298cb6dca63f8.json",
+    "sampledCpuLocalRecordUs": [
+      1879,
+      2145,
+      1556,
+      1767,
+      1458
+    ],
+    "snapshotCounters": {
+      "CpuSpotShadowRecordMicroseconds": 534,
+      "CpuPointShadowRecordMicroseconds": 924,
+      "PointShadowRenderedFaceCount": 48,
+      "GpuSpotShadowMicroseconds": 134,
+      "GpuPointShadowMicroseconds": 341,
+      "SpotShadowAtlasBytes": 8388608,
+      "LocalShadowCacheHitCount": 0,
+      "LocalShadowStaticRefreshCount": 16,
+      "LocalShadowCopyCount": 16,
+      "LocalShadowAllocationFailureCount": 0,
+      "PointShadowBytes": 36962304
+    },
+    "lastPacing": [
+      "120, frameMs avg/p95/max=18.19/19.62/21.80, cpuDrawMs avg/p95/max=5.78/7.09/8.77, rebuilds=0, avgUploadMiB=0.00; last sceneBuildUs=70, meshCullUs=0, uploadUs=32, primaryRecordUs=2711, validation=Standard, stall=FrameResourceRecycleWait:11062us."
+    ],
+    "validationErrors": 0
+  },
+  "imageComparison": {
+    "size": [
+      1600,
+      900
+    ],
+    "meanAbsoluteDifferenceRgb255": [
+      0.026644444444444443,
+      0.025319444444444443,
+      0.01983263888888889
+    ],
+    "maximumChannelDifference": 14
+  },
+  "finalVerification": {
+    "snapshot": "artifacts\\local-shadows\\final\\normal-sponza-interior\\performance-20260907-192325-5757708-a60d1dd6cb7b41938b87e1912cfa0ca7.json",
+    "counters": {
+      "PointShadowSelectedCount": 8,
+      "SpotShadowSelectedCount": 8,
+      "LocalShadowCacheHitCount": 16,
+      "LocalShadowStaticRefreshCount": 0,
+      "LocalShadowCopyCount": 0,
+      "PointShadowRenderedFaceCount": 0,
+      "LocalShadowAllocationFailureCount": 0
+    },
+    "validationErrors": 0
+  }
+}

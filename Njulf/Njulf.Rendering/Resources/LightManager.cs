@@ -1025,6 +1025,8 @@ namespace Njulf.Rendering.Resources
             _freeSlots.Push(slot);
         }
 
+        public static uint GetStableIdentity(LightHandle handle) => handle.IsValid ? PackStableIdentity(handle.Slot, handle.Generation) : 0;
+
         internal static uint PackStableIdentity(int slot, int generation)
         {
             uint packedSlot = checked((uint)slot) & 0x3ffu;

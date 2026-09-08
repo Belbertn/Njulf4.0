@@ -13,7 +13,7 @@ namespace Njulf.Rendering.Resources
 {
     public sealed unsafe class SpotShadowAtlas : IDisposable
     {
-        private const int MaxSpotShadowRecords = 32;
+        private const int MaxSpotShadowRecords = LightManager.MaxLights;
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
         private GpuAllocator.Allocation* _staticAllocation;
@@ -78,6 +78,23 @@ namespace Njulf.Rendering.Resources
         /// configuration-driven behavior for standalone callers. Render-frame code should use the
         /// selection-aware overload to avoid retaining the atlas when no spot shadow is selected.
         /// </summary>
+        private int _allocationRetryFrames;
+        private uint _failedAtlasSize;
+        public bool EnsureLayout(ShadowSettings settings, uint atlasSize, int count)
+        {
+            if (count > 0 && atlasSize == _failedAtlasSize && _allocationRetryFrames-- > 0) return false;
+            bool changed = Ensure(new ShadowSettings
+            {
+                SpotShadowsEnabled = settings.SpotShadowsEnabled,
+                MaxShadowedSpotLights = settings.MaxShadowedSpotLights,
+                SpotShadowAtlasSize = atlasSize == 0 ? 1024 : atlasSize,
+                SpotShadowTileSize = 128
+            }, count);
+            _failedAtlasSize = count > 0 && _workingImage.Handle == 0 ? atlasSize : 0;
+            _allocationRetryFrames = _failedAtlasSize != 0 ? 120 : 0;
+            return changed;
+        }
+
         public bool Ensure(ShadowSettings settings)
         {
             if (settings == null)
@@ -365,7 +382,7 @@ namespace Njulf.Rendering.Resources
                 data,
                 capacity,
                 barrierDescription: new UploadBarrierDescription(
-                    PipelineStageFlags2.FragmentShaderBit,
+                    PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageReadBit));
         }
 

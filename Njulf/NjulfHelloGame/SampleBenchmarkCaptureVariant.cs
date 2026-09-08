@@ -13,6 +13,7 @@ namespace NjulfHelloGame;
 public static class SampleBenchmarkCaptureVariant
 {
     public const string Baseline = "baseline";
+    public const string HiZDisabled = "hiz-disabled";
     public const string DecalsDisabled = "decals-disabled";
     public const string DecalDdgiDisabled = "decal-ddgi-disabled";
     public const string DecalShadowsDisabled = "decal-shadows-disabled";
@@ -278,6 +279,11 @@ public static class SampleBenchmarkCaptureVariant
             case DirectionalShadowsDisabled:
                 settings.Shadows.DirectionalShadowsEnabled = false;
                 return normalized;
+            case HiZDisabled:
+                settings.HiZOcclusion.Enabled = false;
+                settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled = false;
+                settings.HiZOcclusion.CurrentFrameForwardVisibilityEnabled = false;
+                return normalized;
         }
 
         if (normalized.StartsWith(DecalMaterialPrefix, StringComparison.Ordinal))
@@ -297,7 +303,8 @@ public static class SampleBenchmarkCaptureVariant
         string normalized = string.IsNullOrWhiteSpace(variant)
             ? Baseline
             : variant.Trim().ToLowerInvariant();
-        if (normalized is Baseline or DecalsDisabled or DecalDdgiDisabled or
+        if (normalized is Baseline or HiZDisabled or
+            DecalsDisabled or DecalDdgiDisabled or
             DecalShadowsDisabled or TransparentGiDisabled or
             TransparentShadowsDisabled or FarFieldGated or FarFieldForcedOld or
             TailJacobi or TailAccelerated or ForwardGiEnabled or
@@ -337,7 +344,8 @@ public static class SampleBenchmarkCaptureVariant
 
         throw new ArgumentException(
             $"Unknown benchmark capture variant '{variant}'. Supported variants: " +
-            $"{Baseline}, {DecalsDisabled}, {DecalDdgiDisabled}, " +
+            $"{Baseline}, {HiZDisabled}, " +
+            $"{DecalsDisabled}, {DecalDdgiDisabled}, " +
             $"{DecalShadowsDisabled}, {TransparentGiDisabled}, " +
             $"{TransparentShadowsDisabled}, {FarFieldGated}, {FarFieldForcedOld}, " +
             $"{TailJacobi}, {TailAccelerated}, " +

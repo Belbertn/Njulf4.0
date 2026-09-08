@@ -185,6 +185,45 @@ public sealed class SimpleDdgiGuidingTransportTests
     }
 
     [Test]
+    public void SpatialMaintenanceTier_PreservesAConstantWithoutMixtureSamples()
+    {
+        const int maximumRays = 128;
+        const int spatialRays = 32;
+        Vector3 incident = new(0.25f, 1.0f, 3.0f);
+        var samples = new SimpleDdgiGuidingProjectionSample[spatialRays];
+        for (int ray = 0; ray < spatialRays; ray++)
+        {
+            int slot = ray * maximumRays / spatialRays;
+            Assert.That(SimpleDdgiGuidingTransportEstimator.IsMaintenanceSlot(
+                slot, maximumRays), Is.True);
+            // A varying unused mixture density must not change the uniform
+            // estimator selected by this admitted spatial ray tier.
+            samples[ray] = new SimpleDdgiGuidingProjectionSample(
+                incident, Vector3.UnitZ,
+                SimpleDdgiDirectionSamplingTechnique.UniformMaintenance,
+                0.01f + ray * 0.03f);
+        }
+
+        SimpleDdgiGuidingProjectionResult result =
+            SimpleDdgiGuidingTransportEstimator.ProjectIrradiance(
+                Vector3.UnitZ, samples);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.True, result.Reason);
+            Assert.That(result.UniformMaintenanceSampleCount, Is.EqualTo(spatialRays));
+            Assert.That(result.MixtureSampleCount, Is.Zero);
+            Assert.That(Vector3.Distance(result.Irradiance, incident * MathF.PI),
+                Is.LessThan(1.0e-5f));
+            Assert.That(result.MinimumPdfDenominator,
+                Is.EqualTo(spatialRays / (4.0d * Math.PI)).Within(1.0e-12d));
+        });
+
+        samples[0] = samples[0] with { IsPublishable = false };
+        Assert.That(SimpleDdgiGuidingTransportEstimator.ProjectIrradiance(
+            Vector3.UnitZ, samples).IsValid, Is.False);
+    }
+
+    [Test]
     public void BalanceEstimator_ConstantUniformFieldConvergesToPiAndKeepsVisibilityUniform()
     {
         const int rayCount = 256;

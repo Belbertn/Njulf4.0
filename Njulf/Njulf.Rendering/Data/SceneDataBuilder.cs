@@ -114,7 +114,7 @@ namespace Njulf.Rendering.Data
         private readonly List<GPUMeshletDrawCommand> _directionalDynamicShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _localStaticShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _localDynamicShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
-        private readonly int[] _pointShadowFaceMasks = new int[4];
+        private readonly int[] _pointShadowFaceMasks = new int[LightManager.MaxLights];
         private int _directionalShadowSkinnedObjectCount;
         private int _localShadowSkinnedObjectCount;
         private readonly List<ObjectDebugSnapshot> _objectDebugSnapshots = new List<ObjectDebugSnapshot>();
@@ -538,7 +538,7 @@ namespace Njulf.Rendering.Data
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
-            _secondaryScene = scene;
+            BeginSecondarySubmission(scene);
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
             if (uploadCommandBuffer.Handle == 0)
@@ -1656,14 +1656,23 @@ namespace Njulf.Rendering.Data
                             }
                         }
                     }
-                    if (castsLocalShadow)
+                }
+                // Local shadow depth must not depend on the viewing camera's LOD.
+                if (castsLocalShadow)
+                {
+                    var shadowRange = GetMeshletLodRange(meshInfo, 0, out _);
+                    for (uint i = 0; i < shadowRange.Count; i++)
                     {
+                        uint meshletIndex = shadowRange.Offset + i;
+                        var command = new GPUMeshletDrawCommand
+                        {
+                            MeshletIndex = meshletIndex, InstanceId = instanceId,
+                            MaterialIndex = (uint)materialIndex, Flags = meshletCommandFlags
+                        };
                         _localShadowMeshletDrawCommands.Add(command);
-                        if (isSkinnedObject)
-                            _localDynamicShadowMeshletDrawCommands.Add(command);
-                        else
-                            _localStaticShadowMeshletDrawCommands.Add(command);
-                        AccumulatePointShadowFaceCoverage(meshlet, cullingMatrix, selectedPointShadows);
+                        if (isSkinnedObject) _localDynamicShadowMeshletDrawCommands.Add(command);
+                        else _localStaticShadowMeshletDrawCommands.Add(command);
+                        AccumulatePointShadowFaceCoverage(_meshManager.GetMeshlet(meshHandle, meshletIndex), cullingMatrix, selectedPointShadows);
                     }
                 }
                 _lastMeshletCullMicroseconds += ElapsedMicroseconds(meshletStart);
@@ -1997,11 +2006,21 @@ namespace Njulf.Rendering.Data
                                 _doubleSidedDirectionalStaticShadowMeshletCount++;
                             }
                         }
-                        if (castsLocalShadow)
+                    }
+                    if (castsLocalShadow)
+                    {
+                        var shadowRange = GetMeshletLodRange(meshInfo, 0, out _);
+                        for (uint i = 0; i < shadowRange.Count; i++)
                         {
+                            uint meshletIndex = shadowRange.Offset + i;
+                            var command = new GPUMeshletDrawCommand
+                            {
+                                MeshletIndex = meshletIndex, InstanceId = instanceId,
+                                MaterialIndex = (uint)materialIndex, Flags = meshletCommandFlags
+                            };
                             _localShadowMeshletDrawCommands.Add(command);
                             _localStaticShadowMeshletDrawCommands.Add(command);
-                            AccumulatePointShadowFaceCoverage(meshlet, worldMatrix, selectedPointShadows);
+                            AccumulatePointShadowFaceCoverage(_meshManager.GetMeshlet(meshHandle, meshletIndex), worldMatrix, selectedPointShadows);
                         }
                     }
 
@@ -4137,6 +4156,8 @@ namespace Njulf.Rendering.Data
             if (_disposed)
                 return;
             _disposed = true;
+
+            DisposeSecondarySnapshot();
 
             lock (_lock)
             {

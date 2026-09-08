@@ -14,8 +14,8 @@ namespace Njulf.Rendering.Pipeline
 {
     public sealed unsafe class PointShadowPass : RenderPassBase
     {
-        // ShadowSettings and PointShadowCubemapArray both cap selected point lights at four.
-        private const int CachedPointLightLabelCapacity = 4;
+        // Labels are cached up to the engine-wide light capacity.
+        private const int CachedPointLightLabelCapacity = LightManager.MaxLights;
         private const int PointLightFaceCount = 6;
         private static readonly string[] StaticFaceDebugLabels = CreateFaceDebugLabels("Static");
         private static readonly string[] DynamicFaceDebugLabels = CreateFaceDebugLabels("Dynamic");
@@ -24,17 +24,17 @@ namespace Njulf.Rendering.Pipeline
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly FoliagePipeline? _foliagePipeline;
         private readonly FoliageManager? _foliageManager;
-        private readonly PointShadowCubemapArray _cubemapArray;
+        private readonly PointShadowPool _pool;
+        private PointShadowCubemapArray _cubemapArray = null!;
+        private int _pointIndex;
         private readonly ShadowSettings _settings;
-        private ulong _lastStaticCacheSignature;
-        private bool _hasStaticCacheSignature;
 
         public PointShadowPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
-            PointShadowCubemapArray cubemapArray,
+            PointShadowPool cubemapArray,
             ShadowSettings settings,
             FoliagePipeline? foliagePipeline = null,
             FoliageManager? foliageManager = null)
@@ -43,7 +43,7 @@ namespace Njulf.Rendering.Pipeline
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _foliagePipeline = foliagePipeline;
             _foliageManager = foliageManager;
-            _cubemapArray = cubemapArray ?? throw new ArgumentNullException(nameof(cubemapArray));
+            _pool = cubemapArray ?? throw new ArgumentNullException(nameof(cubemapArray));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         }
 
@@ -51,45 +51,37 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
-        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
-        {
-            if (!sceneData.PointShadowsEnabled ||
-                sceneData.PointShadowSelectedCount <= 0 ||
-                _cubemapArray.WorkingImage.Handle == 0)
-            {
-                return false;
-            }
-
-            return IsStaticCacheDirty(sceneData) ||
-                   sceneData.LocalDynamicShadowMeshletCount > 0 ||
-                   HasFoliagePointShadowWork(sceneData);
-        }
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData) =>
+            sceneData.PointShadowsEnabled && sceneData.PointShadowSelectedCount > 0 && _pool.Maps.Length > 0;
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!ShouldExecute(frameIndex, sceneData))
-                return;
-
-            bool staticDirty = IsStaticCacheDirty(sceneData);
-            if (staticDirty)
+            if (!ShouldExecute(frameIndex, sceneData)) return;
+            sceneData.PointShadowRecordSkipped = true;
+            for (_pointIndex = 0; _pointIndex < sceneData.PointShadowSelectedCount; _pointIndex++)
             {
-                RenderStaticCache(cmd, sceneData);
-                _lastStaticCacheSignature = CreateStaticCacheSignature(sceneData);
-                _hasStaticCacheSignature = true;
-            }
-
-            if (sceneData.LocalStaticShadowMeshletCount > 0)
+                _cubemapArray = _pool.Maps[_pointIndex].Images;
+                LocalShadowCacheEntry cache = sceneData.PointShadowCacheEntries[_pointIndex];
+                bool staticDirty = cache.StaticDirty || _cubemapArray.StaticLayout == ImageLayout.Undefined;
+                bool foliage = HasFoliagePointShadowWork(sceneData) && _pointIndex < sceneData.FoliageMaxLocalShadowedPointLights;
+                bool moving = sceneData.LocalDynamicShadowMeshletCount > 0 &&
+                    (_pointIndex >= sceneData.PointShadowDynamicCasters.Length || sceneData.PointShadowDynamicCasters[_pointIndex]);
+                bool dynamic = moving || foliage;
+                if (!staticDirty && !dynamic && !cache.HadDynamic)
+                { cache.LastResult = "Cached"; sceneData.LocalShadowCacheHitCount++; sceneData.PointShadowSkippedFaceCount += 6; continue; }
+                for (int face = 0; face < 6; face++)
+                    if (!IsFaceEnabled(sceneData, _pointIndex, face)) sceneData.PointShadowSkippedFaceCount++;
+                sceneData.PointShadowRecordSkipped = false;
+                if (staticDirty)
+                { RenderStaticCache(cmd, sceneData); sceneData.LocalShadowStaticRefreshCount++; }
                 CopyStaticCacheToWorking(cmd);
-            else
-                ClearWorkingImage(cmd);
-
-            if (sceneData.LocalDynamicShadowMeshletCount > 0)
-                RenderDynamic(cmd, sceneData);
-
-            if (HasFoliagePointShadowWork(sceneData))
-                RenderFoliage(cmd, sceneData);
-
-            TransitionWorking(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
+                sceneData.LocalShadowCopyCount++;
+                if (moving) RenderDynamic(cmd, sceneData);
+                if (foliage) RenderFoliage(cmd, sceneData);
+                if (dynamic) sceneData.LocalShadowDynamicUpdateCount++;
+                TransitionWorking(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
+                cache.Commit(dynamic);
+            }
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -99,10 +91,8 @@ namespace Njulf.Rendering.Pipeline
 
         private void RenderStaticCache(CommandBuffer cmd, SceneRenderingData sceneData)
         {
-            if (sceneData.LocalStaticShadowMeshletCount <= 0)
-                return;
-
             ClearStaticImage(cmd);
+            if (sceneData.LocalStaticShadowMeshletCount <= 0) return;
             TransitionStatic(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             BindShadowPipeline(cmd);
             RenderFaces(
@@ -141,8 +131,8 @@ namespace Njulf.Rendering.Pipeline
             if (meshletCount <= 0)
                 return;
 
-            for (int pointIndex = 0; pointIndex < sceneData.PointShadowSelectedCount; pointIndex++)
             {
+                int pointIndex = _pointIndex;
                 for (int faceIndex = 0; faceIndex < 6; faceIndex++)
                 {
                     if (!IsFaceEnabled(sceneData, pointIndex, faceIndex))
@@ -152,8 +142,8 @@ namespace Njulf.Rendering.Pipeline
                     try
                     {
                         ImageView view = staticViews
-                            ? _cubemapArray.GetStaticFaceView(pointIndex, faceIndex)
-                            : _cubemapArray.GetFaceView(pointIndex, faceIndex);
+                            ? _cubemapArray.GetStaticFaceView(0, faceIndex)
+                            : _cubemapArray.GetFaceView(0, faceIndex);
                         RenderFace(
                             cmd,
                             sceneData,
@@ -217,6 +207,7 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdPushConstants(cmd, _meshPipeline.Layout, ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt, 0, size, &pushConstants);
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            sceneData.PointShadowRenderedFaceCount++;
         }
 
         private void RenderFoliage(CommandBuffer cmd, SceneRenderingData sceneData)
@@ -226,7 +217,7 @@ namespace Njulf.Rendering.Pipeline
 
             TransitionWorking(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             int shadowCount = Math.Min(sceneData.PointShadowSelectedCount, sceneData.FoliageMaxLocalShadowedPointLights);
-            for (int pointIndex = 0; pointIndex < shadowCount; pointIndex++)
+            for (int pointIndex = _pointIndex; pointIndex == _pointIndex && pointIndex < shadowCount; pointIndex++)
             {
                 for (int faceIndex = 0; faceIndex < 6; faceIndex++)
                 {
@@ -241,7 +232,7 @@ namespace Njulf.Rendering.Pipeline
                             sceneData,
                             pointIndex,
                             faceIndex,
-                            _cubemapArray.GetFaceView(pointIndex, faceIndex));
+                            _cubemapArray.GetFaceView(0, faceIndex));
                     }
                     finally
                     {
@@ -337,6 +328,7 @@ namespace Njulf.Rendering.Pipeline
             }
 
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            sceneData.PointShadowRenderedFaceCount++;
         }
 
         private void BindShadowPipeline(CommandBuffer cmd)
@@ -526,42 +518,6 @@ namespace Njulf.Rendering.Pipeline
                 &copy);
         }
 
-        private bool IsStaticCacheDirty(SceneRenderingData sceneData)
-        {
-            if (_cubemapArray.StaticLayout == ImageLayout.Undefined ||
-                _cubemapArray.Layout == ImageLayout.Undefined)
-            {
-                return true;
-            }
-
-            ulong signature = CreateStaticCacheSignature(sceneData);
-            return !_hasStaticCacheSignature || _lastStaticCacheSignature != signature;
-        }
-
-        private static ulong CreateStaticCacheSignature(SceneRenderingData sceneData)
-        {
-            ulong hash = 14695981039346656037UL;
-            hash = HashAdd(hash, sceneData.LocalStaticShadowMeshletCount);
-            hash = HashAdd(hash, sceneData.LocalStaticShadowMeshletDrawSignature);
-            hash = HashAdd(hash, sceneData.PointShadowSelectedCount);
-            hash = HashAdd(hash, sceneData.PointShadowMapSize);
-            for (int i = 0; i < sceneData.PointShadowSelectedCount; i++)
-            {
-                if (i < sceneData.PointShadowFaceMasks.Length)
-                    hash = HashAdd(hash, sceneData.PointShadowFaceMasks[i]);
-
-                GPUPointShadow shadow = sceneData.PointShadowData[i];
-                GPUPointShadow* shadowPtr = &shadow;
-                byte* bytes = (byte*)shadowPtr;
-                for (int byteIndex = 0; byteIndex < sizeof(GPUPointShadow); byteIndex++)
-                {
-                    hash = HashAdd(hash, bytes[byteIndex]);
-                }
-            }
-
-            return hash;
-        }
-
         internal static void GetTransitionMasks(
             ImageLayout oldLayout,
             ImageLayout newLayout,
@@ -579,7 +535,7 @@ namespace Njulf.Rendering.Pipeline
                         AccessFlags2.DepthStencilAttachmentWriteBit;
                     break;
                 case ImageLayout.DepthStencilReadOnlyOptimal:
-                    srcStage = PipelineStageFlags2.FragmentShaderBit;
+                    srcStage = PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit;
                     srcAccess = AccessFlags2.ShaderSampledReadBit;
                     break;
                 case ImageLayout.TransferSrcOptimal:
@@ -606,7 +562,7 @@ namespace Njulf.Rendering.Pipeline
                         AccessFlags2.DepthStencilAttachmentWriteBit;
                     break;
                 case ImageLayout.DepthStencilReadOnlyOptimal:
-                    dstStage = PipelineStageFlags2.FragmentShaderBit;
+                    dstStage = PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit;
                     dstAccess = AccessFlags2.ShaderSampledReadBit;
                     break;
                 case ImageLayout.TransferSrcOptimal:
@@ -622,29 +578,6 @@ namespace Njulf.Rendering.Pipeline
                     dstAccess = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit;
                     break;
             }
-        }
-
-        private static ulong HashAdd(ulong hash, int value) => HashAdd(hash, unchecked((uint)value));
-        private static ulong HashAdd(ulong hash, uint value)
-        {
-            const ulong prime = 1099511628211UL;
-            unchecked
-            {
-                hash ^= value & 0xFFu;
-                hash *= prime;
-                hash ^= (value >> 8) & 0xFFu;
-                hash *= prime;
-                hash ^= (value >> 16) & 0xFFu;
-                hash *= prime;
-                hash ^= (value >> 24) & 0xFFu;
-                return hash * prime;
-            }
-        }
-
-        private static ulong HashAdd(ulong hash, ulong value)
-        {
-            hash = HashAdd(hash, (uint)value);
-            return HashAdd(hash, (uint)(value >> 32));
         }
 
         private static Matrix4x4 GetFaceMatrix(GPUPointShadow shadow, int faceIndex)

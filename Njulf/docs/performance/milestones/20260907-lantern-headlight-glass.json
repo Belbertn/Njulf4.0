@@ -1,0 +1,52 @@
+{
+  "materials": {
+    "Sponza lamp_glass_01": {
+      "transmission": 0.92,
+      "roughness": 0.18,
+      "ior": 1.52,
+      "thinGlass": true
+    },
+    "Bistro Vespa_Headlight": {
+      "transmission": 0.94,
+      "roughness": 0.12,
+      "ior": 1.52,
+      "thinGlass": true
+    }
+  },
+  "tests": {
+    "focusedImportsAndProfiles": 26,
+    "sponzaCookedContracts": 2,
+    "bistroCookedContracts": 2
+  },
+  "cooks": {
+    "Sponza": {
+      "succeeded": true,
+      "warnings": 0,
+      "elapsedMs": 142926
+    },
+    "BistroExterior": {
+      "succeeded": true,
+      "warnings": 0,
+      "elapsedMs": 80684
+    },
+    "BistroInterior": {
+      "succeeded": true,
+      "warnings": 0,
+      "elapsedMs": 35184
+    }
+  },
+  "sponzaRender": {
+    "capture": "artifacts\\material-glass\\sponza-render\\gi-sponza-right-wall-stationary\\performance-20260907-201826-1369339-98697df3c2f548739d8eaba78cc748ed.json",
+    "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "thinGlassObjects": 1,
+    "thinGlassMeshlets": 1,
+    "validationErrors": 0
+  },
+  "bistroRender": {
+    "capture": "artifacts\\material-glass\\bistro-render\\bistro\\performance-20260907-202107-7138599-e41efbf94cba45f189e06998806ebc23.json",
+    "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "thinGlassObjects": 289,
+    "thinGlassMeshlets": 1628,
+    "validationErrors": 0
+  }
+}

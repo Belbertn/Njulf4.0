@@ -12,7 +12,7 @@ namespace Njulf.Assets;
 /// </summary>
 internal static class AmazonBistroMaterialProfile
 {
-    internal const string ProfileRevision = "amazon-bistro-material-profile/v3";
+    internal const string ProfileRevision = "amazon-bistro-material-profile/v4";
 
     public static bool Apply(string modelPath, ModelMaterial material)
     {
@@ -100,6 +100,14 @@ internal static class AmazonBistroMaterialProfile
         out ThinGlassProfile profile)
     {
         string stem = Path.GetFileNameWithoutExtension(identity);
+        if (stem.Equals("Vespa_Headlight_BaseColor", StringComparison.OrdinalIgnoreCase))
+        {
+            profile = new ThinGlassProfile(
+                Transmission: 0.94f, Roughness: 0.12f, Ior: 1.52f,
+                Tint: new Vector4(0.98f, 0.99f, 1.0f, 1.0f));
+            return true;
+        }
+
         if (stem.Equals("MASTER_Glass_Exterior_BaseColor",
                 StringComparison.OrdinalIgnoreCase))
         {

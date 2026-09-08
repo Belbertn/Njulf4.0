@@ -75,8 +75,19 @@ void ValidateScrollCohort(uint volumeIndex)
         uint probeIndex = SchedulerArenaRead(outcomeBase + 5u);
         uint outcomeVolumeIndex;
         if (!SchedulerFindVolume(probeIndex, outcomeVolumeIndex) ||
-            outcomeVolumeIndex >= activeVolumeCount ||
-            !SchedulerVolumeHasMandatoryScrollRepair(outcomeVolumeIndex))
+            outcomeVolumeIndex >= activeVolumeCount)
+        {
+            globalFatalFailure |=
+                SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_UNEXPECTED_PROBE;
+            continue;
+        }
+        // Authored/refinement volumes can reuse toroidal slots too. Their
+        // independent refreshes do not belong to an atomic camera-ring
+        // cohort; CommitLocal still validates each publication normally.
+        if (SchedulerVolumeKind(outcomeVolumeIndex) !=
+            SIMPLE_DDGI_SCHEDULER_VOLUME_KIND_RING)
+            continue;
+        if (!SchedulerVolumeHasMandatoryScrollRepair(outcomeVolumeIndex))
         {
             globalFatalFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_UNEXPECTED_PROBE;
@@ -144,11 +155,22 @@ void ValidateScrollCohort(uint volumeIndex)
         {
             volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_PUBLICATION_INCOMPLETE;
+            SchedulerArenaAtomicOr(
+                pc.CountersOffsetWords +
+                    SIMPLE_DDGI_SCHEDULER_COUNTER_MISSING_COMPLETION_MASK,
+                publicationMask & ~completionMask);
         }
-        if (SchedulerArenaRead(outcomeBase + 9u) != 0u)
+        uint producerFailure = SchedulerArenaRead(outcomeBase + 9u);
+        if (producerFailure != 0u)
         {
             volumeFailure |=
                 SIMPLE_DDGI_SCHEDULER_SCROLL_COHORT_PRODUCER_FAILURE;
+            // Commit rejects the whole cohort before inspecting individual
+            // outcomes. Preserve the producer reason at this gate as well.
+            SchedulerArenaAtomicOr(
+                pc.CountersOffsetWords +
+                    SIMPLE_DDGI_SCHEDULER_COUNTER_PRODUCER_FAILURE_MASK,
+                producerFailure);
         }
         if (SchedulerArenaRead(outcomeBase + 0u) !=
                 SchedulerQueueGeneration() ||

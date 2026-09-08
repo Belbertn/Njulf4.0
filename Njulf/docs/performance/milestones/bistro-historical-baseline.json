@@ -1,0 +1,15 @@
+{
+  "Scene": "Bistro",
+  "Scenario": "Normal",
+  "RepeatCount": 5,
+  "MeasureFrames": 600,
+  "CpuP50Milliseconds": 2.62,
+  "CpuP95Milliseconds": 3.092,
+  "CpuP99Milliseconds": 5.028,
+  "GpuP50Milliseconds": 9.9115,
+  "GpuP95Milliseconds": 14.325,
+  "GpuP99Milliseconds": 14.544,
+  "TargetMet": true,
+  "HdrReferencePath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\.perf-loop-runs\\bistro-1080p-ddgihigh\\reference-v4.pfm",
+  "ProtectedPathFingerprint": "5b7a971d60c67640ba4d1bcddf9e8b06aa98b798ce81051be5d2fff86d6c437b"
+}

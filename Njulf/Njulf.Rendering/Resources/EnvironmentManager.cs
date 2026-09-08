@@ -71,9 +71,11 @@ namespace Njulf.Rendering.Resources
         private uint _giLightingGeneration;
         private bool _giUploadRequired = true;
         private LightHandle _derivedSunHandle;
+        private Guid _derivedSunId;
         private Light _authoredSunRestore;
         private bool _derivedSunWasCreated;
         private LightHandle _derivedMoonHandle;
+        private Guid _derivedMoonId;
         private long _lastAtmosphereTimestamp;
 
         public EnvironmentManager(
@@ -180,10 +182,25 @@ namespace Njulf.Rendering.Resources
         /// never recreates textures or waits for the device.
         /// </summary>
         public void UpdateFrameLighting(LightManager lightManager)
+            => UpdateFrameLighting(lightManager, useImportedDirectionalLight: false);
+
+        public void UpdateFrameLighting(LightManager lightManager, bool useImportedDirectionalLight)
         {
             ArgumentNullException.ThrowIfNull(lightManager);
             EnvironmentSettings environment = _settings.Environment;
             AdvanceAstronomicalClock(environment);
+
+            if (!useImportedDirectionalLight)
+            {
+                // Imported-light switching temporarily removes these records.
+                // Recover their new handles after the original IDs are restored.
+                if (_derivedSunId != Guid.Empty &&
+                    lightManager.TryGetLightHandle(_derivedSunId, out LightHandle sunHandle))
+                    _derivedSunHandle = sunHandle;
+                if (_derivedMoonId != Guid.Empty &&
+                    lightManager.TryGetLightHandle(_derivedMoonId, out LightHandle moonHandle))
+                    _derivedMoonHandle = moonHandle;
+            }
 
             if (!environment.Enabled ||
                 environment.SourceKind != EnvironmentSourceKind.ProceduralSky)
@@ -192,13 +209,16 @@ namespace Njulf.Rendering.Resources
                 // is temporarily unavailable. Never retain analytic sky energy
                 // after a scene disables or replaces the procedural source.
                 environment.TransportFallbackRadiance = default;
-                RestoreAuthoredLighting(lightManager);
+                if (!useImportedDirectionalLight)
+                    RestoreAuthoredLighting(lightManager);
                 return;
             }
 
-            if (environment.SunDriver == ProceduralSkySunDriver.SceneDirectionalLight)
+            if (useImportedDirectionalLight ||
+                environment.SunDriver == ProceduralSkySunDriver.SceneDirectionalLight)
             {
-                RestoreAuthoredLighting(lightManager);
+                if (!useImportedDirectionalLight)
+                    RestoreAuthoredLighting(lightManager);
                 LightFrameSnapshot snapshot = lightManager.GetFrameSnapshot();
                 if (TryResolvePrimaryDirectionalLight(snapshot, out Light sun))
                 {
@@ -494,6 +514,7 @@ namespace Njulf.Rendering.Resources
                         "Procedural Atmosphere Sun");
                     _derivedSunWasCreated = true;
                 }
+                lightManager.TryGetLightId(_derivedSunHandle, out _derivedSunId);
             }
 
             Light previousSun = sun;
@@ -520,6 +541,7 @@ namespace Njulf.Rendering.Resources
                 _derivedMoonHandle = lightManager.AddLightHandle(
                     moon,
                     "Procedural Atmosphere Moon");
+                lightManager.TryGetLightId(_derivedMoonHandle, out _derivedMoonId);
             }
 
             Light previousMoon = moon;
@@ -563,6 +585,7 @@ namespace Njulf.Rendering.Resources
             {
                 lightManager.RemoveLight(_derivedMoonHandle);
                 _derivedMoonHandle = default;
+                _derivedMoonId = Guid.Empty;
             }
 
             if (!_derivedSunHandle.IsValid)
@@ -572,6 +595,7 @@ namespace Njulf.Rendering.Resources
             else
                 lightManager.UpdateLight(_derivedSunHandle, _authoredSunRestore);
             _derivedSunHandle = default;
+            _derivedSunId = Guid.Empty;
             _derivedSunWasCreated = false;
         }
 

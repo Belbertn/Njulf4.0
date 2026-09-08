@@ -232,6 +232,32 @@ public sealed class SimpleDdgiStorageLayoutTests
     }
 
     [Test]
+    public void RefinementHorizonChange_PreservesOtherVolumesStorageAddresses()
+    {
+        var near = Request(0, "near", 0, 11_730, 128, 34, 1.1875f, 0.10f)
+            with { MaximumTraceDistance = 40.375f };
+        var fine = Request(1, "fine", 11_730, 144, 128, 6, 0.59375f, 0.10f)
+            with { MaximumTraceDistance = 40.375f };
+        var before = SimpleDdgiStorageLayoutCompiler.Compile([near, fine]);
+        var after = SimpleDdgiStorageLayoutCompiler.Compile(
+            [near, fine with { MaximumTraceDistance = 65.79086f }]);
+        var moved = SimpleDdgiStorageLayoutCompiler.Compile(
+            [near, fine with { PhysicalFirstProbe = 11_746 }]);
+        var repacked = SimpleDdgiStorageLayoutCompiler.Compile(
+            [near, fine with { UseRecursiveGlossySidecar = true }]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.Fingerprint, Is.Not.EqualTo(after.Fingerprint));
+            Assert.That(before.Regions[0], Is.EqualTo(after.Regions[0]));
+            Assert.That(before.HasSameAddresses(after), Is.True);
+            Assert.That(after.HasSameAddresses(before), Is.True);
+            Assert.That(before.HasSameAddresses(moved), Is.False);
+            Assert.That(before.HasSameAddresses(repacked), Is.False);
+        });
+    }
+
+    [Test]
     public void VolumeFlags_AreNonOverlappingAndLeaveReservedBitsClear()
     {
         uint flags = SimpleDdgiStorageLayoutCompiler.PackVolumeFlags(

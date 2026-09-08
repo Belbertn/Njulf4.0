@@ -1,0 +1,645 @@
+{
+  "Date": "2026-09-08",
+  "Commit": "7eafc485087af01fabfa4a931fb4d03eae93dae7",
+  "Worktree": "dirty before investigation; unrelated changes preserved",
+  "Cpu": "AMD Ryzen 5 5600H",
+  "Gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+  "Driver": "610.248.0",
+  "Resolution": "1920x1080; user snapshot was 1600x900",
+  "Mode": "Development / Standard validation / NormalTelemetry; diagnostic only",
+  "Trajectory": "sponza-vertical-refresh: 2m to 32m in 90 frames, held through frame 239",
+  "Camera": {
+    "PositionX": 2.228,
+    "PositionY": 32,
+    "PositionZ": -0.1611491,
+    "YawRadians": -1.6782299,
+    "PitchRadians": 1.3824875,
+    "FieldOfViewRadians": 0.98174775,
+    "NearPlane": 0.05,
+    "FarPlane": 250,
+    "ViewHash": "sha256:24cb4fe57a8fae161414c3461a078cb40a09cb14b862eb533c7c3bc4d6caa745",
+    "ProjectionHash": "sha256:3fbf0233d1b9dc87d65bef3b0d4edec2462574a0028b716742718bf10c9b11f3",
+    "CameraCutSerial": 0
+  },
+  "AuthoredProfile": "Development 1080p60",
+  "PrimaryRayBudget": 262144,
+  "SpatialRepairRayCeiling": 32768,
+  "NearPlaneProbes": 782,
+  "NearPlaneRaysPerProbe": 32,
+  "NearPlanePrimaryRays": 25024,
+  "OrdinaryConfiguredRequests": 640,
+  "PersistentRequestCapacity": 782,
+  "Decision": "keep correctness fix; no production performance or temporal image-quality claim",
+  "FinalFocusedTests": "314 passed, 0 failed",
+  "BroaderTests": "327 passed, 1 pre-existing source-text assertion failed: RuntimeDiagnostics_ExportExactCommitRejections; both test and feedback shader unchanged from HEAD",
+  "SpirvValidation": "22 projection/blend/audit/commit modules passed spirv-val --target-env vulkan1.4",
+  "LoadedShaderProof": [
+    {
+      "Module": "ddgi_simple_blend_guided.comp.spv",
+      "Sha256": "4b9d92103815835483c035a735edb50911c98672ca76625f2621167d603a4123"
+    },
+    {
+      "Module": "ddgi_simple_directional_project_guided.comp.spv",
+      "Sha256": "74a57c5eb6191a79261f3883d06a12b69e636ae2a8a27f01b111c9fddda96a46"
+    },
+    {
+      "Module": "ddgi_simple_directional_publish.comp.spv",
+      "Sha256": "57c9731ef2cf8b2b21ee1aa5600a670187d1c469404459342c8450942b615f25"
+    },
+    {
+      "Module": "ddgi_simple_directional_stage_guided_packed.comp.spv",
+      "Sha256": "3e2bea34e5544ad5e4c1adc4b87035b2dae1e1185fd484803a782f45772540b9"
+    },
+    {
+      "Module": "ddgi_simple_schedule_commit.comp.spv",
+      "Sha256": "81ef11fc7e91363d56fd0b98da69fbcd6637864027ab8c0b9ec5c3b950cbcee6"
+    },
+    {
+      "Module": "ddgi_simple_transport_audit_packed_guided.comp.spv",
+      "Sha256": "a88e01f9fd92387a0f41cbe6415091e33202bd7d1c44fca674ff9f5ad1f04585"
+    },
+    {
+      "Module": "ddgi_simple_transport_audit_reduce_packed_guided.comp.spv",
+      "Sha256": "3096894cdeab420738bbc4d66ab2a8cc9018f420c72bd657d935626b82fe2c20"
+    }
+  ],
+  "AcceptedHdr": {
+    "Path": ".codex-tmp/vertical-gi-refresh-20260908/accepted-final.pfm",
+    "Bytes": 24883304,
+    "Sha256": "77ded01cf906b0993915094f6fc6d4c2e42242bb03ca9bdb30b1f7086d252f80"
+  },
+  "Runs": [
+    {
+      "Name": "baseline",
+      "Report": ".codex-tmp/vertical-gi-refresh-20260908/baseline.json",
+      "ReportSha256": "de1e344f08de01d078b33d3b619440e8925fff01fad701275140b0b5c8dcf59a",
+      "ExecutableHash": "sha256:5d6bd150e023677f12cb70b0b6a946869c69471902c9a0c09e337058325f3682",
+      "ShaderBundleHash": "sha256:4e91928426a1f4d663b5cba39ebd1eec8fd225bde98ab22c3cd89df8016211c1",
+      "SettingsFingerprint": "bd6a77e32d8d5224f5191fdee0b1f5c231e5a3c88ecda76ff9be37f169b4ca92",
+      "RouteHash": "sha256:d4c3343fcaba85e7af3bae54a3ee7c305b939a416689a3466fe076805d82911d",
+      "SequenceHash": "sha256:1f3b5f58881c1d08055519d501f54078a61876420a825f3ddbd6647b92a75d65",
+      "FrameCount": 240,
+      "FirstCameraY": 2,
+      "CameraYAtFrame90": 32,
+      "FinalCameraY": 32,
+      "MeasuredAtlasClears": 2,
+      "LifetimeAtlasClears": 3,
+      "NearScrollFrames": [],
+      "ScrollCohorts": [],
+      "FailedCohorts": [],
+      "FinalDeferredCascades": 1,
+      "FinalPendingSolverProbes": 0,
+      "CpuMilliseconds": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 9.471475,
+        "MinMilliseconds": 4.408,
+        "MaxMilliseconds": 56.097,
+        "P95Milliseconds": 16.42,
+        "MedianMilliseconds": 7.6385000000000005,
+        "P50Milliseconds": 7.6385000000000005,
+        "P99Milliseconds": 51.093
+      },
+      "GpuMilliseconds": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 30.58673333333333,
+        "MinMilliseconds": 16.563,
+        "MaxMilliseconds": 72.198,
+        "P95Milliseconds": 61.43,
+        "MedianMilliseconds": 26.2625,
+        "P50Milliseconds": 26.2625,
+        "P99Milliseconds": 68.566
+      },
+      "ProductionComparable": false,
+      "ProductionMismatches": [
+        "Loaded shader identity changed during the measurement window.",
+        "Measurement mode is NormalTelemetry, not Production.",
+        "Validation mode is Standard, not Off.",
+        "Build configuration 'Development; validation=Standard; framework=.NETCoreApp,Version=v10.0' is not a production configuration."
+      ],
+      "HealthStatus": "failed",
+      "HealthFailure": "Benchmark exceeded 'CPU renderer': 16.42 ms > 6 ms.",
+      "ValidationWarnings": 0,
+      "ValidationErrors": 0,
+      "GiDiagnosticWarnings": 0,
+      "GiDiagnosticErrors": 0,
+      "ClearEvents": [
+        {
+          "Frame": 37,
+          "CameraY": 14.333334,
+          "RemapKind": 0,
+          "RefinementTraceDistance": [
+            65.79086
+          ]
+        },
+        {
+          "Frame": 60,
+          "CameraY": 22,
+          "RemapKind": 3,
+          "RefinementTraceDistance": [
+            40.375
+          ]
+        }
+      ]
+    },
+    {
+      "Name": "candidate",
+      "Report": ".codex-tmp/vertical-gi-refresh-20260908/candidate.json",
+      "ReportSha256": "81830a95c79ce6552abd54d0cbc396ce06da82ccea56ce4c8f70ceaea75f2dcd",
+      "ExecutableHash": "sha256:c76e34a68f9cecbd6e3f89a7d02594fe41b3076455e26df35a0fba8ddf1cddf8",
+      "ShaderBundleHash": "sha256:4e91928426a1f4d663b5cba39ebd1eec8fd225bde98ab22c3cd89df8016211c1",
+      "SettingsFingerprint": "9719c9e8d0349559047a1ca8ca0fe1ed6517ea6ec6fa6b101e976f191f1e60d4",
+      "RouteHash": "sha256:d4c3343fcaba85e7af3bae54a3ee7c305b939a416689a3466fe076805d82911d",
+      "SequenceHash": "sha256:14950d3a34f3babd4588b32ef30004287edae2e43e9e50d9e7a2da2422701441",
+      "FrameCount": 240,
+      "FirstCameraY": 2,
+      "CameraYAtFrame90": 32,
+      "FinalCameraY": 32,
+      "MeasuredAtlasClears": 0,
+      "LifetimeAtlasClears": 1,
+      "NearScrollFrames": [
+        39,
+        42,
+        45,
+        49,
+        52
+      ],
+      "ScrollCohorts": [
+        {
+          "MeasurementFrame": 41,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 0
+        },
+        {
+          "MeasurementFrame": 44,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 47,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 51,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 54,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        }
+      ],
+      "FailedCohorts": [
+        {
+          "MeasurementFrame": 41,
+          "CohortFailure": "PublicationIncomplete, ProducerFailure",
+          "CommitFailureBreakdown": null
+        },
+        {
+          "MeasurementFrame": 62,
+          "CohortFailure": "UnexpectedProbe",
+          "CommitFailureBreakdown": null
+        }
+      ],
+      "FinalDeferredCascades": 0,
+      "FinalPendingSolverProbes": 12128,
+      "CpuMilliseconds": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 9.462191666666666,
+        "MinMilliseconds": 4.852,
+        "MaxMilliseconds": 53.893,
+        "P95Milliseconds": 15.485,
+        "MedianMilliseconds": 7.8795,
+        "P50Milliseconds": 7.8795,
+        "P99Milliseconds": 37.027
+      },
+      "GpuMilliseconds": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 26.109620833333324,
+        "MinMilliseconds": 15.618,
+        "MaxMilliseconds": 57.271,
+        "P95Milliseconds": 47.228,
+        "MedianMilliseconds": 24.36,
+        "P50Milliseconds": 24.36,
+        "P99Milliseconds": 53.569
+      },
+      "ProductionComparable": false,
+      "ProductionMismatches": [
+        "Loaded shader identity changed during the measurement window.",
+        "Measurement mode is NormalTelemetry, not Production.",
+        "Validation mode is Standard, not Off.",
+        "Build configuration 'Development; validation=Standard; framework=.NETCoreApp,Version=v10.0' is not a production configuration."
+      ],
+      "HealthStatus": "failed",
+      "HealthFailure": "Benchmark exceeded 'CPU renderer': 15.485 ms > 6 ms.",
+      "ValidationWarnings": 0,
+      "ValidationErrors": 0,
+      "GiDiagnosticWarnings": 0,
+      "GiDiagnosticErrors": 0,
+      "ClearEvents": []
+    },
+    {
+      "Name": "guiding",
+      "Report": ".codex-tmp/vertical-gi-refresh-20260908/guiding.json",
+      "ReportSha256": "3776a9e4a34641b742eab41988ad7de3c6fa23df787527b75e168eeefb4564e8",
+      "ExecutableHash": "sha256:0108229be649669021c1c1464a93f24ac3eb49b9f2c5bd239a273c2be0f9109e",
+      "ShaderBundleHash": "sha256:98ec40fe1d5ea314e4541775e124d662908d7cffb9136574b7a1b7037cc47201",
+      "SettingsFingerprint": "bd6a77e32d8d5224f5191fdee0b1f5c231e5a3c88ecda76ff9be37f169b4ca92",
+      "RouteHash": "sha256:d4c3343fcaba85e7af3bae54a3ee7c305b939a416689a3466fe076805d82911d",
+      "SequenceHash": "sha256:4e737170b9e00a22d643634f92ce97d3c9789413d29081103cf65f37a9823ceb",
+      "FrameCount": 240,
+      "FirstCameraY": 2,
+      "CameraYAtFrame90": 32,
+      "FinalCameraY": 32,
+      "MeasuredAtlasClears": 0,
+      "LifetimeAtlasClears": 1,
+      "NearScrollFrames": [
+        39,
+        42,
+        45,
+        49,
+        52
+      ],
+      "ScrollCohorts": [
+        {
+          "MeasurementFrame": 41,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 0
+        },
+        {
+          "MeasurementFrame": 44,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 47,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 51,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 54,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        }
+      ],
+      "FailedCohorts": [
+        {
+          "MeasurementFrame": 41,
+          "CohortFailure": "PublicationIncomplete, ProducerFailure",
+          "CommitFailureBreakdown": "transaction=782,publicGeneration=0,sourceEpoch=0,payloadIdentity=0,cachePrecondition=0,cacheAddress=0,cacheClassification=0,cacheGeneration=0,cacheEpochOrCardinality=0,receiverPack=0,transactionPredicateMask=0x0,missingCompletionMask=0x30,producerFailureMask=0x4440a,cacheReadFailureMask=0x0"
+        },
+        {
+          "MeasurementFrame": 62,
+          "CohortFailure": "UnexpectedProbe",
+          "CommitFailureBreakdown": "transaction=0,publicGeneration=0,sourceEpoch=0,payloadIdentity=0,cachePrecondition=0,cacheAddress=0,cacheClassification=0,cacheGeneration=0,cacheEpochOrCardinality=0,receiverPack=0,transactionPredicateMask=0x0,missingCompletionMask=0x0,producerFailureMask=0x0,cacheReadFailureMask=0x0"
+        }
+      ],
+      "FinalDeferredCascades": 0,
+      "FinalPendingSolverProbes": 12128,
+      "CpuMilliseconds": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 9.5978875,
+        "MinMilliseconds": 4.598,
+        "MaxMilliseconds": 59.59,
+        "P95Milliseconds": 16.305,
+        "MedianMilliseconds": 7.621,
+        "P50Milliseconds": 7.621,
+        "P99Milliseconds": 41.729
+      },
+      "GpuMilliseconds": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 25.96644583333333,
+        "MinMilliseconds": 15.254,
+        "MaxMilliseconds": 57.198,
+        "P95Milliseconds": 46.526,
+        "MedianMilliseconds": 24.2895,
+        "P50Milliseconds": 24.2895,
+        "P99Milliseconds": 53.976
+      },
+      "ProductionComparable": false,
+      "ProductionMismatches": [
+        "Loaded shader identity changed during the measurement window.",
+        "Measurement mode is NormalTelemetry, not Production.",
+        "Validation mode is Standard, not Off.",
+        "Build configuration 'Development; validation=Standard; framework=.NETCoreApp,Version=v10.0' is not a production configuration."
+      ],
+      "HealthStatus": "failed",
+      "HealthFailure": "Benchmark exceeded 'CPU renderer': 16.305 ms > 6 ms.",
+      "ValidationWarnings": 0,
+      "ValidationErrors": 0,
+      "GiDiagnosticWarnings": 0,
+      "GiDiagnosticErrors": 0,
+      "ClearEvents": []
+    },
+    {
+      "Name": "final",
+      "Report": ".codex-tmp/vertical-gi-refresh-20260908/final.json",
+      "ReportSha256": "7a947acca7b83e6a5b4021f4e989dc42a33e3af8cd415e003042da4d21e326a4",
+      "ExecutableHash": "sha256:57a1246b5f5d1b2604f94cbd190e04c755a75b5aa8aa17cde12f036381f5f72b",
+      "ShaderBundleHash": "sha256:f06c1f50ddc164acb0a485981fbd16f7426b85477d31bed0823d8d1260f9e79e",
+      "SettingsFingerprint": "9719c9e8d0349559047a1ca8ca0fe1ed6517ea6ec6fa6b101e976f191f1e60d4",
+      "RouteHash": "sha256:d4c3343fcaba85e7af3bae54a3ee7c305b939a416689a3466fe076805d82911d",
+      "SequenceHash": "sha256:7527a845d5c0eaf9ccf33df94a572d5baf3aaa50f3d4e195e2f8a3d2d8c4b2b0",
+      "FrameCount": 240,
+      "FirstCameraY": 2,
+      "CameraYAtFrame90": 32,
+      "FinalCameraY": 32,
+      "MeasuredAtlasClears": 0,
+      "LifetimeAtlasClears": 1,
+      "NearScrollFrames": [
+        39,
+        42,
+        45,
+        49,
+        52
+      ],
+      "ScrollCohorts": [
+        {
+          "MeasurementFrame": 41,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 44,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 47,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 51,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 54,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        }
+      ],
+      "FailedCohorts": [
+        {
+          "MeasurementFrame": 62,
+          "CohortFailure": "UnexpectedProbe",
+          "CommitFailureBreakdown": "transaction=0,publicGeneration=0,sourceEpoch=0,payloadIdentity=0,cachePrecondition=0,cacheAddress=0,cacheClassification=0,cacheGeneration=0,cacheEpochOrCardinality=0,receiverPack=0,transactionPredicateMask=0x0,missingCompletionMask=0x0,producerFailureMask=0x0,cacheReadFailureMask=0x0"
+        }
+      ],
+      "FinalDeferredCascades": 0,
+      "FinalPendingSolverProbes": 12128,
+      "CpuMilliseconds": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 10.898175000000004,
+        "MinMilliseconds": 5.117,
+        "MaxMilliseconds": 336.865,
+        "P95Milliseconds": 13.974,
+        "MedianMilliseconds": 8.517,
+        "P50Milliseconds": 8.517,
+        "P99Milliseconds": 52.706
+      },
+      "GpuMilliseconds": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 26.971474999999987,
+        "MinMilliseconds": 15.609,
+        "MaxMilliseconds": 57.239,
+        "P95Milliseconds": 46.493,
+        "MedianMilliseconds": 24.7095,
+        "P50Milliseconds": 24.7095,
+        "P99Milliseconds": 55.829
+      },
+      "ProductionComparable": false,
+      "ProductionMismatches": [
+        "Loaded shader identity changed during the measurement window.",
+        "Measurement mode is NormalTelemetry, not Production.",
+        "Validation mode is Standard, not Off.",
+        "Build configuration 'Development; validation=Standard; framework=.NETCoreApp,Version=v10.0' is not a production configuration."
+      ],
+      "HealthStatus": "failed",
+      "HealthFailure": "Benchmark exceeded 'CPU renderer': 13.974 ms > 6 ms.",
+      "ValidationWarnings": 0,
+      "ValidationErrors": 0,
+      "GiDiagnosticWarnings": 0,
+      "GiDiagnosticErrors": 0,
+      "ClearEvents": []
+    },
+    {
+      "Name": "verified",
+      "Report": ".codex-tmp/vertical-gi-refresh-20260908/verified.json",
+      "ReportSha256": "512f875a554bd9ac5f98f7b762b3d979e64280e816735dc3021f2216c4db42c4",
+      "ExecutableHash": "sha256:534a1edd6782a45897cb71ec5824f7ad10715b52d1ea98b200a670e3302b9f4d",
+      "ShaderBundleHash": "sha256:f90a64b568ee89e15887a50698aae0da66c1a21ef577c877605ed4f527b5c20c",
+      "SettingsFingerprint": "9719c9e8d0349559047a1ca8ca0fe1ed6517ea6ec6fa6b101e976f191f1e60d4",
+      "RouteHash": "sha256:d4c3343fcaba85e7af3bae54a3ee7c305b939a416689a3466fe076805d82911d",
+      "SequenceHash": "sha256:ae75882060ac2fdbc1537b779fbcf7556477fa0838c41c6b2ce1ac2840018cc1",
+      "FrameCount": 240,
+      "FirstCameraY": 2,
+      "CameraYAtFrame90": 32,
+      "FinalCameraY": 32,
+      "MeasuredAtlasClears": 0,
+      "LifetimeAtlasClears": 1,
+      "NearScrollFrames": [
+        39,
+        42,
+        45,
+        49,
+        52
+      ],
+      "ScrollCohorts": [
+        {
+          "MeasurementFrame": 41,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 44,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 47,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 51,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 54,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        }
+      ],
+      "FailedCohorts": [],
+      "FinalDeferredCascades": 0,
+      "FinalPendingSolverProbes": 12128,
+      "CpuMilliseconds": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 8.804195833333331,
+        "MinMilliseconds": 4.872,
+        "MaxMilliseconds": 39.35,
+        "P95Milliseconds": 13.687,
+        "MedianMilliseconds": 7.3075,
+        "P50Milliseconds": 7.3075,
+        "P99Milliseconds": 26.617
+      },
+      "GpuMilliseconds": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 26.835325000000008,
+        "MinMilliseconds": 15.485,
+        "MaxMilliseconds": 57.233,
+        "P95Milliseconds": 46.365,
+        "MedianMilliseconds": 24.4745,
+        "P50Milliseconds": 24.4745,
+        "P99Milliseconds": 56.541
+      },
+      "ProductionComparable": false,
+      "ProductionMismatches": [
+        "Loaded shader identity changed during the measurement window.",
+        "Measurement mode is NormalTelemetry, not Production.",
+        "Validation mode is Standard, not Off.",
+        "Build configuration 'Development; validation=Standard; framework=.NETCoreApp,Version=v10.0' is not a production configuration."
+      ],
+      "HealthStatus": "failed",
+      "HealthFailure": "Benchmark exceeded 'CPU renderer': 13.687 ms > 6 ms.",
+      "ValidationWarnings": 0,
+      "ValidationErrors": 0,
+      "GiDiagnosticWarnings": 0,
+      "GiDiagnosticErrors": 0,
+      "ClearEvents": []
+    },
+    {
+      "Name": "accepted",
+      "Report": ".codex-tmp/vertical-gi-refresh-20260908/accepted.json",
+      "ReportSha256": "b50167f9727734b585eee8c2bbb44040745232aa5bc42d721e8bbe6176c2959a",
+      "ExecutableHash": "sha256:68bdefc1ac2de4eceb72f72ae91a12271d58ecfa66895068b2f9981f86b2883d",
+      "ShaderBundleHash": "sha256:f90a64b568ee89e15887a50698aae0da66c1a21ef577c877605ed4f527b5c20c",
+      "SettingsFingerprint": "9719c9e8d0349559047a1ca8ca0fe1ed6517ea6ec6fa6b101e976f191f1e60d4",
+      "RouteHash": "sha256:d4c3343fcaba85e7af3bae54a3ee7c305b939a416689a3466fe076805d82911d",
+      "SequenceHash": "sha256:453d2ee192d691f57653b2247c7d6da5624f86e8e8f433d0ad8bffcb5fcf80f1",
+      "FrameCount": 240,
+      "FirstCameraY": 2,
+      "CameraYAtFrame90": 32,
+      "FinalCameraY": 32,
+      "MeasuredAtlasClears": 0,
+      "LifetimeAtlasClears": 1,
+      "NearScrollFrames": [
+        39,
+        42,
+        45,
+        49,
+        52
+      ],
+      "ScrollCohorts": [
+        {
+          "MeasurementFrame": 41,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 44,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 47,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 51,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        },
+        {
+          "MeasurementFrame": 54,
+          "AcceptedScrollProbes": 782,
+          "TracedScrollProbes": 782,
+          "CommittedScrollProbes": 782
+        }
+      ],
+      "FailedCohorts": [],
+      "FinalDeferredCascades": 0,
+      "FinalPendingSolverProbes": 12128,
+      "CpuMilliseconds": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 9.577970833333332,
+        "MinMilliseconds": 4.893,
+        "MaxMilliseconds": 56.495,
+        "P95Milliseconds": 15.868,
+        "MedianMilliseconds": 8.4545,
+        "P50Milliseconds": 8.4545,
+        "P99Milliseconds": 23.231
+      },
+      "GpuMilliseconds": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 26.109158333333333,
+        "MinMilliseconds": 15.668,
+        "MaxMilliseconds": 56.901,
+        "P95Milliseconds": 46.157,
+        "MedianMilliseconds": 24.305,
+        "P50Milliseconds": 24.305,
+        "P99Milliseconds": 55.568
+      },
+      "ProductionComparable": false,
+      "ProductionMismatches": [
+        "Loaded shader identity changed during the measurement window.",
+        "Measurement mode is NormalTelemetry, not Production.",
+        "Validation mode is Standard, not Off.",
+        "Build configuration 'Development; validation=Standard; framework=.NETCoreApp,Version=v10.0' is not a production configuration."
+      ],
+      "HealthStatus": "failed",
+      "HealthFailure": "Benchmark exceeded 'CPU renderer': 15.868 ms > 6 ms.",
+      "ValidationWarnings": 0,
+      "ValidationErrors": 0,
+      "GiDiagnosticWarnings": 0,
+      "GiDiagnosticErrors": 0,
+      "ClearEvents": []
+    }
+  ]
+}

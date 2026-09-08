@@ -2998,6 +2998,7 @@ internal sealed class RendererDiagnosticsAssembler
             DirectionalShadowMeshOnlyIndirectDrawCount =
                 sceneData.DirectionalShadowMeshOnlyIndirectDrawCount,
             LightTileSaturationCount = sceneData.LightTileSaturationCount,
+            TiledLightDiagnosticsValid = sceneData.TiledLightDiagnosticsValid,
             MaxLightsInAnyTile = sceneData.MaxLightsInAnyTile,
             AverageLightsPerNonEmptyTile = sceneData.AverageLightsPerNonEmptyTile,
             LightCullRejectedPointCount = sceneData.LightCullRejectedPointCount,
@@ -3023,6 +3024,23 @@ internal sealed class RendererDiagnosticsAssembler
             WeightedOitRenderTargetCount = _renderTargets == null ? 0 : 2,
             DirectionalShadowBytes = _directionalShadowResources?.EstimatedImageBytes ?? 0,
             SpotShadowAtlasBytes = _spotShadowAtlas?.EstimatedImageBytes ?? 0,
+            LocalShadowLights = sceneData.LocalShadowLights.Select(light =>
+            {
+                int point = Array.FindIndex(sceneData.PointShadowAllocations, x => x.Identity == light.Identity);
+                int spot = Array.FindIndex(sceneData.SpotShadowAllocations, x => x.Identity == light.Identity);
+                string status = point >= 0 ? sceneData.PointShadowCacheEntries[point].LastResult :
+                    spot >= 0 ? sceneData.SpotShadowCacheEntries[spot].LastResult : light.Status;
+                return light with { Status = status };
+            }).ToArray(),
+            PointShadowConfiguredLimit = Settings.Shadows.MaxShadowedPointLights,
+            SpotShadowConfiguredLimit = Settings.Shadows.MaxShadowedSpotLights,
+            LocalShadowMemoryBudgetMiB = Settings.Shadows.LocalShadowMemoryBudgetMiB,
+            LocalShadowCacheHitCount = sceneData.LocalShadowCacheHitCount,
+            LocalShadowStaticRefreshCount = sceneData.LocalShadowStaticRefreshCount,
+            LocalShadowDynamicUpdateCount = sceneData.LocalShadowDynamicUpdateCount,
+            LocalShadowCopyCount = sceneData.LocalShadowCopyCount,
+            LocalShadowDowngradedCount = sceneData.LocalShadowDowngradedCount,
+            LocalShadowAllocationFailureCount = sceneData.LocalShadowAllocationFailureCount,
             PointShadowBytes = _pointShadowCubemapArray?.EstimatedImageBytes ?? 0,
             PointShadowSkippedFaceCount = sceneData.PointShadowSkippedFaceCount,
             ShadowMapBytes = (_directionalShadowResources?.EstimatedImageBytes ?? 0) +

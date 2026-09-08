@@ -8,9 +8,9 @@ namespace Njulf.Rendering.Data
 {
     public sealed class LocalShadowSelector
     {
-        private readonly HashSet<int> _previousSpotSelection = new();
-        private readonly HashSet<int> _previousPointSelection = new();
-        private readonly HashSet<int> _previousAreaSelection = new();
+        private readonly HashSet<uint> _previousSpotSelection = new();
+        private readonly HashSet<uint> _previousPointSelection = new();
+        private readonly HashSet<uint> _previousAreaSelection = new();
 
         public LocalShadowSelection Select(
             Light[] lights,
@@ -30,7 +30,7 @@ namespace Njulf.Rendering.Data
             ICamera camera,
             ShadowSettings settings,
             int spotAtlasCapacityOverride = -1,
-            int pointShadowCapacityOverride = -1)
+            int pointShadowCapacityOverride = -1, ReadOnlySpan<uint> stableIdentities = default)
         {
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
@@ -47,20 +47,21 @@ namespace Njulf.Rendering.Data
                 if (!IsCandidate(light))
                     continue;
 
+                uint identity = i < stableIdentities.Length ? stableIdentities[i] : (uint)i + 1;
                 float score = Score(light, camera, i);
                 if (light.Type == LightType.Spot && IsValidSpot(light))
-                    spotCandidates.Add(new SelectedLocalShadow(i, light, score + (_previousSpotSelection.Contains(i) ? 0.05f : 0f)));
+                    spotCandidates.Add(new SelectedLocalShadow(i, light, score + (_previousSpotSelection.Contains(identity) ? 0.05f : 0f), identity));
                 else if (light.Type == LightType.Point)
-                    pointCandidates.Add(new SelectedLocalShadow(i, light, score + (_previousPointSelection.Contains(i) ? 0.05f : 0f)));
+                    pointCandidates.Add(new SelectedLocalShadow(i, light, score + (_previousPointSelection.Contains(identity) ? 0.05f : 0f), identity));
                 else if (AnalyticalLightGeometry.IsArea(light.Type) &&
                          AnalyticalLightGeometry.HasValidDimensions(light) &&
                          AnalyticalLightGeometry.TryGetFrame(light, out _, out _, out _))
-                    areaCandidates.Add(new SelectedLocalShadow(i, light, score + (_previousAreaSelection.Contains(i) ? 0.05f : 0f)));
+                    areaCandidates.Add(new SelectedLocalShadow(i, light, score + (_previousAreaSelection.Contains(identity) ? 0.05f : 0f), identity));
             }
 
             int spotAtlasCapacity = spotAtlasCapacityOverride >= 0
                 ? spotAtlasCapacityOverride
-                : settings.SpotShadowAtlasCapacity;
+                : settings.MaxShadowedSpotLights;
             int pointShadowCapacity = pointShadowCapacityOverride >= 0
                 ? pointShadowCapacityOverride
                 : settings.MaxShadowedPointLights;
@@ -114,8 +115,7 @@ namespace Njulf.Rendering.Data
             return light.ShadowPriority * 1000f +
                    projectedSize * 100f +
                    MathF.Max(light.Intensity, 0f) +
-                   1f / distance -
-                   lightIndex * 0.0001f;
+                   1f / distance;
         }
 
         private static SelectedLocalShadow[] SelectTop(List<SelectedLocalShadow> candidates, int budget)
@@ -123,18 +123,18 @@ namespace Njulf.Rendering.Data
             if (budget <= 0 || candidates.Count == 0)
                 return [];
 
-            candidates.Sort(static (a, b) => b.Score.CompareTo(a.Score));
+            candidates.Sort(static (a, b) => { int score = b.Score.CompareTo(a.Score); return score != 0 ? score : a.StableIdentity.CompareTo(b.StableIdentity); });
             int count = Math.Min(budget, candidates.Count);
             var selected = new SelectedLocalShadow[count];
             candidates.CopyTo(0, selected, 0, count);
             return selected;
         }
 
-        private static void Remember(HashSet<int> previousSelection, SelectedLocalShadow[] selected)
+        private static void Remember(HashSet<uint> previousSelection, SelectedLocalShadow[] selected)
         {
             previousSelection.Clear();
             for (int i = 0; i < selected.Length; i++)
-                previousSelection.Add(selected[i].LightIndex);
+                previousSelection.Add(selected[i].StableIdentity);
         }
     }
 }

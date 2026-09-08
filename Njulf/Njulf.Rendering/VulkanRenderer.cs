@@ -184,7 +184,13 @@ namespace Njulf.Rendering
             _directionalShadowStabilizationState = new();
 
         private SpotShadowAtlas? _spotShadowAtlas;
-        private PointShadowCubemapArray? _pointShadowCubemapArray;
+        private PointShadowPool? _pointShadowCubemapArray;
+        private readonly LocalShadowLayout _localShadowLayout = new();
+        private readonly LocalShadowCache _localShadowCache = new();
+        private Scene? _localShadowScene;
+        private int _localShadowAllocationFailures;
+        private LocalShadowSelection _localShadowCountSelection = new();
+        private readonly HashSet<uint> _localShadowUnavailable = new();
         private EnvironmentManager? _environmentManager;
         private readonly IesPhotometricProfileManager _iesPhotometricProfileManager;
         private ReflectionProbeManager? _reflectionProbeManager;
@@ -249,8 +255,8 @@ namespace Njulf.Rendering
         private SkinningManager _skinningManager = null!;
         private GpuParticleRuntimeManager _gpuParticleRuntimeManager = null!;
         private readonly LocalShadowSelector _localShadowSelector = new();
-        private readonly GPUSpotShadow[] _spotShadowScratch = new GPUSpotShadow[32];
-        private readonly GPUPointShadow[] _pointShadowScratch = new GPUPointShadow[4];
+        private readonly GPUSpotShadow[] _spotShadowScratch = new GPUSpotShadow[LightManager.MaxLights];
+        private readonly GPUPointShadow[] _pointShadowScratch = new GPUPointShadow[LightManager.MaxLights];
 
         private readonly GPULocalLightShadowIndex[] _localShadowIndexScratch =
             new GPULocalLightShadowIndex[LightManager.MaxLights];
@@ -461,6 +467,8 @@ namespace Njulf.Rendering
         private float _lastEffectiveResolutionScale = 1.0f;
         private readonly DynamicResolutionScaleController _dynamicResolutionScaleController = new();
         private string _lastRenderTargetRecreateReason = string.Empty;
+
+        private readonly ImportedLightShadowPolicy _importedLightShadowPolicy = new();
 
         // Scene state
         private Color _clearColor = Color.Black;
@@ -1502,7 +1510,7 @@ namespace Njulf.Rendering
                 _bufferManager,
                 _bindlessHeap);
             _spotShadowAtlas = new SpotShadowAtlas(_context, _bufferManager, Settings.Shadows);
-            _pointShadowCubemapArray = new PointShadowCubemapArray(_context, _bufferManager, Settings.Shadows);
+            _pointShadowCubemapArray = new PointShadowPool(_context, _bufferManager, Settings.Shadows);
             _environmentManager = new EnvironmentManager(_context, _bufferManager, _textureManager, Settings);
             _reflectionProbeManager = new ReflectionProbeManager(
                 _context,
@@ -5338,7 +5346,9 @@ namespace Njulf.Rendering
                 debugEnabled,
                 Settings.Debug.MaxDebugLineSegments);
 
-            _environmentManager?.UpdateFrameLighting(_lightManager);
+            _environmentManager?.UpdateFrameLighting(_lightManager,
+                scene.GetComponent<Njulf.Assets.Scenes.ModelLightRuntimeController>()?
+                    .ImportedDirectionalLightEnabled == true);
             if (_environmentManager != null)
             {
                 bool simpleDdgiConsumesAtmosphere =
@@ -5365,6 +5375,16 @@ namespace Njulf.Rendering
                         : 0U);
             }
 
+            if (!ReferenceEquals(_localShadowScene, scene))
+            {
+                _localShadowScene = scene;
+                _localShadowLayout.Clear();
+                _localShadowCache.Attach(scene, _materialManager);
+            }
+            _localShadowAllocationFailures = 0;
+            _localShadowUnavailable.Clear();
+            _importedLightShadowPolicy.Apply(Settings.Shadows,
+                scene.GetComponent<Njulf.Assets.Scenes.ModelLightRuntimeController>());
             _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
             ulong lightUploadBytes = _lightManager.LastUploadBytes;
             LightFrameSnapshot lightSnapshot = _lightManager.GetFrameSnapshot();
@@ -5383,11 +5403,12 @@ namespace Njulf.Rendering
                     lightSnapshot.Lights.Span,
                     camera,
                     Settings.Shadows,
-                    Settings.Shadows.SpotShadowAtlasCapacity,
-                    Settings.Shadows.MaxShadowedPointLights);
-                EnsureLocalShadowResources(
-                    localShadowSelection.SpotLights.Length,
-                    localShadowSelection.PointLights.Length);
+                    Settings.Shadows.MaxShadowedSpotLights,
+                    Settings.Shadows.MaxShadowedPointLights, lightSnapshot.StableIdentities.Span);
+                _localShadowCountSelection = localShadowSelection;
+                localShadowSelection = _localShadowLayout.Plan(localShadowSelection, lightSnapshot.StableIdentities.Span, Settings.Shadows);
+                EnsureLocalShadowResources(localShadowSelection.SpotLights.Length, localShadowSelection.PointLights.Length);
+                localShadowSelection = _localShadowLayout.ApplyTo(localShadowSelection);
                 hasLocalShadows = localShadowSelection.SpotLights.Length > 0 ||
                                   localShadowSelection.PointLights.Length > 0;
                 shadowData = CreateDirectionalShadowData(camera, lightSnapshot, out directionalShadowsEnabled,
@@ -5399,6 +5420,7 @@ namespace Njulf.Rendering
                 hasLocalShadows = false;
                 // Feature isolation must not retain maps that no pass can sample. Re-registering
                 // after a release also prevents a descriptor from referencing a destroyed image.
+                _localShadowLayout.Clear();
                 EnsureLocalShadowResources(0, 0);
                 EnsureDirectionalShadowResources(requiresShadowMap: false);
             }
@@ -5560,7 +5582,7 @@ namespace Njulf.Rendering
             sceneData.TubeLightCount = lightSnapshot.TubeLightCount;
             sceneData.AreaLightCount = lightSnapshot.AreaLightCount;
             sceneData.LightUploadBytes = lightUploadBytes;
-            UpdateTiledLightDiagnostics(sceneData, lightSnapshot);
+            UpdateTiledLightDiagnostics(sceneData, lightSnapshot, Settings.Diagnostics.TiledLightDiagnosticsEnabled);
             sceneData.UploadedBytes += lightUploadBytes;
             sceneData.SceneSubmissionGpuCompactionEnabled = Settings.SceneSubmission.GpuCompactionEnabled;
             sceneData.SceneSubmissionIndirectMeshletDispatchEnabled =
@@ -7050,18 +7072,27 @@ namespace Njulf.Rendering
                 return;
 
             ShadowSettings shadowSettings = Settings.Shadows;
-            if (_spotShadowAtlas.Ensure(shadowSettings, selectedSpotShadowCount))
+            if (_spotShadowAtlas.EnsureLayout(shadowSettings, _localShadowLayout.SpotAtlasSize, selectedSpotShadowCount))
             {
                 _spotShadowAtlas.Register(_bindlessHeap, _swapchain.DepthImageView);
                 _hasUploadedSpotShadows = false;
                 _hasUploadedLocalShadowIndices = false;
             }
 
-            if (_pointShadowCubemapArray.Ensure(shadowSettings, selectedPointShadowCount))
+            if (_pointShadowCubemapArray.Ensure(shadowSettings, _localShadowLayout.Points))
             {
                 _pointShadowCubemapArray.Register(_bindlessHeap, _swapchain.DepthImageView);
                 _hasUploadedPointShadows = false;
             }
+            var availablePointMaps = _pointShadowCubemapArray.Maps.Select(x => x.Identity).ToHashSet();
+            foreach (var request in _localShadowLayout.Points)
+                if (!availablePointMaps.Contains(request.Identity)) _localShadowUnavailable.Add(request.Identity);
+            if (_spotShadowAtlas.WorkingImage.Handle == 0)
+                foreach (var request in _localShadowLayout.Spots) _localShadowUnavailable.Add(request.Identity);
+            _localShadowLayout.RetainAvailable(_pointShadowCubemapArray.Maps.Select(x => x.Identity).ToHashSet(),
+                _spotShadowAtlas.WorkingImage.Handle != 0);
+            _localShadowAllocationFailures = selectedPointShadowCount + selectedSpotShadowCount -
+                _localShadowLayout.Points.Length - _localShadowLayout.Spots.Length;
         }
 
         private DirectionalShadowQualificationGateResult
@@ -7403,8 +7434,36 @@ namespace Njulf.Rendering
                 sceneData.AreaRayShadowPassEnabled
                     ? selection.AreaLights
                     : ReadOnlySpan<SelectedLocalShadow>.Empty;
-            LocalShadowDataBuilder.FillSpotShadows(selection.SpotLights, shadowSettings, spotShadows);
-            LocalShadowDataBuilder.FillPointShadows(selection.PointLights, shadowSettings, pointShadows);
+            LocalShadowDataBuilder.FillSpotShadows(selection.SpotLights, shadowSettings, spotShadows, _localShadowLayout.Spots, _localShadowLayout.SpotAtlasSize);
+            LocalShadowDataBuilder.FillPointShadows(selection.PointLights, shadowSettings, pointShadows, _localShadowLayout.Points);
+            for (int i = 0; i < pointShadows.Length; i++) pointShadows[i].TextureIndex = _pointShadowCubemapArray.Maps[i].TextureIndex;
+            sceneData.PointShadowAllocations = _localShadowLayout.Points;
+            sceneData.PointShadowDynamicCasters = _localShadowCache.DynamicCasters(_localShadowLayout.Points);
+            sceneData.SpotShadowDynamicCasters = _localShadowCache.DynamicCasters(_localShadowLayout.Spots);
+            sceneData.SpotShadowAllocations = _localShadowLayout.Spots;
+            sceneData.PointShadowCacheEntries = _localShadowCache.Prepare(_localShadowLayout.Points, shadowSettings);
+            sceneData.SpotShadowCacheEntries = _localShadowCache.Prepare(_localShadowLayout.Spots, shadowSettings, _localShadowLayout.SpotAtlasSize);
+            _localShadowCache.Retain(_localShadowLayout.Points.Concat(_localShadowLayout.Spots).Select(x => x.Identity));
+            sceneData.LocalShadowDowngradedCount = _localShadowLayout.DowngradedCount;
+            sceneData.LocalShadowAllocationFailureCount = _localShadowAllocationFailures;
+            var snapshot = _lightManager.GetFrameSnapshot();
+            var counted = _localShadowCountSelection.PointLights.Concat(_localShadowCountSelection.SpotLights)
+                .Select(x => x.LightIndex).ToHashSet();
+            var allocated = _localShadowLayout.Points.Concat(_localShadowLayout.Spots).ToDictionary(x => x.Identity);
+            var statuses = new List<LocalShadowLightDiagnostics>();
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                var light = snapshot.Lights.Span[i];
+                if (light.Type is not (LightType.Point or LightType.Spot)) continue;
+                uint identity = snapshot.StableIdentities.Span[i];
+                uint requested = LocalShadowLayout.ResolveResolution(light.ShadowMapSizeOverride,
+                    light.Type == LightType.Point ? shadowSettings.PointShadowMapSize : shadowSettings.SpotShadowTileSize);
+                bool resident = allocated.TryGetValue(identity, out var allocation);
+                string reason = LocalShadowLightDiagnostics.DescribeStatus(light, shadowSettings,
+                    counted.Contains(i), resident, _localShadowUnavailable.Contains(identity));
+                statuses.Add(new(identity, light.Type, requested, allocation?.Resolution ?? 0, resident, reason));
+            }
+            sceneData.LocalShadowLights = statuses.ToArray();
             LocalShadowDataBuilder.FillShadowIndexMap(
                 lightCount,
                 selection.SpotLights,
@@ -7413,6 +7472,13 @@ namespace Njulf.Rendering
                 shadowIndices);
 
             ulong spotSignature = CreateSpotShadowSignature(selection.SpotLights, shadowSettings);
+            spotSignature = HashAdd(spotSignature, _localShadowLayout.SpotAtlasSize);
+            foreach (var allocation in _localShadowLayout.Spots)
+            {
+                spotSignature = HashAdd(spotSignature, allocation.Region.X);
+                spotSignature = HashAdd(spotSignature, allocation.Region.Y);
+                spotSignature = HashAdd(spotSignature, allocation.Resolution);
+            }
             if (!_hasUploadedSpotShadows || _lastSpotShadowUploadSignature != spotSignature)
             {
                 _spotShadowAtlas.UploadSpotShadows(_stagingRing, _currentCommandBuffer, spotShadows);
@@ -7496,11 +7562,8 @@ namespace Njulf.Rendering
             sceneData.PointShadowSelectedCount = pointShadows.Length;
             sceneData.PointShadowRejectedByBudgetCount = selection.PointRejectedByBudgetCount;
             sceneData.PointShadowMapSize = _pointShadowCubemapArray.MapSize;
-            int pointShadowFaceCapacity = pointShadows.Length * 6;
-            sceneData.PointShadowRenderedFaceCount =
-                CountPointShadowFaces(sceneData.PointShadowFaceMasks, pointShadows.Length);
-            sceneData.PointShadowSkippedFaceCount =
-                Math.Max(0, pointShadowFaceCapacity - sceneData.PointShadowRenderedFaceCount);
+            sceneData.PointShadowRenderedFaceCount = 0;
+            sceneData.PointShadowSkippedFaceCount = 0;
         }
 
         private static ulong CreateSpotShadowSignature(ReadOnlySpan<SelectedLocalShadow> selectedLights,
@@ -7730,8 +7793,10 @@ namespace Njulf.Rendering
             return faceCount;
         }
 
-        private static void UpdateTiledLightDiagnostics(SceneRenderingData sceneData, LightFrameSnapshot lightSnapshot)
+        internal static void UpdateTiledLightDiagnostics(SceneRenderingData sceneData, LightFrameSnapshot lightSnapshot,
+            bool diagnosticsRequested)
         {
+            sceneData.TiledLightDiagnosticsValid = false;
             sceneData.MaxLightsInAnyTile = 0;
             sceneData.AverageLightsPerNonEmptyTile = 0.0f;
             sceneData.LightTileSaturationCount = 0;
@@ -7739,8 +7804,19 @@ namespace Njulf.Rendering
             sceneData.LightCullRejectedSpotCount = 0;
             sceneData.LightCullRejectedAreaCount = 0;
 
-            if (sceneData.LocalLightCount <= 0 ||
-                sceneData.TileCountX == 0 ||
+            if (!diagnosticsRequested &&
+                !(sceneData.DebugToolingEnabled && sceneData.DebugOverlayMode == DebugOverlayMode.LightTiles))
+            {
+                return;
+            }
+
+            if (sceneData.LocalLightCount <= 0)
+            {
+                sceneData.TiledLightDiagnosticsValid = true;
+                return;
+            }
+
+            if (sceneData.TileCountX == 0 ||
                 sceneData.TileCountY == 0 ||
                 sceneData.MaxLightsPerTile <= 0)
             {
@@ -7802,6 +7878,7 @@ namespace Njulf.Rendering
                 sceneData.AverageLightsPerNonEmptyTile = nonEmptyTileCount == 0
                     ? 0.0f
                     : (float)totalLightsInNonEmptyTiles / nonEmptyTileCount;
+                sceneData.TiledLightDiagnosticsValid = true;
             }
             finally
             {
@@ -14136,9 +14213,7 @@ namespace Njulf.Rendering
                 () => _spotShadowAtlas?.Dispose());
             AddResourceStage(
                 "point-shadow-cubemap-array",
-                () =>
-                    _pointShadowCubemapArray
-                        ?.Dispose());
+                () => { _localShadowCache.Dispose(); _pointShadowCubemapArray?.Dispose(); });
             AddResourceStage(
                 "environment-manager",
                 () => _environmentManager?.Dispose());

@@ -11,6 +11,37 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SharpGltfModelMeshConverterTests
 {
+    [TestCase(ModelImportBackend.SharpGltf)]
+    [TestCase(ModelImportBackend.Assimp)]
+    public void SponzaLanternMaterial_ImportsAsVisibleThinGlass(ModelImportBackend backend)
+    {
+        var root = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
+        while (root != null && !File.Exists(Path.Combine(root.FullName, "NjulfHelloGame", "NewSponza_Main_glTF_003.gltf")))
+            root = root.Parent;
+        Assert.That(root, Is.Not.Null);
+        var source = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(root!.FullName,
+            "NjulfHelloGame", "NewSponza_Main_glTF_003.gltf")))!;
+        var glass = source["materials"]!.AsArray().Single(x => x!["name"]!.GetValue<string>() == "lamp_glass_01")!;
+        string path = CreateVertexStreamGltf();
+        var triangle = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        triangle["materials"] = new System.Text.Json.Nodes.JsonArray(glass.DeepClone());
+        triangle["extensionsUsed"] = System.Text.Json.Nodes.JsonNode.Parse("[\"KHR_materials_transmission\",\"KHR_materials_ior\",\"KHR_materials_specular\"]");
+        File.WriteAllText(path, triangle.ToJsonString());
+        using var importer = new ModelImporter();
+        var imported = importer.Import(path, new ImporterOptions { Backend = backend });
+        var material = imported.Materials.Single(x => x.Name == "lamp_glass_01");
+        Assert.Multiple(() =>
+        {
+            Assert.That(material.IsThinGlass, Is.True);
+            Assert.That(material.AlphaMode, Is.EqualTo(ModelAlphaMode.Blend));
+            Assert.That(material.GiTransmissionPolicy, Is.EqualTo(ModelGiTransmissionPolicy.ThinSurface));
+            Assert.That(material.TransmissionFactor, Is.InRange(0.9f, 1f));
+            Assert.That(material.Ior, Is.EqualTo(1.52f).Within(.001f));
+            Assert.That(material.SpecularFactor, Is.Zero);
+            Assert.That(material.DoubleSided, Is.True);
+        });
+    }
+
     [Test]
     public void Import_WithSharpGltfBackend_PreservesTransformsVertexStreamsAndBounds()
     {

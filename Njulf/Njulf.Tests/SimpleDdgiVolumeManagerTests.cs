@@ -1385,10 +1385,6 @@ public sealed class SimpleDdgiVolumeManagerTests
         int ensureCapacity = upload.IndexOf(
             "EnsureCapacity(",
             StringComparison.Ordinal);
-        int configuredCapacityBudget = upload.IndexOf(
-            "_schedulerConfiguredRequestBudget",
-            ensureCapacity,
-            StringComparison.Ordinal);
         int markFresh = upload.IndexOf(
             "MarkFreshForNewOrScrolledProbes();",
             StringComparison.Ordinal);
@@ -1402,8 +1398,6 @@ public sealed class SimpleDdgiVolumeManagerTests
         Assert.Multiple(() =>
         {
             Assert.That(ensureCapacity, Is.GreaterThanOrEqualTo(0));
-            Assert.That(configuredCapacityBudget, Is.GreaterThan(ensureCapacity));
-            Assert.That(configuredCapacityBudget, Is.LessThan(markFresh));
             Assert.That(markFresh, Is.GreaterThan(ensureCapacity));
             Assert.That(refreshImportance, Is.GreaterThan(markFresh));
             Assert.That(resolveFeedback, Is.GreaterThan(refreshImportance));
@@ -1797,6 +1791,28 @@ public sealed class SimpleDdgiVolumeManagerTests
                     previous,
                     fractional),
                 Is.False);
+        });
+    }
+
+    [Test]
+    public void TraceHorizonChange_InvalidatesOnlyTheChangedVolumeIdentity()
+    {
+        var previous = new GPUSimpleDdgiVolume
+        {
+            OriginAndSpacing = new Vector4(0f, 0f, 0f, 0.59375f),
+            GridCountsAndFirstProbe = new Vector4(6f, 4f, 6f, 16_122f),
+            WorldMaxAndKind = new Vector4(0f, 0f, 0f, 2f),
+            RaysAndReserved = new Vector4(30_000f, 0f, 0f, 0f),
+            UpdateStartAndCount = new Vector4(40.375f, 0f, 0f, 0f)
+        };
+        GPUSimpleDdgiVolume changed = previous;
+        changed.UpdateStartAndCount.X = 65.79086f;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SimpleDdgiVolumeManager.IsCompatibleVolumeRemap(previous, previous), Is.True);
+            Assert.That(SimpleDdgiVolumeManager.IsCompatibleVolumeRemap(previous, changed), Is.False,
+                "A longer trace horizon must repair that volume's cached misses.");
         });
     }
 

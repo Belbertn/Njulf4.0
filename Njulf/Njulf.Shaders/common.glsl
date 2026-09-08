@@ -1606,7 +1606,7 @@ struct GPUPointShadow
     vec4 PositionRange;
     vec4 BiasStrengthTexelSize;
     int LightIndex;
-    int CubemapIndex;
+    int TextureIndex;
     int PcfRadius;
     int Enabled;
 };
@@ -5901,7 +5901,7 @@ GPUPointShadow ReadPointShadow(uint shadowIndex)
     shadow.BiasStrengthTexelSize = ReadStorageAlignedVec4Uniform(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 100u);
     uvec4 metadata = ReadStorageAlignedUVec4Uniform(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 104u);
     shadow.LightIndex = int(metadata.x);
-    shadow.CubemapIndex = int(metadata.y);
+    shadow.TextureIndex = int(metadata.y);
     shadow.PcfRadius = int(metadata.z);
     shadow.Enabled = int(metadata.w);
     return shadow;

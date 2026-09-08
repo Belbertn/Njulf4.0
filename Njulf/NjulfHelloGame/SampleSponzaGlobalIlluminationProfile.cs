@@ -191,9 +191,7 @@ public static class SampleSponzaGlobalIlluminationProfile
         settings.Shadows.MaxShadowDistance = 48.0f;
         settings.Shadows.PcfRadius = 1;
         settings.Shadows.SpotShadowsEnabled = false;
-        settings.Shadows.MaxShadowedSpotLights = 0;
         settings.Shadows.PointShadowsEnabled = false;
-        settings.Shadows.MaxShadowedPointLights = 0;
         settings.AmbientOcclusion.Enabled = true;
         settings.AmbientOcclusion.ResolutionScale = 0.5f;
         settings.AmbientOcclusion.SampleCount = 16;

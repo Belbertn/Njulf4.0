@@ -74,7 +74,9 @@ public sealed class SceneDocumentLoader
             throw new InvalidOperationException("SceneDocumentLoader.Populate requires an empty scene. Clear and dispose the destination before reloading.");
         }
 
-        if (document.ImportedModelLightsEnabled &&
+        if ((document.ImportedModelLightsEnabled || document.ImportedDirectionalLightEnabled ||
+             document.ImportedModelLightShadowsEnabled ||
+             document.ImportedLightOverrides.Count > 0) &&
             lights is not IMutableSceneLightStore)
         {
             throw new InvalidOperationException(
@@ -154,7 +156,9 @@ public sealed class SceneDocumentLoader
                 throw new InvalidOperationException("The document contains lights, but no ISceneLightStore was supplied.");
             }
 
-            if (document.ImportedModelLightsEnabled &&
+            if ((document.ImportedModelLightsEnabled || document.ImportedDirectionalLightEnabled ||
+                 document.ImportedModelLightShadowsEnabled ||
+                 document.ImportedLightOverrides.Count > 0) &&
                 lights is IMutableSceneLightStore mutableLights)
             {
                 ModelLightRuntimeController importedLights =
@@ -163,8 +167,12 @@ public sealed class SceneDocumentLoader
                         _content,
                         mutableLights,
                         _loadModel);
+                importedLights.LoadLightOverrides(document.ImportedLightOverrides);
+                importedLights.SetImportedModelLightShadowsEnabled(document.ImportedModelLightShadowsEnabled);
                 importedLights.SetImportedModelLightsEnabled(
                     document.ImportedModelLightsEnabled);
+                importedLights.SetImportedDirectionalLightEnabled(
+                    document.ImportedDirectionalLightEnabled);
             }
         }
         catch (Exception failure)
@@ -539,6 +547,7 @@ public sealed class SceneDocumentLoader
         var ids = new HashSet<Guid>();
         AddIds(document.Objects, static item => item.Id, "object");
         AddIds(document.Lights, static item => item.Id, "light");
+        AddIds(document.ImportedLightOverrides, static item => item.Id, "imported light override");
         AddIds(document.ReflectionProbes, static item => item.Id, "reflection probe");
         AddIds(document.GiProbeVolumes, static item => item.Id, "GI probe volume");
         AddIds(document.VolumetricDensityVolumes, static item => item.Id, "volumetric density volume");
@@ -548,6 +557,17 @@ public sealed class SceneDocumentLoader
         AddIds(document.ParticleEffects, static item => item.Id, "particle effect");
         foreach (SceneLightDocument light in document.Lights)
             ValidateLight(light);
+        foreach (var edits in document.ImportedLightOverrides)
+        {
+            if (edits.Source == null || edits.Values == null ||
+                edits.Source.Id != edits.Id || edits.Values.Id != edits.Id)
+                throw new InvalidDataException("Imported light overrides must reference matching light IDs.");
+            ValidateLight(edits.Source);
+            ValidateLight(edits.Values);
+            if (string.Equals(edits.Source.Type, "Directional", StringComparison.OrdinalIgnoreCase) !=
+                string.Equals(edits.Values.Type, "Directional", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Imported light overrides cannot change directional ownership.");
+        }
         foreach (SceneVolumetricDensityVolumeDocument volume in
                  document.VolumetricDensityVolumes)
         {

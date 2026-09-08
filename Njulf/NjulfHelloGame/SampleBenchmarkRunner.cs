@@ -1290,6 +1290,9 @@ public sealed class SampleBenchmarkAnalyzer
             GpuUnexplainedMilliseconds = gpuUnexplained,
             SimpleDdgiTransportBlendMilliseconds = simpleDdgiTransportBlend,
             SimpleDdgiSchedulerRefresh = schedulerRefreshEvidence,
+            DdgiMotionFrames = SampleBenchmarkTrajectory.IsMoving(options.Trajectory)
+                ? _samples.Select(SampleBenchmarkDdgiMotionFrame.Capture).ToArray()
+                : Array.Empty<SampleBenchmarkDdgiMotionFrame>(),
             CpuSpikeEvidence = BuildCpuSpikeEvidence(),
             ReflectionProbeCaptureRawEvidence = reflectionRawEvidence,
             ReflectionProbeCaptureEvidence = reflectionCaptureEvidence,

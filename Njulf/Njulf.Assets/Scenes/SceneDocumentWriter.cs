@@ -25,6 +25,11 @@ public sealed class SceneDocumentWriter
             AmbientLight = ToSceneColor(scene.AmbientLight),
             ImportedModelLightsEnabled =
                 importedLights?.ImportedModelLightsEnabled ?? false,
+            ImportedDirectionalLightEnabled =
+                importedLights?.ImportedDirectionalLightEnabled ?? false,
+            ImportedModelLightShadowsEnabled =
+                importedLights?.ImportedModelLightShadowsEnabled ?? false,
+            ImportedLightOverrides = importedLights?.LightOverrides.ToList() ?? [],
             Objects = scene.RenderObjects
                 .Where(static item => item.PersistInSceneDocument)
                 .Select(item => ToObject(item, dependencies, materials))
@@ -38,6 +43,7 @@ public sealed class SceneDocumentWriter
             ParticleEffects = scene.ParticleEffects.Select(item => ToParticleEffect(item, dependencies)).ToList(),
             Lights = lights?.Enumerate()
                 .Where(light => importedLights?.IsImportedLight(light.Id) != true)
+                .Concat(importedLights?.SuspendedDirectionalLights ?? [])
                 .ToList() ?? [],
             Dependencies = []
         };
@@ -46,6 +52,9 @@ public sealed class SceneDocumentWriter
             if (light.IesProfile is { } profile)
                 AddDependency(profile, light.Id, light.Name, dependencies);
         }
+        foreach (var edits in document.ImportedLightOverrides)
+            if (edits.Values.IesProfile is { } profile)
+                AddDependency(profile, edits.Id, edits.Values.Name, dependencies);
         document.Dependencies.AddRange(dependencies.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
             .Select(static pair => new SceneAssetDependency(pair.Key, pair.Value)));
         return document;

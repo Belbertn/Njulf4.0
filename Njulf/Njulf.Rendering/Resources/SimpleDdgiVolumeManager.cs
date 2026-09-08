@@ -1098,6 +1098,7 @@ namespace Njulf.Rendering.Resources
         private bool _capacityKeyValid;
         private SimpleDdgiCapacityKey _capacityKey;
         private SimpleDdgiMemoryPlan _capacityPlan;
+        private SimpleDdgiStorageLayout _capacityStorageLayout = SimpleDdgiStorageLayout.Empty();
         private uint _publishedDirectionalGuidingPhysicalProbeCapacity;
         private int _publishedDirectionalGuidingDirectionSlotsPerProbe;
         private bool _guidedTransportAuditAvailable;
@@ -5910,6 +5911,9 @@ namespace Njulf.Rendering.Resources
                 _schedulerConfiguredRequestBudget = Math.Max(
                     _schedulerConfiguredRequestBudget,
                     _scrollRepairExpectedProbeCountThisFrame);
+                int schedulerRequestCapacity = Math.Max(
+                    _schedulerConfiguredRequestBudget,
+                    ResolveScrollPlanningRequestCapacity(gi, _schedulerMode, _probeCount));
                 int dirtyBoostedBudget = ResolveLightingDirtyUpdateBudget(gi, baseUpdateBudget);
                 // Atlas growth can invalidate every physical slot. Establish storage
                 // first so MarkFreshForNewOrScrolledProbes observes that invalidation;
@@ -5917,7 +5921,7 @@ namespace Njulf.Rendering.Resources
                 if (!EnsureCapacity(
                         _probeCount,
                         _raysPerProbe,
-                        _schedulerConfiguredRequestBudget,
+                        schedulerRequestCapacity,
                         commandBuffer))
                 {
                     // Keep the prior generation alive and publish a disabled
@@ -6038,7 +6042,7 @@ namespace Njulf.Rendering.Resources
                 {
                     bool schedulerArenaReplaced = _gpuScheduler.EnsureCapacity(
                         _probeCount,
-                        Math.Clamp(_schedulerConfiguredRequestBudget, 0, _probeCount),
+                        schedulerRequestCapacity,
                         _volumeCount,
                         SimpleDdgiGpuSchedulerLayout.MaxDirtyRegionCapacity,
                         _context.ValidationSettings.Mode != RendererValidationMode.Off,
@@ -7060,22 +7064,9 @@ namespace Njulf.Rendering.Resources
             ulong cameraCutSerial)
         {
             AdvanceRingRebaseFades();
-            int baseRequestBudget = settings.SimpleDdgiProbeUpdatesPerFrame <= 0
-                ? GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount
-                : Math.Clamp(
-                    settings.SimpleDdgiProbeUpdatesPerFrame,
-                    0,
-                    GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
-            _scrollPlanningRemainingRequests = ResolveScrollPlanningRequestBudget(
-                baseRequestBudget,
-                GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount,
-                settings.SimpleDdgiLightingDirtyBoostEnabled,
-                ResolveMaximumRingFullRays(settings),
-                settings.SimpleDdgiTransportV2Enabled,
-                ShouldProvisionAcceleratedTailSchedulerCapacity(
-                    settings.SimpleDdgiTransportTailCertificationEnabled,
-                    settings.SimpleDdgiTransportAccelerationEnabled,
-                    _schedulerMode));
+            _scrollPlanningRemainingRequests = ResolveScrollPlanningRequestCapacity(
+                settings, _schedulerMode,
+                GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
             _scrollPlanningRemainingPrimaryRays = Math.Min(
                 (ulong)Math.Max(0, settings.DdgiProbeUpdatePrimaryRayBudget),
                 SimpleDdgiScrollPlanner.MaximumSpatialRecoveryPrimaryRays);
@@ -8327,6 +8318,7 @@ namespace Njulf.Rendering.Resources
                     CountZ(previous) != CountZ(current) ||
                     VolumeProbeCount(previous) != VolumeProbeCount(current) ||
                     !NearlyEqual(Spacing(previous), Spacing(current), 0.0001f) ||
+                    !NearlyEqual(ResolveGpuVolumeTraceDistance(previous), ResolveGpuVolumeTraceDistance(current), 0.0001f) ||
                     !ApproximatelyEqual(Origin(previous), Origin(current)) ||
                     PhysicalOffsetX(previous) != PhysicalOffsetX(current) ||
                     PhysicalOffsetY(previous) != PhysicalOffsetY(current) ||
@@ -10147,6 +10139,52 @@ namespace Njulf.Rendering.Resources
                 maximumFullRaysPerProbe,
                 transportV2Active,
                 acceleratedTailSolveEnabled);
+        }
+
+        /// <summary>
+        /// Provision an entire affordable entering plane on every ring axis.
+        /// This is a persistent allocation ceiling; ordinary source/solve work
+        /// retains its existing frame budget. In particular, a wide horizontal
+        /// plane must not wait forever behind a cap sized for full-ray solves.
+        /// </summary>
+        internal static int ResolveScrollPlanningRequestCapacity(
+            GlobalIlluminationSettings settings,
+            SimpleDdgiSchedulerMode schedulerMode,
+            int probeCount)
+        {
+            int probes = Math.Clamp(probeCount, 0,
+                GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount);
+            int baseBudget = settings.SimpleDdgiProbeUpdatesPerFrame <= 0
+                ? probes : Math.Min(probes, settings.SimpleDdgiProbeUpdatesPerFrame);
+            int configured = ResolveConfiguredRequestBudget(
+                baseBudget, probes, settings.SimpleDdgiLightingDirtyBoostEnabled);
+            int capacity = ResolveScrollPlanningRequestBudget(
+                baseBudget, probes, settings.SimpleDdgiLightingDirtyBoostEnabled,
+                ResolveMaximumRingFullRays(settings), settings.SimpleDdgiTransportV2Enabled,
+                ShouldProvisionAcceleratedTailSchedulerCapacity(
+                    settings.SimpleDdgiTransportTailCertificationEnabled,
+                    settings.SimpleDdgiTransportAccelerationEnabled, schedulerMode));
+            if (!settings.SimpleDdgiToroidalScrollingEnabled || configured == 0)
+                return capacity;
+
+            Span<uint> buckets = stackalloc uint[SimpleDdgiSchedulerAbi.MaxRayBucketCount];
+            SimpleDdgiRayBucketPolicy.Build(settings, buckets);
+            ulong rays = Math.Min((ulong)Math.Max(0, settings.DdgiProbeUpdatePrimaryRayBudget),
+                SimpleDdgiScrollPlanner.MaximumSpatialRecoveryPrimaryRays);
+            for (int ring = 0; ring < Math.Clamp(settings.SimpleDdgiRingCount, 0, 3); ring++)
+            {
+                (int x, int y, int z) = ResolveRingGrid(settings, ring);
+                for (int axis = 0; axis < 3; axis++)
+                {
+                    if (SimpleDdgiScrollPlanner.TryPlanIncrementalStep(
+                            axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0,
+                            x, y, z, ResolveRingMaintenanceRays(settings, ring),
+                            ResolveRingFullRays(settings, ring), buckets, configured, rays,
+                            out SimpleDdgiScrollStep step))
+                        capacity = Math.Max(capacity, step.ExposedProbeCount);
+                }
+            }
+            return capacity;
         }
 
         /// <summary>
@@ -13517,7 +13555,8 @@ namespace Njulf.Rendering.Resources
             CountY(previous) == CountY(current) &&
             CountZ(previous) == CountZ(current) &&
             FirstProbe(previous) == FirstProbe(current) &&
-            NearlyEqual(Spacing(previous), Spacing(current), 0.0001f);
+            NearlyEqual(Spacing(previous), Spacing(current), 0.0001f) &&
+            NearlyEqual(ResolveGpuVolumeTraceDistance(previous), ResolveGpuVolumeTraceDistance(current), 0.0001f);
 
         internal static bool IsCompatibleVolumeRemap(
             GPUSimpleDdgiVolume previous,
@@ -17186,7 +17225,7 @@ namespace Njulf.Rendering.Resources
                 (_capacityPlan.StoragePackingMode != allocationPlan.StoragePackingMode ||
                  _capacityPlan.StorageAbiVersion != allocationPlan.StorageAbiVersion ||
                  _capacityPlan.DirectionCodebookVersion != allocationPlan.DirectionCodebookVersion ||
-                 _capacityPlan.StorageLayoutFingerprint != allocationPlan.StorageLayoutFingerprint);
+                 !_capacityStorageLayout.HasSameAddresses(_storageLayout));
             bool sampledMappingChanged = _capacityKeyValid &&
                 (_capacityPlan.SampledAtlasCoverageMode != allocationPlan.SampledAtlasCoverageMode ||
                  _capacityPlan.SampledAtlasLayoutFingerprint != allocationPlan.SampledAtlasLayoutFingerprint);
@@ -17477,6 +17516,7 @@ namespace Njulf.Rendering.Resources
             if (directionalContractChanged)
                 _directionalRadianceClearRequired = true;
             _capacityPlan = allocationPlan;
+            _capacityStorageLayout = _storageLayout;
             _capacityKey = requiredKey;
             _capacityKeyValid = true;
             if (commandBuffer.Handle != 0)

@@ -1,0 +1,634 @@
+{
+  "Date": "2026-09-08",
+  "Revision": "7eafc485087af01fabfa4a931fb4d03eae93dae7",
+  "Dirty": true,
+  "UserCaptureSha256": "f977f900371cf5f10a45ee6b530296b87164b28061ccb4a567ae74f990668761",
+  "Gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+  "Driver": "610.248.0",
+  "Width": 1600,
+  "Height": 900,
+  "Camera": {
+    "PositionX": 5.1274147,
+    "PositionY": 10.843294,
+    "PositionZ": 0.28348958,
+    "YawRadians": -1.2049768,
+    "PitchRadians": 0.69391876,
+    "FieldOfViewRadians": 0.98174775,
+    "NearPlane": 0.05,
+    "FarPlane": 250,
+    "ViewHash": "sha256:82e2eca7c85cdd073f2a55a77e582aa60ea89030b8e73ce42ebaff74ce1c3c51",
+    "ProjectionHash": "sha256:3fbf0233d1b9dc87d65bef3b0d4edec2462574a0028b716742718bf10c9b11f3",
+    "CameraCutSerial": 1
+  },
+  "Workload": "Sponza DdgiHigh, direct-only diagnostic: frozen sun, GI and environment surface lighting disabled, reflection/bloom/fog disabled, exposure 1.2279266, standard Vulkan validation",
+  "ComputeOnlyComparison": {
+    "Regions": [
+      {
+        "Mode": "hard",
+        "Region": "UpperCurtain",
+        "Rectangle": [
+          800,
+          465,
+          828,
+          583
+        ],
+        "BrightBefore": 126,
+        "BrightAfter": 0,
+        "MaxBefore": 235,
+        "MaxAfter": 0,
+        "Darker": 137,
+        "Brighter": 0,
+        "AbsoluteDifference": 40328
+      },
+      {
+        "Mode": "hard",
+        "Region": "LowerCurtain",
+        "Rectangle": [
+          938,
+          685,
+          976,
+          825
+        ],
+        "BrightBefore": 56,
+        "BrightAfter": 0,
+        "MaxBefore": 201,
+        "MaxAfter": 0,
+        "Darker": 57,
+        "Brighter": 0,
+        "AbsoluteDifference": 14982
+      },
+      {
+        "Mode": "hard",
+        "Region": "ShadowedGallery",
+        "Rectangle": [
+          1120,
+          250,
+          1465,
+          600
+        ],
+        "BrightBefore": 238,
+        "BrightAfter": 134,
+        "MaxBefore": 220,
+        "MaxAfter": 108,
+        "Darker": 108,
+        "Brighter": 0,
+        "AbsoluteDifference": 43843
+      },
+      {
+        "Mode": "hard",
+        "Region": "SunlitStone",
+        "Rectangle": [
+          100,
+          566,
+          177,
+          663
+        ],
+        "BrightBefore": 7395,
+        "BrightAfter": 7395,
+        "MaxBefore": 249,
+        "MaxAfter": 249,
+        "Darker": 0,
+        "Brighter": 0,
+        "AbsoluteDifference": 0
+      },
+      {
+        "Mode": "soft",
+        "Region": "UpperCurtain",
+        "Rectangle": [
+          800,
+          465,
+          828,
+          583
+        ],
+        "BrightBefore": 147,
+        "BrightAfter": 0,
+        "MaxBefore": 235,
+        "MaxAfter": 0,
+        "Darker": 242,
+        "Brighter": 0,
+        "AbsoluteDifference": 42228
+      },
+      {
+        "Mode": "soft",
+        "Region": "LowerCurtain",
+        "Rectangle": [
+          938,
+          685,
+          976,
+          825
+        ],
+        "BrightBefore": 101,
+        "BrightAfter": 0,
+        "MaxBefore": 200,
+        "MaxAfter": 0,
+        "Darker": 276,
+        "Brighter": 0,
+        "AbsoluteDifference": 19213
+      },
+      {
+        "Mode": "soft",
+        "Region": "ShadowedGallery",
+        "Rectangle": [
+          1120,
+          250,
+          1465,
+          600
+        ],
+        "BrightBefore": 394,
+        "BrightAfter": 134,
+        "MaxBefore": 220,
+        "MaxAfter": 108,
+        "Darker": 1525,
+        "Brighter": 0,
+        "AbsoluteDifference": 70043
+      },
+      {
+        "Mode": "soft",
+        "Region": "SunlitStone",
+        "Rectangle": [
+          100,
+          566,
+          177,
+          663
+        ],
+        "BrightBefore": 7461,
+        "BrightAfter": 7461,
+        "MaxBefore": 249,
+        "MaxAfter": 249,
+        "Darker": 21,
+        "Brighter": 6,
+        "AbsoluteDifference": 149
+      }
+    ],
+    "Timings": [
+      {
+        "Variant": "baseline",
+        "Mode": "hard",
+        "Metric": "GpuFrameMicroseconds",
+        "Count": 99,
+        "Median": 9915,
+        "P95": 10459,
+        "P99": 10559
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalRayShadowMicroseconds",
+        "Count": 99,
+        "Median": 839,
+        "P95": 1073,
+        "P99": 1093
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalShadowTemporalMicroseconds",
+        "Count": 99,
+        "Median": 0,
+        "P95": 0,
+        "P99": 0
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalShadowSpatialMicroseconds",
+        "Count": 99,
+        "Median": 0,
+        "P95": 0,
+        "P99": 0
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "soft",
+        "Metric": "GpuFrameMicroseconds",
+        "Count": 99,
+        "Median": 11365,
+        "P95": 11593,
+        "P99": 11702
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalRayShadowMicroseconds",
+        "Count": 99,
+        "Median": 878,
+        "P95": 902,
+        "P99": 916
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalShadowTemporalMicroseconds",
+        "Count": 99,
+        "Median": 220,
+        "P95": 224,
+        "P99": 226
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalShadowSpatialMicroseconds",
+        "Count": 99,
+        "Median": 989,
+        "P95": 1013,
+        "P99": 1025
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "hard",
+        "Metric": "GpuFrameMicroseconds",
+        "Count": 99,
+        "Median": 9915,
+        "P95": 10588,
+        "P99": 10878
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalRayShadowMicroseconds",
+        "Count": 99,
+        "Median": 941,
+        "P95": 1165,
+        "P99": 1297
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalShadowTemporalMicroseconds",
+        "Count": 99,
+        "Median": 0,
+        "P95": 0,
+        "P99": 0
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalShadowSpatialMicroseconds",
+        "Count": 99,
+        "Median": 0,
+        "P95": 0,
+        "P99": 0
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "soft",
+        "Metric": "GpuFrameMicroseconds",
+        "Count": 99,
+        "Median": 11306,
+        "P95": 11499,
+        "P99": 11628
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalRayShadowMicroseconds",
+        "Count": 99,
+        "Median": 987,
+        "P95": 1004,
+        "P99": 1014
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalShadowTemporalMicroseconds",
+        "Count": 99,
+        "Median": 217,
+        "P95": 220,
+        "P99": 220
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalShadowSpatialMicroseconds",
+        "Count": 99,
+        "Median": 978,
+        "P95": 992,
+        "P99": 1001
+      }
+    ]
+  },
+  "ShaderHashes": {
+    "Baseline": "ff0442300a343031fd04df34e036e66d53dfdcc380afa6d2b99b8e351a7e0fc6",
+    "Candidate": "4d93dd60959892c5d06940b0aeafcf78a8bc67c8c8d55b02ecbed53c2d4ae348"
+  },
+  "Validation": {
+    "VulkanWarnings": 0,
+    "BaselineReproduced": true,
+    "VulkanErrors": 0,
+    "HardSunlitControlByteIdentical": true,
+    "BothCurtainRegionsBlackAfterFix": true
+  },
+  "Limitations": [
+    "99-frame diagnostic timing windows, not performance qualification",
+    "Complete user GI workload not benchmarked",
+    "No transparent-only fixture",
+    "Other nonzero gallery edge pixels not classified"
+  ],
+  "Build": {
+    "Configuration": "Development",
+    "Succeeded": true,
+    "Warnings": 0,
+    "Errors": 0,
+    "FocusedTestsPassed": 14,
+    "FocusedTestsSkipped": 0,
+    "SpirvValidated": [
+      "directional_ray_shadow.comp.spv",
+      "forward_transparent_ray.frag.spv",
+      "forward_transparent_ordinary_ray.frag.spv",
+      "forward_weighted_oit_ordinary_ray.frag.spv"
+    ],
+    "ProductionShaderAssemblySha256": "204a6fdc3a58407fdaa2ae6b832a8ccbf95d87421545f338a282bc335c1a464f",
+    "DiagnosticAssemblyIdentical": true
+  },
+  "FinalComparison": {
+    "BaselineReproduced": true,
+    "CandidatePassed": true,
+    "Regions": [
+      {
+        "Mode": "hard",
+        "Region": "UpperCurtain",
+        "Rectangle": [
+          800,
+          465,
+          828,
+          583
+        ],
+        "BrightBefore": 126,
+        "BrightAfter": 0,
+        "MaxBefore": 235,
+        "MaxAfter": 0,
+        "Darker": 137,
+        "Brighter": 0,
+        "AbsoluteDifference": 40328
+      },
+      {
+        "Mode": "hard",
+        "Region": "LowerCurtain",
+        "Rectangle": [
+          938,
+          685,
+          976,
+          825
+        ],
+        "BrightBefore": 56,
+        "BrightAfter": 0,
+        "MaxBefore": 201,
+        "MaxAfter": 0,
+        "Darker": 57,
+        "Brighter": 0,
+        "AbsoluteDifference": 14982
+      },
+      {
+        "Mode": "hard",
+        "Region": "ShadowedGallery",
+        "Rectangle": [
+          1120,
+          250,
+          1465,
+          600
+        ],
+        "BrightBefore": 238,
+        "BrightAfter": 134,
+        "MaxBefore": 220,
+        "MaxAfter": 108,
+        "Darker": 108,
+        "Brighter": 0,
+        "AbsoluteDifference": 43843
+      },
+      {
+        "Mode": "hard",
+        "Region": "SunlitStone",
+        "Rectangle": [
+          100,
+          566,
+          177,
+          663
+        ],
+        "BrightBefore": 7395,
+        "BrightAfter": 7395,
+        "MaxBefore": 249,
+        "MaxAfter": 249,
+        "Darker": 0,
+        "Brighter": 0,
+        "AbsoluteDifference": 0
+      },
+      {
+        "Mode": "soft",
+        "Region": "UpperCurtain",
+        "Rectangle": [
+          800,
+          465,
+          828,
+          583
+        ],
+        "BrightBefore": 147,
+        "BrightAfter": 0,
+        "MaxBefore": 235,
+        "MaxAfter": 0,
+        "Darker": 242,
+        "Brighter": 0,
+        "AbsoluteDifference": 42228
+      },
+      {
+        "Mode": "soft",
+        "Region": "LowerCurtain",
+        "Rectangle": [
+          938,
+          685,
+          976,
+          825
+        ],
+        "BrightBefore": 101,
+        "BrightAfter": 0,
+        "MaxBefore": 200,
+        "MaxAfter": 0,
+        "Darker": 276,
+        "Brighter": 0,
+        "AbsoluteDifference": 19213
+      },
+      {
+        "Mode": "soft",
+        "Region": "ShadowedGallery",
+        "Rectangle": [
+          1120,
+          250,
+          1465,
+          600
+        ],
+        "BrightBefore": 394,
+        "BrightAfter": 134,
+        "MaxBefore": 220,
+        "MaxAfter": 108,
+        "Darker": 1525,
+        "Brighter": 0,
+        "AbsoluteDifference": 70043
+      },
+      {
+        "Mode": "soft",
+        "Region": "SunlitStone",
+        "Rectangle": [
+          100,
+          566,
+          177,
+          663
+        ],
+        "BrightBefore": 7461,
+        "BrightAfter": 7461,
+        "MaxBefore": 249,
+        "MaxAfter": 249,
+        "Darker": 21,
+        "Brighter": 3,
+        "AbsoluteDifference": 76
+      }
+    ],
+    "Timings": [
+      {
+        "Variant": "baseline",
+        "Mode": "hard",
+        "Metric": "GpuFrameMicroseconds",
+        "Count": 99,
+        "Median": 9915,
+        "P95": 10459,
+        "P99": 10559
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalRayShadowMicroseconds",
+        "Count": 99,
+        "Median": 839,
+        "P95": 1073,
+        "P99": 1093
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalShadowTemporalMicroseconds",
+        "Count": 99,
+        "Median": 0,
+        "P95": 0,
+        "P99": 0
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalShadowSpatialMicroseconds",
+        "Count": 99,
+        "Median": 0,
+        "P95": 0,
+        "P99": 0
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "soft",
+        "Metric": "GpuFrameMicroseconds",
+        "Count": 99,
+        "Median": 11365,
+        "P95": 11593,
+        "P99": 11702
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalRayShadowMicroseconds",
+        "Count": 99,
+        "Median": 878,
+        "P95": 902,
+        "P99": 916
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalShadowTemporalMicroseconds",
+        "Count": 99,
+        "Median": 220,
+        "P95": 224,
+        "P99": 226
+      },
+      {
+        "Variant": "baseline",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalShadowSpatialMicroseconds",
+        "Count": 99,
+        "Median": 989,
+        "P95": 1013,
+        "P99": 1025
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "hard",
+        "Metric": "GpuFrameMicroseconds",
+        "Count": 99,
+        "Median": 9981,
+        "P95": 10189,
+        "P99": 10755
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalRayShadowMicroseconds",
+        "Count": 99,
+        "Median": 952,
+        "P95": 991,
+        "P99": 1181
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalShadowTemporalMicroseconds",
+        "Count": 99,
+        "Median": 0,
+        "P95": 0,
+        "P99": 0
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "hard",
+        "Metric": "GpuDirectionalShadowSpatialMicroseconds",
+        "Count": 99,
+        "Median": 0,
+        "P95": 0,
+        "P99": 0
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "soft",
+        "Metric": "GpuFrameMicroseconds",
+        "Count": 99,
+        "Median": 11474,
+        "P95": 11692,
+        "P99": 11875
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalRayShadowMicroseconds",
+        "Count": 99,
+        "Median": 999,
+        "P95": 1023,
+        "P99": 1049
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalShadowTemporalMicroseconds",
+        "Count": 99,
+        "Median": 220,
+        "P95": 223,
+        "P99": 227
+      },
+      {
+        "Variant": "candidate",
+        "Mode": "soft",
+        "Metric": "GpuDirectionalShadowSpatialMicroseconds",
+        "Count": 99,
+        "Median": 992,
+        "P95": 1014,
+        "P99": 1033
+      }
+    ]
+  },
+  "FinalCaptureShaderAssemblyIdenticalToProduction": true,
+  "FinalColdStartupMilliseconds": 274002,
+  "FinalDiagnosticShutdown": "All requested images, diagnostics and timings were written and the image gate passed. The owned diagnostic host was stopped after slow shutdown failed to return; shutdown behavior was not qualified."
+}

@@ -1,0 +1,24 @@
+{
+  "sourceCapture": "performance-20260907-193732-4741695-ae595de11fe5402f90be81377951ecc0.json",
+  "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+  "diagnostics": {
+    "PointShadowsEnabled": 1,
+    "PointShadowCandidateCount": 23,
+    "PointShadowSelectedCount": 0,
+    "PointShadowRejectedByBudgetCount": 23,
+    "LocalShadowAllocationFailureCount": 0
+  },
+  "reportedStatus": "Count limit or ineligible light",
+  "cause": "Sponza setup assigned MaxShadowedPointLights=0; gate activation preserved the zero capacity.",
+  "regressionBefore": {
+    "High": "7 candidates, 0 admitted",
+    "Medium": "7 candidates, 0 admitted",
+    "Low": "7 candidates, 0 admitted"
+  },
+  "regressionAfter": {
+    "High": "7 admitted",
+    "Medium": "7 admitted",
+    "Low": "7 admitted"
+  },
+  "focusedTestsPassed": 97
+}

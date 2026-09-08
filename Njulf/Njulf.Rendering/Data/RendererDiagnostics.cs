@@ -1560,6 +1560,8 @@ namespace Njulf.Rendering.Data
         public int DepthMeshOnlyIndirectDrawCount { get; init; }
         public int DirectionalShadowMeshOnlyIndirectDrawCount { get; init; }
         public int LightTileSaturationCount { get; init; }
+        /// <summary>True when this frame's CPU tile-occupancy estimates were collected.</summary>
+        public bool TiledLightDiagnosticsValid { get; init; }
         public int MaxLightsInAnyTile { get; init; }
         public float AverageLightsPerNonEmptyTile { get; init; }
         public int LightCullRejectedPointCount { get; init; }
@@ -2415,6 +2417,16 @@ namespace Njulf.Rendering.Data
         public ulong ShadowMapBytes { get; init; }
         public ulong DirectionalShadowBytes { get; init; }
         public ulong SpotShadowAtlasBytes { get; init; }
+        public LocalShadowLightDiagnostics[] LocalShadowLights { get; init; } = [];
+        public int PointShadowConfiguredLimit { get; init; }
+        public int SpotShadowConfiguredLimit { get; init; }
+        public int LocalShadowMemoryBudgetMiB { get; init; }
+        public int LocalShadowCacheHitCount { get; init; }
+        public int LocalShadowStaticRefreshCount { get; init; }
+        public int LocalShadowDynamicUpdateCount { get; init; }
+        public int LocalShadowCopyCount { get; init; }
+        public int LocalShadowDowngradedCount { get; init; }
+        public int LocalShadowAllocationFailureCount { get; init; }
         public ulong PointShadowBytes { get; init; }
         public float SpotShadowAtlasUtilization { get; init; }
         public float PointShadowFaceUtilization { get; init; }

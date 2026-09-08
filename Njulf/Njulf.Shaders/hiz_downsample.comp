@@ -19,15 +19,20 @@ void main()
         return;
 
     ivec2 srcSize = ivec2(pc.SourceDimensions);
-    ivec2 srcBase = dstPixel * 2;
+    // Each destination texel must contain every source texel intersecting
+    // its normalized UV footprint. Vulkan rounds mip extents down: a fixed
+    // 2x2 footprint drops odd edges and shifts coverage (e.g. 225 -> 112),
+    // allowing an occlusion query to read depth from a neighboring occluder.
+    // The overlapping third row/column is intentional for odd extents.
+    ivec2 srcBegin = dstPixel * srcSize / dstSize;
+    ivec2 srcEnd = ((dstPixel + ivec2(1)) * srcSize + dstSize - ivec2(1)) / dstSize;
 
     float farthestDepth = 1.0;
-    for (int y = 0; y < 2; y++)
+    for (int y = srcBegin.y; y < srcEnd.y; y++)
     {
-        for (int x = 0; x < 2; x++)
+        for (int x = srcBegin.x; x < srcEnd.x; x++)
         {
-            ivec2 srcPixel = min(srcBase + ivec2(x, y), srcSize - ivec2(1));
-            farthestDepth = min(farthestDepth, texelFetch(SourceDepth, srcPixel, 0).r);
+            farthestDepth = min(farthestDepth, texelFetch(SourceDepth, ivec2(x, y), 0).r);
         }
     }
 

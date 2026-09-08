@@ -36,14 +36,14 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(settings.MaxShadowedSpotLights, Is.EqualTo(32));
+                Assert.That(settings.MaxShadowedSpotLights, Is.EqualTo(99));
                 Assert.That(settings.SpotShadowAtlasSize, Is.EqualTo(8192));
                 Assert.That(settings.SpotShadowTileSize, Is.EqualTo(128));
                 Assert.That(settings.SpotNormalBias, Is.EqualTo(0f));
                 Assert.That(settings.SpotConstantDepthBias, Is.EqualTo(0.1f));
                 Assert.That(settings.SpotSlopeScaledDepthBias, Is.EqualTo(16f));
                 Assert.That(settings.SpotPcfRadius, Is.EqualTo(3));
-                Assert.That(settings.MaxShadowedPointLights, Is.EqualTo(4));
+                Assert.That(settings.MaxShadowedPointLights, Is.EqualTo(99));
                 Assert.That(settings.PointShadowMapSize, Is.EqualTo(128));
                 Assert.That(settings.PointNormalBias, Is.EqualTo(0f));
                 Assert.That(settings.PointConstantDepthBias, Is.EqualTo(0.1f));

@@ -1,0 +1,32 @@
+{
+  "DateUtc": "2026-09-08T06:36:17.7607250Z",
+  "Applied": true,
+  "KeepDays": 2,
+  "TotalBytes": 6778641642,
+  "TotalFiles": 922.0,
+  "FreeBytesBefore": 313524031488,
+  "FreeBytesAfter": 320304087040,
+  "Groups": [
+    {
+      "Path": "artifacts/c-drive-migration-20260907",
+      "Files": 791,
+      "Bytes": 5815716226
+    },
+    {
+      "Path": ".perf-loop-runs/reflection-ao-20260905",
+      "Files": 43,
+      "Bytes": 748800988
+    },
+    {
+      "Path": ".codex-tmp/pfm-preview",
+      "Files": 82,
+      "Bytes": 114210832
+    },
+    {
+      "Path": ".perf-loop-runs/sponza-full-20260905",
+      "Files": 6,
+      "Bytes": 99913596
+    }
+  ],
+  "Failures": []
+}

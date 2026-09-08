@@ -37,7 +37,7 @@ internal readonly record struct RendererDiagnosticsResourceInput(
     RenderTargetManager? RenderTargets,
     DirectionalShadowResources? DirectionalShadowResources,
     SpotShadowAtlas? SpotShadowAtlas,
-    PointShadowCubemapArray? PointShadowCubemapArray,
+    PointShadowPool? PointShadowCubemapArray,
     EnvironmentManager? EnvironmentManager,
     IesPhotometricProfileManager IesPhotometricProfileManager,
     ReflectionProbeManager? ReflectionProbeManager,

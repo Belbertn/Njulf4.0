@@ -20,6 +20,7 @@ public sealed class SampleBenchmarkTrajectoryTests
     [TestCase("sponza-snapshot-incident", SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident, 1, false)]
     [TestCase("sponza-horizontal", SampleBenchmarkTrajectoryKind.SponzaHorizontal, 300, true)]
     [TestCase("sponza-vertical", SampleBenchmarkTrajectoryKind.SponzaVertical, 960, true)]
+    [TestCase("sponza-vertical-refresh", SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh, 240, true)]
     public void NamedContracts_ParseWithLockedFrameCounts(
         string name,
         SampleBenchmarkTrajectoryKind expected,
@@ -42,6 +43,29 @@ public sealed class SampleBenchmarkTrajectoryTests
                     parsed,
                     SampleBistroQualityCaptureVariant.SunScaleStep),
                 Does.Match("^sha256:[0-9a-f]{64}$"));
+        });
+    }
+
+    [Test]
+    public void VerticalRefreshTrajectory_RisesPastReportedHeightQuicklyThenHolds()
+    {
+        const SampleBenchmarkTrajectoryKind kind = SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh;
+        SampleBenchmarkCameraPose Pose(int frame) => SampleBenchmarkTrajectory.ResolveCamera(
+            kind, frame, SampleBistroQualityCaptureVariant.SunScaleStep)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Pose(0).Position.Y, Is.EqualTo(2f));
+            Assert.That(Pose(45).Position.Y, Is.EqualTo(17f));
+            Assert.That(Pose(90).Position.Y, Is.EqualTo(32f));
+            Assert.That(Pose(239), Is.EqualTo(Pose(90)));
+            Assert.That(Pose(45).Position.X, Is.EqualTo(2.228f));
+            Assert.That(Pose(45).Position.Z, Is.EqualTo(-0.1611491f));
+            Assert.That(Pose(45).Yaw, Is.EqualTo(-1.6782299f));
+            Assert.That(Pose(45).Pitch, Is.EqualTo(1.3824875f));
+            Assert.That(SampleBenchmarkTrajectory.GetWarmupFrameIndex(kind, 239), Is.Zero);
+            Assert.That(SampleBenchmarkTrajectory.CanStartMeasurementAfterFrame(kind, 239), Is.True);
+            Assert.That(SampleBenchmarkTrajectory.RequiresSponza(kind), Is.True);
         });
     }
 

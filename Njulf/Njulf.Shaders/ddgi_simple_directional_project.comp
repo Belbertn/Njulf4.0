@@ -352,8 +352,10 @@ void main()
                     recursiveGuidingMixtureCount++;
                 }
             }
-            if (recursiveGuidingMaintenanceCount == 0u ||
-                recursiveGuidingMixtureCount == 0u)
+            // Spatial recovery can select exactly the uniform maintenance
+            // subset. Its balance denominator is N / (4*pi), so no mixture
+            // samples are required for a complete, authenticated projection.
+            if (recursiveGuidingMaintenanceCount == 0u)
             {
                 MarkSimpleDdgiDirectionalProjectionFailure(
                     scratchBaseWord,

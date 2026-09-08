@@ -462,6 +462,7 @@ namespace Njulf.Rendering.Data
         /// </summary>
         public uint NearFieldResidualDebugView { get; set; }
         public int MaxLightsPerTile { get; set; }
+        public bool TiledLightDiagnosticsValid { get; set; }
         public int MaxLightsInAnyTile { get; set; }
         public float AverageLightsPerNonEmptyTile { get; set; }
         public int LightTileSaturationCount { get; set; }
@@ -763,6 +764,19 @@ namespace Njulf.Rendering.Data
         public uint SpotShadowTileSize { get; set; }
         public int SpotShadowAtlasCapacity { get; set; }
         public int SpotShadowAtlasUsedTiles { get; set; }
+        public LocalShadowLightDiagnostics[] LocalShadowLights { get; set; } = [];
+        public bool[] PointShadowDynamicCasters { get; set; } = [];
+        public bool[] SpotShadowDynamicCasters { get; set; } = [];
+        public LocalShadowAllocation[] PointShadowAllocations { get; set; } = [];
+        public LocalShadowAllocation[] SpotShadowAllocations { get; set; } = [];
+        public LocalShadowCacheEntry[] PointShadowCacheEntries { get; set; } = [];
+        public LocalShadowCacheEntry[] SpotShadowCacheEntries { get; set; } = [];
+        public int LocalShadowCacheHitCount { get; set; }
+        public int LocalShadowStaticRefreshCount { get; set; }
+        public int LocalShadowDynamicUpdateCount { get; set; }
+        public int LocalShadowCopyCount { get; set; }
+        public int LocalShadowDowngradedCount { get; set; }
+        public int LocalShadowAllocationFailureCount { get; set; }
         public bool PointShadowsEnabled { get; set; }
         public bool PointShadowRecordSkipped { get; set; }
         public int PointShadowCandidateCount { get; set; }
@@ -2288,6 +2302,7 @@ namespace Njulf.Rendering.Data
             VariableRateShadingFallbackReason = string.Empty;
             NearFieldResidualDebugView = 0;
             MaxLightsPerTile = 0;
+            TiledLightDiagnosticsValid = false;
             MaxLightsInAnyTile = 0;
             AverageLightsPerNonEmptyTile = 0.0f;
             LightTileSaturationCount = 0;
@@ -2658,6 +2673,11 @@ namespace Njulf.Rendering.Data
             SpotShadowTileSize = 0;
             SpotShadowAtlasCapacity = 0;
             SpotShadowAtlasUsedTiles = 0;
+            LocalShadowLights = []; PointShadowDynamicCasters = []; SpotShadowDynamicCasters = [];
+            PointShadowAllocations = []; SpotShadowAllocations = [];
+            PointShadowCacheEntries = []; SpotShadowCacheEntries = [];
+            LocalShadowCacheHitCount = LocalShadowStaticRefreshCount = LocalShadowDynamicUpdateCount = 0;
+            LocalShadowCopyCount = LocalShadowDowngradedCount = LocalShadowAllocationFailureCount = 0;
             PointShadowsEnabled = false;
             PointShadowRecordSkipped = false;
             PointShadowCandidateCount = 0;

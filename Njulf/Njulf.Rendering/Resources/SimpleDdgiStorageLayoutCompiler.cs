@@ -147,6 +147,34 @@ public sealed record SimpleDdgiStorageLayout(
 
         return null;
     }
+
+    /// <summary>
+    /// Tests the allocation/address ABI independently of each volume's tracing
+    /// horizon. Horizon changes invalidate that volume's samples, not the
+    /// canonical lighting and cache owned by every other volume.
+    /// </summary>
+    internal bool HasSameAddresses(SimpleDdgiStorageLayout other)
+    {
+        if (PackingMode != other.PackingMode || AbiVersion != other.AbiVersion ||
+            DirectionCodebookVersion != other.DirectionCodebookVersion ||
+            SourceCacheBytes != other.SourceCacheBytes || Regions.Count != other.Regions.Count)
+            return false;
+
+        for (int i = 0; i < Regions.Count; i++)
+        {
+            SimpleDdgiTransportCacheRegion next = other.Regions[i];
+            SimpleDdgiTransportCacheRegion previous = Regions[i] with
+            {
+                MaximumTraceDistance = next.MaximumTraceDistance,
+                WorstCaseHalfUlp = next.WorstCaseHalfUlp,
+                MaximumDecodedDistanceError = next.MaximumDecodedDistanceError,
+                DistancePackingDecision = next.DistancePackingDecision
+            };
+            if (previous != next)
+                return false;
+        }
+        return true;
+    }
 }
 
 /// <summary>

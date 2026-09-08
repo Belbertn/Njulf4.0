@@ -25,8 +25,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly FoliageManager? _foliageManager;
         private readonly SpotShadowAtlas _atlas;
         private readonly ShadowSettings _settings;
-        private ulong _lastStaticCacheSignature;
-        private bool _hasStaticCacheSignature;
+        private int _spotIndex;
+        private SpotShadowAtlasRect _region;
 
         public SpotShadowPass(
             VulkanContext context,
@@ -50,45 +50,36 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
-        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
-        {
-            if (!sceneData.SpotShadowsEnabled ||
-                sceneData.SpotShadowSelectedCount <= 0 ||
-                _atlas.WorkingImage.Handle == 0)
-            {
-                return false;
-            }
-
-            return IsStaticCacheDirty(sceneData) ||
-                   sceneData.LocalDynamicShadowMeshletCount > 0 ||
-                   HasFoliageSpotShadowWork(sceneData);
-        }
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData) =>
+            sceneData.SpotShadowsEnabled && sceneData.SpotShadowSelectedCount > 0 && _atlas.WorkingImage.Handle != 0;
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!ShouldExecute(frameIndex, sceneData))
-                return;
-
-            bool staticDirty = IsStaticCacheDirty(sceneData);
-            if (staticDirty)
+            if (!ShouldExecute(frameIndex, sceneData)) return;
+            sceneData.SpotShadowRecordSkipped = true;
+            bool fresh = _atlas.StaticLayout == ImageLayout.Undefined || _atlas.Layout == ImageLayout.Undefined;
+            for (_spotIndex = 0; _spotIndex < sceneData.SpotShadowSelectedCount; _spotIndex++)
             {
-                RenderStaticCache(cmd, sceneData);
-                _lastStaticCacheSignature = CreateStaticCacheSignature(sceneData);
-                _hasStaticCacheSignature = true;
-            }
-
-            if (sceneData.LocalStaticShadowMeshletCount > 0)
+                _region = sceneData.SpotShadowAllocations[_spotIndex].Region;
+                LocalShadowCacheEntry cache = sceneData.SpotShadowCacheEntries[_spotIndex];
+                bool staticDirty = fresh || cache.StaticDirty;
+                bool foliage = HasFoliageSpotShadowWork(sceneData) && _spotIndex < sceneData.FoliageMaxLocalShadowedSpotLights;
+                bool moving = sceneData.LocalDynamicShadowMeshletCount > 0 &&
+                    (_spotIndex >= sceneData.SpotShadowDynamicCasters.Length || sceneData.SpotShadowDynamicCasters[_spotIndex]);
+                bool dynamic = moving || foliage;
+                if (!staticDirty && !dynamic && !cache.HadDynamic)
+                { cache.LastResult = "Cached"; sceneData.LocalShadowCacheHitCount++; continue; }
+                sceneData.SpotShadowRecordSkipped = false;
+                if (staticDirty)
+                { RenderStaticCache(cmd, sceneData); sceneData.LocalShadowStaticRefreshCount++; }
                 CopyStaticCacheToWorking(cmd);
-            else
-                ClearWorkingAtlas(cmd);
-
-            if (sceneData.LocalDynamicShadowMeshletCount > 0)
-                RenderDynamic(cmd, sceneData);
-
-            if (HasFoliageSpotShadowWork(sceneData))
-                RenderFoliage(cmd, sceneData);
-
-            TransitionWorking(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
+                sceneData.LocalShadowCopyCount++;
+                if (moving) RenderDynamic(cmd, sceneData);
+                if (foliage) RenderFoliage(cmd, sceneData);
+                if (dynamic) sceneData.LocalShadowDynamicUpdateCount++;
+                TransitionWorking(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
+                cache.Commit(dynamic);
+            }
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -98,14 +89,12 @@ namespace Njulf.Rendering.Pipeline
 
         private void RenderStaticCache(CommandBuffer cmd, SceneRenderingData sceneData)
         {
-            if (sceneData.LocalStaticShadowMeshletCount <= 0)
-                return;
-
             TransitionStatic(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             ClearAtlas(cmd, _atlas.StaticView);
+            if (sceneData.LocalStaticShadowMeshletCount <= 0) return;
             BindShadowPipeline(cmd);
-            for (int i = 0; i < sceneData.SpotShadowSelectedCount; i++)
             {
+                int i = _spotIndex;
                 _context.BeginDebugLabel(cmd, GetLightDebugLabel(StaticLightDebugLabels, "Static", i));
                 try
                 {
@@ -128,8 +117,8 @@ namespace Njulf.Rendering.Pipeline
         {
             TransitionWorking(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             BindShadowPipeline(cmd);
-            for (int i = 0; i < sceneData.SpotShadowSelectedCount; i++)
             {
+                int i = _spotIndex;
                 _context.BeginDebugLabel(cmd, GetLightDebugLabel(DynamicLightDebugLabels, "Dynamic", i));
                 try
                 {
@@ -155,7 +144,7 @@ namespace Njulf.Rendering.Pipeline
 
             TransitionWorking(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             int shadowCount = Math.Min(sceneData.SpotShadowSelectedCount, sceneData.FoliageMaxLocalShadowedSpotLights);
-            for (int i = 0; i < shadowCount; i++)
+            for (int i = _spotIndex; i == _spotIndex && i < shadowCount; i++)
             {
                 _context.BeginDebugLabel(cmd, GetLightDebugLabel(FoliageLightDebugLabels, "Foliage", i));
                 try
@@ -196,13 +185,13 @@ namespace Njulf.Rendering.Pipeline
             if (meshletCount <= 0)
                 return;
 
-            SpotShadowAtlasRect rect = LocalShadowAllocator.GetSpotTileRect(_atlas.AtlasSize, _atlas.TileSize, shadowIndex);
+            SpotShadowAtlasRect rect = sceneData.SpotShadowAllocations[shadowIndex].Region;
             var viewport = new Viewport
             {
-                X = rect.X,
-                Y = rect.Y,
-                Width = rect.Width,
-                Height = rect.Height,
+                X = rect.X + 4,
+                Y = rect.Y + 4,
+                Width = rect.Width - 8,
+                Height = rect.Height - 8,
                 MinDepth = 0.0f,
                 MaxDepth = 1.0f
             };
@@ -263,13 +252,13 @@ namespace Njulf.Rendering.Pipeline
             if (clusterDrawCount == 0u && meshletDrawCount == 0u)
                 return;
 
-            SpotShadowAtlasRect rect = LocalShadowAllocator.GetSpotTileRect(_atlas.AtlasSize, _atlas.TileSize, shadowIndex);
+            SpotShadowAtlasRect rect = sceneData.SpotShadowAllocations[shadowIndex].Region;
             var viewport = new Viewport
             {
-                X = rect.X,
-                Y = rect.Y,
-                Width = rect.Width,
-                Height = rect.Height,
+                X = rect.X + 4,
+                Y = rect.Y + 4,
+                Width = rect.Width - 8,
+                Height = rect.Height - 8,
                 MinDepth = 0.0f,
                 MaxDepth = 1.0f
             };
@@ -352,8 +341,8 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.RenderingInfo,
                 RenderArea = new Rect2D
                 {
-                    Offset = new Offset2D { X = 0, Y = 0 },
-                    Extent = new Extent2D { Width = _atlas.AtlasSize, Height = _atlas.AtlasSize }
+                    Offset = new Offset2D { X = (int)_region.X, Y = (int)_region.Y },
+                    Extent = new Extent2D { Width = _region.Width, Height = _region.Height }
                 },
                 LayerCount = 1,
                 ColorAttachmentCount = 0,
@@ -499,7 +488,9 @@ namespace Njulf.Rendering.Pipeline
                     BaseArrayLayer = 0,
                     LayerCount = 1
                 },
-                Extent = new Extent3D { Width = _atlas.AtlasSize, Height = _atlas.AtlasSize, Depth = 1 }
+                SrcOffset = new Offset3D((int)_region.X, (int)_region.Y, 0),
+                DstOffset = new Offset3D((int)_region.X, (int)_region.Y, 0),
+                Extent = new Extent3D { Width = _region.Width, Height = _region.Height, Depth = 1 }
             };
 
             _context.Api.CmdCopyImage(
@@ -510,40 +501,6 @@ namespace Njulf.Rendering.Pipeline
                 ImageLayout.TransferDstOptimal,
                 1,
                 &copy);
-        }
-
-        private bool IsStaticCacheDirty(SceneRenderingData sceneData)
-        {
-            if (_atlas.StaticLayout == ImageLayout.Undefined ||
-                _atlas.Layout == ImageLayout.Undefined)
-            {
-                return true;
-            }
-
-            ulong signature = CreateStaticCacheSignature(sceneData);
-            return !_hasStaticCacheSignature || _lastStaticCacheSignature != signature;
-        }
-
-        private static ulong CreateStaticCacheSignature(SceneRenderingData sceneData)
-        {
-            ulong hash = 14695981039346656037UL;
-            hash = HashAdd(hash, sceneData.LocalStaticShadowMeshletCount);
-            hash = HashAdd(hash, sceneData.LocalStaticShadowMeshletDrawSignature);
-            hash = HashAdd(hash, sceneData.SpotShadowSelectedCount);
-            hash = HashAdd(hash, sceneData.SpotShadowAtlasSize);
-            hash = HashAdd(hash, sceneData.SpotShadowTileSize);
-            for (int i = 0; i < sceneData.SpotShadowSelectedCount; i++)
-            {
-                GPUSpotShadow shadow = sceneData.SpotShadowData[i];
-                GPUSpotShadow* shadowPtr = &shadow;
-                byte* bytes = (byte*)shadowPtr;
-                for (int byteIndex = 0; byteIndex < sizeof(GPUSpotShadow); byteIndex++)
-                {
-                    hash = HashAdd(hash, bytes[byteIndex]);
-                }
-            }
-
-            return hash;
         }
 
         private static void GetTransitionMasks(
@@ -561,7 +518,7 @@ namespace Njulf.Rendering.Pipeline
                     srcAccess = AccessFlags2.DepthStencilAttachmentWriteBit;
                     break;
                 case ImageLayout.DepthStencilReadOnlyOptimal:
-                    srcStage = PipelineStageFlags2.FragmentShaderBit;
+                    srcStage = PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit;
                     srcAccess = AccessFlags2.ShaderSampledReadBit;
                     break;
                 case ImageLayout.TransferSrcOptimal:
@@ -585,7 +542,7 @@ namespace Njulf.Rendering.Pipeline
                     dstAccess = AccessFlags2.DepthStencilAttachmentWriteBit;
                     break;
                 case ImageLayout.DepthStencilReadOnlyOptimal:
-                    dstStage = PipelineStageFlags2.FragmentShaderBit;
+                    dstStage = PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit;
                     dstAccess = AccessFlags2.ShaderSampledReadBit;
                     break;
                 case ImageLayout.TransferSrcOptimal:
@@ -603,27 +560,5 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private static ulong HashAdd(ulong hash, int value) => HashAdd(hash, unchecked((uint)value));
-        private static ulong HashAdd(ulong hash, uint value)
-        {
-            const ulong prime = 1099511628211UL;
-            unchecked
-            {
-                hash ^= value & 0xFFu;
-                hash *= prime;
-                hash ^= (value >> 8) & 0xFFu;
-                hash *= prime;
-                hash ^= (value >> 16) & 0xFFu;
-                hash *= prime;
-                hash ^= (value >> 24) & 0xFFu;
-                return hash * prime;
-            }
-        }
-
-        private static ulong HashAdd(ulong hash, ulong value)
-        {
-            hash = HashAdd(hash, (uint)value);
-            return HashAdd(hash, (uint)(value >> 32));
-        }
     }
 }

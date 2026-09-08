@@ -11,6 +11,7 @@ public sealed class AmazonBistroMaterialProfileTests
 
     [TestCase("MASTER_Glass_Exterior_BaseColor.dds", 0.94f, 0.08f)]
     [TestCase("TransparentGlass_BaseColor.dds", 0.96f, 0.05f)]
+    [TestCase("Vespa_Headlight_BaseColor.dds", 0.94f, 0.12f)]
     [TestCase("MASTER_Glass_Dirty_BaseColor.dds", 0.78f, 0.28f)]
     [TestCase("MASTER_Glass_Dirty_MASKED_BaseColor.dds", 0.70f, 0.34f)]
     [TestCase("MASTER_Frosted_Glass_BaseColor.dds", 0.58f, 0.72f)]
@@ -83,6 +84,8 @@ public sealed class AmazonBistroMaterialProfileTests
     [TestCase("Plants_Metal_Base_01_BaseColor.dds")]
     [TestCase("Foliage_Leaves_Normal.dds")]
     [TestCase("Generic_Foliage_BaseColor.dds")]
+    [TestCase("Vespa_BaseColor.dds")]
+    [TestCase("Vespa_Odometer_BaseColor.dds")]
     public void Apply_FoliageLikeButUnlistedIdentityRemainsOpaque(
         string textureName)
     {

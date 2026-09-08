@@ -115,14 +115,14 @@ namespace Njulf.Rendering.Data
         private float _slopeScaledDepthBias = 1.5f;
         private float _constantDepthBias = 0.0005f;
         private int _pcfRadius = 1;
-        private int _maxShadowedSpotLights = 2;
+        private int _maxShadowedSpotLights = 32;
         private uint _spotShadowAtlasSize = 4096;
         private uint _spotShadowTileSize = 512;
         private float _spotNormalBias = 0.02f;
         private float _spotConstantDepthBias = 0.0005f;
         private float _spotSlopeScaledDepthBias = 1.5f;
         private int _spotPcfRadius = 1;
-        private int _maxShadowedPointLights = 1;
+        private int _maxShadowedPointLights = 32;
         private int _maxShadowedAreaLights = 2;
         private int _areaShadowSampleCount = 1;
         private uint _pointShadowMapSize = 512;
@@ -134,6 +134,16 @@ namespace Njulf.Rendering.Data
         public bool DirectionalShadowsEnabled { get; set; } = true;
         public bool SpotShadowsEnabled { get; set; } = true;
         public bool PointShadowsEnabled { get; set; } = true;
+
+        private int _localShadowMemoryBudgetMiB = 256;
+        /// <summary>Combined point/spot static and working map budget. Zero disables local maps.</summary>
+        public int LocalShadowMemoryBudgetMiB
+        {
+            get => _localShadowMemoryBudgetMiB;
+            set => _localShadowMemoryBudgetMiB = Math.Max(0, value);
+        }
+        public bool LocalShadowCacheEnabled { get; set; } = true;
+
         public bool AreaShadowsEnabled { get; set; } = true;
 
         public DirectionalShadowMode RequestedDirectionalShadowMode
@@ -344,8 +354,8 @@ namespace Njulf.Rendering.Data
 
         public int MaxShadowedSpotLights
         {
-            get => Math.Min(_maxShadowedSpotLights, SpotShadowAtlasCapacity);
-            set => _maxShadowedSpotLights = value < 0 ? 0 : value > 32 ? 32 : value;
+            get => _maxShadowedSpotLights;
+            set => _maxShadowedSpotLights = Math.Clamp(value, 0, LightManager.MaxLights);
         }
 
         public uint SpotShadowAtlasSize
@@ -387,7 +397,7 @@ namespace Njulf.Rendering.Data
         public int MaxShadowedPointLights
         {
             get => _maxShadowedPointLights;
-            set => _maxShadowedPointLights = value < 0 ? 0 : value > 4 ? 4 : value;
+            set => _maxShadowedPointLights = Math.Clamp(value, 0, LightManager.MaxLights);
         }
 
         /// <summary>Maximum area emitters receiving full-resolution ray-query masks.</summary>
@@ -5524,6 +5534,12 @@ namespace Njulf.Rendering.Data
 
     public sealed class RenderDiagnosticsSettings
     {
+        /// <summary>
+        /// Opts into CPU tile-occupancy estimates on every frame. Runtime-only;
+        /// the Light Tiles overlay also requests these statistics automatically.
+        /// </summary>
+        public bool TiledLightDiagnosticsEnabled { get; set; }
+
         public bool GpuMeshletCountersEnabled { get; set; }
         public bool DdgiForwardEstimateCountersEnabled { get; set; }
         public bool DirectionalShadowReceiverCountersEnabled { get; set; }
@@ -5977,9 +5993,9 @@ namespace Njulf.Rendering.Data
                     Shadows.DirectionalPcfRadiusMode =
                         DirectionalPcfRadiusMode.Constant;
                     Shadows.SpotShadowsEnabled = false;
-                    Shadows.MaxShadowedSpotLights = 0;
+                    Shadows.MaxShadowedSpotLights = 32;
                     Shadows.PointShadowsEnabled = false;
-                    Shadows.MaxShadowedPointLights = 0;
+                    Shadows.MaxShadowedPointLights = 32;
                     Shadows.AreaShadowsEnabled = false;
                     Shadows.MaxShadowedAreaLights = 0;
                     Shadows.AreaShadowSampleCount = 1;
@@ -6046,8 +6062,8 @@ namespace Njulf.Rendering.Data
                         DirectionalPcfRadiusMode.WorldSpaceAdaptive;
                     Shadows.SpotShadowsEnabled = true;
                     Shadows.PointShadowsEnabled = true;
-                    Shadows.MaxShadowedSpotLights = 2;
-                    Shadows.MaxShadowedPointLights = 1;
+                    Shadows.MaxShadowedSpotLights = 32;
+                    Shadows.MaxShadowedPointLights = 32;
                     Shadows.AreaShadowsEnabled = true;
                     Shadows.MaxShadowedAreaLights = 1;
                     Shadows.AreaShadowSampleCount = 1;
@@ -6113,8 +6129,8 @@ namespace Njulf.Rendering.Data
                         DirectionalPcfRadiusMode.WorldSpaceAdaptive;
                     Shadows.SpotShadowsEnabled = true;
                     Shadows.PointShadowsEnabled = true;
-                    Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 3);
-                    Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
+                    Shadows.MaxShadowedSpotLights = 32;
+                    Shadows.MaxShadowedPointLights = 32;
                     Shadows.AreaShadowsEnabled = true;
                     Shadows.MaxShadowedAreaLights = Math.Max(
                         Shadows.MaxShadowedAreaLights,
@@ -6180,8 +6196,8 @@ namespace Njulf.Rendering.Data
                         DirectionalPcfRadiusMode.WorldSpaceAdaptive;
                     Shadows.SpotShadowsEnabled = true;
                     Shadows.PointShadowsEnabled = true;
-                    Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 4);
-                    Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
+                    Shadows.MaxShadowedSpotLights = 32;
+                    Shadows.MaxShadowedPointLights = 32;
                     Shadows.AreaShadowsEnabled = true;
                     Shadows.MaxShadowedAreaLights = 4;
                     Shadows.AreaShadowSampleCount = 2;
@@ -6250,8 +6266,8 @@ namespace Njulf.Rendering.Data
                         DirectionalPcfRadiusMode.WorldSpaceAdaptive;
                     Shadows.SpotShadowsEnabled = true;
                     Shadows.PointShadowsEnabled = true;
-                    Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 2);
-                    Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
+                    Shadows.MaxShadowedSpotLights = 32;
+                    Shadows.MaxShadowedPointLights = 32;
                     Shadows.AreaShadowsEnabled = true;
                     Shadows.MaxShadowedAreaLights = Math.Max(
                         Shadows.MaxShadowedAreaLights,
@@ -7161,6 +7177,23 @@ namespace Njulf.Rendering.Data
 
         private sealed record ShadowSettingsFile
         {
+            public bool? PointShadowsEnabled { get; init; }
+            public bool? SpotShadowsEnabled { get; init; }
+            public int? MaxShadowedPointLights { get; init; }
+            public int? MaxShadowedSpotLights { get; init; }
+            public uint? PointShadowMapSize { get; init; }
+            public uint? SpotShadowTileSize { get; init; }
+            public uint? SpotShadowAtlasSize { get; init; }
+            public int? LocalShadowMemoryBudgetMiB { get; init; }
+            public bool? LocalShadowCacheEnabled { get; init; }
+            public float? PointNormalBias { get; init; }
+            public float? PointConstantDepthBias { get; init; }
+            public float? PointSlopeScaledDepthBias { get; init; }
+            public int? PointPcfRadius { get; init; }
+            public float? SpotNormalBias { get; init; }
+            public float? SpotConstantDepthBias { get; init; }
+            public float? SpotSlopeScaledDepthBias { get; init; }
+            public int? SpotPcfRadius { get; init; }
             public bool DirectionalShadowsEnabled { get; init; } = true;
             public DirectionalShadowMode RequestedDirectionalShadowMode { get; init; } =
                 DirectionalShadowMode.Cascaded;
@@ -7194,6 +7227,24 @@ namespace Njulf.Rendering.Data
 
             public static ShadowSettingsFile FromSettings(ShadowSettings settings) => new()
             {
+                PointShadowsEnabled = settings.PointShadowsEnabled,
+                SpotShadowsEnabled = settings.SpotShadowsEnabled,
+                MaxShadowedPointLights = settings.MaxShadowedPointLights,
+                MaxShadowedSpotLights = settings.MaxShadowedSpotLights,
+                PointShadowMapSize = settings.PointShadowMapSize,
+                SpotShadowTileSize = settings.SpotShadowTileSize,
+                SpotShadowAtlasSize = settings.SpotShadowAtlasSize,
+                LocalShadowMemoryBudgetMiB = settings.LocalShadowMemoryBudgetMiB,
+                LocalShadowCacheEnabled = settings.LocalShadowCacheEnabled,
+                PointNormalBias = settings.PointNormalBias,
+                PointConstantDepthBias = settings.PointConstantDepthBias,
+                PointSlopeScaledDepthBias = settings.PointSlopeScaledDepthBias,
+                PointPcfRadius = settings.PointPcfRadius,
+                SpotNormalBias = settings.SpotNormalBias,
+                SpotConstantDepthBias = settings.SpotConstantDepthBias,
+                SpotSlopeScaledDepthBias = settings.SpotSlopeScaledDepthBias,
+                SpotPcfRadius = settings.SpotPcfRadius,
+
                 DirectionalShadowsEnabled = settings.DirectionalShadowsEnabled,
                 RequestedDirectionalShadowMode = settings.RequestedDirectionalShadowMode,
                 DirectionalCsmTemporalMode = settings.DirectionalCsmTemporalMode,
@@ -7225,6 +7276,23 @@ namespace Njulf.Rendering.Data
                 ShadowSettings settings,
                 int sourceVersion)
             {
+                if (PointShadowsEnabled.HasValue) settings.PointShadowsEnabled = PointShadowsEnabled.Value;
+                if (SpotShadowsEnabled.HasValue) settings.SpotShadowsEnabled = SpotShadowsEnabled.Value;
+                if (MaxShadowedPointLights.HasValue) settings.MaxShadowedPointLights = MaxShadowedPointLights.Value;
+                if (MaxShadowedSpotLights.HasValue) settings.MaxShadowedSpotLights = MaxShadowedSpotLights.Value;
+                if (PointShadowMapSize.HasValue) settings.PointShadowMapSize = PointShadowMapSize.Value;
+                if (SpotShadowTileSize.HasValue) settings.SpotShadowTileSize = SpotShadowTileSize.Value;
+                if (SpotShadowAtlasSize.HasValue) settings.SpotShadowAtlasSize = SpotShadowAtlasSize.Value;
+                if (LocalShadowMemoryBudgetMiB.HasValue) settings.LocalShadowMemoryBudgetMiB = LocalShadowMemoryBudgetMiB.Value;
+                if (LocalShadowCacheEnabled.HasValue) settings.LocalShadowCacheEnabled = LocalShadowCacheEnabled.Value;
+                if (PointNormalBias.HasValue) settings.PointNormalBias = PointNormalBias.Value;
+                if (PointConstantDepthBias.HasValue) settings.PointConstantDepthBias = PointConstantDepthBias.Value;
+                if (PointSlopeScaledDepthBias.HasValue) settings.PointSlopeScaledDepthBias = PointSlopeScaledDepthBias.Value;
+                if (PointPcfRadius.HasValue) settings.PointPcfRadius = PointPcfRadius.Value;
+                if (SpotNormalBias.HasValue) settings.SpotNormalBias = SpotNormalBias.Value;
+                if (SpotConstantDepthBias.HasValue) settings.SpotConstantDepthBias = SpotConstantDepthBias.Value;
+                if (SpotSlopeScaledDepthBias.HasValue) settings.SpotSlopeScaledDepthBias = SpotSlopeScaledDepthBias.Value;
+                if (SpotPcfRadius.HasValue) settings.SpotPcfRadius = SpotPcfRadius.Value;
                 settings.DirectionalShadowsEnabled = DirectionalShadowsEnabled;
                 settings.RequestedDirectionalShadowMode = RequestedDirectionalShadowMode;
                 settings.DirectionalCsmTemporalMode =

@@ -2161,8 +2161,8 @@ float EvaluateDirectionalTransparentRay(
         return 1.0;
     }
     normal *= inversesqrt(normalLengthSquared);
-    if (dot(normal, centerDirection) < -0.25)
-        return 1.0;
+    // The shading normal and two-sided material response may still receive
+    // sunlight. Receiver orientation alone cannot prove an unoccluded ray.
     if (dot(normal, centerDirection) < 0.0)
         normal = -normal;
 
@@ -3023,7 +3023,7 @@ float SamplePointShadowFace(
         return 1.0;
     }
 
-    float layer = float(shadow.CubemapIndex * 6 + int(faceIndex));
+    float layer = float(int(faceIndex));
     float lit = 0.0;
     float taps = 0.0;
     for (int y = -radius; y <= radius; y++)
@@ -3034,7 +3034,7 @@ float SamplePointShadowFace(
             if (sampleUv.x < 0.0 || sampleUv.x > 1.0 || sampleUv.y < 0.0 || sampleUv.y > 1.0)
                 continue;
 
-            float sampledDepth = texture(BindlessArrayTextures[nonuniformEXT(POINT_SHADOW_CUBEMAP_ARRAY_TEXTURE_INDEX)], vec3(sampleUv, layer)).r;
+            float sampledDepth = texture(BindlessArrayTextures[nonuniformEXT(shadow.TextureIndex)], vec3(sampleUv, layer)).r;
             lit += CompareReverseZDepth(shadowCoord.z, sampledDepth, shadow.BiasStrengthTexelSize.y);
             taps += 1.0;
         }
@@ -5769,6 +5769,7 @@ void main()
     // a missing extension into an opaque black pane.
     float transmissionFactor = 0.90;
     float ior = 1.50;
+    float specularFactor = 1.0;
     vec3 thinTransmissionTint = vec3(1.0);
     bool hasMaterialExtension =
         material.FeatureFlags != 0u && material.ExtensionDataIndex >= 0;
@@ -5786,6 +5787,12 @@ void main()
             dispersion.yzw,
             vec3(0.0),
             vec3(1.0));
+        if ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR) != 0u)
+        {
+            GPUMaterialExtensionData optics = ReadForwardMaterialExtension(
+                uint(material.ExtensionDataIndex), MATERIAL_FEATURE_SPECULAR);
+            specularFactor = clamp(optics.SpecularColor.a, 0.0, 1.0);
+        }
     }
 
     SimpleDdgiGatherResult gather = EmptySimpleDdgiGatherResult();
@@ -5794,7 +5801,7 @@ void main()
     bool gatherContributed = false;
     float radiometricOwnership = 0.0;
     float leakAttenuation = 0.0;
-    if (ForwardGlobalIlluminationEnabled() != 0u)
+    if (specularFactor > 0.0 && ForwardGlobalIlluminationEnabled() != 0u)
     {
         SimpleDdgiParams params = ReadSimpleDdgiParams(
             uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
@@ -5846,7 +5853,7 @@ void main()
 
     GPUEnvironmentData environment = ReadEnvironmentData();
     vec3 reflectedSpecular = vec3(0.0);
-    if (environment.Enabled != 0u)
+    if (specularFactor > 0.0 && environment.Enabled != 0u)
     {
         vec3 reflectionDirection = reflect(-viewDirection, normal);
         float maxLod = max(
@@ -5896,8 +5903,8 @@ void main()
         1.0);
     float glassF0Ratio = (ior - 1.0) / max(ior + 1.0, 0.0001);
     float glassF0 = glassF0Ratio * glassF0Ratio;
-    float glassFresnel = glassF0 +
-        (1.0 - glassF0) * pow(1.0 - glassNdotV, 5.0);
+    float glassFresnel = specularFactor * (glassF0 +
+        (1.0 - glassF0) * pow(1.0 - glassNdotV, 5.0));
     float tintTransmission = dot(
         thinTransmissionTint,
         vec3(0.2126, 0.7152, 0.0722));
@@ -5907,7 +5914,7 @@ void main()
         0.08,
         1.0);
     float outputAlpha = min(materialCoverage.Alpha, glassOpacity);
-    vec3 color = max(reflectedSpecular, vec3(0.0)) / glassOpacity;
+    vec3 color = specularFactor * max(reflectedSpecular, vec3(0.0)) / glassOpacity;
 
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
     EmitSimpleDdgiTransparentReceiverFeedback(
@@ -8282,8 +8289,8 @@ void main()
                     1.0);
                 float glassF0Ratio = (ior - 1.0) / max(ior + 1.0, 0.0001);
                 float glassF0 = glassF0Ratio * glassF0Ratio;
-                float glassFresnel = glassF0 +
-                    (1.0 - glassF0) * pow(1.0 - glassNdotV, 5.0);
+                float glassFresnel = specularFactor * (glassF0 +
+                    (1.0 - glassF0) * pow(1.0 - glassNdotV, 5.0));
                 float tintTransmission = dot(
                     thinTransmissionTint,
                     vec3(0.2126, 0.7152, 0.0722));
@@ -8292,7 +8299,11 @@ void main()
                         tintTransmission * (1.0 - glassFresnel),
                     0.08,
                     1.0);
-                color = max(color, vec3(0.0)) / glassOpacity;
+                // Zero specular explicitly disables sheet reflections,
+                // including the grazing-angle Fresnel tail in the universal path.
+                color = specularFactor > 0.0
+                    ? max(color, vec3(0.0)) / glassOpacity
+                    : vec3(0.0);
                 outputAlpha = min(outputAlpha, glassOpacity);
             }
             else if (extensionEnvironment.Enabled != 0u)

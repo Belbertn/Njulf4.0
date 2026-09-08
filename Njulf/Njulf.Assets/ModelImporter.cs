@@ -1761,6 +1761,7 @@ namespace Njulf.Assets
             target.DoubleSided = material.DoubleSided;
             target.Unlit = material.Unlit ?? target.Unlit;
             target.IsGeometryDecal = material.IsGeometryDecal;
+            target.IsThinGlass = material.IsThinGlass;
             target.DecalLayer = material.DecalLayer;
             target.DecalDepthBias = material.DecalDepthBias;
             target.AlbedoTexturePath = material.BaseColorTexturePath ?? target.AlbedoTexturePath;
@@ -2492,6 +2493,13 @@ namespace Njulf.Assets
                 }
 
                 material.DecalDepthBias = value;
+            }
+
+            if (extras.TryGetProperty(Gltf.SharpGltfModelMeshConverter.ThinGlassExtra, out JsonElement glass))
+            {
+                if (glass.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new InvalidDataException("glTF material extra 'NJULF_thin_glass' must be a boolean.");
+                material.IsThinGlass = glass.GetBoolean();
             }
 
             if (extras.TryGetProperty(
@@ -3403,6 +3411,7 @@ namespace Njulf.Assets
         public bool? AutomaticPlanarReflectionEnabled { get; set; }
         public bool? Unlit { get; set; }
         public bool IsGeometryDecal { get; set; }
+        public bool IsThinGlass { get; set; }
         public int DecalLayer { get; set; }
         public float DecalDepthBias { get; set; }
         public string? BaseColorTexturePath { get; set; }

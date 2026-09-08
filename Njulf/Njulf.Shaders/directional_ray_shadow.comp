@@ -247,13 +247,11 @@ void main()
                 AddCounter(COUNTER_RAYS_SKIPPED, 1u);
                 WriteResult(pixelIndex, 1.0, configuredMaximum, 0u, 2u);
             }
-            else if (normalValid && dot(geometricNormal, centerDirection) < -0.25)
-            {
-                AddCounter(COUNTER_RAYS_SKIPPED, 1u);
-                WriteResult(pixelIndex, 1.0, configuredMaximum, 0u, 4u);
-            }
             else
             {
+                // Depth neighbors can cross folds or silhouettes, and the
+                // forward shading normal can still face the sun. Use this
+                // estimate only for ray bias; it cannot prove visibility.
                 if (!normalValid)
                 {
                     geometricNormal = centerDirection;

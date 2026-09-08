@@ -39,6 +39,12 @@ public sealed class LightManagerSceneLightStore : IMutableSceneLightStore
             yield return ToDocument(record.Id, record.Name, record.Light);
     }
 
+    public SceneLightDocument Describe(Guid id, string? name, Light light) =>
+        ToDocument(id, name, light, AnalyticalLightGeometry.IsPunctual(light.Type)
+            ? ResolvePhotometricProfileReference(light.PhotometricProfile) : null);
+
+    public Light Resolve(SceneLightDocument light) => ToLight(light);
+
     public bool TryUpdate(Guid id, SceneLightDocument source)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -88,7 +94,14 @@ public sealed class LightManagerSceneLightStore : IMutableSceneLightStore
         IesRotationRadians = source.IesRotationRadians
     };
 
-    private SceneLightDocument ToDocument(Guid id, string? name, Light source) => new()
+    private SceneLightDocument ToDocument(Guid id, string? name, Light source) =>
+        ToDocument(id, name, source, AnalyticalLightGeometry.IsPunctual(source.Type)
+            ? _photometricSources.TryGetValue(id, out var profileSource)
+                ? profileSource : ResolvePhotometricProfileReference(source.PhotometricProfile)
+            : null);
+
+    private static SceneLightDocument ToDocument(
+        Guid id, string? name, Light source, SceneAssetReferenceDocument? profile) => new()
     {
         Id = id,
         Name = string.IsNullOrWhiteSpace(name) ? "Light" : name,
@@ -113,11 +126,7 @@ public sealed class LightManagerSceneLightStore : IMutableSceneLightStore
         ShadowNearPlane = source.ShadowNearPlane,
         ShadowFarPlane = source.ShadowFarPlane,
         ShadowPriority = source.ShadowPriority,
-        IesProfile = AnalyticalLightGeometry.IsPunctual(source.Type)
-            ? _photometricSources.TryGetValue(id, out var profileSource)
-                ? profileSource
-                : ResolvePhotometricProfileReference(source.PhotometricProfile)
-            : null,
+        IesProfile = profile,
         IesRotationRadians = source.IesRotationRadians
     };
 

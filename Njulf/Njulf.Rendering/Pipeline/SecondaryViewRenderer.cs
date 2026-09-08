@@ -117,7 +117,9 @@ internal sealed unsafe class SecondaryViewRenderer : IDisposable
             view.Projection, view.LodEnabled, view.LodTargetPixelError, view.LodResourceGeneration,
             view.LodCameraCutSerial), view.LodCaptureSerial);
         SecondaryViewResources.ViewResources resources = _resources.Acquire(frameIndex, slot, scene.DdgiFrameSerial);
+        long drawListStart = _trace ? Stopwatch.GetTimestamp() : 0;
         _scene.BuildSecondaryDrawLists(view, frameIndex, resources.Draws, _cull);
+        double drawListMicroseconds = _trace ? Stopwatch.GetElapsedTime(drawListStart).TotalMicroseconds : 0;
         _resources.Prepare(resources, view, frameIndex, _foliageManager?.GetBuffers(frameIndex) ?? default);
         _foliageCull.ExecuteSecondary(cmd, frameIndex, view, resources.Foliage, resources.StorageSet);
         if (_trace)
@@ -126,7 +128,7 @@ internal sealed unsafe class SecondaryViewRenderer : IDisposable
                 $"{resources.Draws.Opaque[1].Count}/{resources.Draws.Opaque[2].Count}/{resources.Draws.TransparentCommands.Count} " +
                 $"excluded={resources.Draws.ExcludedObjects} culledObjects={resources.Draws.CulledObjects} " +
                 $"culledMeshlets={resources.Draws.CulledMeshlets} region={view.Region.Resolve(view.Width, view.Height)} " +
-                $"prepareUs={Stopwatch.GetElapsedTime(start).TotalMicroseconds:F0} " +
+                $"prepareUs={Stopwatch.GetElapsedTime(start).TotalMicroseconds:F0} drawListUs={drawListMicroseconds:F1} " +
                 $"requestedLods={string.Join('/', resources.Draws.RequestedLods)} " +
                 $"effectiveLods={string.Join('/', resources.Draws.EffectiveLods)} " +
                 $"lodTransitions={resources.Draws.LodTransitions} commandBytes={resources.Draws.CommandBytes}");

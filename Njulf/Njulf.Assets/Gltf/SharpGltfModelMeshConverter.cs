@@ -47,6 +47,7 @@ internal static class SharpGltfModelMeshConverter
     internal const string GiCausticParticipationExtra = "NJULF_gi_caustic_participation";
     internal const string GiCausticCasterPolicyExtra = "NJULF_gi_caustic_caster_policy";
     internal const string OpticalBoundaryKindExtra = "NJULF_optical_boundary_kind";
+    internal const string ThinGlassExtra = "NJULF_thin_glass";
     internal const string ThinTransmissionFactorExtra = "NJULF_thin_transmission_factor";
     internal const string ThinTransmissionTintExtra = "NJULF_thin_transmission_tint";
     internal const string WaterNormalVelocity0Extra = "NJULF_water_normal_velocity_0";
@@ -452,6 +453,13 @@ internal static class SharpGltfModelMeshConverter
             }
 
             imported.DecalDepthBias = (float)bias;
+        }
+
+        if (objectExtras.TryGetPropertyValue(ThinGlassExtra, out JsonNode? glassNode))
+        {
+            if (glassNode is not JsonValue glassValue || !glassValue.TryGetValue(out bool isGlass))
+                throw InvalidMaterialExtra(materialIndex, ThinGlassExtra, "a boolean");
+            imported.IsThinGlass = isGlass;
         }
 
         if (objectExtras.TryGetPropertyValue(GiTransmissionPolicyExtra, out JsonNode? policyNode))

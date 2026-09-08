@@ -66,8 +66,6 @@ internal static class SampleAnalyticalAreaLightRoomScene
         settings.Shadows.DirectionalShadowsEnabled = false;
         settings.Shadows.SpotShadowsEnabled = false;
         settings.Shadows.PointShadowsEnabled = false;
-        settings.Shadows.MaxShadowedSpotLights = 0;
-        settings.Shadows.MaxShadowedPointLights = 0;
         settings.Shadows.AreaShadowsEnabled = true;
         settings.Shadows.MaxShadowedAreaLights = 3;
         settings.Shadows.AreaShadowSampleCount = 2;

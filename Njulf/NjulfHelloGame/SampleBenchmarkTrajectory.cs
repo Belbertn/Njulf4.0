@@ -25,7 +25,9 @@ public enum SampleBenchmarkTrajectoryKind : byte
     BistroSnapshotIncident,
     SponzaSnapshotIncident,
     BistroFoliageIncident,
-    ReflectionLod
+    ReflectionLod,
+    SponzaHiZIncident,
+    SponzaVerticalRefresh
 }
 
 public sealed record SampleBenchmarkCameraPose(
@@ -48,12 +50,14 @@ public static class SampleBenchmarkTrajectory
     public const string BistroLoopName = "bistro-loop";
     public const string SponzaLowName = "sponza-low";
     public const string SponzaHighName = "sponza-high";
+    public const string SponzaHiZIncidentName = "sponza-hiz-incident";
     public const string SponzaReceiverCacheIncidentName =
         "sponza-receiver-cache-incident";
     public const string SponzaSnapshotIncidentName =
         "sponza-snapshot-incident";
     public const string SponzaHorizontalName = "sponza-horizontal";
     public const string SponzaVerticalName = "sponza-vertical";
+    public const string SponzaVerticalRefreshName = "sponza-vertical-refresh";
 
     private const float CameraValueTolerance = 1.0e-4f;
 
@@ -75,21 +79,23 @@ public static class SampleBenchmarkTrajectory
             BistroLoopName => SampleBenchmarkTrajectoryKind.BistroLoop,
             SponzaLowName => SampleBenchmarkTrajectoryKind.SponzaLow,
             SponzaHighName => SampleBenchmarkTrajectoryKind.SponzaHigh,
+            SponzaHiZIncidentName => SampleBenchmarkTrajectoryKind.SponzaHiZIncident,
             SponzaReceiverCacheIncidentName =>
                 SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident,
             SponzaSnapshotIncidentName =>
                 SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident,
             SponzaHorizontalName => SampleBenchmarkTrajectoryKind.SponzaHorizontal,
             SponzaVerticalName => SampleBenchmarkTrajectoryKind.SponzaVertical,
+            SponzaVerticalRefreshName => SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh,
             _ => throw new ArgumentException(
                 $"Unknown benchmark trajectory '{value}'. Valid values: " +
                 $"{StationaryName}, reflection-lod, {BistroPresentationName}, " +
                 $"{BistroSnapshotIncidentName}, {BistroFoliageIncidentName}, " +
                 $"{BistroLoopName}, " +
-                $"{SponzaLowName}, {SponzaHighName}, " +
+                $"{SponzaLowName}, {SponzaHighName}, {SponzaHiZIncidentName}, " +
                 $"{SponzaReceiverCacheIncidentName}, {SponzaSnapshotIncidentName}, " +
                 $"{SponzaHorizontalName}, " +
-                $"{SponzaVerticalName}.",
+                $"{SponzaVerticalName}, {SponzaVerticalRefreshName}.",
                 nameof(value))
         };
     }
@@ -106,12 +112,14 @@ public static class SampleBenchmarkTrajectory
         SampleBenchmarkTrajectoryKind.BistroLoop => BistroLoopName,
         SampleBenchmarkTrajectoryKind.SponzaLow => SponzaLowName,
         SampleBenchmarkTrajectoryKind.SponzaHigh => SponzaHighName,
+        SampleBenchmarkTrajectoryKind.SponzaHiZIncident => SponzaHiZIncidentName,
         SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident =>
             SponzaReceiverCacheIncidentName,
         SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident =>
             SponzaSnapshotIncidentName,
         SampleBenchmarkTrajectoryKind.SponzaHorizontal => SponzaHorizontalName,
         SampleBenchmarkTrajectoryKind.SponzaVertical => SponzaVerticalName,
+        SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh => SponzaVerticalRefreshName,
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
 
@@ -119,7 +127,8 @@ public static class SampleBenchmarkTrajectory
         SampleBenchmarkTrajectoryKind.ReflectionLod or
         SampleBenchmarkTrajectoryKind.BistroLoop or
         SampleBenchmarkTrajectoryKind.SponzaHorizontal or
-        SampleBenchmarkTrajectoryKind.SponzaVertical;
+        SampleBenchmarkTrajectoryKind.SponzaVertical or
+        SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh;
 
     public static bool RequiresBistro(
         SampleBenchmarkTrajectoryKind kind) => kind is
@@ -132,14 +141,17 @@ public static class SampleBenchmarkTrajectory
         SampleBenchmarkTrajectoryKind kind) => kind is
         SampleBenchmarkTrajectoryKind.SponzaLow or
         SampleBenchmarkTrajectoryKind.SponzaHigh or
+        SampleBenchmarkTrajectoryKind.SponzaHiZIncident or
         SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident or
         SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident or
         SampleBenchmarkTrajectoryKind.SponzaHorizontal or
-        SampleBenchmarkTrajectoryKind.SponzaVertical;
+        SampleBenchmarkTrajectoryKind.SponzaVertical or
+        SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh;
 
     public static int GetFrameCount(SampleBenchmarkTrajectoryKind kind) => kind switch
     {
         SampleBenchmarkTrajectoryKind.ReflectionLod => 240,
+        SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh => 240,
         SampleBenchmarkTrajectoryKind.BistroLoop =>
             SampleBistroQualityCaptureContract.LoopFrameCount,
         SampleBenchmarkTrajectoryKind.SponzaHorizontal =>
@@ -179,7 +191,8 @@ public static class SampleBenchmarkTrajectory
         SampleBenchmarkTrajectoryKind kind,
         int absoluteFrameIndex)
     {
-        if (kind == SampleBenchmarkTrajectoryKind.SponzaVertical)
+        if (kind is SampleBenchmarkTrajectoryKind.SponzaVertical or
+            SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh)
             return 0;
         return GetTrajectoryFrameIndex(kind, absoluteFrameIndex);
     }
@@ -189,7 +202,8 @@ public static class SampleBenchmarkTrajectory
         int absoluteFrameIndex)
     {
         if (!IsMoving(kind) ||
-            kind == SampleBenchmarkTrajectoryKind.SponzaVertical)
+            kind is SampleBenchmarkTrajectoryKind.SponzaVertical or
+                SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh)
         {
             return true;
         }
@@ -204,6 +218,8 @@ public static class SampleBenchmarkTrajectory
         string contractFingerprint = kind switch
         {
             SampleBenchmarkTrajectoryKind.ReflectionLod => "reflection-lod-near-far/v1|6..22|240",
+            SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh =>
+                "sponza-vertical-refresh/v1|2..32|rise=90|hold=150|look-down=20260908-061619",
             SampleBenchmarkTrajectoryKind.BistroPresentation or
                 SampleBenchmarkTrajectoryKind.BistroSnapshotIncident or
                 SampleBenchmarkTrajectoryKind.BistroFoliageIncident or
@@ -211,6 +227,7 @@ public static class SampleBenchmarkTrajectory
                 new SampleBistroQualityCaptureContract(bistroVariant).Fingerprint,
             SampleBenchmarkTrajectoryKind.SponzaLow or
                 SampleBenchmarkTrajectoryKind.SponzaHigh or
+                SampleBenchmarkTrajectoryKind.SponzaHiZIncident or
                 SampleBenchmarkTrajectoryKind.SponzaReceiverCacheIncident or
                 SampleBenchmarkTrajectoryKind.SponzaSnapshotIncident or
                 SampleBenchmarkTrajectoryKind.SponzaHorizontal or
@@ -292,6 +309,19 @@ public static class SampleBenchmarkTrajectory
                 MathF.PI / 3.2f, 0.05f, 120);
         }
 
+        if (kind == SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh)
+        {
+            int frame = ValidateFrameIndex(kind, trajectoryFrameIndex);
+            // Reproduce the fast ascent beyond the roof in the 2026-09-08
+            // report. Keep X/Z and orientation fixed, then hold the endpoint
+            // so a deferred repair remains observable after motion stops.
+            float height = 2f + 30f * Math.Min(frame / 90f, 1f);
+            return new SampleBenchmarkCameraPose(
+                "SponzaVerticalRefresh20260908",
+                new Vector3(2.228f, height, -0.1611491f),
+                -1.6782299f, 1.3824875f, 0.98174775f, 0.05f, 250f);
+        }
+
         if (RequiresBistro(kind))
         {
             var contract = new SampleBistroQualityCaptureContract(bistroVariant);
@@ -310,6 +340,16 @@ public static class SampleBenchmarkTrajectory
                     trajectoryFrameIndex))
             };
             return FromBistro(bookmark);
+        }
+
+        if (kind == SampleBenchmarkTrajectoryKind.SponzaHiZIncident)
+        {
+            // Camera from the 2026-09-08 report: distant gallery arches lose
+            // their shaded surface with Hi-Z enabled and recover with F8.
+            return new SampleBenchmarkCameraPose(
+                "SponzaHiZGalleryIncident20260908",
+                new Vector3(8.981506f, 3.3245177f, 4.6348004f),
+                -1.5707964f, -0.26577514f, 0.98174775f, 0.05f, 250f);
         }
 
         SampleSponzaGiCaptureContract sponza =

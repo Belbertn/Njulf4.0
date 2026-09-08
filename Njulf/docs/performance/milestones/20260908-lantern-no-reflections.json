@@ -1,0 +1,40 @@
+{
+  "date": "2026-09-08",
+  "revision": "7eafc485087af01fabfa4a931fb4d03eae93dae7",
+  "dirty": true,
+  "material": "lamp_glass_01",
+  "specularFactor": 0,
+  "transmissionFactor": 0.92,
+  "importTestsPassed": 2,
+  "cookedTestsPassed": 2,
+  "buildErrors": 0,
+  "buildWarnings": 0,
+  "cookWarnings": 0,
+  "cookSeconds": 342.523,
+  "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+  "resolution": "1600x900",
+  "scenario": "GiSponzaRightWallStationary",
+  "validationMode": "Standard",
+  "validationWarnings": 0,
+  "validationErrors": 0,
+  "thinGlassObjects": 1,
+  "thinGlassMeshlets": 1,
+  "thinGlassDirectionalOnlyPipelineEnabled": 0,
+  "screenshot": "artifacts/material-glass/sponza-no-reflections/gi-sponza-right-wall-stationary/exact-camera.png",
+  "imageResult": "Reflected bulb highlight removed; bulb and background remain visible through glass.",
+  "performanceComparison": null,
+  "shaderArtifacts": [
+    {
+      "name": "forward_transparent_thin_glass.frag.spv",
+      "hash": "209513da1b1954deb9256ba4142ca80b14454ed93fae2a1e7323ab13da0836f8"
+    },
+    {
+      "name": "forward_transparent_thin_glass_ddgi_b1.frag.spv",
+      "hash": "c8fffbb895b1ba982cd34e88af886f60fa54eca2599626c5a9f761679815e12f"
+    },
+    {
+      "name": "forward_transparent_thin_glass_ray.frag.spv",
+      "hash": "38eede3acd894508c5de63c5f08ca2af5200fbee1999d951933648521363fbd9"
+    }
+  ]
+}

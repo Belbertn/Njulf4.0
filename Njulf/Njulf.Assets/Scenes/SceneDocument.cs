@@ -13,6 +13,9 @@ public sealed class SceneDocument
     public string Name { get; init; } = "Scene";
     public SceneColor AmbientLight { get; init; } = new(0.2f, 0.2f, 0.2f, 1f);
     public bool ImportedModelLightsEnabled { get; init; }
+    public bool ImportedDirectionalLightEnabled { get; init; }
+    public bool ImportedModelLightShadowsEnabled { get; init; }
+    public List<SceneImportedLightOverrideDocument> ImportedLightOverrides { get; init; } = [];
     public List<SceneObjectDocument> Objects { get; init; } = [];
     public List<SceneLightDocument> Lights { get; init; } = [];
     public List<SceneReflectionProbeDocument> ReflectionProbes { get; init; } = [];
