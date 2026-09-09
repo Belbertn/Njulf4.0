@@ -12,5 +12,8 @@ public sealed class ContentLoadOptions
     /// </summary>
     public bool RequireCooked { get; init; }
 
+    /// <summary>Observes this request; does not affect cache identity.</summary>
+    public IProgress<ContentLoadProgressEvent>? Progress { get; init; }
+
     public static ContentLoadOptions Default { get; } = new();
 }

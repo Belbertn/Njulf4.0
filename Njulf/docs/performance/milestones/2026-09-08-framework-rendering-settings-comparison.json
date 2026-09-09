@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-08",
+  "revision": "7ce858e642b7937789b33a1e3ab9978792b8d15b",
+  "sourceState": "dirty; earlier framework and user changes preserved; before/after item 7-8 implementation",
+  "workload": "Development API procedural example, 960x640, default DdgiHigh, exposure 0.01, auto exposure off, default AA, no custom passes, validation off, screenshot at full-quality frame 120, exit at 360",
+  "hardware": "Ryzen 5 5600H; RTX 3060 Laptop; NVIDIA 32.0.16.1062",
+  "before": {
+    "samples": 240,
+    "frameIntervalMedianMs": 16.575,
+    "frameIntervalP95Ms": 19.589,
+    "frameIntervalP99Ms": 23.455,
+    "processAllocatedBytesFromFrame120ThroughShutdown": 545187224,
+    "pngSha256": "87E6AC30DF47FBC99F72AA8C5B03DC1E56A56217F862FF6425A546BEF39BE717"
+  },
+  "after": {
+    "samples": 240,
+    "frameIntervalMedianMs": 16.687,
+    "frameIntervalP95Ms": 18.610,
+    "frameIntervalP99Ms": 22.507,
+    "processAllocatedBytesFromFrame120ThroughShutdown": 185884272,
+    "pngSha256": "DC5C10C66495E62C324B8AA63FDF9502394937C23DFE5365C642B02F8C78D985"
+  },
+  "decision": "Performance inconclusive; no speedup or allocation improvement claimed",
+  "limitations": [
+    "Single frame-paced pair, not isolated CPU/GPU timings or release qualification",
+    "Allocation totals include screenshot, background work and shutdown; not per-frame allocation evidence",
+    "Warm cache membership differs; candidate log contains a 1630.978 ms frame hitch dominated by PrepareScene",
+    "Maximum sample and complete timing series were not retained; p99 does not bound a rare hitch",
+    "Images visually match; PNG hashes differ and pixel equality was not asserted",
+    "Final cancellation refinements were made after this pair; they add no work when no settings request is pending"
+  ]
+}

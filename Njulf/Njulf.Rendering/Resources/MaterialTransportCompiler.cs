@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 

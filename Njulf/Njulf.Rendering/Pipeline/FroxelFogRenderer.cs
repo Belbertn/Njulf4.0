@@ -3,6 +3,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;

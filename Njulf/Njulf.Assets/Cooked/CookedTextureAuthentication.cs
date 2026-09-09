@@ -1,3 +1,5 @@
+using Njulf.Graphics;
+
 namespace Njulf.Assets.Cooked;
 
 /// <summary>
@@ -114,7 +116,7 @@ public static class CookedTextureAuthentication
         }
 
         (int width, int height, int mipCount, uint format) =
-            TextureCooker.Inspect(ktx2Bytes, fullKtx2Path);
+            TextureSourceDecoder.Inspect(ktx2Bytes, fullKtx2Path);
         if (metadata.CookedWidth != width ||
             metadata.CookedHeight != height ||
             metadata.MipCount != mipCount ||

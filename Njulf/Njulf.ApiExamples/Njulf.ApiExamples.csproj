@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
+    <ProjectReference Include="..\Njulf.Graphics\Njulf.Graphics.csproj" />
+    <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
+    <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
+    <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />
+    <None Update="Assets\tetrahedron.gltf" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Njulf.Framework\Njulf.Framework.csproj" />
+  </ItemGroup>
+</Project>

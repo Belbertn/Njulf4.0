@@ -1,3 +1,4 @@
+using Njulf.Graphics;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;

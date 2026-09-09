@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;

@@ -5,6 +5,7 @@ using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -740,7 +741,7 @@ internal sealed class DdgiEmissiveTransportCoordinator : IDisposable
             RenderObject renderObject = scene.RenderObjects[objectIndex];
             if (!renderObject.Enabled ||
                 !renderObject.Visible ||
-                renderObject.Mesh is not MeshHandle meshHandle ||
+                !(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) ||
                 !meshHandle.IsValid ||
                 !TryResolveDdgiEmissiveMaterial(
                     renderObject.Material,
@@ -793,7 +794,7 @@ internal sealed class DdgiEmissiveTransportCoordinator : IDisposable
         {
             StaticInstanceBatch batch = scene.StaticInstanceBatches[batchIndex];
             if (!batch.Visible ||
-                batch.Mesh is not MeshHandle meshHandle ||
+                !(batch.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) ||
                 !meshHandle.IsValid ||
                 !TryResolveDdgiEmissiveMaterial(
                     batch.Material,
@@ -1261,7 +1262,7 @@ internal sealed class DdgiEmissiveTransportCoordinator : IDisposable
 
         if (!renderObject.Enabled ||
             !renderObject.Visible ||
-            renderObject.Mesh is not MeshHandle meshHandle ||
+            !(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) ||
             !meshHandle.IsValid)
         {
             return false;

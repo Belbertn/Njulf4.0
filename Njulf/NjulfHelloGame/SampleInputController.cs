@@ -6,6 +6,7 @@ using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Debug;
 using Njulf.Input;
 using Njulf.Rendering.Data;
@@ -213,6 +214,81 @@ internal sealed class SampleInputController
 
     private readonly FirstPersonCamera _camera;
     private readonly IInputManager _input;
+    private readonly InputAction _actionAmbientOcclusionIntensityDown;
+    private readonly InputAction _actionAmbientOcclusionIntensityUp;
+    private readonly InputAction _actionAmbientOcclusionRadiusDown;
+    private readonly InputAction _actionAmbientOcclusionRadiusUp;
+    private readonly InputAction _actionBloomIntensityDown;
+    private readonly InputAction _actionBloomIntensityUp;
+    private readonly InputAction _actionBloomRadiusDown;
+    private readonly InputAction _actionBloomRadiusUp;
+    private readonly InputAction _actionBloomThresholdDown;
+    private readonly InputAction _actionBloomThresholdUp;
+    private readonly InputAction _actionCycleAmbientOcclusionDebug;
+    private readonly InputAction _actionCycleAntiAliasingDebug;
+    private readonly InputAction _actionCycleAntiAliasingMode;
+    private readonly InputAction _actionCycleBloomDebug;
+    private readonly InputAction _actionCycleBloomDebugMip;
+    private readonly InputAction _actionCycleFogDebug;
+    private readonly InputAction _actionCycleParticleDebug;
+    private readonly InputAction _actionCycleReflectionDebug;
+    private readonly InputAction _actionCycleReflectionMode;
+    private readonly InputAction _actionCycleScene;
+    private readonly InputAction _actionCycleShadowCascadeCount;
+    private readonly InputAction _actionCycleShadowDebug;
+    private readonly InputAction _actionCycleToneMapper;
+    private readonly InputAction _actionExitGame;
+    private readonly InputAction _actionExposureDown;
+    private readonly InputAction _actionExposureUp;
+    private readonly InputAction _actionFogDensityDown;
+    private readonly InputAction _actionFogDensityUp;
+    private readonly InputAction _actionFogHeightDensityDown;
+    private readonly InputAction _actionFogHeightDensityUp;
+    private readonly InputAction _actionFogStartDistanceDown;
+    private readonly InputAction _actionFogStartDistanceUp;
+    private readonly InputAction _actionFullModelView;
+    private readonly InputAction _actionInteriorView;
+    private readonly InputAction _actionLookDown;
+    private readonly InputAction _actionLookLeft;
+    private readonly InputAction _actionLookRight;
+    private readonly InputAction _actionLookUp;
+    private readonly InputAction _actionMoveBackward;
+    private readonly InputAction _actionMoveDown;
+    private readonly InputAction _actionMoveForward;
+    private readonly InputAction _actionMoveLeft;
+    private readonly InputAction _actionMoveRight;
+    private readonly InputAction _actionMoveUp;
+    private readonly InputAction _actionPauseParticles;
+    private readonly InputAction _actionPointShadowBiasDown;
+    private readonly InputAction _actionPointShadowBiasUp;
+    private readonly InputAction _actionPointShadowBudgetDown;
+    private readonly InputAction _actionPointShadowBudgetUp;
+    private readonly InputAction _actionPrintSelectedObject;
+    private readonly InputAction _actionRequestRenderDocCapture;
+    private readonly InputAction _actionRequestScreenshot;
+    private readonly InputAction _actionRestartParticlesFixedSeed;
+    private readonly InputAction _actionShadowNormalBiasDown;
+    private readonly InputAction _actionShadowNormalBiasUp;
+    private readonly InputAction _actionSpotShadowBiasDown;
+    private readonly InputAction _actionSpotShadowBiasUp;
+    private readonly InputAction _actionSpotShadowBudgetDown;
+    private readonly InputAction _actionSpotShadowBudgetUp;
+    private readonly InputAction _actionToggleAmbientOcclusion;
+    private readonly InputAction _actionToggleBloom;
+    private readonly InputAction _actionToggleDebugTooling;
+    private readonly InputAction _actionToggleFog;
+    private readonly InputAction _actionToggleFogInscattering;
+    private readonly InputAction _actionToggleHiZ;
+    private readonly InputAction _actionToggleMeshletDebug;
+    private readonly InputAction _actionToggleParticles;
+    private readonly InputAction _actionTogglePointShadows;
+    private readonly InputAction _actionToggleRawHdr;
+    private readonly InputAction _actionToggleReflectionBoxProjection;
+    private readonly InputAction _actionToggleReflections;
+    private readonly InputAction _actionToggleShadows;
+    private readonly InputAction _actionToggleSoftParticles;
+    private readonly InputAction _actionToggleSpotShadows;
+    private readonly InputAction _actionToggleTransparent;
     private readonly InputManager? _rawInput;
     private readonly System.Action _exit;
     private readonly Njulf.Rendering.VulkanRenderer? _renderer;
@@ -383,6 +459,81 @@ internal sealed class SampleInputController
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
         _input = input ?? throw new ArgumentNullException(nameof(input));
         _rawInput = input as InputManager;
+        _actionAmbientOcclusionIntensityDown = input.GetAction(AmbientOcclusionIntensityDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionAmbientOcclusionIntensityUp = input.GetAction(AmbientOcclusionIntensityUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionAmbientOcclusionRadiusDown = input.GetAction(AmbientOcclusionRadiusDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionAmbientOcclusionRadiusUp = input.GetAction(AmbientOcclusionRadiusUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionBloomIntensityDown = input.GetAction(BloomIntensityDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionBloomIntensityUp = input.GetAction(BloomIntensityUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionBloomRadiusDown = input.GetAction(BloomRadiusDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionBloomRadiusUp = input.GetAction(BloomRadiusUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionBloomThresholdDown = input.GetAction(BloomThresholdDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionBloomThresholdUp = input.GetAction(BloomThresholdUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleAmbientOcclusionDebug = input.GetAction(CycleAmbientOcclusionDebug) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleAntiAliasingDebug = input.GetAction(CycleAntiAliasingDebug) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleAntiAliasingMode = input.GetAction(CycleAntiAliasingMode) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleBloomDebug = input.GetAction(CycleBloomDebug) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleBloomDebugMip = input.GetAction(CycleBloomDebugMip) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleFogDebug = input.GetAction(CycleFogDebug) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleParticleDebug = input.GetAction(CycleParticleDebug) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleReflectionDebug = input.GetAction(CycleReflectionDebug) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleReflectionMode = input.GetAction(CycleReflectionMode) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleScene = input.GetAction(CycleScene) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleShadowCascadeCount = input.GetAction(CycleShadowCascadeCount) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleShadowDebug = input.GetAction(CycleShadowDebug) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionCycleToneMapper = input.GetAction(CycleToneMapper) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionExitGame = input.GetAction(ExitGame) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionExposureDown = input.GetAction(ExposureDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionExposureUp = input.GetAction(ExposureUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionFogDensityDown = input.GetAction(FogDensityDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionFogDensityUp = input.GetAction(FogDensityUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionFogHeightDensityDown = input.GetAction(FogHeightDensityDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionFogHeightDensityUp = input.GetAction(FogHeightDensityUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionFogStartDistanceDown = input.GetAction(FogStartDistanceDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionFogStartDistanceUp = input.GetAction(FogStartDistanceUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionFullModelView = input.GetAction(FullModelView) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionInteriorView = input.GetAction(InteriorView) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionLookDown = input.GetAction(LookDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionLookLeft = input.GetAction(LookLeft) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionLookRight = input.GetAction(LookRight) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionLookUp = input.GetAction(LookUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionMoveBackward = input.GetAction(MoveBackward) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionMoveDown = input.GetAction(MoveDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionMoveForward = input.GetAction(MoveForward) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionMoveLeft = input.GetAction(MoveLeft) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionMoveRight = input.GetAction(MoveRight) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionMoveUp = input.GetAction(MoveUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionPauseParticles = input.GetAction(PauseParticles) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionPointShadowBiasDown = input.GetAction(PointShadowBiasDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionPointShadowBiasUp = input.GetAction(PointShadowBiasUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionPointShadowBudgetDown = input.GetAction(PointShadowBudgetDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionPointShadowBudgetUp = input.GetAction(PointShadowBudgetUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionPrintSelectedObject = input.GetAction(PrintSelectedObject) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionRequestRenderDocCapture = input.GetAction(RequestRenderDocCapture) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionRequestScreenshot = input.GetAction(RequestScreenshot) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionRestartParticlesFixedSeed = input.GetAction(RestartParticlesFixedSeed) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionShadowNormalBiasDown = input.GetAction(ShadowNormalBiasDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionShadowNormalBiasUp = input.GetAction(ShadowNormalBiasUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionSpotShadowBiasDown = input.GetAction(SpotShadowBiasDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionSpotShadowBiasUp = input.GetAction(SpotShadowBiasUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionSpotShadowBudgetDown = input.GetAction(SpotShadowBudgetDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionSpotShadowBudgetUp = input.GetAction(SpotShadowBudgetUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleAmbientOcclusion = input.GetAction(ToggleAmbientOcclusion) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleBloom = input.GetAction(ToggleBloom) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleDebugTooling = input.GetAction(ToggleDebugTooling) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleFog = input.GetAction(ToggleFog) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleFogInscattering = input.GetAction(ToggleFogInscattering) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleHiZ = input.GetAction(ToggleHiZ) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleMeshletDebug = input.GetAction(ToggleMeshletDebug) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleParticles = input.GetAction(ToggleParticles) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionTogglePointShadows = input.GetAction(TogglePointShadows) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleRawHdr = input.GetAction(ToggleRawHdr) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleReflectionBoxProjection = input.GetAction(ToggleReflectionBoxProjection) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleReflections = input.GetAction(ToggleReflections) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleShadows = input.GetAction(ToggleShadows) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleSoftParticles = input.GetAction(ToggleSoftParticles) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleSpotShadows = input.GetAction(ToggleSpotShadows) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
+        _actionToggleTransparent = input.GetAction(ToggleTransparent) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _renderer = renderer;
         _lightManager = lightManager;
@@ -413,7 +564,7 @@ internal sealed class SampleInputController
 
     public void Update(float deltaTime, int viewportWidth, int viewportHeight)
     {
-        if (_input.IsKeyDown(ExitGame))
+        if (_actionExitGame.IsDown)
             _exit();
 
         if (_suppressGameInput?.Invoke() == true)
@@ -445,22 +596,22 @@ internal sealed class SampleInputController
             return;
         }
 
-        if (WasPressed(FullModelView, ref _fullModelPressed))
+        if (WasPressed(_actionFullModelView, ref _fullModelPressed))
         {
             ApplyPerformanceScenario(SamplePerformanceScenario.Normal);
             MoveCamera(FullModelPosition, FullModelYaw, FullModelPitch);
         }
 
-        if (WasPressed(InteriorView, ref _interiorPressed))
+        if (WasPressed(_actionInteriorView, ref _interiorPressed))
         {
             ApplyPerformanceScenario(SamplePerformanceScenario.Normal);
             MoveCamera(InteriorPosition, InteriorYaw, InteriorPitch);
         }
 
-        if (WasPressed(CycleScene, ref _cycleScenePressed))
+        if (WasPressed(_actionCycleScene, ref _cycleScenePressed))
             _cycleScene?.Invoke();
 
-        if (_renderer != null && WasPressed(ToggleHiZ, ref _toggleHiZPressed))
+        if (_renderer != null && WasPressed(_actionToggleHiZ, ref _toggleHiZPressed))
         {
             _renderer.EnableHiZOcclusion = !_renderer.EnableHiZOcclusion;
             _renderer.Settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled = _renderer.EnableHiZOcclusion;
@@ -471,14 +622,14 @@ internal sealed class SampleInputController
                 $"current-frame={(_renderer.Settings.HiZOcclusion.CurrentFrameForwardVisibilityEnabled ? "on" : "off")}");
         }
 
-        if (_renderer != null && WasPressed(ToggleTransparent, ref _toggleTransparentPressed))
+        if (_renderer != null && WasPressed(_actionToggleTransparent, ref _toggleTransparentPressed))
         {
             _renderer.EnableTransparentPass = !_renderer.EnableTransparentPass;
             _renderer.Settings.Transparency.Enabled = _renderer.EnableTransparentPass;
             PrintTransparencySettings("Transparent pass");
         }
 
-        if (_renderer != null && WasPressed(ToggleMeshletDebug, ref _toggleMeshletDebugPressed))
+        if (_renderer != null && WasPressed(_actionToggleMeshletDebug, ref _toggleMeshletDebugPressed))
         {
             _renderer.EnableMeshletDebugView = !_renderer.EnableMeshletDebugView;
             Console.WriteLine($"Meshlet debug view: {(_renderer.EnableMeshletDebugView ? "enabled" : "disabled")}");
@@ -582,7 +733,7 @@ internal sealed class SampleInputController
             PrintAnimationSettings("Animation debug");
         }
 
-        if (_renderer != null && WasPressed(CycleToneMapper, ref _cycleToneMapperPressed))
+        if (_renderer != null && WasPressed(_actionCycleToneMapper, ref _cycleToneMapperPressed))
         {
             _renderer.Settings.ToneMapper = _renderer.Settings.ToneMapper switch
             {
@@ -593,7 +744,7 @@ internal sealed class SampleInputController
             Console.WriteLine($"Tone mapper: {_renderer.Settings.ToneMapper}");
         }
 
-        if (_renderer != null && WasPressed(ToggleRawHdr, ref _toggleRawHdrPressed))
+        if (_renderer != null && WasPressed(_actionToggleRawHdr, ref _toggleRawHdrPressed))
         {
             _renderer.Settings.ShowRawHdrSceneColor = !_renderer.Settings.ShowRawHdrSceneColor;
             Console.WriteLine($"Raw HDR view: {(_renderer.Settings.ShowRawHdrSceneColor ? "enabled" : "disabled")}");
@@ -605,30 +756,30 @@ internal sealed class SampleInputController
             PrintExposureSettings("Auto exposure");
         }
 
-        if (_renderer != null && WasPressed(ToggleBloom, ref _toggleBloomPressed))
+        if (_renderer != null && WasPressed(_actionToggleBloom, ref _toggleBloomPressed))
         {
             _renderer.Settings.Bloom.Enabled = !_renderer.Settings.Bloom.Enabled;
             PrintBloomSettings("Bloom");
         }
 
-        if (_renderer != null && WasPressed(ToggleShadows, ref _toggleShadowsPressed))
+        if (_renderer != null && WasPressed(_actionToggleShadows, ref _toggleShadowsPressed))
         {
             ToggleAllShadowsForDiagnostics();
         }
 
-        if (_renderer != null && WasPressed(ToggleSpotShadows, ref _toggleSpotShadowsPressed))
+        if (_renderer != null && WasPressed(_actionToggleSpotShadows, ref _toggleSpotShadowsPressed))
         {
             _renderer.Settings.Shadows.SpotShadowsEnabled = !_renderer.Settings.Shadows.SpotShadowsEnabled;
             PrintShadowSettings("Spot shadows");
         }
 
-        if (_renderer != null && WasPressed(TogglePointShadows, ref _togglePointShadowsPressed))
+        if (_renderer != null && WasPressed(_actionTogglePointShadows, ref _togglePointShadowsPressed))
         {
             _renderer.Settings.Shadows.PointShadowsEnabled = !_renderer.Settings.Shadows.PointShadowsEnabled;
             PrintShadowSettings("Point shadows");
         }
 
-        if (_renderer != null && WasPressed(ToggleAmbientOcclusion, ref _toggleAmbientOcclusionPressed))
+        if (_renderer != null && WasPressed(_actionToggleAmbientOcclusion, ref _toggleAmbientOcclusionPressed))
         {
             _renderer.Settings.AmbientOcclusion.Enabled = !_renderer.Settings.AmbientOcclusion.Enabled;
             PrintAmbientOcclusionSettings("AO");
@@ -666,25 +817,25 @@ internal sealed class SampleInputController
         if (_renderer != null && WasChordPressed(Key.R, ref _printDdgiDiagnosticsPressed))
             PrintDdgiDiagnostics("DDGI diagnostics");
 
-        if (_renderer != null && WasPressed(ToggleFog, ref _toggleFogPressed))
+        if (_renderer != null && WasPressed(_actionToggleFog, ref _toggleFogPressed))
         {
             _renderer.Settings.Fog.Enabled = !_renderer.Settings.Fog.Enabled;
             PrintFogSettings("Fog");
         }
 
-        if (_renderer != null && WasPressed(ToggleReflections, ref _toggleReflectionsPressed))
+        if (_renderer != null && WasPressed(_actionToggleReflections, ref _toggleReflectionsPressed))
         {
             _renderer.Settings.Reflections.Enabled = !_renderer.Settings.Reflections.Enabled;
             PrintReflectionSettings("Reflections");
         }
 
-        if (_renderer != null && WasPressed(ToggleParticles, ref _toggleParticlesPressed))
+        if (_renderer != null && WasPressed(_actionToggleParticles, ref _toggleParticlesPressed))
         {
             _renderer.Settings.Particles.Enabled = !_renderer.Settings.Particles.Enabled;
             PrintParticleSettings("Particles");
         }
 
-        if (_renderer != null && WasPressed(ToggleDebugTooling, ref _toggleDebugToolingPressed))
+        if (_renderer != null && WasPressed(_actionToggleDebugTooling, ref _toggleDebugToolingPressed))
         {
             _renderer.Settings.Debug.Enabled = !_renderer.Settings.Debug.Enabled;
             _renderer.Settings.Debug.CpuSnapshotsEnabled = _renderer.Settings.Debug.Enabled;
@@ -708,7 +859,7 @@ internal sealed class SampleInputController
             PrintDebugSettings("Debug overlay");
         }
 
-        if (_renderer != null && WasPressed(RequestScreenshot, ref _requestScreenshotPressed))
+        if (_renderer != null && WasPressed(_actionRequestScreenshot, ref _requestScreenshotPressed))
         {
             _renderer.Settings.Debug.Enabled = true;
             _renderer.Settings.Debug.AllowScreenshots = true;
@@ -717,7 +868,7 @@ internal sealed class SampleInputController
             Console.WriteLine(screenshotPath == null ? "Screenshot requested." : $"Screenshot requested: {screenshotPath}");
         }
 
-        if (_renderer != null && WasPressed(RequestRenderDocCapture, ref _requestRenderDocCapturePressed))
+        if (_renderer != null && WasPressed(_actionRequestRenderDocCapture, ref _requestRenderDocCapturePressed))
         {
             _renderer.Settings.Debug.Enabled = true;
             _renderer.Settings.Debug.AllowRenderDocCapture = true;
@@ -733,10 +884,10 @@ internal sealed class SampleInputController
         if (_renderer != null && WasChordPressed(Key.Right, ref _nextSelectedObjectPressed))
             SelectDebugObject(1);
 
-        if (_renderer != null && WasPressed(PrintSelectedObject, ref _printSelectedObjectPressed))
+        if (_renderer != null && WasPressed(_actionPrintSelectedObject, ref _printSelectedObjectPressed))
             PrintSelectedObjectInspection();
 
-        if (_renderer != null && WasPressed(CycleParticleDebug, ref _cycleParticleDebugPressed))
+        if (_renderer != null && WasPressed(_actionCycleParticleDebug, ref _cycleParticleDebugPressed))
         {
             _renderer.Settings.Particles.DebugView = _renderer.Settings.Particles.DebugView switch
             {
@@ -752,7 +903,7 @@ internal sealed class SampleInputController
             PrintParticleSettings("Particle debug");
         }
 
-        if (WasPressed(PauseParticles, ref _pauseParticlesPressed))
+        if (WasPressed(_actionPauseParticles, ref _pauseParticlesPressed))
         {
             _particlesPaused = !_particlesPaused;
             for (int i = 0; i < _particleEffects.Count; i++)
@@ -765,7 +916,7 @@ internal sealed class SampleInputController
             Console.WriteLine($"Particles playback: {(_particlesPaused ? "paused" : "playing")}");
         }
 
-        if (WasPressed(RestartParticlesFixedSeed, ref _restartParticlesFixedSeedPressed))
+        if (WasPressed(_actionRestartParticlesFixedSeed, ref _restartParticlesFixedSeedPressed))
         {
             for (int i = 0; i < _particleEffects.Count; i++)
                 _particleEffects[i].Restart((uint)(1000 + i * 101));
@@ -773,13 +924,13 @@ internal sealed class SampleInputController
             Console.WriteLine("Particles restarted with fixed sample seeds.");
         }
 
-        if (_renderer != null && WasPressed(ToggleSoftParticles, ref _toggleSoftParticlesPressed))
+        if (_renderer != null && WasPressed(_actionToggleSoftParticles, ref _toggleSoftParticlesPressed))
         {
             _renderer.Settings.Particles.SoftParticlesEnabled = !_renderer.Settings.Particles.SoftParticlesEnabled;
             PrintParticleSettings("Soft particles");
         }
 
-        if (_renderer != null && WasPressed(CycleShadowDebug, ref _cycleShadowDebugPressed))
+        if (_renderer != null && WasPressed(_actionCycleShadowDebug, ref _cycleShadowDebugPressed))
         {
             _renderer.Settings.Shadows.DebugView = _renderer.Settings.Shadows.DebugView switch
             {
@@ -793,14 +944,14 @@ internal sealed class SampleInputController
             PrintShadowSettings("Shadow debug");
         }
 
-        if (_renderer != null && WasPressed(CycleShadowCascadeCount, ref _cycleShadowCascadeCountPressed))
+        if (_renderer != null && WasPressed(_actionCycleShadowCascadeCount, ref _cycleShadowCascadeCountPressed))
         {
             _renderer.Settings.Shadows.DirectionalCascadeCount =
                 _renderer.Settings.Shadows.DirectionalCascadeCount % ShadowSettings.MaxDirectionalCascades + 1;
             PrintShadowSettings("Shadow cascades");
         }
 
-        if (_renderer != null && WasPressed(CycleBloomDebug, ref _cycleBloomDebugPressed))
+        if (_renderer != null && WasPressed(_actionCycleBloomDebug, ref _cycleBloomDebugPressed))
         {
             _renderer.Settings.Bloom.DebugView = _renderer.Settings.Bloom.DebugView switch
             {
@@ -813,13 +964,13 @@ internal sealed class SampleInputController
             PrintBloomSettings("Bloom debug");
         }
 
-        if (_renderer != null && WasPressed(CycleBloomDebugMip, ref _cycleBloomDebugMipPressed))
+        if (_renderer != null && WasPressed(_actionCycleBloomDebugMip, ref _cycleBloomDebugMipPressed))
         {
             _renderer.Settings.Bloom.DebugMipLevel = (_renderer.Settings.Bloom.DebugMipLevel + 1) % _renderer.Settings.Bloom.MipCount;
             PrintBloomSettings("Bloom debug mip");
         }
 
-        if (_renderer != null && WasPressed(CycleAmbientOcclusionDebug, ref _cycleAmbientOcclusionDebugPressed))
+        if (_renderer != null && WasPressed(_actionCycleAmbientOcclusionDebug, ref _cycleAmbientOcclusionDebugPressed))
         {
             _renderer.Settings.AmbientOcclusion.DebugView = _renderer.Settings.AmbientOcclusion.DebugView switch
             {
@@ -908,7 +1059,7 @@ internal sealed class SampleInputController
             ChangeFogDebugSlice(1);
         }
 
-        if (_renderer != null && WasPressed(CycleFogDebug, ref _cycleFogDebugPressed))
+        if (_renderer != null && WasPressed(_actionCycleFogDebug, ref _cycleFogDebugPressed))
         {
             _renderer.Settings.Fog.DebugView = _renderer.Settings.Fog.DebugView switch
             {
@@ -932,7 +1083,7 @@ internal sealed class SampleInputController
             PrintFogSettings("Fog debug");
         }
 
-        if (_renderer != null && WasPressed(CycleReflectionDebug, ref _cycleReflectionDebugPressed))
+        if (_renderer != null && WasPressed(_actionCycleReflectionDebug, ref _cycleReflectionDebugPressed))
         {
             _renderer.Settings.Reflections.DebugView = _renderer.Settings.Reflections.DebugView switch
             {
@@ -957,7 +1108,7 @@ internal sealed class SampleInputController
             PrintReflectionSettings("Reflection debug");
         }
 
-        if (_renderer != null && WasPressed(CycleReflectionMode, ref _cycleReflectionModePressed))
+        if (_renderer != null && WasPressed(_actionCycleReflectionMode, ref _cycleReflectionModePressed))
         {
             _renderer.Settings.Reflections.Mode = _renderer.Settings.Reflections.Mode switch
             {
@@ -980,13 +1131,13 @@ internal sealed class SampleInputController
             PrintGlobalIlluminationSettings("GI mode");
         }
 
-        if (_renderer != null && WasPressed(ToggleReflectionBoxProjection, ref _toggleReflectionBoxProjectionPressed))
+        if (_renderer != null && WasPressed(_actionToggleReflectionBoxProjection, ref _toggleReflectionBoxProjectionPressed))
         {
             _renderer.Settings.Reflections.BoxProjectionEnabled = !_renderer.Settings.Reflections.BoxProjectionEnabled;
             PrintReflectionSettings("Reflection box projection");
         }
 
-        if (_renderer != null && WasPressed(CycleAntiAliasingMode, ref _cycleAntiAliasingModePressed))
+        if (_renderer != null && WasPressed(_actionCycleAntiAliasingMode, ref _cycleAntiAliasingModePressed))
         {
             _renderer.Settings.AntiAliasing.Mode = _renderer.Settings.AntiAliasing.Mode switch
             {
@@ -1000,7 +1151,7 @@ internal sealed class SampleInputController
             PrintAntiAliasingSettings("AA mode");
         }
 
-        if (_renderer != null && WasPressed(CycleAntiAliasingDebug, ref _cycleAntiAliasingDebugPressed))
+        if (_renderer != null && WasPressed(_actionCycleAntiAliasingDebug, ref _cycleAntiAliasingDebugPressed))
         {
             _renderer.Settings.AntiAliasing.DebugView = _renderer.Settings.AntiAliasing.DebugView switch
             {
@@ -1016,67 +1167,67 @@ internal sealed class SampleInputController
             PrintAntiAliasingSettings("AA debug");
         }
 
-        if (_renderer != null && WasPressed(BloomIntensityDown, ref _bloomIntensityDownPressed))
+        if (_renderer != null && WasPressed(_actionBloomIntensityDown, ref _bloomIntensityDownPressed))
         {
             _renderer.Settings.Bloom.Intensity -= 0.02f;
             PrintBloomSettings("Bloom intensity");
         }
 
-        if (_renderer != null && WasPressed(BloomIntensityUp, ref _bloomIntensityUpPressed))
+        if (_renderer != null && WasPressed(_actionBloomIntensityUp, ref _bloomIntensityUpPressed))
         {
             _renderer.Settings.Bloom.Intensity += 0.02f;
             PrintBloomSettings("Bloom intensity");
         }
 
-        if (_renderer != null && WasPressed(BloomThresholdDown, ref _bloomThresholdDownPressed))
+        if (_renderer != null && WasPressed(_actionBloomThresholdDown, ref _bloomThresholdDownPressed))
         {
             _renderer.Settings.Bloom.Threshold -= 0.1f;
             PrintBloomSettings("Bloom threshold");
         }
 
-        if (_renderer != null && WasPressed(BloomThresholdUp, ref _bloomThresholdUpPressed))
+        if (_renderer != null && WasPressed(_actionBloomThresholdUp, ref _bloomThresholdUpPressed))
         {
             _renderer.Settings.Bloom.Threshold += 0.1f;
             PrintBloomSettings("Bloom threshold");
         }
 
-        if (_renderer != null && WasPressed(BloomRadiusDown, ref _bloomRadiusDownPressed))
+        if (_renderer != null && WasPressed(_actionBloomRadiusDown, ref _bloomRadiusDownPressed))
         {
             _renderer.Settings.Bloom.Radius -= 0.05f;
             PrintBloomSettings("Bloom radius");
         }
 
-        if (_renderer != null && WasPressed(BloomRadiusUp, ref _bloomRadiusUpPressed))
+        if (_renderer != null && WasPressed(_actionBloomRadiusUp, ref _bloomRadiusUpPressed))
         {
             _renderer.Settings.Bloom.Radius += 0.05f;
             PrintBloomSettings("Bloom radius");
         }
 
-        if (_renderer != null && !IsControlDown() && WasPressed(ExposureDown, ref _exposureDownPressed))
+        if (_renderer != null && !IsControlDown() && WasPressed(_actionExposureDown, ref _exposureDownPressed))
             AdjustExposure(0.9f);
 
-        if (_renderer != null && !IsControlDown() && WasPressed(ExposureUp, ref _exposureUpPressed))
+        if (_renderer != null && !IsControlDown() && WasPressed(_actionExposureUp, ref _exposureUpPressed))
             AdjustExposure(1.1f);
 
-        if (_renderer != null && WasPressed(AmbientOcclusionRadiusDown, ref _ambientOcclusionRadiusDownPressed))
+        if (_renderer != null && WasPressed(_actionAmbientOcclusionRadiusDown, ref _ambientOcclusionRadiusDownPressed))
         {
             _renderer.Settings.AmbientOcclusion.Radius -= 0.05f;
             PrintAmbientOcclusionSettings("AO radius");
         }
 
-        if (_renderer != null && WasPressed(AmbientOcclusionRadiusUp, ref _ambientOcclusionRadiusUpPressed))
+        if (_renderer != null && WasPressed(_actionAmbientOcclusionRadiusUp, ref _ambientOcclusionRadiusUpPressed))
         {
             _renderer.Settings.AmbientOcclusion.Radius += 0.05f;
             PrintAmbientOcclusionSettings("AO radius");
         }
 
-        if (_renderer != null && WasPressed(AmbientOcclusionIntensityDown, ref _ambientOcclusionIntensityDownPressed))
+        if (_renderer != null && WasPressed(_actionAmbientOcclusionIntensityDown, ref _ambientOcclusionIntensityDownPressed))
         {
             _renderer.Settings.AmbientOcclusion.Intensity -= 0.05f;
             PrintAmbientOcclusionSettings("AO intensity");
         }
 
-        if (_renderer != null && WasPressed(AmbientOcclusionIntensityUp, ref _ambientOcclusionIntensityUpPressed))
+        if (_renderer != null && WasPressed(_actionAmbientOcclusionIntensityUp, ref _ambientOcclusionIntensityUpPressed))
         {
             _renderer.Settings.AmbientOcclusion.Intensity += 0.05f;
             PrintAmbientOcclusionSettings("AO intensity");
@@ -1106,103 +1257,103 @@ internal sealed class SampleInputController
             PrintGlobalIlluminationSettings("GI intensity");
         }
 
-        if (_renderer != null && WasPressed(FogDensityDown, ref _fogDensityDownPressed))
+        if (_renderer != null && WasPressed(_actionFogDensityDown, ref _fogDensityDownPressed))
         {
             _renderer.Settings.Fog.Density -= 0.0025f;
             PrintFogSettings("Fog density");
         }
 
-        if (_renderer != null && WasPressed(FogDensityUp, ref _fogDensityUpPressed))
+        if (_renderer != null && WasPressed(_actionFogDensityUp, ref _fogDensityUpPressed))
         {
             _renderer.Settings.Fog.Density += 0.0025f;
             PrintFogSettings("Fog density");
         }
 
-        if (_renderer != null && WasPressed(FogHeightDensityDown, ref _fogHeightDensityDownPressed))
+        if (_renderer != null && WasPressed(_actionFogHeightDensityDown, ref _fogHeightDensityDownPressed))
         {
             _renderer.Settings.Fog.HeightDensity -= 0.005f;
             PrintFogSettings("Fog height density");
         }
 
-        if (_renderer != null && WasPressed(FogHeightDensityUp, ref _fogHeightDensityUpPressed))
+        if (_renderer != null && WasPressed(_actionFogHeightDensityUp, ref _fogHeightDensityUpPressed))
         {
             _renderer.Settings.Fog.HeightDensity += 0.005f;
             PrintFogSettings("Fog height density");
         }
 
-        if (_renderer != null && WasPressed(FogStartDistanceDown, ref _fogStartDistanceDownPressed))
+        if (_renderer != null && WasPressed(_actionFogStartDistanceDown, ref _fogStartDistanceDownPressed))
         {
             _renderer.Settings.Fog.StartDistance -= 1.0f;
             PrintFogSettings("Fog start distance");
         }
 
-        if (_renderer != null && WasPressed(FogStartDistanceUp, ref _fogStartDistanceUpPressed))
+        if (_renderer != null && WasPressed(_actionFogStartDistanceUp, ref _fogStartDistanceUpPressed))
         {
             _renderer.Settings.Fog.StartDistance += 1.0f;
             PrintFogSettings("Fog start distance");
         }
 
-        if (_renderer != null && WasPressed(ToggleFogInscattering, ref _toggleFogInscatteringPressed))
+        if (_renderer != null && WasPressed(_actionToggleFogInscattering, ref _toggleFogInscatteringPressed))
         {
             _renderer.Settings.Fog.DirectionalInscatteringEnabled = !_renderer.Settings.Fog.DirectionalInscatteringEnabled;
             PrintFogSettings("Fog inscattering");
         }
 
-        if (_renderer != null && WasPressed(ShadowNormalBiasDown, ref _shadowNormalBiasDownPressed))
+        if (_renderer != null && WasPressed(_actionShadowNormalBiasDown, ref _shadowNormalBiasDownPressed))
         {
             _renderer.Settings.Shadows.NormalBias -= 0.005f;
             PrintShadowSettings("Shadow normal bias");
         }
 
-        if (_renderer != null && WasPressed(ShadowNormalBiasUp, ref _shadowNormalBiasUpPressed))
+        if (_renderer != null && WasPressed(_actionShadowNormalBiasUp, ref _shadowNormalBiasUpPressed))
         {
             _renderer.Settings.Shadows.NormalBias += 0.005f;
             PrintShadowSettings("Shadow normal bias");
         }
 
-        if (_renderer != null && WasPressed(SpotShadowBudgetDown, ref _spotShadowBudgetDownPressed))
+        if (_renderer != null && WasPressed(_actionSpotShadowBudgetDown, ref _spotShadowBudgetDownPressed))
         {
             _renderer.Settings.Shadows.MaxShadowedSpotLights--;
             PrintShadowSettings("Spot shadow budget");
         }
 
-        if (_renderer != null && WasPressed(SpotShadowBudgetUp, ref _spotShadowBudgetUpPressed))
+        if (_renderer != null && WasPressed(_actionSpotShadowBudgetUp, ref _spotShadowBudgetUpPressed))
         {
             _renderer.Settings.Shadows.MaxShadowedSpotLights++;
             PrintShadowSettings("Spot shadow budget");
         }
 
-        if (_renderer != null && WasPressed(PointShadowBudgetDown, ref _pointShadowBudgetDownPressed))
+        if (_renderer != null && WasPressed(_actionPointShadowBudgetDown, ref _pointShadowBudgetDownPressed))
         {
             _renderer.Settings.Shadows.MaxShadowedPointLights--;
             PrintShadowSettings("Point shadow budget");
         }
 
-        if (_renderer != null && WasPressed(PointShadowBudgetUp, ref _pointShadowBudgetUpPressed))
+        if (_renderer != null && WasPressed(_actionPointShadowBudgetUp, ref _pointShadowBudgetUpPressed))
         {
             _renderer.Settings.Shadows.MaxShadowedPointLights++;
             PrintShadowSettings("Point shadow budget");
         }
 
-        if (_renderer != null && WasPressed(SpotShadowBiasDown, ref _spotShadowBiasDownPressed))
+        if (_renderer != null && WasPressed(_actionSpotShadowBiasDown, ref _spotShadowBiasDownPressed))
         {
             _renderer.Settings.Shadows.SpotNormalBias -= 0.005f;
             PrintShadowSettings("Spot shadow bias");
         }
 
-        if (_renderer != null && WasPressed(SpotShadowBiasUp, ref _spotShadowBiasUpPressed))
+        if (_renderer != null && WasPressed(_actionSpotShadowBiasUp, ref _spotShadowBiasUpPressed))
         {
             _renderer.Settings.Shadows.SpotNormalBias += 0.005f;
             PrintShadowSettings("Spot shadow bias");
         }
 
-        if (_renderer != null && WasPressed(PointShadowBiasDown, ref _pointShadowBiasDownPressed))
+        if (_renderer != null && WasPressed(_actionPointShadowBiasDown, ref _pointShadowBiasDownPressed))
         {
             _renderer.Settings.Shadows.PointNormalBias -= 0.005f;
             PrintShadowSettings("Point shadow bias");
         }
 
-        if (_renderer != null && WasPressed(PointShadowBiasUp, ref _pointShadowBiasUpPressed))
+        if (_renderer != null && WasPressed(_actionPointShadowBiasUp, ref _pointShadowBiasUpPressed))
         {
             _renderer.Settings.Shadows.PointNormalBias += 0.005f;
             PrintShadowSettings("Point shadow bias");
@@ -1210,37 +1361,37 @@ internal sealed class SampleInputController
 
         float distance = CameraSpeed * deltaTime;
 
-        if (_input.IsKeyDown(MoveForward))
+        if (_actionMoveForward.IsDown)
             _camera.MoveForward(distance);
-        if (_input.IsKeyDown(MoveBackward))
+        if (_actionMoveBackward.IsDown)
             _camera.MoveBackward(distance);
-        if (_input.IsKeyDown(MoveLeft))
+        if (_actionMoveLeft.IsDown)
             _camera.MoveLeft(distance);
-        if (_input.IsKeyDown(MoveRight))
+        if (_actionMoveRight.IsDown)
             _camera.MoveRight(distance);
-        if (_input.IsKeyDown(MoveUp))
+        if (_actionMoveUp.IsDown)
             _camera.MoveUp(distance);
-        if (_input.IsKeyDown(MoveDown))
+        if (_actionMoveDown.IsDown)
             _camera.MoveDown(distance);
 
         float lookDelta = KeyboardLookSpeed * deltaTime;
         float yawDelta = 0f;
         float pitchDelta = 0f;
 
-        if (_input.IsKeyDown(LookLeft))
+        if (_actionLookLeft.IsDown)
             yawDelta -= lookDelta;
-        if (_input.IsKeyDown(LookRight))
+        if (_actionLookRight.IsDown)
             yawDelta += lookDelta;
-        if (_input.IsKeyDown(LookUp))
+        if (_actionLookUp.IsDown)
             pitchDelta -= lookDelta;
-        if (_input.IsKeyDown(LookDown))
+        if (_actionLookDown.IsDown)
             pitchDelta += lookDelta;
 
         if (yawDelta != 0f || pitchDelta != 0f)
             _camera.RotateYawPitch(yawDelta, pitchDelta);
 
         Vector2 mouseDelta = _input.ConsumeMouseDelta();
-        if (_input.IsMouseButtonDown((int)MouseButton.Right))
+        if (_input.IsMouseButtonDown(Njulf.Input.MouseButton.Right))
         {
             _camera.RotateYawPitch(mouseDelta.X * MouseSensitivity, mouseDelta.Y * MouseSensitivity);
         }
@@ -1253,13 +1404,13 @@ internal sealed class SampleInputController
 
     private static void CreateKeyboardAction(InputManager input, string name, Key key)
     {
-        Njulf.Input.Action action = input.CreateAction(name);
-        action.AddBinding(new InputBinding(key));
+        Njulf.Input.InputAction action = input.CreateAction(name);
+        action.AddBinding(new InputBinding((InputKey)key));
     }
 
-    private bool WasPressed(string actionName, ref bool previousState)
+    private bool WasPressed(InputAction action, ref bool previousState)
     {
-        bool currentState = _input.IsKeyDown(actionName);
+        bool currentState = action.IsDown;
         bool pressed = currentState && !previousState && !IsControlDown();
         previousState = currentState;
         return pressed;

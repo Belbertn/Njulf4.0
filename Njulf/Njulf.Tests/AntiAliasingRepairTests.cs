@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;

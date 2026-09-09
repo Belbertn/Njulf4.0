@@ -1,3 +1,4 @@
+using Njulf.Assets;
 using Njulf.Assets.Scenes;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
@@ -9,6 +10,31 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SceneDocumentTests
 {
+    [Test]
+    public void SceneOwnedLightingRoundTripsWithoutRendererStore()
+    {
+        using var scene = new Scene
+        {
+            Environment = new SceneEnvironment { SourceKind = SceneEnvironmentSource.HdrEquirectangular,
+                SourcePath = "studio.hdr", GroundAlbedo = new Vector3(0.1f, 0.2f, 0.3f), TimeOfDayHours = 9f }
+        };
+        var light = new SceneLight { Type = SceneLightType.Spot, Intensity = 17f,
+            Size = new Vector2(3, 2), CastsShadows = true,
+            IesProfile = new SceneAssetReference { Path = "fixture.ies" } };
+        scene.Add(light);
+        SceneDocument document = new SceneDocumentWriter().CreateDocument(scene);
+        string json = SceneDocumentJson.Serialize(document);
+        SceneDocument restored = System.Text.Json.JsonSerializer.Deserialize<SceneDocument>(json, SceneDocumentJson.Options)!;
+        using Scene loaded = new SceneDocumentLoader(new ThrowingContentManager()).Load(restored);
+        Assert.That(loaded.Environment, Is.EqualTo(scene.Environment));
+        Assert.That(loaded.Lights.Single().Id, Is.EqualTo(light.Id));
+        Assert.That(loaded.Lights.Single().Intensity, Is.EqualTo(17f));
+        Assert.That(loaded.Lights.Single().IesProfile, Is.EqualTo(light.IesProfile));
+        ulong revision = loaded.LightRevision;
+        loaded.Lights.Single().Intensity = 19f;
+        Assert.That(loaded.LightRevision, Is.GreaterThan(revision));
+    }
+
     [Test]
     public void Serialize_IsDeterministicAndSortsUnorderedEntityCollections()
     {
@@ -318,7 +344,7 @@ public sealed class SceneDocumentTests
             SceneDocument captured = new SceneDocumentWriter().CreateDocument(scene, lights);
             Assert.Multiple(() =>
             {
-                Assert.That(SceneDocument.CurrentSchemaVersion, Is.EqualTo(11));
+                Assert.That(SceneDocument.CurrentSchemaVersion, Is.EqualTo(12));
                 Assert.That(SceneDocumentJson.Serialize(captured),
                     Is.EqualTo(SceneDocumentJson.Serialize(source)));
                 Assert.That(captured.Dependencies.Single().Path,
@@ -524,14 +550,20 @@ public sealed class SceneDocumentTests
     {
         public T Load<T>(string path) => throw new FileNotFoundException($"Missing {path}");
         public void Unload<T>(T asset) { }
-        public void Clear() { }
+        public void UnloadAll() { }
+        public T Load<T>(string path, ContentLoadOptions options) => Load<T>(path);
+        public Task<T> LoadAsync<T>(string path, ContentLoadOptions? options = null, CancellationToken cancellationToken = default) => Task.FromResult(Load<T>(path));
+        public Task<ContentPreloadResult<T>> PreloadAsync<T>(IEnumerable<ContentPreloadRequest> requests, ContentPreloadOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class ModelContentManager(Model model) : IContentManager
     {
         public T Load<T>(string path) => (T)(object)model;
         public void Unload<T>(T asset) { }
-        public void Clear() { }
+        public void UnloadAll() { }
+        public T Load<T>(string path, ContentLoadOptions options) => Load<T>(path);
+        public Task<T> LoadAsync<T>(string path, ContentLoadOptions? options = null, CancellationToken cancellationToken = default) => Task.FromResult(Load<T>(path));
+        public Task<ContentPreloadResult<T>> PreloadAsync<T>(IEnumerable<ContentPreloadRequest> requests, ContentPreloadOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class MemoryLightStore : ISceneLightStore

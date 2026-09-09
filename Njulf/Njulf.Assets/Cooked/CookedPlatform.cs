@@ -25,18 +25,6 @@ public static class CookedPlatform
             : Path.Combine(root, normalized);
     }
 
-    public static TextureTargetFormatPolicy ResolveTexturePolicy(string platform, TextureTargetFormatPolicy requested)
-    {
-        platform = Normalize(platform);
-        if (requested != TextureTargetFormatPolicy.AutoBc)
-            return requested;
-        // BCn is mandatory on the supported desktop Vulkan targets; MoltenVK targets
-        // retain RGBA8 until an ASTC encoder/runtime capability profile is added.
-        return platform.StartsWith("osx-", StringComparison.Ordinal)
-            ? TextureTargetFormatPolicy.Rgba8
-            : TextureTargetFormatPolicy.AutoBc;
-    }
-
     public static bool SupportsMeshOptimizer(string platform)
     {
         platform = Normalize(platform);

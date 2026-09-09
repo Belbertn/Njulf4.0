@@ -1,11 +1,12 @@
 using System.Linq;
-using Njulf.Assets;
 using Njulf.Assets.Cooked;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
 using CoreVector3 = Njulf.Core.Math.Vector3;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Tests;
 

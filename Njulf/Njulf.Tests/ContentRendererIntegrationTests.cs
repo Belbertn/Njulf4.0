@@ -52,8 +52,8 @@ namespace Njulf.Tests
                 Assert.That(first, Is.SameAs(second));
                 Assert.That(uploader.UploadCount, Is.EqualTo(1));
                 Assert.That(first.RenderObjects, Has.Count.EqualTo(1));
-                Assert.That(first.RenderObjects[0].Mesh, Is.EqualTo(new MeshHandle(1, 1)));
-                Assert.That(first.RenderObjects[0].Material, Is.EqualTo(new MaterialHandle(1, 1)));
+                Assert.That(first.RenderObjects[0].Mesh!.GetMeshHandle(), Is.EqualTo(new MeshHandle(1, 1)));
+                Assert.That(first.RenderObjects[0].Material!.GetMaterialHandle(), Is.EqualTo(new MaterialHandle(1, 1)));
             });
         }
 
@@ -1043,7 +1043,7 @@ namespace Njulf.Tests
                     BoundingSphere = modelMesh.BoundingSphere
                 };
 
-                model.Add(new RenderObject(new MeshHandle(1, 1), new MaterialHandle(1, 1)));
+                model.Add(new RenderObject(TestGraphicsResources.Mesh(new MeshHandle(1, 1)), TestGraphicsResources.Material(new MaterialHandle(1, 1))));
                 LastUploadDiagnostics = new ModelRenderUploadDiagnostics(model.Name, 1, 1, 1, 0, 0, 0, 0, 0);
                 return model;
             }
@@ -1099,9 +1099,7 @@ namespace Njulf.Tests
                     BoundingBox = modelMesh.BoundingBox,
                     BoundingSphere = modelMesh.BoundingSphere
                 };
-                _model.Add(new RenderObject(
-                    new MeshHandle(11, 1),
-                    new MaterialHandle(12, 1)));
+                _model.Add(new RenderObject(TestGraphicsResources.Mesh(new MeshHandle(11, 1)), TestGraphicsResources.Material(new MaterialHandle(12, 1))));
             }
 
             public ContentUploadStepResult ExecuteStep(

@@ -1,6 +1,7 @@
 using System.Numerics;
 using Njulf.Assets;
 using Njulf.Assets.Validation;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using NUnit.Framework;
 

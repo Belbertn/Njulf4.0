@@ -1,3 +1,4 @@
+using Njulf.Graphics;
 using System.Buffers.Binary;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
@@ -85,13 +86,11 @@ public sealed class WebPTextureDecoderTests
         WebPDecodedImage decoded = WebPTextureDecoder.DecodeRgba8(
             WebPTestFixtures.Alpha,
             "alpha.webp");
-        TextureTransportSourceAnalysis analysis = TextureCooker.AnalyzeTransportSource(
+        TextureTransportSourceAnalysis analysis = TextureSourceDecoder.AnalyzeTransportSource(
             WebPTestFixtures.Alpha,
             TextureContainerKind.WebP,
             "alpha.webp",
-            new TextureCookOptions(
-                ColorSpace: TextureColorSpace.Linear,
-                TargetFormatPolicy: TextureTargetFormatPolicy.Rgba8));
+            new TextureDecodeOptions(ColorSpace: TextureColorSpace.Linear, ForceHdr: false));
         for (int offset = 0; offset < decoded.Rgba8.Length; offset += 4)
         {
             byte expectedAlpha = WebPTestFixtures.AlphaPixels[offset + 3];
@@ -291,11 +290,11 @@ public sealed class WebPTextureDecoderTests
     public void DeclaredWebPWithoutSignature_DoesNotFallThroughToAnotherDecoder()
     {
         byte[] notWebP = [0x89, 0x50, 0x4e, 0x47];
-        TextureTransportSourceAnalysis analysis = TextureCooker.AnalyzeTransportSource(
+        TextureTransportSourceAnalysis analysis = TextureSourceDecoder.AnalyzeTransportSource(
             notWebP,
             TextureContainerKind.WebP,
             "declared.webp",
-            new TextureCookOptions(TargetFormatPolicy: TextureTargetFormatPolicy.Rgba8));
+            new TextureDecodeOptions(ForceHdr: false));
 
         Assert.Multiple(() =>
         {

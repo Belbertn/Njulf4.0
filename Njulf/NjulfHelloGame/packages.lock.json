@@ -155,21 +155,6 @@
           "SharpGLTF.Runtime": "1.0.6"
         }
       },
-      "Silk.NET": {
-        "type": "Transitive",
-        "resolved": "2.23.0",
-        "contentHash": "9h3saHV0WjZxh4agyHTWFtcAiaOwrW2KZID9k7OzIcUN9ugmvRl9FJxDRZ1Sjbvf7ZcewLCw1C5RCcQomT8Vgw==",
-        "dependencies": {
-          "Silk.NET.Core": "2.23.0",
-          "Silk.NET.GLFW": "2.23.0",
-          "Silk.NET.Input": "2.23.0",
-          "Silk.NET.OpenAL": "2.23.0",
-          "Silk.NET.OpenGL": "2.23.0",
-          "Silk.NET.Vulkan": "2.23.0",
-          "Silk.NET.Vulkan.Extensions.KHR": "2.23.0",
-          "Silk.NET.Windowing": "2.23.0"
-        }
-      },
       "Silk.NET.Assimp": {
         "type": "Transitive",
         "resolved": "2.23.0",
@@ -236,23 +221,6 @@
         "type": "Transitive",
         "resolved": "2.23.0",
         "contentHash": "r8PdIVzME8EH0qAgbmRPO87I4GfgR2j8TofT7EMuRJDf1QluoQwnVypDoFJjQ2ZBSRsGYk5unYxxogI05Ogsmw=="
-      },
-      "Silk.NET.OpenAL": {
-        "type": "Transitive",
-        "resolved": "2.23.0",
-        "contentHash": "O8EaDRWGOcKniZ2VxKD/xOmugzUJz747KpqGRw3cezDsz8nD66OZW217o1rT06cG76f8eYigy/yY6eRdhRqHHQ==",
-        "dependencies": {
-          "Silk.NET.Core": "2.23.0"
-        }
-      },
-      "Silk.NET.OpenGL": {
-        "type": "Transitive",
-        "resolved": "2.23.0",
-        "contentHash": "CIakUoUqiAyRPykMk54tr1M1XpbJrT/iw12T85HDQcuRCFlBa1cxbX7v3FmtznKO5eM89esfmGNCgqDaKBiWfg==",
-        "dependencies": {
-          "Silk.NET.Core": "2.23.0",
-          "Silk.NET.Maths": "2.23.0"
-        }
       },
       "Silk.NET.Vulkan": {
         "type": "Transitive",
@@ -342,30 +310,19 @@
           "Meshoptimizer.NET": "[1.0.7, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.0, )",
           "Njulf.Core": "[1.0.0, )",
+          "Njulf.Graphics": "[1.0.0, )",
           "SharpGLTF.Core": "[1.0.6, )",
           "SharpGLTF.Runtime": "[1.0.6, )",
           "SharpGLTF.Toolkit": "[1.0.6, )",
-          "Silk.NET": "[2.23.0, )",
           "Silk.NET.Assimp": "[2.23.0, )",
           "Silk.NET.Core": "[2.23.0, )",
-          "Silk.NET.Maths": "[2.23.0, )",
           "StbImageSharp": "[2.30.15, )",
           "System.IO.Hashing": "[10.0.0, )",
           "ZstdSharp.Port": "[0.8.8, )"
         }
       },
       "njulf.core": {
-        "type": "Project",
-        "dependencies": {
-          "Microsoft.Extensions.DependencyInjection": "[10.0.0, )",
-          "Silk.NET": "[2.23.0, )",
-          "Silk.NET.Core": "[2.23.0, )",
-          "Silk.NET.Input": "[2.23.0, )",
-          "Silk.NET.Input.Common": "[2.23.0, )",
-          "Silk.NET.Maths": "[2.23.0, )",
-          "Silk.NET.Windowing": "[2.23.0, )",
-          "Silk.NET.Windowing.Common": "[2.23.0, )"
-        }
+        "type": "Project"
       },
       "njulf.editor": {
         "type": "Project",
@@ -373,8 +330,29 @@
           "Hexa.NET.ImGui": "[2.2.9, )",
           "Njulf.Assets": "[1.0.0, )",
           "Njulf.Core": "[1.0.0, )",
+          "Njulf.Graphics": "[1.0.0, )",
           "Njulf.Input": "[1.0.0, )",
           "Njulf.Rendering": "[1.0.0, )"
+        }
+      },
+      "njulf.framework": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection": "[10.0.0, )",
+          "Njulf.Assets": "[1.0.0, )",
+          "Njulf.Core": "[1.0.0, )",
+          "Njulf.Graphics": "[1.0.0, )",
+          "Njulf.Input": "[1.0.0, )",
+          "Njulf.Rendering": "[1.0.0, )",
+          "Silk.NET.Input": "[2.23.0, )",
+          "Silk.NET.Maths": "[2.23.0, )",
+          "Silk.NET.Windowing": "[2.23.0, )"
+        }
+      },
+      "njulf.graphics": {
+        "type": "Project",
+        "dependencies": {
+          "Njulf.Core": "[1.0.0, )"
         }
       },
       "njulf.input": {
@@ -382,7 +360,6 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection": "[10.0.0, )",
           "Njulf.Core": "[1.0.0, )",
-          "Silk.NET": "[2.23.0, )",
           "Silk.NET.Core": "[2.23.0, )",
           "Silk.NET.Input": "[2.23.0, )",
           "Silk.NET.Input.Common": "[2.23.0, )",
@@ -397,25 +374,19 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.0, )",
           "Njulf.Assets": "[1.0.0, )",
           "Njulf.Core": "[1.0.0, )",
+          "Njulf.Graphics": "[1.0.0, )",
           "Njulf.Shaders": "[1.0.0, )",
-          "Silk.NET": "[2.23.0, )",
           "Silk.NET.Core": "[2.23.0, )",
           "Silk.NET.Maths": "[2.23.0, )",
           "Silk.NET.Vulkan": "[2.23.0, )",
           "Silk.NET.Vulkan.Extensions.EXT": "[2.23.0, )",
           "Silk.NET.Vulkan.Extensions.KHR": "[2.23.0, )",
+          "Silk.NET.Windowing.Common": "[2.23.0, )",
           "StbImageSharp": "[2.30.15, )"
         }
       },
       "njulf.shaders": {
-        "type": "Project",
-        "dependencies": {
-          "Silk.NET": "[2.23.0, )",
-          "Silk.NET.Core": "[2.23.0, )",
-          "Silk.NET.Vulkan": "[2.23.0, )",
-          "Silk.NET.Vulkan.Extensions.EXT": "[2.23.0, )",
-          "Silk.NET.Vulkan.Extensions.KHR": "[2.23.0, )"
-        }
+        "type": "Project"
       }
     }
   }

@@ -2,217 +2,180 @@ using System;
 using System.Collections.Generic;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 
-namespace Njulf.Assets;
-
-public enum AssetImportSeverity
+namespace Njulf.Graphics
 {
-    Info,
-    Warning,
-    Error
 }
 
-public enum AssetImportMessageCode
+namespace Njulf.Assets
 {
-    NativeImporterCrash,
-    ChildProcessTimeout,
-    UnsupportedRequiredExtension,
-    UnsupportedOptionalExtension,
-    MissingExternalBuffer,
-    MissingModelFile,
-    MissingExternalImage,
-    EmbeddedBufferLoaded,
-    EmbeddedImageLoaded,
-    SamplerDefaulted,
-    TextureTransformApplied,
-    TextureTransformUnsupported,
-    ColorSpaceAssigned,
-    TextureFallbackUsed,
-    AlphaModePerformanceWarning,
-    ExcessiveTextureMemory,
-    VertexColorImported,
-    UvSetImported,
-    AccessorBoundsInvalid,
-    InvalidAccessorOrBufferData,
-    UnsupportedCompressedMesh,
-    CompressedTextureUnsupported,
-    UnsupportedPrimitiveMode,
-    MorphTargetsUnsupported,
-    ManagedImporterException,
-    UnsupportedAssetFormat,
-    SharpGltfMeshConversionPending,
-    FoliageBlendAlphaWarning,
-    FoliageAlphaCutoffWarning,
-    FoliageDoubleSidedWarning,
-    UnsupportedTranslucencyWarning,
-    LightImported,
-    LightRangeDefaulted,
-    LightRangeClamped,
-    UnsupportedLightType,
-    InvalidLight,
-    LightNodeMissing,
-    AnimatedLightUnsupported
-}
-
-public sealed record AssetImportMessage(
-    AssetImportSeverity Severity,
-    AssetImportMessageCode Code,
-    string AssetPath,
-    string? Source,
-    string Message);
-
-public sealed class AssetImportDiagnostics
-{
-    private readonly List<AssetImportMessage> _messages = new();
-
-    public static AssetImportDiagnostics Empty { get; } = new();
-
-    public IReadOnlyList<AssetImportMessage> Messages => _messages;
-    public int ImportedGltfCount { get; set; }
-    public int ImportedGlbCount { get; set; }
-    public int ExternalBufferCount { get; set; }
-    public int EmbeddedBufferCount { get; set; }
-    public int DataUriBufferCount { get; set; }
-    public int ExternalImageCount { get; set; }
-    public int EmbeddedImageCount { get; set; }
-    public int DataUriImageCount { get; set; }
-    public int BufferViewImageCount { get; set; }
-    public int ImportedSamplerCount { get; set; }
-    public int TextureTransformCount { get; set; }
-    public int UnsupportedOptionalExtensionCount { get; set; }
-    public int UnsupportedRequiredExtensionCount { get; set; }
-    public int VertexColorMeshCount { get; set; }
-    public int Uv0MeshCount { get; set; }
-    public int Uv1MeshCount { get; set; }
-    public int UnsupportedCompressedTextureCount { get; set; }
-    public int UnsupportedMorphTargetMeshCount { get; set; }
-    public int ImportedLightCount { get; set; }
-    public int ImportedPointLightCount { get; set; }
-    public int ImportedDirectionalLightCount { get; set; }
-    public int ImportedSpotLightCount { get; set; }
-    public int SkippedLightCount { get; set; }
-
-    public void Add(AssetImportSeverity severity, AssetImportMessageCode code, string assetPath, string? source, string message)
+    public enum AssetImportSeverity
     {
-        _messages.Add(new AssetImportMessage(severity, code, assetPath, source, message));
+        Info,
+        Warning,
+        Error
     }
-}
 
-public enum TextureColorSpace
-{
-    Linear,
-    Srgb,
-    HdrLinear
-}
-
-public enum TextureContainerKind
-{
-    StandardImage,
-    Ktx2,
-    WebP
-}
-
-public enum TextureSourceKind
-{
-    Unknown,
-    ExternalFile,
-    DataUri,
-    BufferView,
-    GlbBinary,
-    EmbeddedMemory
-}
-
-public enum TextureWrapMode
-{
-    Repeat,
-    ClampToEdge,
-    MirroredRepeat
-}
-
-public enum TextureFilterMode
-{
-    Nearest,
-    Linear
-}
-
-public enum TextureMipFilterMode
-{
-    Nearest,
-    Linear
-}
-
-public readonly record struct TextureSamplerDescription(
-    TextureWrapMode WrapU,
-    TextureWrapMode WrapV,
-    TextureFilterMode MinFilter,
-    TextureFilterMode MagFilter,
-    TextureMipFilterMode MipFilter,
-    float MaxAnisotropy)
-{
-    public static TextureSamplerDescription Default { get; } = new(
-        TextureWrapMode.Repeat,
-        TextureWrapMode.Repeat,
-        TextureFilterMode.Linear,
-        TextureFilterMode.Linear,
-        TextureMipFilterMode.Linear,
-        16f);
-}
-
-public sealed class ModelTextureSource
-{
-    public string DebugName { get; init; } = string.Empty;
-    public TextureSourceKind SourceKind { get; init; } = TextureSourceKind.Unknown;
-    public string? FilePath { get; init; }
-    public byte[]? Bytes { get; init; }
-    public string? MimeType { get; init; }
-    public string CacheIdentity { get; init; } = string.Empty;
-    public TextureContainerKind ContainerKind { get; init; } = TextureContainerKind.StandardImage;
-    public int EncodedByteLength { get; init; }
-
-    /// <summary>
-    /// Optional immutable snapshot prepared by a background content worker.
-    /// Renderer upload may consume these exact authenticated bytes without
-    /// reopening and hashing the source file on the render thread.
-    /// </summary>
-    public PreparedTextureSourceSnapshot? PreparedSnapshot { get; init; }
-
-    public bool IsMemorySource => Bytes is { Length: > 0 };
-}
-
-public sealed class PreparedTextureSourceSnapshot
-{
-    public PreparedTextureSourceSnapshot(
-        byte[] encodedBytes,
-        ulong contentHash,
-        AuthenticatedCookedTexture? cookedAuthentication = null)
+    public enum AssetImportMessageCode
     {
-        EncodedBytes = encodedBytes ??
-            throw new ArgumentNullException(nameof(encodedBytes));
-        if (encodedBytes.Length == 0)
+        NativeImporterCrash,
+        ChildProcessTimeout,
+        UnsupportedRequiredExtension,
+        UnsupportedOptionalExtension,
+        MissingExternalBuffer,
+        MissingModelFile,
+        MissingExternalImage,
+        EmbeddedBufferLoaded,
+        EmbeddedImageLoaded,
+        SamplerDefaulted,
+        TextureTransformApplied,
+        TextureTransformUnsupported,
+        ColorSpaceAssigned,
+        TextureFallbackUsed,
+        AlphaModePerformanceWarning,
+        ExcessiveTextureMemory,
+        VertexColorImported,
+        UvSetImported,
+        AccessorBoundsInvalid,
+        InvalidAccessorOrBufferData,
+        UnsupportedCompressedMesh,
+        CompressedTextureUnsupported,
+        UnsupportedPrimitiveMode,
+        MorphTargetsUnsupported,
+        ManagedImporterException,
+        UnsupportedAssetFormat,
+        SharpGltfMeshConversionPending,
+        FoliageBlendAlphaWarning,
+        FoliageAlphaCutoffWarning,
+        FoliageDoubleSidedWarning,
+        UnsupportedTranslucencyWarning,
+        LightImported,
+        LightRangeDefaulted,
+        LightRangeClamped,
+        UnsupportedLightType,
+        InvalidLight,
+        LightNodeMissing,
+        AnimatedLightUnsupported
+    }
+
+    public sealed record AssetImportMessage(
+        AssetImportSeverity Severity,
+        AssetImportMessageCode Code,
+        string AssetPath,
+        string? Source,
+        string Message);
+
+    public sealed class AssetImportDiagnostics
+    {
+        private readonly List<AssetImportMessage> _messages = new();
+
+        public static AssetImportDiagnostics Empty { get; } = new();
+
+        public IReadOnlyList<AssetImportMessage> Messages => _messages;
+        public int ImportedGltfCount { get; set; }
+        public int ImportedGlbCount { get; set; }
+        public int ExternalBufferCount { get; set; }
+        public int EmbeddedBufferCount { get; set; }
+        public int DataUriBufferCount { get; set; }
+        public int ExternalImageCount { get; set; }
+        public int EmbeddedImageCount { get; set; }
+        public int DataUriImageCount { get; set; }
+        public int BufferViewImageCount { get; set; }
+        public int ImportedSamplerCount { get; set; }
+        public int TextureTransformCount { get; set; }
+        public int UnsupportedOptionalExtensionCount { get; set; }
+        public int UnsupportedRequiredExtensionCount { get; set; }
+        public int VertexColorMeshCount { get; set; }
+        public int Uv0MeshCount { get; set; }
+        public int Uv1MeshCount { get; set; }
+        public int UnsupportedCompressedTextureCount { get; set; }
+        public int UnsupportedMorphTargetMeshCount { get; set; }
+        public int ImportedLightCount { get; set; }
+        public int ImportedPointLightCount { get; set; }
+        public int ImportedDirectionalLightCount { get; set; }
+        public int ImportedSpotLightCount { get; set; }
+        public int SkippedLightCount { get; set; }
+
+        public void Add(AssetImportSeverity severity, AssetImportMessageCode code, string assetPath, string? source, string message)
         {
-            throw new ArgumentException(
-                "A prepared texture snapshot cannot be empty.",
-                nameof(encodedBytes));
+            _messages.Add(new AssetImportMessage(severity, code, assetPath, source, message));
+        }
+    }
+
+    public enum TextureContainerKind
+    {
+        StandardImage,
+        Ktx2,
+        WebP
+    }
+
+    public enum TextureSourceKind
+    {
+        Unknown,
+        ExternalFile,
+        DataUri,
+        BufferView,
+        GlbBinary,
+        EmbeddedMemory
+    }
+
+    public sealed class ModelTextureSource
+    {
+        public string DebugName { get; init; } = string.Empty;
+        public TextureSourceKind SourceKind { get; init; } = TextureSourceKind.Unknown;
+        public string? FilePath { get; init; }
+        public byte[]? Bytes { get; init; }
+        public string? MimeType { get; init; }
+        public string CacheIdentity { get; init; } = string.Empty;
+        public TextureContainerKind ContainerKind { get; init; } = TextureContainerKind.StandardImage;
+        public int EncodedByteLength { get; init; }
+
+        /// <summary>
+        /// Optional immutable snapshot prepared by a background content worker.
+        /// Renderer upload may consume these exact authenticated bytes without
+        /// reopening and hashing the source file on the render thread.
+        /// </summary>
+        public PreparedTextureSourceSnapshot? PreparedSnapshot { get; init; }
+
+        public bool IsMemorySource => Bytes is { Length: > 0 };
+    }
+
+    public sealed class PreparedTextureSourceSnapshot
+    {
+        public PreparedTextureSourceSnapshot(
+            byte[] encodedBytes,
+            ulong contentHash,
+            AuthenticatedCookedTexture? cookedAuthentication = null)
+        {
+            EncodedBytes = encodedBytes ??
+                           throw new ArgumentNullException(nameof(encodedBytes));
+            if (encodedBytes.Length == 0)
+            {
+                throw new ArgumentException(
+                    "A prepared texture snapshot cannot be empty.",
+                    nameof(encodedBytes));
+            }
+
+            ContentHash = contentHash;
+            CookedAuthentication = cookedAuthentication;
         }
 
-        ContentHash = contentHash;
-        CookedAuthentication = cookedAuthentication;
+        public byte[] EncodedBytes { get; }
+
+        public ulong ContentHash { get; }
+
+        public AuthenticatedCookedTexture? CookedAuthentication { get; }
     }
 
-    public byte[] EncodedBytes { get; }
-
-    public ulong ContentHash { get; }
-
-    public AuthenticatedCookedTexture? CookedAuthentication { get; }
-}
-
-public sealed class ModelTextureSlot
-{
-    public ModelTextureSource? Source { get; init; }
-    public TextureSamplerDescription Sampler { get; init; } = TextureSamplerDescription.Default;
-    public TextureColorSpace ColorSpace { get; init; } = TextureColorSpace.Linear;
-    public int TexCoordSet { get; init; }
-    public Vector2 Offset { get; init; } = Vector2.Zero;
-    public Vector2 Scale { get; init; } = new(1f, 1f);
-    public float RotationRadians { get; init; }
+    public sealed class ModelTextureSlot
+    {
+        public ModelTextureSource? Source { get; init; }
+        public TextureSamplerDescription Sampler { get; init; } = TextureSamplerDescription.Default;
+        public TextureColorSpace ColorSpace { get; init; } = TextureColorSpace.Linear;
+        public int TexCoordSet { get; init; }
+        public Vector2 Offset { get; init; } = Vector2.Zero;
+        public Vector2 Scale { get; init; } = new(1f, 1f);
+        public float RotationRadians { get; init; }
+    }
 }

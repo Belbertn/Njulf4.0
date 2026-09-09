@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Njulf.Assets;
 using Njulf.Core.Geometry;
+using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Pipeline;

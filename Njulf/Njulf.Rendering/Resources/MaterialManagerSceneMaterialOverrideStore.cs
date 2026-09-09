@@ -2,6 +2,7 @@ using System;
 using Njulf.Assets.Scenes;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Resources;
@@ -24,7 +25,7 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
     {
         ArgumentNullException.ThrowIfNull(renderObject);
         ArgumentNullException.ThrowIfNull(source);
-        if (renderObject.Material is not MaterialHandle handle)
+        if (!(renderObject.Material).TryGetMaterialHandle(out MaterialHandle handle))
             throw new InvalidOperationException($"Scene object '{renderObject.Name}' ({renderObject.Id}) has no material handle.");
 
         // Compile and normalize the authored override before copy-on-write
@@ -170,7 +171,7 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
     public SceneMaterialOverrideDocument? Capture(RenderObject renderObject)
     {
         ArgumentNullException.ThrowIfNull(renderObject);
-        if (renderObject.Material is not MaterialHandle handle)
+        if (!(renderObject.Material).TryGetMaterialHandle(out MaterialHandle handle))
             return null;
         MaterialDefinition material = _materials.GetMaterialDefinition(handle);
         return new SceneMaterialOverrideDocument

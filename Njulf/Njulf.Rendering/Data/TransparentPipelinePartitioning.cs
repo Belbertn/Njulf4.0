@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Graphics;
 using Njulf.Rendering.Descriptors;
 
 namespace Njulf.Rendering.Data

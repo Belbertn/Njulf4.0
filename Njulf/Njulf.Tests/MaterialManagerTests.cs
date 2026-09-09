@@ -2,6 +2,7 @@ using System.Linq;
 using Njulf.Assets.Scenes;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
@@ -413,7 +414,7 @@ namespace Njulf.Tests
                     AlphaMode = MaterialAlphaMode.Mask,
                     AlphaCutoff = 0.5f
                 });
-            var renderObject = new RenderObject { Name = "Masked card", Material = original };
+            var renderObject = TestGraphicsResources.AdoptMaterial(manager, original);
             var store = new MaterialManagerSceneMaterialOverrideStore(manager);
             int materialCountBeforeInvalidEdit = manager.RegisteredMaterialCount;
 
@@ -434,7 +435,7 @@ namespace Njulf.Tests
                 Throws.InstanceOf<ArgumentOutOfRangeException>());
             Assert.Multiple(() =>
             {
-                Assert.That(renderObject.Material, Is.EqualTo(original));
+                Assert.That(renderObject.Material!.GetMaterialHandle(), Is.EqualTo(original));
                 Assert.That(manager.RegisteredMaterialCount, Is.EqualTo(materialCountBeforeInvalidEdit));
                 Assert.That(manager.GetMaterialDefinition(original).AlphaCutoff, Is.EqualTo(0.5f));
             });
@@ -442,7 +443,7 @@ namespace Njulf.Tests
             store.Apply(
                 renderObject,
                 new SceneMaterialOverrideDocument { AlphaCutoff = 1.25f });
-            MaterialHandle edited = (MaterialHandle)renderObject.Material!;
+            MaterialHandle edited = (renderObject.Material!).GetMaterialHandle();
 
             Assert.Multiple(() =>
             {

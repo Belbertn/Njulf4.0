@@ -1,7 +1,9 @@
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Rendering.Resources;
 
@@ -21,7 +23,7 @@ internal sealed class RuntimePrimitiveTransportProfileBuilder
     internal const int MaximumTextureCacheEntries = 32;
     internal const long MaximumTextureCacheBytes = 128L * 1024L * 1024L;
     internal const long MaximumTexturePixelsPerMaterial =
-        TextureCooker.DefaultMaximumRuntimeTransportPixels;
+        TextureSourceDecoder.DefaultMaximumRuntimeTransportPixels;
     internal const int MaximumDiagnosticMessages = 32;
     private const int MaximumDiagnosticLength = 768;
 
@@ -394,16 +396,12 @@ internal sealed class RuntimePrimitiveTransportProfileBuilder
                 reason);
         }
         long pixelLimit = remainingPixels;
-        TextureTransportSourceAnalysis analysis = TextureCooker.AnalyzeTransportSource(
+        TextureTransportSourceAnalysis analysis = TextureSourceDecoder.AnalyzeTransportSource(
             encoded,
             source.ContainerKind,
             identity,
-            new TextureCookOptions(
-                MaxDimension: 2048,
-                ColorSpace: slot.ColorSpace,
-                TargetFormatPolicy: TextureTargetFormatPolicy.Rgba8,
-                Semantic: semantic),
-            TextureCooker.DefaultMaximumRuntimeTransportEncodedBytes,
+            new TextureDecodeOptions(ColorSpace: slot.ColorSpace, ForceHdr: false, Semantic: semantic),
+            TextureSourceDecoder.DefaultMaximumRuntimeTransportEncodedBytes,
             pixelLimit);
         TextureTransportImage result = analysis.Image ??
                                        TextureTransportImage.Unavailable(analysis.Statistics);
@@ -684,11 +682,11 @@ internal sealed class RuntimePrimitiveTransportProfileBuilder
         {
             if (source.Bytes is { Length: > 0 } bytes)
             {
-                if (bytes.Length > TextureCooker.DefaultMaximumRuntimeTransportEncodedBytes)
+                if (bytes.Length > TextureSourceDecoder.DefaultMaximumRuntimeTransportEncodedBytes)
                 {
                     failure =
                         $"encoded payload contains {bytes.Length} bytes, exceeding the hard limit " +
-                        $"{TextureCooker.DefaultMaximumRuntimeTransportEncodedBytes}.";
+                        $"{TextureSourceDecoder.DefaultMaximumRuntimeTransportEncodedBytes}.";
                     return false;
                 }
                 encoded = bytes.ToArray();
@@ -709,11 +707,11 @@ internal sealed class RuntimePrimitiveTransportProfileBuilder
                 bufferSize: 64 * 1024,
                 FileOptions.SequentialScan);
             long declaredLength = stream.Length;
-            if (declaredLength is <= 0 or > TextureCooker.DefaultMaximumRuntimeTransportEncodedBytes)
+            if (declaredLength is <= 0 or > TextureSourceDecoder.DefaultMaximumRuntimeTransportEncodedBytes)
             {
                 failure =
                     $"source file contains {declaredLength} bytes; expected a size in (0, " +
-                    $"{TextureCooker.DefaultMaximumRuntimeTransportEncodedBytes}].";
+                    $"{TextureSourceDecoder.DefaultMaximumRuntimeTransportEncodedBytes}].";
                 return false;
             }
 

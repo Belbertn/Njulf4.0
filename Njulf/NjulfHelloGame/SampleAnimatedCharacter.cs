@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using Njulf.Assets;
 using Njulf.Core.Animation;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Scene;

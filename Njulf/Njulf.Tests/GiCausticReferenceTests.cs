@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;

@@ -1,5 +1,6 @@
 using System;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 

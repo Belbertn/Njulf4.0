@@ -9,6 +9,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
+      <ProjectReference Include="..\Njulf.Assets.Tooling\Njulf.Assets.Tooling.csproj" />
       <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
     </ItemGroup>
 

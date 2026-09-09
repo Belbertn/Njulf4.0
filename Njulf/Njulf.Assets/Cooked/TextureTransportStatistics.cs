@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 
 namespace Njulf.Assets.Cooked;
 

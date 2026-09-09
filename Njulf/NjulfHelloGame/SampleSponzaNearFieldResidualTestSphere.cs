@@ -2,6 +2,7 @@ using System;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
@@ -9,6 +10,7 @@ using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector2 = Njulf.Core.Math.Vector2;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 using CoreVector4 = Njulf.Core.Math.Vector4;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace NjulfHelloGame;
 
@@ -47,7 +49,7 @@ internal static class SampleSponzaNearFieldResidualTestSphere
         TextureHandle emissionTexture = CreateEmissionTexture(textureManager);
         MaterialHandle material = materialManager.RegisterMaterialDefinition(
             CreateMaterialDefinition(emissionTexture));
-        var sphere = new RenderObject(mesh, material)
+        var sphere = new RenderObject(meshManager.GetResourceView(mesh), materialManager.GetResourceView(material))
         {
             Id = new Guid("c5000001-0000-4000-8000-000000000001"),
             Name = ObjectName,

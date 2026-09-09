@@ -1,6 +1,7 @@
 using Njulf.Core.Geometry;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Resources;

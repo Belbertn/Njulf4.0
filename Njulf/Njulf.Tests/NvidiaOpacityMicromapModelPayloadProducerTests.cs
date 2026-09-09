@@ -5,8 +5,10 @@ using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Geometry;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Tests;
 

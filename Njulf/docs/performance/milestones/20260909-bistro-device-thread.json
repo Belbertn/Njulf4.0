@@ -1,0 +1,62 @@
+{
+  "date": "2026-09-09",
+  "revision": "7ce858e642b7937789b33a1e3ab9978792b8d15b",
+  "preExistingDirtyWorktree": true,
+  "baseline": {
+    "outcome": "Bistro failed after cooked upload at 92 percent",
+    "deviceManagedThread": 2,
+    "actualManagedThread": 24,
+    "generation": 2,
+    "stack": "PrepareImportedSceneGraphAsync -> BuildSampleScene -> SampleSceneLoader.LoadModelInstance -> Model.CreateInstance -> RenderObject.Mesh -> GraphicsDevice.EnsureDeviceThread",
+    "successfulFirstPresentMilliseconds": null
+  },
+  "tests": {
+    "passed": 47,
+    "failed": 0,
+    "skipped": 0
+  },
+  "runs": [
+    {
+      "name": "initial candidate: repeated device-thread cache lookups",
+      "smokeStatus": "failed",
+      "validationErrors": 0,
+      "validationWarnings": 0,
+      "timings": {
+        "coldFirstMilliseconds": 10811.141,
+        "coldFullMilliseconds": 16842.3,
+        "returnMilliseconds": -0.001,
+        "warmMilliseconds": -0.001,
+        "maxHostStepMilliseconds": 2362.832
+      },
+      "detail": "coldFirst=10811.141ms/5000.000ms, coldFull=16842.300ms/15000.000ms, return=-0.001ms, warm=-0.001ms/1000.000ms, maxHostStep=2362.832ms/33.000ms, coldCache=False, warmCache=False, workflow=Sponza->Bistro, sourceFallbacks=0, cornellRecovery=False, validationErrors=0."
+    },
+    {
+      "name": "final: Sponza to cold Bistro",
+      "smokeStatus": "failed",
+      "validationErrors": 0,
+      "validationWarnings": 0,
+      "timings": {
+        "coldFirstMilliseconds": 7113.925,
+        "coldFullMilliseconds": 11072.834,
+        "returnMilliseconds": -0.001,
+        "warmMilliseconds": -0.001,
+        "maxHostStepMilliseconds": 1332.378
+      },
+      "detail": "coldFirst=7113.925ms/5000.000ms, coldFull=11072.834ms/15000.000ms, return=-0.001ms, warm=-0.001ms/1000.000ms, maxHostStep=1332.378ms/33.000ms, coldCache=False, warmCache=False, workflow=Sponza->Bistro, sourceFallbacks=0, cornellRecovery=False, validationErrors=0."
+    },
+    {
+      "name": "final: GI to cold Bistro to GI to resident Bistro",
+      "smokeStatus": "failed",
+      "validationErrors": 0,
+      "validationWarnings": 0,
+      "timings": {
+        "coldFirstMilliseconds": 12750.562,
+        "coldFullMilliseconds": 20008.877,
+        "returnMilliseconds": 185.667,
+        "warmMilliseconds": 527.139,
+        "maxHostStepMilliseconds": 3538.331
+      },
+      "detail": "coldFirst=12750.562ms/5000.000ms, coldFull=20008.877ms/15000.000ms, return=185.667ms, warm=527.139ms/1000.000ms, maxHostStep=3538.331ms/33.000ms, coldCache=False, warmCache=True, workflow=Cornell->Bistro->Cornell->Bistro, sourceFallbacks=0, cornellRecovery=False, validationErrors=0."
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
@@ -48,8 +49,8 @@ public sealed class SecondarySceneSnapshotTests
     public void PreparationIsLazyAndSharedAcrossViewsAndUnchangedSubmissions()
     {
         using var f = new Fixture();
-        f.Scene.Add(new RenderObject(Mesh, Material));
-        f.Scene.Add(new RenderObject(Mesh, Material));
+        f.Scene.Add(new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material)));
+        f.Scene.Add(new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material)));
         f.Scene.Add(new StaticInstanceBatch([Matrix4x4.Identity, Matrix4x4.Identity]) { Mesh = Mesh, Material = Material });
         f.Snapshot.BeginSubmission(f.Scene, 1);
         Assert.That(f.MeshReads + f.MaterialReads, Is.Zero);
@@ -78,9 +79,9 @@ public sealed class SecondarySceneSnapshotTests
     public void TransformChangesRefreshOnlyTheChangedProducerAtTheNextSubmission()
     {
         using var f = new Fixture();
-        var moving = new RenderObject(Mesh, Material);
+        var moving = new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material));
         f.Scene.Add(moving);
-        f.Scene.Add(new RenderObject(Mesh, Material));
+        f.Scene.Add(new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material)));
         var entries = f.Prepare();
         moving.WorldMatrix = Matrix4x4.CreateScale(new Vector3(-2, 3, 4)) *
                              Matrix4x4.CreateTranslation(new Vector3(10, 20, 30));
@@ -103,9 +104,9 @@ public sealed class SecondarySceneSnapshotTests
         using var f = new Fixture();
         MaterialHandle other = new(1, 1);
         f.Materials.Add(other, (new(1, new(), MaterialForwardClass.SimpleOpaque), 1));
-        f.Scene.Add(new RenderObject(Mesh, Material));
-        f.Scene.Add(new RenderObject(Mesh, Material));
-        f.Scene.Add(new RenderObject(Mesh, other));
+        f.Scene.Add(new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material)));
+        f.Scene.Add(new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material)));
+        f.Scene.Add(new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(other)));
         var entries = f.Prepare();
         var metadata = new MaterialRenderMetadata { BlendMode = MaterialBlendMode.AlphaBlend, DecalLayer = 7 };
         f.Materials[Material] = (new(0, metadata, MaterialForwardClass.Transparent), 2);
@@ -129,13 +130,13 @@ public sealed class SecondarySceneSnapshotTests
     public void MembershipVisibilityMeshAndBatchChangesPreserveSubmissionOrder()
     {
         using var f = new Fixture();
-        var first = new RenderObject(Mesh, Material);
-        var second = new RenderObject(Mesh, Material);
+        var first = new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material));
+        var second = new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material));
         var batch = new StaticInstanceBatch([Matrix4x4.Identity, Matrix4x4.Identity]) { Mesh = Mesh, Material = Material };
         f.Scene.Add(first); f.Scene.Add(second); f.Scene.Add(batch);
         f.Prepare();
         first.Visible = false;
-        second.Mesh = new MeshHandle(3, 1);
+        second.Mesh = TestGraphicsResources.Mesh(new MeshHandle(3, 1));
         batch.ReplaceWorldMatrices([Matrix4x4.CreateTranslation(new Vector3(4, 0, 0))]);
         var entries = f.Prepare();
         Assert.Multiple(() =>
@@ -146,13 +147,13 @@ public sealed class SecondarySceneSnapshotTests
             Assert.That(entries[1].LodKey, Is.EqualTo(new SecondaryLodInstanceKey(batch.Id, 0, Mesh)));
         });
         first.Visible = true;
-        second.Mesh = MeshHandle.Invalid;
+        second.Mesh = null;
         batch.ReplaceWorldMatrices([Matrix4x4.Identity, Matrix4x4.Identity, Matrix4x4.Identity]);
         Assert.That(f.Prepare().Select(i => i.InstanceId), Is.EqualTo(new uint[] { 0, 1, 2, 3 }));
         f.Scene.Remove(first);
         f.Scene.Remove(batch);
         Assert.That(f.Prepare(), Is.Empty);
-        f.Scene.Add(new RenderObject(Mesh, Material));
+        f.Scene.Add(new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material)));
         Assert.That(f.Prepare().Single().InstanceId, Is.Zero);
     }
 
@@ -160,13 +161,13 @@ public sealed class SecondarySceneSnapshotTests
     public void MaterialReplacementEvictsUnusedHandlesIncludingReusedIndices()
     {
         using var f = new Fixture();
-        var obj = new RenderObject(Mesh, Material);
+        var obj = new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material));
         f.Scene.Add(obj);
         f.Prepare();
         MaterialHandle replacement = new(0, 2);
         f.Materials.Remove(Material);
         f.Materials.Add(replacement, (new(0, new(), MaterialForwardClass.FullOpaque), 2));
-        obj.Material = replacement;
+        obj.Material = TestGraphicsResources.Material(replacement);
         f.MaterialRevision++;
         Assert.That(f.Prepare().Single().Material.Data.Family, Is.EqualTo(MaterialForwardClass.FullOpaque));
         f.MaterialRevision++;
@@ -177,7 +178,7 @@ public sealed class SecondarySceneSnapshotTests
     public void SkinningStateAndBindTransformsAreInvalidated()
     {
         using var f = new Fixture();
-        var obj = new SkinnedRenderObject(Mesh, Material) { SkinningEnabled = true };
+        var obj = new SkinnedRenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material)) { SkinningEnabled = true };
         f.Scene.Add(obj);
         var entry = f.Prepare().Single();
         Assert.That(entry.Deforming, Is.True);
@@ -195,8 +196,8 @@ public sealed class SecondarySceneSnapshotTests
     public void SnapshotRetainsGeometryOutsideTheFirstViewsFrustum()
     {
         using var f = new Fixture();
-        f.Scene.Add(new RenderObject(Mesh, Material));
-        f.Scene.Add(new RenderObject(Mesh, Material) { Position = new Vector3(10, 0, 0) });
+        f.Scene.Add(new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material)));
+        f.Scene.Add(new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material)) { Position = new Vector3(10, 0, 0) });
         var entries = f.Prepare();
         Frustum first = SceneDataBuilder.ExtractFrustum(Matrix4x4.Identity);
         Frustum second = SceneDataBuilder.ExtractFrustum(Matrix4x4.CreateTranslation(new Vector3(-10, 0, 0)));
@@ -214,11 +215,11 @@ public sealed class SecondarySceneSnapshotTests
     public void SceneReplacementAndDisposalDetachPreviousSources()
     {
         using var f = new Fixture();
-        var old = new RenderObject(Mesh, Material);
+        var old = new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material));
         f.Scene.Add(old);
         f.Prepare();
         using var replacement = new Scene();
-        replacement.Add(new RenderObject(Mesh, Material) { Position = new Vector3(20, 0, 0) });
+        replacement.Add(new RenderObject(TestGraphicsResources.Mesh(Mesh), TestGraphicsResources.Material(Material)) { Position = new Vector3(20, 0, 0) });
         f.Snapshot.BeginSubmission(replacement, 1);
         Assert.That(f.Snapshot.Prepare().Single().Bounds.Center, Is.EqualTo(new Vector3(20, 0, 0)));
         old.Position = new Vector3(50, 0, 0);

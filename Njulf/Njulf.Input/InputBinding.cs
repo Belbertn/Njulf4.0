@@ -1,275 +1,120 @@
-using System;
-using System.Collections.Generic;
 using Silk.NET.Input;
 
-namespace Njulf.Input
+namespace Njulf.Input;
+
+/// <summary>The device family supplying a button binding.</summary>
+public enum BindingDeviceType
 {
-    /// <summary>
-    /// Defines the type of input device for a binding.
-    /// </summary>
-    public enum BindingDeviceType
-    {
-        Keyboard,
-        Mouse,
-        Joystick
-    }
-    
-    /// <summary>
-    /// Joystick button codes.
-    /// </summary>
-    public enum JoystickButton
-    {
-        Button0 = 0,
-        Button1,
-        Button2,
-        Button3,
-        Button4,
-        Button5,
-        Button6,
-        Button7,
-        Button8,
-        Button9,
-        Button10,
-        Button11,
-        Button12,
-        Button13,
-        Button14,
-        Button15
-    }
-    
-    /// <summary>
-    /// Joystick axis codes.
-    /// </summary>
-    public enum JoystickAxis
-    {
-        X = 0,
-        Y,
-        Z,
-        Rx,
-        Ry,
-        Rz,
-        Button0 = 100,
-        Button1,
-        Button2,
-        Button3,
-        Button4,
-        Button5,
-        Button6,
-        Button7,
-        Button8,
-        Button9,
-        Button10,
-        Button11,
-        Button12,
-        Button13,
-        Button14,
-        Button15
-    }
-    
-    /// <summary>
-    /// Represents a binding between an input action and a physical input (key, mouse button, etc.).
-    /// </summary>
-    public class InputBinding : IDisposable
-    {
-        private readonly BindingDeviceType _deviceType;
-        private readonly int _deviceIndex;
-        private readonly int _inputCode;
-        private readonly bool _isNegative;
-        
-        /// <summary>
-        /// Gets the type of device this binding targets.
-        /// </summary>
-        public BindingDeviceType DeviceType => _deviceType;
-        
-        /// <summary>
-        /// Gets the device index (0 for primary, 1+ for additional devices).
-        /// </summary>
-        public int DeviceIndex => _deviceIndex;
-        
-        /// <summary>
-        /// Gets the input code (key code, mouse button, joystick button/axis).
-        /// </summary>
-        public int InputCode => _inputCode;
-        
-        /// <summary>
-        /// Gets whether this binding represents a negative axis value (e.g., left on a joystick axis).
-        /// </summary>
-        public bool IsNegative => _isNegative;
-        
-        /// <summary>
-        /// Initializes a new keyboard binding.
-        /// </summary>
-        /// <param name="key">The key to bind.</param>
-        /// <param name="deviceIndex">The keyboard index (default: 0 for primary keyboard).</param>
-        public InputBinding(Key key, int deviceIndex = 0)
-            : this(BindingDeviceType.Keyboard, deviceIndex, (int)key, false)
-        {
-        }
-        
-        /// <summary>
-        /// Initializes a new mouse button binding.
-        /// </summary>
-        /// <param name="button">The mouse button to bind.</param>
-        /// <param name="deviceIndex">The mouse index (default: 0 for primary mouse).</param>
-        public InputBinding(MouseButton button, int deviceIndex = 0)
-            : this(BindingDeviceType.Mouse, deviceIndex, (int)button, false)
-        {
-        }
-        
-        /// <summary>
-        /// Initializes a new joystick button binding.
-        /// </summary>
-        /// <param name="button">The joystick button to bind.</param>
-        /// <param name="deviceIndex">The joystick index.</param>
-        public InputBinding(JoystickButton button, int deviceIndex)
-            : this(BindingDeviceType.Joystick, deviceIndex, (int)button, false)
-        {
-        }
-        
-        /// <summary>
-        /// Initializes a new joystick axis binding.
-        /// </summary>
-        /// <param name="axis">The joystick axis to bind.</param>
-        /// <param name="deviceIndex">The joystick index.</param>
-        /// <param name="isNegative">Whether to use the negative direction of the axis.</param>
-        public InputBinding(JoystickAxis axis, int deviceIndex, bool isNegative = false)
-            : this(BindingDeviceType.Joystick, deviceIndex, (int)axis, isNegative)
-        {
-        }
-        
-        /// <summary>
-        /// Initializes a new input binding with raw values.
-        /// </summary>
-        /// <param name="deviceType">The type of device.</param>
-        /// <param name="deviceIndex">The device index.</param>
-        /// <param name="inputCode">The input code.</param>
-        /// <param name="isNegative">Whether this is a negative axis binding.</param>
-        public InputBinding(BindingDeviceType deviceType, int deviceIndex, int inputCode, bool isNegative)
-        {
-            _deviceType = deviceType;
-            _deviceIndex = deviceIndex;
-            _inputCode = inputCode;
-            _isNegative = isNegative;
-        }
-        
-        /// <summary>
-        /// Checks if this binding is currently active based on the current input device states.
-        /// </summary>
-        /// <param name="keyboards">Collection of keyboard devices.</param>
-        /// <param name="mice">Collection of mouse devices.</param>
-        /// <param name="joysticks">Collection of joystick/gamepad devices.</param>
-        /// <returns>True if the binding is active, false otherwise.</returns>
-        public bool IsActive(
-            IReadOnlyList<IKeyboard> keyboards,
-            IReadOnlyList<IMouse> mice,
-            IReadOnlyList<IJoystick> joysticks)
-        {
-            return _deviceType switch
-            {
-                BindingDeviceType.Keyboard => IsKeyboardActive(keyboards),
-                BindingDeviceType.Mouse => IsMouseActive(mice),
-                BindingDeviceType.Joystick => IsJoystickActive(joysticks),
-                _ => false
-            };
-        }
-        
-        private bool IsKeyboardActive(IReadOnlyList<IKeyboard> keyboards)
-        {
-            if (_deviceIndex >= keyboards.Count)
-                return false;
-            
-            var keyboard = keyboards[_deviceIndex];
-            if (keyboard == null)
-                return false;
-            
-            return keyboard.IsKeyPressed((Key)_inputCode);
-        }
-        
-        private bool IsMouseActive(IReadOnlyList<IMouse> mice)
-        {
-            if (_deviceIndex >= mice.Count)
-                return false;
-            
-            var mouse = mice[_deviceIndex];
-            if (mouse == null)
-                return false;
-            
-            return mouse.IsButtonPressed((MouseButton)_inputCode);
-        }
-        
-        private bool IsJoystickActive(IReadOnlyList<IJoystick> joysticks)
-        {
-            if (_deviceIndex >= joysticks.Count)
-                return false;
-            
-            var joystick = joysticks[_deviceIndex];
-            if (joystick == null)
-                return false;
-            
-            if (_isNegative)
-            {
-                // For negative axis, check if axis value is less than -0.5
-                return GetJoystickAxis(joystick, _inputCode) < -0.5f;
-            }
-            else if ((JoystickAxis)_inputCode >= JoystickAxis.Button0)
-            {
-                // This is a button
-                return IsJoystickButtonPressed(joystick, _inputCode - (int)JoystickAxis.Button0);
-            }
-            else
-            {
-                // This is an axis, check if value is greater than 0.5
-                return GetJoystickAxis(joystick, _inputCode) > 0.5f;
-            }
-        }
-        
-        /// <summary>
-        /// Gets the axis value for this binding (for analog inputs like joystick axes).
-        /// </summary>
-        /// <param name="keyboards">Collection of keyboard devices.</param>
-        /// <param name="mice">Collection of mouse devices.</param>
-        /// <param name="joysticks">Collection of joystick/gamepad devices.</param>
-        /// <returns>The axis value, or 0 if not applicable.</returns>
-        public float GetAxisValue(
-            IReadOnlyList<IKeyboard> keyboards,
-            IReadOnlyList<IMouse> mice,
-            IReadOnlyList<IJoystick> joysticks)
-        {
-            if (_deviceType != BindingDeviceType.Joystick)
-                return IsActive(keyboards, mice, joysticks) ? 1.0f : 0.0f;
-            
-            if (_deviceIndex >= joysticks.Count)
-                return 0.0f;
-            
-            var joystick = joysticks[_deviceIndex];
-            if (joystick == null)
-                return 0.0f;
-            
-            var value = GetJoystickAxis(joystick, _inputCode);
-            return _isNegative ? -value : value;
-        }
+    /// <summary>Keyboard physical binding code.</summary>
+    Keyboard,
+    /// <summary>Mouse physical binding code.</summary>
+    Mouse,
+    /// <summary>Joystick physical binding code.</summary>
+    Joystick
+}
+/// <summary>Zero-based joystick button codes.</summary>
+public enum JoystickButton
+{
+    /// <summary>Button0 physical binding code.</summary>
+    Button0,
+    /// <summary>Button1 physical binding code.</summary>
+    Button1,
+    /// <summary>Button2 physical binding code.</summary>
+    Button2,
+    /// <summary>Button3 physical binding code.</summary>
+    Button3,
+    /// <summary>Button4 physical binding code.</summary>
+    Button4,
+    /// <summary>Button5 physical binding code.</summary>
+    Button5,
+    /// <summary>Button6 physical binding code.</summary>
+    Button6,
+    /// <summary>Button7 physical binding code.</summary>
+    Button7,
+    /// <summary>Button8 physical binding code.</summary>
+    Button8,
+    /// <summary>Button9 physical binding code.</summary>
+    Button9,
+    /// <summary>Button10 physical binding code.</summary>
+    Button10,
+    /// <summary>Button11 physical binding code.</summary>
+    Button11,
+    /// <summary>Button12 physical binding code.</summary>
+    Button12,
+    /// <summary>Button13 physical binding code.</summary>
+    Button13,
+    /// <summary>Button14 physical binding code.</summary>
+    Button14,
+    /// <summary>Button15 physical binding code.</summary>
+    Button15
+}
+/// <summary>Joystick axes available as thresholded button bindings.</summary>
+public enum JoystickAxis
+{
+    /// <summary>X physical binding code.</summary>
+    X,
+    /// <summary>Y physical binding code.</summary>
+    Y,
+    /// <summary>Z physical binding code.</summary>
+    Z,
+    /// <summary>Rx physical binding code.</summary>
+    Rx,
+    /// <summary>Ry physical binding code.</summary>
+    Ry,
+    /// <summary>Rz physical binding code.</summary>
+    Rz
+}
 
-        private static float GetJoystickAxis(IJoystick joystick, int axisIndex)
-        {
-            return axisIndex >= 0 && axisIndex < joystick.Axes.Count
-                ? joystick.Axes[axisIndex].Position
-                : 0.0f;
-        }
-
-        private static bool IsJoystickButtonPressed(IJoystick joystick, int buttonIndex)
-        {
-            return buttonIndex >= 0 && buttonIndex < joystick.Buttons.Count &&
-                   joystick.Buttons[buttonIndex].Pressed;
-        }
-        
-        public void Dispose()
-        {
-            // Nothing to dispose - this is a data class
-        }
-        
-        public override string ToString()
-        {
-            return $"{_deviceType}:{_deviceIndex}:{_inputCode}{(IsNegative ? "(-)" : "")}";
-        }
+/// <summary>An immutable physical binding for a button action.</summary>
+/// <remarks>Device zero is the first device in its family. Unavailable devices are inactive.
+/// A joystick axis acts as a button above +0.5, or below -0.5 for its negative direction.</remarks>
+public sealed class InputBinding
+{
+    private readonly bool _joystickButton;
+    /// <summary>Device family.</summary>
+    public BindingDeviceType DeviceType { get; }
+    /// <summary>Zero-based index within the device family.</summary>
+    public int DeviceIndex { get; }
+    /// <summary>Typed enum's numeric code; joystick buttons and axes are separate binding kinds.</summary>
+    public int InputCode { get; }
+    /// <summary>Whether the joystick axis uses the negative threshold.</summary>
+    public bool IsNegative { get; }
+    /// <summary>Binds a keyboard key on device zero by default.</summary>
+    public InputBinding(InputKey key, int deviceIndex = 0)
+        : this(BindingDeviceType.Keyboard, Validate(key), deviceIndex, false, false) { }
+    /// <summary>Binds a mouse button on device zero by default.</summary>
+    public InputBinding(MouseButton button, int deviceIndex = 0)
+        : this(BindingDeviceType.Mouse, Validate(button), deviceIndex, false, false) { }
+    /// <summary>Binds a joystick button on device zero by default.</summary>
+    public InputBinding(JoystickButton button, int deviceIndex = 0)
+        : this(BindingDeviceType.Joystick, Validate(button), deviceIndex, false, true) { }
+    /// <summary>Binds one joystick axis direction using a strict ±0.5 threshold.</summary>
+    public InputBinding(JoystickAxis axis, int deviceIndex = 0, bool isNegative = false)
+        : this(BindingDeviceType.Joystick, Validate(axis), deviceIndex, isNegative, false) { }
+    private InputBinding(BindingDeviceType type, int code, int index, bool negative, bool button)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        DeviceType = type; InputCode = code; DeviceIndex = index; IsNegative = negative; _joystickButton = button;
     }
+    private static int Validate<T>(T code) where T : struct, Enum
+    {
+        int value = Convert.ToInt32(code);
+        if (value < 0 || !Enum.IsDefined(code)) throw new ArgumentOutOfRangeException(nameof(code));
+        return value;
+    }
+    internal bool IsActive(IReadOnlyList<IKeyboard> keyboards, IReadOnlyList<IMouse> mice, IReadOnlyList<IJoystick> joysticks)
+    {
+        if (DeviceType == BindingDeviceType.Keyboard)
+            return DeviceIndex < keyboards.Count && keyboards[DeviceIndex].IsKeyPressed((Key)InputCode);
+        if (DeviceType == BindingDeviceType.Mouse)
+            return DeviceIndex < mice.Count && mice[DeviceIndex].IsButtonPressed((Silk.NET.Input.MouseButton)InputCode);
+        if (DeviceIndex >= joysticks.Count) return false;
+        var joystick = joysticks[DeviceIndex];
+        if (_joystickButton) return InputCode < joystick.Buttons.Count && joystick.Buttons[InputCode].Pressed;
+        if (InputCode >= joystick.Axes.Count) return false;
+        float value = joystick.Axes[InputCode].Position;
+        return IsNegative ? value < -0.5f : value > 0.5f;
+    }
+    /// <summary>Returns a diagnostic description including device, code and direction.</summary>
+    public override string ToString() => $"{DeviceType}:{DeviceIndex}:{InputCode}{(_joystickButton ? "(button)" : IsNegative ? "(-)" : "")}";
 }

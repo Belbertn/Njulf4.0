@@ -10,6 +10,8 @@ using NUnit.Framework;
 using System.Buffers.Binary;
 using System.Reflection;
 using System.Security.Cryptography;
+using Njulf.Graphics;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Tests
 {

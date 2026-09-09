@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;

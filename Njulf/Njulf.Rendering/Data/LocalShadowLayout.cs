@@ -12,7 +12,10 @@ public sealed record LocalShadowLightDiagnostics(uint Identity, LightType Type, 
         if (!(light.Intensity > 0)) return "Light intensity must be greater than zero";
         if (!(light.Range > 0)) return "Light range must be greater than zero";
         bool point = light.Type == LightType.Point;
-        if (!(point ? settings.PointShadowsEnabled : settings.SpotShadowsEnabled)) return "Renderer pass disabled";
+        if (!(point ? settings.PointShadowsEnabled : settings.SpotShadowsEnabled))
+            return point
+                ? "Point shadows disabled (Shadows > Point > Point Shadows Enabled)"
+                : "Spot shadows disabled (Shadows > Spot > Spot Shadows Enabled)";
         if (!point && !(light.SpotAngle > 0.01f && light.SpotAngle < MathF.PI * 0.99f)) return "Invalid spot cone angle";
         if (allocationFailed) return "GPU allocation failed";
         if (!selected)

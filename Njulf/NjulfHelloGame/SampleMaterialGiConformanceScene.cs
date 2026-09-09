@@ -5,6 +5,7 @@ using Njulf.Assets.Cooked;
 using Njulf.Core.Animation;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
@@ -12,6 +13,7 @@ using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector2 = Njulf.Core.Math.Vector2;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 using CoreVector4 = Njulf.Core.Math.Vector4;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace NjulfHelloGame;
 
@@ -1106,12 +1108,12 @@ internal static class SampleMaterialGiConformanceScene
             RenderObject renderObject;
             if (fixture.Primitive == SampleMaterialGiScenePrimitive.SkinnedCard)
             {
-                renderObject = CreateSkinnedCard(mesh, material);
+                renderObject = CreateSkinnedCard(meshManager.GetResourceView(mesh), materialManager.GetResourceView(material));
                 skinnedFixtures++;
             }
             else
             {
-                renderObject = new RenderObject(mesh, material);
+                renderObject = new RenderObject(meshManager.GetResourceView(mesh), materialManager.GetResourceView(material));
             }
 
             renderObject.Id = SampleMaterialGiConformanceSceneLayout.CreateStableEntityId(fixture.StableId);
@@ -1287,7 +1289,7 @@ internal static class SampleMaterialGiConformanceScene
         return texture;
     }
 
-    private static SkinnedRenderObject CreateSkinnedCard(MeshHandle mesh, MaterialHandle material)
+    private static SkinnedRenderObject CreateSkinnedCard(Njulf.Graphics.IMesh mesh, Njulf.Graphics.IMaterial material)
     {
         var joint = new SkeletonJoint
         {

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Core.Camera;
+using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;

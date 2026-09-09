@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Njulf.Core.Math
 {
+    /// <summary>Single-precision rotation quaternion used by ordinary scene transforms.</summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct Quaternion : IEquatable<Quaternion>
     {

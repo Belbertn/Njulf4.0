@@ -1,3 +1,5 @@
+using Njulf.Graphics;
+
 namespace Njulf.Rendering.Debug
 {
     /// <summary>

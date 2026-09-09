@@ -165,12 +165,12 @@ public sealed class DdgiMutationJournalTests
         using var scene = new Scene();
         var first = new RenderObject
         {
-            Material = handle,
+            Material = TestGraphicsResources.Material(handle),
             LocalMeshBounds = UnitBounds
         };
         var second = new RenderObject
         {
-            Material = handle,
+            Material = TestGraphicsResources.Material(handle),
             LocalMeshBounds = UnitBounds,
             Position = new Vector3(16f, 0f, 0f)
         };

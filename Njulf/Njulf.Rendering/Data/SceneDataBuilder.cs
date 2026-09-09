@@ -8,6 +8,7 @@ using Njulf.Core.Geometry;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
@@ -1319,7 +1320,7 @@ namespace Njulf.Rendering.Data
                     continue;
                 }
 
-                if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                if (!(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
                 {
                     _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
                     continue;
@@ -1685,7 +1686,7 @@ namespace Njulf.Rendering.Data
                 _staticInstanceCount += batch.WorldMatrices.Count;
                 if (!batch.Visible)
                     continue;
-                if (batch.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                if (!(batch.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
                     continue;
 
                 MeshInfo meshInfo = GetValidatedMeshInfo(meshHandle);
@@ -2083,7 +2084,7 @@ namespace Njulf.Rendering.Data
             foreach (RenderObject renderObject in scene.RenderObjects)
             {
                 if (!renderObject.Visible ||
-                    renderObject.Mesh is not MeshHandle meshHandle ||
+                    !(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) ||
                     !meshHandle.IsValid)
                 {
                     continue;
@@ -2157,7 +2158,7 @@ namespace Njulf.Rendering.Data
             foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
             {
                 if (!batch.Visible ||
-                    batch.Mesh is not MeshHandle meshHandle ||
+                    !(batch.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) ||
                     !meshHandle.IsValid)
                 {
                     continue;
@@ -3280,7 +3281,7 @@ namespace Njulf.Rendering.Data
             if (material == null)
                 return defaultMaterialHandle;
 
-            if (material is MaterialHandle materialHandle)
+            if (material.TryGetMaterialHandle(out MaterialHandle materialHandle))
                 return materialHandle;
 
             if (material is int materialIndex && materialIndex == 0)
@@ -3946,7 +3947,7 @@ namespace Njulf.Rendering.Data
                     continue;
 
                 skinnedObjectCount++;
-                _animationModelScratch.Add(skinned.Mesh ?? skinned);
+                _animationModelScratch.Add((object?)skinned.Mesh ?? skinned);
 
                 Animator? animator = skinned.Animator;
                 if (animator == null)

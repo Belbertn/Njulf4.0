@@ -32,6 +32,7 @@ internal static class SceneDocumentCompatibility
             SchemaVersion = source.SchemaVersion,
             Id = source.Id,
             Name = source.Name,
+            Environment = source.Environment,
             AmbientLight = source.AmbientLight,
             ImportedModelLightsEnabled = source.ImportedModelLightsEnabled,
             ImportedDirectionalLightEnabled = source.ImportedDirectionalLightEnabled,

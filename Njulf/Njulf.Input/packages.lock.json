@@ -11,22 +11,6 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0"
         }
       },
-      "Silk.NET": {
-        "type": "Direct",
-        "requested": "[2.23.0, )",
-        "resolved": "2.23.0",
-        "contentHash": "9h3saHV0WjZxh4agyHTWFtcAiaOwrW2KZID9k7OzIcUN9ugmvRl9FJxDRZ1Sjbvf7ZcewLCw1C5RCcQomT8Vgw==",
-        "dependencies": {
-          "Silk.NET.Core": "2.23.0",
-          "Silk.NET.GLFW": "2.23.0",
-          "Silk.NET.Input": "2.23.0",
-          "Silk.NET.OpenAL": "2.23.0",
-          "Silk.NET.OpenGL": "2.23.0",
-          "Silk.NET.Vulkan": "2.23.0",
-          "Silk.NET.Vulkan.Extensions.KHR": "2.23.0",
-          "Silk.NET.Windowing": "2.23.0"
-        }
-      },
       "Silk.NET.Core": {
         "type": "Direct",
         "requested": "[2.23.0, )",
@@ -103,49 +87,6 @@
         "resolved": "2.23.0",
         "contentHash": "r8PdIVzME8EH0qAgbmRPO87I4GfgR2j8TofT7EMuRJDf1QluoQwnVypDoFJjQ2ZBSRsGYk5unYxxogI05Ogsmw=="
       },
-      "Silk.NET.OpenAL": {
-        "type": "Transitive",
-        "resolved": "2.23.0",
-        "contentHash": "O8EaDRWGOcKniZ2VxKD/xOmugzUJz747KpqGRw3cezDsz8nD66OZW217o1rT06cG76f8eYigy/yY6eRdhRqHHQ==",
-        "dependencies": {
-          "Silk.NET.Core": "2.23.0"
-        }
-      },
-      "Silk.NET.OpenGL": {
-        "type": "Transitive",
-        "resolved": "2.23.0",
-        "contentHash": "CIakUoUqiAyRPykMk54tr1M1XpbJrT/iw12T85HDQcuRCFlBa1cxbX7v3FmtznKO5eM89esfmGNCgqDaKBiWfg==",
-        "dependencies": {
-          "Silk.NET.Core": "2.23.0",
-          "Silk.NET.Maths": "2.23.0"
-        }
-      },
-      "Silk.NET.Vulkan": {
-        "type": "Transitive",
-        "resolved": "2.23.0",
-        "contentHash": "3/irtlSWXZ3eTi8N6nelI6L34NTB8ZJHpqVMNzZx2aX7Ek9YEQ34NoQW8/Tljrtmkg8KRhHW8hKTEzZaKV8PgA==",
-        "dependencies": {
-          "Silk.NET.Core": "2.23.0"
-        }
-      },
-      "Silk.NET.Vulkan.Extensions.KHR": {
-        "type": "Transitive",
-        "resolved": "2.23.0",
-        "contentHash": "uRaf4j+SmH3DumjSSSUbFg33BnsGZUyXGj93O9NgGKZSJN3OTmNmQDxRew+/KiVLcgH6qzbto8aNGZ++j9GFWg==",
-        "dependencies": {
-          "Silk.NET.Core": "2.23.0",
-          "Silk.NET.Vulkan": "2.23.0"
-        }
-      },
-      "Silk.NET.Windowing": {
-        "type": "Transitive",
-        "resolved": "2.23.0",
-        "contentHash": "OPNPmt/lRyUKVYrFLQXVxyATqD3MKLc1iY1oKx1/2GppgmZxVZPwN12tekrQ4C7408kgB1L5JD1Wnirqqeb2kg==",
-        "dependencies": {
-          "Silk.NET.Windowing.Common": "2.23.0",
-          "Silk.NET.Windowing.Glfw": "2.23.0"
-        }
-      },
       "Silk.NET.Windowing.Common": {
         "type": "Transitive",
         "resolved": "2.23.0",
@@ -170,17 +111,7 @@
         "contentHash": "Iy22JopynbOJ32vA0lBhFEzGi65GQJBuJHYBYRBpydrDpNoTiHnjIXfA65Gu+8qsOr/ZEoIF8r9aHCgAXuO6DA=="
       },
       "njulf.core": {
-        "type": "Project",
-        "dependencies": {
-          "Microsoft.Extensions.DependencyInjection": "[10.0.0, )",
-          "Silk.NET": "[2.23.0, )",
-          "Silk.NET.Core": "[2.23.0, )",
-          "Silk.NET.Input": "[2.23.0, )",
-          "Silk.NET.Input.Common": "[2.23.0, )",
-          "Silk.NET.Maths": "[2.23.0, )",
-          "Silk.NET.Windowing": "[2.23.0, )",
-          "Silk.NET.Windowing.Common": "[2.23.0, )"
-        }
+        "type": "Project"
       }
     }
   }

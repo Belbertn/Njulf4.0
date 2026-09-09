@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using Njulf.Assets.Cooked;
 using Njulf.Assets.Validation;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
@@ -1157,7 +1158,7 @@ namespace Njulf.Rendering.Resources
             {
                 if (!renderObject.Visible || !renderObject.Enabled)
                     continue;
-                if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                if (!(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
                     continue;
                 AccelerationStructureGeometryDomain requestedDomain = renderObject.IsStatic
                     ? AccelerationStructureGeometryDomain.Static
@@ -1246,7 +1247,7 @@ namespace Njulf.Rendering.Resources
             {
                 if (!batch.Visible)
                     continue;
-                if (batch.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                if (!(batch.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
                     continue;
                 if (!TryGetRayQueryMesh(
                     meshHandle,

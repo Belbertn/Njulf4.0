@@ -5,6 +5,7 @@ using NUnit.Framework;
 using Silk.NET.Vulkan;
 using System.IO;
 using System.Linq;
+using Njulf.Graphics;
 
 namespace Njulf.Tests;
 

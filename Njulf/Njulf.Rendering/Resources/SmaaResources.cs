@@ -1,5 +1,6 @@
 using System;
 using Njulf.Assets;
+using Njulf.Graphics;
 using Njulf.Rendering.Descriptors;
 using Silk.NET.Vulkan;
 

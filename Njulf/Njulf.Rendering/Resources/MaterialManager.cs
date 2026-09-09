@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -30,10 +31,44 @@ namespace Njulf.Rendering.Resources
         private const int MaximumCompilationPublishAttempts = 4;
 
         private readonly VulkanContext? _context;
+        internal Njulf.Graphics.VulkanGraphicsDevice? GraphicsDevice { get; set; }
+        internal object ResourceOwner => (object?)_context ?? this;
+        /// <summary>A borrowed view of a handle owned by the caller. Assignment to an object retains it.</summary>
+        public Njulf.Graphics.IMaterial GetResourceView(MaterialHandle handle) => AdoptResource(handle).AsBorrowedView();
+
+        /// <summary>Publishes a reference already transferred by a manager copy-on-write operation.</summary>
+        public void AdoptTransferredResource(RenderObject target, MaterialHandle handle)
+        {
+            if (target.Material is not Njulf.Graphics.VulkanMaterial current || !ReferenceEquals(current.OwnerIdentity, ResourceOwner))
+                throw new ArgumentException("Object material belongs to another graphics device.", nameof(target));
+            var replacement = AdoptResource(handle);
+            target.TransferMaterialOwnership(target.Material ?? throw new InvalidOperationException("Object has no material."), () => replacement);
+        }
+
+        /// <summary>Acquires an owned typed reference to an existing device-local material handle.</summary>
+        public Njulf.Graphics.Material RetainResource(MaterialHandle handle)
+        {
+            var resource = AdoptResource(handle);
+            RetainMaterial(handle);
+            return resource;
+        }
+
+        internal Njulf.Graphics.VulkanMaterial AdoptResource(MaterialHandle handle) =>
+            new(ResourceOwner, handle, GetMaterialDefinition(handle).Name,
+                RetainMaterial, ReleaseResource,
+                () => { GraphicsDevice?.EnsureUsable(); GetMaterialDefinition(handle); })
+                { NameResolver = handle => GetMaterialDefinition(handle).Name };
+
+        private void ReleaseResource(MaterialHandle handle)
+        {
+            if (GraphicsDevice != null) GraphicsDevice.ReleaseMaterial(handle);
+            else ReleaseMaterial(handle);
+        }
         private readonly BufferManager? _bufferManager;
         private readonly StagingRing? _stagingRing;
         private readonly SynchronizationManager? _sync;
         private readonly TextureManager? _textureManager;
+        internal TextureManager? TextureManager => _textureManager;
         private readonly ITextureReferenceManager? _textureReferences;
         private readonly Func<
             MaterialTextureBinding,
@@ -983,10 +1018,14 @@ namespace Njulf.Rendering.Resources
             ArgumentNullException.ThrowIfNull(renderObject);
             ArgumentNullException.ThrowIfNull(definition);
 
-            object expectedMaterial = renderObject.Material ??
+            Njulf.Graphics.IMaterial expectedMaterial = renderObject.Material ??
                 throw new InvalidOperationException(
                     $"Scene object '{renderObject.Name}' ({renderObject.Id}) has no material.");
-            if (expectedMaterial is not MaterialHandle sourceHandle)
+            GraphicsDevice?.EnsureUsable();
+            if (expectedMaterial is not Njulf.Graphics.VulkanMaterial typedMaterial ||
+                !ReferenceEquals(typedMaterial.OwnerIdentity, ResourceOwner))
+                throw new ArgumentException("Object material belongs to another graphics device.", nameof(renderObject));
+            if (!expectedMaterial.TryGetMaterialHandle(out MaterialHandle sourceHandle))
             {
                 throw new InvalidOperationException(
                     $"Scene object '{renderObject.Name}' ({renderObject.Id}) has no material handle.");
@@ -1161,8 +1200,10 @@ namespace Njulf.Rendering.Resources
                                     anticipatedIndex,
                                     AllocateGeneration(
                                         anticipatedIndex));
-                            object boxedReplacement =
-                                anticipatedHandle;
+                            Njulf.Graphics.IMaterial boxedReplacement = new Njulf.Graphics.VulkanMaterial(
+                                ResourceOwner, anticipatedHandle, compiled.Definition.Name,
+                                RetainMaterial, ReleaseResource, () => { GraphicsDevice?.EnsureUsable(); GetMaterialDefinition(anticipatedHandle); })
+                                { NameResolver = handle => GetMaterialDefinition(handle).Name };
 
                             try
                             {

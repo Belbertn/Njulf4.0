@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
@@ -15,11 +15,14 @@
 
     <ItemGroup>
       <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
+    <ProjectReference Include="..\Njulf.Graphics\Njulf.Graphics.csproj" />
       <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
       <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
+      <ProjectReference Include="..\Njulf.Assets.Tooling\Njulf.Assets.Tooling.csproj" />
       <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />
       <ProjectReference Include="..\Njulf.Editor\Njulf.Editor.csproj" />
       <ProjectReference Include="..\NjulfHelloGame\NjulfHelloGame.csproj" />
+      <ProjectReference Include="..\Njulf.Framework\Njulf.Framework.csproj" />
     </ItemGroup>
 
     <ItemGroup>

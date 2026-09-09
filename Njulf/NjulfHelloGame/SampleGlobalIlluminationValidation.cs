@@ -1,4 +1,5 @@
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 
 namespace NjulfHelloGame;

@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Core.Camera;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
@@ -129,17 +130,17 @@ internal sealed class SampleDeterministicLongRunWorkload
             throw new ArgumentOutOfRangeException(nameof(mutationIntervalFrames));
 
         RenderObject target = scene.RenderObjects.FirstOrDefault(
-            renderObject => renderObject.Material is MaterialHandle handle && handle.IsValid)
+            renderObject => (renderObject.Material).TryGetMaterialHandle(out MaterialHandle handle) && handle.IsValid)
             ?? throw new InvalidOperationException(
                 "The long-run material workload requires at least one render object with a live material.");
-        MaterialHandle source = (MaterialHandle)target.Material!;
+        MaterialHandle source = target.Material!.GetMaterialHandle();
         _material = _materialManager.CreateEditableMaterialCopy(source);
         if (_material != source)
         {
             if (target.HasResourceLifetime)
-                target.AdoptTransferredMaterial(_material);
+                _materialManager.AdoptTransferredResource(target, _material);
             else
-                target.Material = _material;
+                target.Material = _materialManager.GetResourceView(_material);
         }
         _initialDefinition = _materialManager.GetMaterialDefinition(_material);
         _initialCameraPosition = _camera.Position;

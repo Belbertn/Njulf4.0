@@ -63,6 +63,7 @@ public sealed class SceneDocumentLoader
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(scene);
+        lights ??= new SceneLightStore(scene);
         document =
             SceneDocumentCompatibility.MaterializeLegacyMaterialOverrideDefaults(
                 document);
@@ -85,6 +86,7 @@ public sealed class SceneDocumentLoader
 
         scene.Id = document.Id;
         scene.Name = document.Name;
+        scene.Environment = document.Environment?.ToEnvironment();
         scene.AmbientLight = ToColor(document.AmbientLight);
         var modelInstances = new Dictionary<string, ModelInstanceCursor>(StringComparer.Ordinal);
         Exception? populateFailure = null;

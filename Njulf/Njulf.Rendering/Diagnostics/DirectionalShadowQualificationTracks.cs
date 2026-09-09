@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Diagnostics;

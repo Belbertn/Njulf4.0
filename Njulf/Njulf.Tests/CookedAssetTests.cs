@@ -1,3 +1,4 @@
+using Njulf.Graphics;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -325,7 +326,7 @@ public sealed class CookedAssetTests
         string path = Path.Combine(_directory, "white.ktx2");
         var source = new ModelTextureSource { Bytes = png, CacheIdentity = "white", DebugName = "white.png" };
         var report = new TextureCooker().Cook(source, path, new TextureCookOptions(MaxDimension: 16, ColorSpace: TextureColorSpace.Srgb, TargetFormatPolicy: TextureTargetFormatPolicy.Rgba8));
-        var info = TextureCooker.Inspect(File.ReadAllBytes(path), path);
+        var info = TextureSourceDecoder.Inspect(File.ReadAllBytes(path), path);
         Assert.Multiple(() =>
         {
             Assert.That(report.PassedThrough, Is.False);
@@ -1270,7 +1271,7 @@ public sealed class CookedAssetTests
         {
             string path = Path.Combine(_directory, policy + ".ktx2");
             _ = new TextureCooker().Cook(source, path, new TextureCookOptions(16, colorSpace, TargetFormatPolicy: policy));
-            Assert.That(TextureCooker.Inspect(File.ReadAllBytes(path), path).Format, Is.EqualTo(format), policy.ToString());
+            Assert.That(TextureSourceDecoder.Inspect(File.ReadAllBytes(path), path).Format, Is.EqualTo(format), policy.ToString());
         }
     }
 

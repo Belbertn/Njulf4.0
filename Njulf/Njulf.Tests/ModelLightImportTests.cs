@@ -285,6 +285,39 @@ public sealed class ModelLightImportTests
         Assert.That(settings.PointShadowMapSize, Is.EqualTo(1024));
     }
 
+    [TestCase(LightType.Point)]
+    [TestCase(LightType.Spot)]
+    public void ImportedShadows_RestorationPreservesExplicitAuthoredLightShadowRequest(LightType type)
+    {
+        using Model model = CreateRuntimeModel(lightCount: 1);
+        using var scene = new Scene();
+        AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, new ModelContentManager(model), new MutableMemoryLightStore());
+        controller.SetImportedModelLightsEnabled(true);
+        controller.SetImportedModelLightShadowsEnabled(true);
+        var settings = new ShadowSettings { PointShadowsEnabled = false, SpotShadowsEnabled = false };
+        var policy = new ImportedLightShadowPolicy();
+        policy.Apply(settings, controller);
+
+        var authored = new Light
+        {
+            Type = type, CastsShadows = true, Intensity = 10f, Range = 12f, SpotAngle = MathF.PI / 4f
+        };
+        policy.ApplyLightEdit(settings, default, authored);
+        controller.SetImportedModelLightShadowsEnabled(false);
+        policy.Apply(settings, controller);
+
+        var camera = new Njulf.Core.Camera.FirstPersonCamera(new Vector3(0f, 0f, 8f), 0f, 0f);
+        camera.Update();
+        LocalShadowSelection selected = new LocalShadowSelector().Select([authored], camera, settings);
+        Assert.Multiple(() =>
+        {
+            Assert.That(selected.PointLights.Length + selected.SpotLights.Length, Is.EqualTo(1));
+            Assert.That(settings.PointShadowsEnabled, Is.EqualTo(type == LightType.Point));
+            Assert.That(settings.SpotShadowsEnabled, Is.EqualTo(type == LightType.Spot));
+        });
+    }
+
     [TestCase(ModelLightType.Spot)]
     [TestCase(ModelLightType.Rectangle)]
     [TestCase(ModelLightType.Disk)]
@@ -1504,7 +1537,10 @@ public sealed class ModelLightImportTests
         public T Load<T>(string path) => (T)(object)model;
 
         public void Unload<T>(T asset) { }
-        public void Clear() { }
+        public void UnloadAll() { }
+        public T Load<T>(string path, ContentLoadOptions options) => Load<T>(path);
+        public Task<T> LoadAsync<T>(string path, ContentLoadOptions? options = null, CancellationToken cancellationToken = default) => Task.FromResult(Load<T>(path));
+        public Task<ContentPreloadResult<T>> PreloadAsync<T>(IEnumerable<ContentPreloadRequest> requests, ContentPreloadOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class MutableMemoryLightStore : IMutableSceneLightStore

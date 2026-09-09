@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
@@ -12,6 +12,8 @@
     <ItemGroup>
       <PackageReference Include="FlipBinding.CSharp" Version="1.0.3" />
       <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
+    <ProjectReference Include="..\Njulf.Graphics\Njulf.Graphics.csproj" />
+      <ProjectReference Include="..\Njulf.Framework\Njulf.Framework.csproj" />
       <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
       <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
       <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />

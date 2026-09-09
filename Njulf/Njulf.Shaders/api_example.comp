@@ -1,0 +1,12 @@
+#version 460
+layout(local_size_x=8, local_size_y=8) in;
+layout(set=0, binding=0, rgba16f) uniform writeonly image2D destination;
+layout(set=0, binding=1, std430) buffer Data { uint value; } data;
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(destination);
+    if (any(greaterThanEqual(p, size))) return;
+    vec2 uv = (vec2(p) + 0.5) / vec2(size);
+    imageStore(destination, p, vec4(uv.x, uv.y, 0.25, 1));
+    if (all(equal(p, ivec2(0)))) data.value = 1;
+}

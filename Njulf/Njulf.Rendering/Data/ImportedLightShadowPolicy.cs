@@ -1,5 +1,6 @@
 using Njulf.Assets.Scenes;
 using Njulf.Core.Scene;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Data;
 
@@ -9,6 +10,29 @@ public sealed class ImportedLightShadowPolicy
     private ShadowSettings? _settings;
     private ModelLightRuntimeController? _owner;
     private Snapshot _previous;
+
+    /// <summary>
+    /// An explicit editor request enables the required local shadow pass without changing its budgets.
+    /// Retain that choice when a temporary imported-light override is later restored.
+    /// </summary>
+    public void ApplyLightEdit(ShadowSettings settings, in Light previous, in Light current)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (!current.CastsShadows || (previous.CastsShadows && previous.Type == current.Type))
+            return;
+
+        bool restorePrevious = ReferenceEquals(_settings, settings);
+        if (current.Type == LightType.Point)
+        {
+            settings.PointShadowsEnabled = true;
+            if (restorePrevious) _previous = _previous with { Point = true };
+        }
+        else if (current.Type == LightType.Spot)
+        {
+            settings.SpotShadowsEnabled = true;
+            if (restorePrevious) _previous = _previous with { Spot = true };
+        }
+    }
 
     public void Apply(ShadowSettings settings, ModelLightRuntimeController? imported)
     {

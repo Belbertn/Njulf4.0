@@ -49,6 +49,43 @@ public sealed class ContentManagerHardeningTests
     }
 
     [Test]
+    public async Task NormalContractReportsCacheHitsAndRejectsForeignOwnership()
+    {
+        TestCookedModel fixture = WriteCookedModel("Contract", "contract");
+        using var manager = new ContentManager(_directory, new RecordingUploadService());
+        IContentManager content = manager;
+        var progress = new RecordingProgress();
+        var options = new ContentLoadOptions { Progress = progress };
+        Model template = await content.LoadAsync<Model>(fixture.ModelPath, options);
+        Model cached = await content.LoadAsync<Model>(fixture.ModelPath, options);
+        using Model instance = template.CreateInstance();
+        Assert.That(cached, Is.SameAs(template));
+        Assert.That(progress.Stages.Count(stage => stage == ContentLoadStage.Ready), Is.EqualTo(2));
+        Assert.Throws<ArgumentException>(() => content.Unload(instance));
+        content.Unload(template);
+        Assert.DoesNotThrow(() => instance.CreateInstance().Dispose());
+        Assert.Throws<ArgumentException>(() => content.Unload(template));
+    }
+
+    [Test]
+    public void ShutdownRejectsNewRequestsButAllowsOwnedAssetUnloading()
+    {
+        TestCookedModel fixture = WriteCookedModel("Shutdown", "shutdown");
+        using var content = new ContentManager(_directory, new RecordingUploadService());
+        Model template = content.Load<Model>(fixture.ModelPath);
+        content.BeginShutdown();
+        Assert.ThrowsAsync<ObjectDisposedException>(() => content.LoadAsync<Model>(fixture.ModelPath));
+        Assert.DoesNotThrow(() => content.Unload(template));
+        Assert.That(content.ActiveOperationCount, Is.Zero);
+    }
+
+    private sealed class RecordingProgress : IProgress<ContentLoadProgressEvent>
+    {
+        public List<ContentLoadStage> Stages { get; } = new();
+        public void Report(ContentLoadProgressEvent value) => Stages.Add(value.Stage);
+    }
+
+    [Test]
     public async Task ConcurrentCacheMisses_PublishOneUploadedOwner()
     {
         TestCookedModel fixture = WriteCookedModel(
@@ -190,7 +227,7 @@ public sealed class ContentManagerHardeningTests
                 () => content.Unload(new Model()),
                 Throws.TypeOf<ObjectDisposedException>());
             Assert.That(
-                () => content.Clear(),
+                () => content.UnloadAll(),
                 Throws.TypeOf<ObjectDisposedException>());
             Assert.That(
                 () => _ = content.CookedDiagnostics,

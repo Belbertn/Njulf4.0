@@ -1,3 +1,4 @@
+using Njulf.Rendering;
 using Njulf.Rendering.Diagnostics;
 using NUnit.Framework;
 
@@ -19,7 +20,7 @@ public sealed class RendererValidationSettingsTests
         {
             Assert.That(RendererValidationSettings.Default.Mode, Is.EqualTo(expectedMode));
             Assert.That(
-                Microsoft.Extensions.DependencyInjection.RenderingOptions.DefaultEnableValidation,
+                RenderingOptions.DefaultEnableValidation,
                 Is.EqualTo(expectedMode != RendererValidationMode.Off));
         });
     }

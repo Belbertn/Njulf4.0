@@ -4,6 +4,7 @@ using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
 using System.Text.Json;
+using Njulf.Graphics;
 
 namespace Njulf.Tests;
 

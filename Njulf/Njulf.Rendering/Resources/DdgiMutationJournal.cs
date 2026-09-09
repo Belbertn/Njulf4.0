@@ -630,7 +630,7 @@ public sealed class DdgiMutationJournal : IDisposable
 
     private void TrackMaterialUserLocked(RenderObject renderObject, object? material)
     {
-        if (material is not MaterialHandle handle || !handle.IsValid)
+        if (!material.TryGetMaterialHandle(out MaterialHandle handle) || !handle.IsValid)
             return;
         if (!_materialUsers.TryGetValue(handle, out HashSet<RenderObject>? users))
         {
@@ -642,7 +642,7 @@ public sealed class DdgiMutationJournal : IDisposable
 
     private void UntrackMaterialUserLocked(RenderObject renderObject, object? material)
     {
-        if (material is not MaterialHandle handle ||
+        if (!material.TryGetMaterialHandle(out MaterialHandle handle) ||
             !_materialUsers.TryGetValue(handle, out HashSet<RenderObject>? users))
         {
             return;

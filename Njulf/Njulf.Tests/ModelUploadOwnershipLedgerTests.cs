@@ -1,3 +1,4 @@
+using Njulf.Graphics;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 

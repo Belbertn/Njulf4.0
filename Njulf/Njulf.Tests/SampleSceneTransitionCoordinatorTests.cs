@@ -120,7 +120,7 @@ public sealed class SampleSceneTransitionCoordinatorTests
     public void HeartbeatsPreserveProgressAndPreventNoActivityFailure()
     {
         long now = 0;
-        IContentLoadProgressSink? sink = null;
+        IProgress<ContentLoadProgressEvent>? sink = null;
         var preparation = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         using var coordinator = new SampleSceneTransitionCoordinator(
@@ -201,7 +201,7 @@ public sealed class SampleSceneTransitionCoordinatorTests
     public void AbsoluteWatchdogFailsEvenWhenHeartbeatsContinue()
     {
         long now = 0;
-        IContentLoadProgressSink? sink = null;
+        IProgress<ContentLoadProgressEvent>? sink = null;
         var preparation = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         using var coordinator = new SampleSceneTransitionCoordinator(

@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using Hexa.NET.ImGui;
 using Njulf.Rendering.Data;
+using Njulf.Graphics;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 using NumericsVector3 = System.Numerics.Vector3;
 
@@ -49,6 +50,9 @@ internal sealed unsafe class RenderingSettingsEditorPanel
     ];
 
     private string _filter = string.Empty;
+    private GraphicsSettingsController? _controller;
+    private Task<GraphicsSettingsResult>? _pending;
+    private GraphicsSettingsResult? _lastResult;
 
     internal static IReadOnlyList<PropertyInfo> EditableProperties => AllEditableProperties;
 
@@ -67,6 +71,7 @@ internal sealed unsafe class RenderingSettingsEditorPanel
         ImGui.Begin("Rendering Settings");
 
         RenderSettings? settings = editor.RendererSettings;
+        _controller = editor.GraphicsSettings;
         if (settings == null)
         {
             ImGui.TextWrapped("Live rendering settings are unavailable because this editor is not attached to a Vulkan renderer.");
@@ -75,6 +80,15 @@ internal sealed unsafe class RenderingSettingsEditorPanel
         }
 
         RenderRuntimeSummary(editor.RendererDiagnostics);
+        if (_pending?.IsCompletedSuccessfully == true)
+        { _lastResult = _pending.Result; _pending = null; }
+        if (_pending != null) ImGui.TextWrapped("Settings change pending; resources are being prepared.");
+        if (_lastResult != null)
+        {
+            ImGui.TextWrapped($"Settings: {_lastResult.Outcome}. {_lastResult.Reason}");
+            if (_lastResult.Outcome is GraphicsSettingsOutcome.RestartRequired or GraphicsSettingsOutcome.Rejected)
+                foreach (var field in _lastResult.Fields) ImGui.TextWrapped($"{field.Field}: {field.Reason}");
+        }
         if (ImGui.Button("Reset visualization overrides"))
             settings.ResetRenderViewOverrides();
         if (ImGui.IsItemHovered())
@@ -83,7 +97,7 @@ internal sealed unsafe class RenderingSettingsEditorPanel
         ImGui.SeparatorText("Live renderer settings");
         ImGui.InputText("Filter settings", ref _filter, (nuint)256);
         ImGui.TextDisabled(
-            $"{AllEditableProperties.Length} settings; changes apply immediately. Hover a control for its property and current value.");
+            $"{AllEditableProperties.Length} settings; common controls apply at frame boundaries. Hover for property details.");
 
         RenderSection("Exposure and tone mapping", settings, ExposureEditors, defaultOpen: true);
         RenderResolutionSection(settings);
@@ -169,13 +183,13 @@ internal sealed unsafe class RenderingSettingsEditorPanel
         }
     }
 
-    private static void RenderEditors(object target, IReadOnlyList<SettingEditor> editors)
+    private void RenderEditors(object target, IReadOnlyList<SettingEditor> editors)
     {
         foreach (SettingEditor editor in editors)
             RenderProperty(target, editor);
     }
 
-    private static void RenderProperty(object target, SettingEditor editor)
+    private void RenderProperty(object target, SettingEditor editor)
     {
         PropertyInfo property = editor.Property;
         string controlLabel = $"{editor.Label}##{property.DeclaringType?.Name}.{property.Name}";
@@ -243,11 +257,32 @@ internal sealed unsafe class RenderingSettingsEditorPanel
         }
 
         if (changed)
-            property.SetValue(target, next);
+        {
+            GraphicsSettingsChange? change = CreateCommonChange(target, property.Name, next);
+            if (change != null && _controller != null)
+            {
+                var task = _controller.ApplyAsync(change);
+                if (task.IsCompletedSuccessfully) _lastResult = task.Result;
+                else _pending = task;
+            }
+            else property.SetValue(target, next);
+        }
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip($"{property.DeclaringType?.Name}.{property.Name} = {property.GetValue(target)}");
     }
+
+    internal static GraphicsSettingsChange? CreateCommonChange(object target, string property, object? value) => (target, property) switch
+    {
+        (RenderSettings, nameof(RenderSettings.Exposure)) => new() { Exposure = (float)value! },
+        (RenderSettings, nameof(RenderSettings.ToneMapper)) => new() { ToneMapper = (ToneMapper)value! },
+        (RenderSettings, nameof(RenderSettings.ResolutionScale)) => new() { ResolutionScale = (float)value! },
+        (AutoExposureSettings, nameof(AutoExposureSettings.Enabled)) => new() { AutoExposureEnabled = (bool)value! },
+        (AntiAliasingSettings, nameof(AntiAliasingSettings.Mode)) => new() { AntiAliasingMode = (AntiAliasingMode)value! },
+        (AmbientOcclusionSettings, nameof(AmbientOcclusionSettings.Mode)) => new() { AmbientOcclusionMode = (AmbientOcclusionMode)value! },
+        (ReflectionSettings, nameof(ReflectionSettings.Mode)) => new() { ReflectionMode = (ReflectionMode)value! },
+        _ => null
+    };
 
     private bool MatchesFilter(SettingEditor editor, string sectionName) =>
         !IsFiltering ||

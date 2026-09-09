@@ -1,10 +1,13 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <Nullable>enable</Nullable>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <!-- Existing APIs have incomplete XML comments; emit available IntelliSense documentation. -->
+        <NoWarn>$(NoWarn);1591;1573;0419;1587</NoWarn>
         <NjulfSceneCompactionCounterReadback Condition="'$(NjulfSceneCompactionCounterReadback)' == ''">true</NjulfSceneCompactionCounterReadback>
         <DefineConstants Condition="'$(NjulfSceneCompactionCounterReadback)' == 'true'">$(DefineConstants);NJULF_SCENE_COMPACTION_COUNTER_READBACK</DefineConstants>
     </PropertyGroup>
@@ -13,9 +16,9 @@
       <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
       <PackageReference Include="GpuMemoryAllocator.vma" Version="3.3.0-0.2.0" />
       <PackageReference Include="GpuMemoryAllocator.Vulkan" Version="3.3.0-0.2.0" />
-      <PackageReference Include="Silk.NET" Version="2.23.0" />
       <PackageReference Include="Silk.NET.Core" Version="2.23.0" />
       <PackageReference Include="Silk.NET.Maths" Version="2.23.0" />
+      <PackageReference Include="Silk.NET.Windowing.Common" Version="2.23.0" />
       <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
       <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.23.0" />
       <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />
@@ -26,6 +29,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
+    <ProjectReference Include="..\Njulf.Graphics\Njulf.Graphics.csproj" />
       <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
       <ProjectReference Include="..\Njulf.Shaders\Njulf.Shaders.csproj" />
     </ItemGroup>

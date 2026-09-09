@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Resources;
@@ -13,6 +14,8 @@ namespace Njulf.Rendering.Resources;
 /// </summary>
 internal interface IModelRenderUploadBackend
 {
+    object ResourceOwner => this;
+    Njulf.Graphics.VulkanGraphicsDevice? GraphicsDevice => null;
     TextureHandle DefaultWhiteTexture { get; }
 
     TextureHandle DefaultNormalTexture { get; }
@@ -96,6 +99,8 @@ internal interface IModelRenderUploadBackend
 
 internal sealed class ModelRenderUploadBackend : IModelRenderUploadBackend
 {
+    public object ResourceOwner => _meshManager.ResourceOwner;
+    public Njulf.Graphics.VulkanGraphicsDevice? GraphicsDevice => _meshManager.GraphicsDevice;
     private readonly MeshManager _meshManager;
     private readonly TextureManager _textureManager;
     private readonly MaterialManager _materialManager;

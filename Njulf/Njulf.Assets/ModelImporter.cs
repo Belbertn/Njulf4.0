@@ -1,3 +1,5 @@
+using Mesh = Silk.NET.Assimp.Mesh;
+using Material = Silk.NET.Assimp.Material;
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
@@ -11,6 +13,7 @@ using Njulf.Assets.Gltf;
 using Njulf.Assets.Validation;
 using Njulf.Core.Animation;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Silk.NET.Assimp;
 using Silk.NET.Core.Native;
 using File = System.IO.File;
@@ -20,6 +23,7 @@ using ModelLightDefinition = Njulf.Core.Scene.ModelLightDefinition;
 using ModelLightType = Njulf.Core.Scene.ModelLightType;
 using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
 using NumericsVector4 = System.Numerics.Vector4;
+using TextureWrapMode = Njulf.Graphics.TextureWrapMode;
 
 namespace Njulf.Assets
 {

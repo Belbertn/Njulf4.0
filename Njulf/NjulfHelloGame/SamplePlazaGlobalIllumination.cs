@@ -1,6 +1,7 @@
 using System;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 
 namespace NjulfHelloGame;

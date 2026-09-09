@@ -3,6 +3,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using NUnit.Framework;

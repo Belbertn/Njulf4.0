@@ -7,6 +7,7 @@ using Njulf.Assets.Cooked;
 using Njulf.Core.Foliage;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -578,7 +579,7 @@ public sealed class FoliageManager : IDisposable
         uint impostorMetadataIndex)
     {
         MeshInfo meshInfo = default;
-        if (prototype.Mesh is MeshHandle meshHandle && meshHandle.IsValid && _meshManager != null)
+        if ((prototype.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) && meshHandle.IsValid && _meshManager != null)
         {
             try
             {
@@ -665,7 +666,7 @@ public sealed class FoliageManager : IDisposable
     {
         if (_materialManager == null)
         {
-            return prototype.Material is MaterialHandle materialHandle &&
+            return (prototype.Material).TryGetMaterialHandle(out MaterialHandle materialHandle) &&
                 materialHandle.IsValid
                     ? materialHandle
                     : MaterialHandle.Invalid;
@@ -868,7 +869,7 @@ public sealed class FoliageManager : IDisposable
 
         Vector3 localMin = patch.Bounds.Min - patch.InstancePosition;
         Vector3 localMax = patch.Bounds.Max - patch.InstancePosition;
-        if (patch.Prototype.Mesh is MeshHandle meshHandle &&
+        if ((patch.Prototype.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) &&
             meshHandle.IsValid && _meshManager != null)
         {
             try

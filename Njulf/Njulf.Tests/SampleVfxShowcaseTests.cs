@@ -2,6 +2,7 @@ using System.IO;
 using System.Linq;
 using Njulf.Core.Scene;
 using Njulf.Core.Vfx;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NjulfHelloGame;

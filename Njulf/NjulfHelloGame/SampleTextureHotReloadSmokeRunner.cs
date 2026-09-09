@@ -3,10 +3,12 @@ using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Resources;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace NjulfHelloGame;
 
@@ -140,7 +142,7 @@ internal sealed class SampleTextureHotReloadSession :
             {
                 if (!renderObject.Visible ||
                     !renderObject.Enabled ||
-                    renderObject.Mesh is not MeshHandle { IsValid: true })
+                    !(renderObject.Mesh).TryGetMeshHandle(out _))
                 {
                     continue;
                 }
@@ -148,8 +150,8 @@ internal sealed class SampleTextureHotReloadSession :
                 _sceneBindings.Add(
                     new SceneMaterialBinding(
                         renderObject,
-                        renderObject.Material));
-                renderObject.Material = _material;
+                        renderObject.Material == null ? null : _materialManager.RetainResource(renderObject.Material.GetMaterialHandle())));
+                renderObject.Material = _materialManager.GetResourceView(_material);
             }
 
             ConfigureEvidenceSettings(_renderer.Settings);
@@ -285,15 +287,16 @@ internal sealed class SampleTextureHotReloadSession :
     {
         if (_restored)
             return;
-        _restored = true;
 
         List<Exception>? failures = null;
         for (int index = _sceneBindings.Count - 1; index >= 0; index--)
         {
             SceneMaterialBinding binding = _sceneBindings[index];
+            if (binding.OriginalMaterial?.IsDisposed == true) continue;
             try
             {
                 binding.RenderObject.Material = binding.OriginalMaterial;
+                binding.OriginalMaterial?.Dispose();
             }
             catch (Exception exception)
             {
@@ -316,6 +319,7 @@ internal sealed class SampleTextureHotReloadSession :
                 "Texture hot-reload qualification rollback was incomplete.",
                 failures);
         }
+        _restored = true;
     }
 
     private TextureContentReloadResult Reload() =>
@@ -440,7 +444,7 @@ internal sealed class SampleTextureHotReloadSession :
 
     private sealed record SceneMaterialBinding(
         RenderObject RenderObject,
-        object? OriginalMaterial);
+        Njulf.Graphics.Material? OriginalMaterial);
 }
 
 internal sealed class SampleTextureHotReloadSmokeRunner

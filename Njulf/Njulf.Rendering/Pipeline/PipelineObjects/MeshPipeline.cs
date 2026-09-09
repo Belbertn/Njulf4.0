@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using Njulf.Assets;
+using Njulf.Graphics;
 using Silk.NET.Core.Native;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
@@ -400,20 +401,33 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _hybridReflectionConfiguration = hybridReflectionConfiguration;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
-            ValidatePushConstantRange((uint)Math.Max(
-                Math.Max(
-                    Math.Max(Marshal.SizeOf<GPUDepthPushConstants>(), Marshal.SizeOf<GPUForwardPushConstants>()),
-                    Marshal.SizeOf<GPUMotionVectorPushConstants>()),
-                Math.Max(
-                    Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>(),
-                    Marshal.SizeOf<GPUForwardVisibilityCompactionPushConstants>())));
-            CreatePipelineCache();
-            CreateForwardReceiverCacheBufferSetLayout();
-            CreatePipelineLayout();
-            CreateRayTransparentPipelineLayout();
-            CreateSceneSubmissionComputeLayout();
-            CreatePipelines(colorFormat, depthFormat);
-            CreateComputePipelines();
+            try
+            {
+                ValidatePushConstantRange((uint)Math.Max(
+                    Math.Max(
+                        Math.Max(Marshal.SizeOf<GPUDepthPushConstants>(), Marshal.SizeOf<GPUForwardPushConstants>()),
+                        Marshal.SizeOf<GPUMotionVectorPushConstants>()),
+                    Math.Max(
+                        Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>(),
+                        Marshal.SizeOf<GPUForwardVisibilityCompactionPushConstants>())));
+                CreatePipelineCache();
+                CreateForwardReceiverCacheBufferSetLayout();
+                CreatePipelineLayout();
+                CreateRayTransparentPipelineLayout();
+                CreateSceneSubmissionComputeLayout();
+                CreatePipelines(colorFormat, depthFormat);
+                CreateComputePipelines();
+                }
+            catch (Exception initializationFailure)
+            {
+                // A cancelled constructor never publishes this owner to the renderer.
+                // Finish native callbacks before releasing partially created pipelines.
+                try { _pipelineCacheService?.CompilationScheduler.WaitForAll(); }
+                catch (OperationCanceledException) { }
+                try { Dispose(); }
+                catch (Exception cleanupFailure) { initializationFailure.Data["Njulf.PipelineCleanupFailure"] = cleanupFailure; }
+                throw;
+            }
         }
 
         private VkPipeline _visibilityDepthPipeline;

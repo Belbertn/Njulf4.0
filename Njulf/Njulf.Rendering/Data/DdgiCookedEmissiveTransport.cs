@@ -2,6 +2,7 @@ using System;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 
 namespace Njulf.Rendering.Data;
 

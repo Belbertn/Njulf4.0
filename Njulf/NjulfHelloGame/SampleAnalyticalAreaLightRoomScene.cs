@@ -1,6 +1,9 @@
+using IMesh = Njulf.Graphics.IMesh;
+using IMaterial = Njulf.Graphics.IMaterial;
 using System;
 using System.Collections.Generic;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
@@ -87,44 +90,44 @@ internal static class SampleAnalyticalAreaLightRoomScene
             0.022f,
             1f);
 
-        MeshHandle boxMesh = meshManager.RegisterMesh(
+        IMesh boxMesh = meshManager.GetResourceView(meshManager.RegisterMesh(
             CreateBoxVertices(),
-            CreateBoxIndices());
-        MeshHandle sphereMesh = meshManager.RegisterMesh(
+            CreateBoxIndices()));
+        IMesh sphereMesh = meshManager.GetResourceView(meshManager.RegisterMesh(
             SampleUvSphereMesh.CreateVertices(),
-            SampleUvSphereMesh.CreateIndices());
-        MeshHandle diskFixtureMesh = meshManager.RegisterMesh(
+            SampleUvSphereMesh.CreateIndices()));
+        IMesh diskFixtureMesh = meshManager.GetResourceView(meshManager.RegisterMesh(
             CreateDiskFixtureVertices(),
-            CreateDiskFixtureIndices());
-        MeshHandle tubeFixtureMesh = meshManager.RegisterMesh(
+            CreateDiskFixtureIndices()));
+        IMesh tubeFixtureMesh = meshManager.GetResourceView(meshManager.RegisterMesh(
             CreateTubeFixtureVertices(),
-            CreateTubeFixtureIndices());
+            CreateTubeFixtureIndices()));
 
-        MaterialHandle wallMaterial = CreateMaterial(
+        IMaterial wallMaterial = CreateMaterial(
             materialManager,
             "AreaLightRoom.Walls",
             new CoreVector3(0.62f, 0.64f, 0.68f),
             metallic: 0f,
             roughness: 0.88f);
-        MaterialHandle floorMaterial = CreateMaterial(
+        IMaterial floorMaterial = CreateMaterial(
             materialManager,
             "AreaLightRoom.Floor",
             new CoreVector3(0.34f, 0.36f, 0.40f),
             metallic: 0f,
             roughness: 0.66f);
-        MaterialHandle plinthMaterial = CreateMaterial(
+        IMaterial plinthMaterial = CreateMaterial(
             materialManager,
             "AreaLightRoom.Plinths",
             new CoreVector3(0.56f, 0.58f, 0.62f),
             metallic: 0f,
             roughness: 0.72f);
-        MaterialHandle iesBoardMaterial = CreateMaterial(
+        IMaterial iesBoardMaterial = CreateMaterial(
             materialManager,
             "AreaLightRoom.IES.TargetBoard",
             new CoreVector3(0.78f, 0.79f, 0.82f),
             metallic: 0f,
             roughness: 0.92f);
-        MaterialHandle iesBoardTrimMaterial = CreateMaterial(
+        IMaterial iesBoardTrimMaterial = CreateMaterial(
             materialManager,
             "AreaLightRoom.IES.TargetBoardTrim",
             new CoreVector3(0.12f, 0.13f, 0.16f),
@@ -215,8 +218,8 @@ internal static class SampleAnalyticalAreaLightRoomScene
 
     private static void AddPlinth(
         Scene scene,
-        MeshHandle boxMesh,
-        MaterialHandle material,
+        IMesh boxMesh,
+        IMaterial material,
         float x,
         float z)
     {
@@ -231,12 +234,12 @@ internal static class SampleAnalyticalAreaLightRoomScene
 
     private static void AddEmitterProxies(
         Scene scene,
-        MeshHandle boxMesh,
-        MeshHandle diskFixtureMesh,
-        MeshHandle tubeFixtureMesh,
+        IMesh boxMesh,
+        IMesh diskFixtureMesh,
+        IMesh tubeFixtureMesh,
         MaterialManager materialManager)
     {
-        MaterialHandle rectangleProxy = CreateEmitterProxyMaterial(
+        IMaterial rectangleProxy = CreateEmitterProxyMaterial(
             materialManager,
             "AreaLightRoom.RectangleEmitterProxy",
             new CoreVector3(1.0f, 0.67f, 0.34f));
@@ -248,7 +251,7 @@ internal static class SampleAnalyticalAreaLightRoomScene
             new CoreVector3(-2.75f, 4.94f, -0.55f),
             new CoreVector3(2.15f, 0.035f, 1.25f));
 
-        MaterialHandle diskProxy = CreateEmitterProxyMaterial(
+        IMaterial diskProxy = CreateEmitterProxyMaterial(
             materialManager,
             "AreaLightRoom.DiskEmitterProxy",
             new CoreVector3(0.25f, 0.52f, 1.0f));
@@ -260,7 +263,7 @@ internal static class SampleAnalyticalAreaLightRoomScene
             new CoreVector3(2.75f, 3.35f, -3.96f),
             new CoreVector3(1.25f, 1.25f, 0.05f));
 
-        MaterialHandle tubeProxy = CreateEmitterProxyMaterial(
+        IMaterial tubeProxy = CreateEmitterProxyMaterial(
             materialManager,
             "AreaLightRoom.TubeEmitterProxy",
             new CoreVector3(0.18f, 1.0f, 0.66f));
@@ -273,29 +276,29 @@ internal static class SampleAnalyticalAreaLightRoomScene
             new CoreVector3(2.5f, 0.16f, 0.16f));
     }
 
-    private static MaterialHandle CreateMaterial(
+    private static IMaterial CreateMaterial(
         MaterialManager materialManager,
         string name,
         CoreVector3 albedo,
         float metallic,
         float roughness)
     {
-        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
+        return materialManager.GetResourceView(materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
             Name = name,
             BaseColorFactor = new CoreVector4(albedo, 1f),
             MetallicFactor = metallic,
             RoughnessFactor = roughness,
             ReceivesShadows = true
-        });
+        }));
     }
 
-    private static MaterialHandle CreateEmitterProxyMaterial(
+    private static IMaterial CreateEmitterProxyMaterial(
         MaterialManager materialManager,
         string name,
         CoreVector3 color)
     {
-        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
+        return materialManager.GetResourceView(materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
             Name = name,
             BaseColorFactor = new CoreVector4(color, 1f),
@@ -308,7 +311,7 @@ internal static class SampleAnalyticalAreaLightRoomScene
             DiffuseGiParticipation = GiParticipationOverride.Disabled,
             EmissionGiParticipation = GiParticipationOverride.Disabled,
             ReceivesShadows = false
-        });
+        }));
     }
 
     private const int DiskFixtureSegmentCount = 48;
@@ -485,8 +488,8 @@ internal static class SampleAnalyticalAreaLightRoomScene
 
     private static void AddBox(
         Scene scene,
-        MeshHandle mesh,
-        MaterialHandle material,
+        IMesh mesh,
+        IMaterial material,
         string name,
         CoreVector3 position,
         CoreVector3 scale)
@@ -503,8 +506,8 @@ internal static class SampleAnalyticalAreaLightRoomScene
 
     private static void AddSphere(
         Scene scene,
-        MeshHandle mesh,
-        MaterialHandle material,
+        IMesh mesh,
+        IMaterial material,
         string name,
         CoreVector3 position,
         CoreVector3 scale)

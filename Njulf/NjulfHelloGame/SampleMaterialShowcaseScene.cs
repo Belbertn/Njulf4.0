@@ -1,8 +1,11 @@
+using IMesh = Njulf.Graphics.IMesh;
+using IMaterial = Njulf.Graphics.IMaterial;
 using System;
 using System.Collections.Generic;
 using Njulf.Assets;
 using Njulf.Assets.Validation;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
@@ -87,18 +90,18 @@ internal static class SampleMaterialShowcaseScene
         scene.Name = "Njulf Material Showcase";
         scene.AmbientLight = new Njulf.Core.Math.Color(0.055f, 0.06f, 0.07f, 1f);
 
-        MeshHandle floorMesh = meshManager.RegisterMesh(CreateFloorVertices(), CreateFloorIndices());
+        IMesh floorMesh = meshManager.GetResourceView(meshManager.RegisterMesh(CreateFloorVertices(), CreateFloorIndices()));
         GPUVertex[] sphereVertices = SampleUvSphereMesh.CreateVertices();
         uint[] sphereIndices = SampleUvSphereMesh.CreateIndices();
-        MeshHandle sphereMesh = RegisterMeshWithCausticTopology(
+        IMesh sphereMesh = RegisterMeshWithCausticTopology(
             meshManager,
             sphereVertices,
             sphereIndices,
             "material-showcase sphere");
-        MeshHandle boxMesh = meshManager.RegisterMesh(CreateBoxVertices(), CreateBoxIndices());
+        IMesh boxMesh = meshManager.GetResourceView(meshManager.RegisterMesh(CreateBoxVertices(), CreateBoxIndices()));
         GPUVertex[] waterVertices = CreateWaterVertices();
         uint[] waterIndices = CreateFloorIndices();
-        MeshHandle waterMesh = RegisterMeshWithCausticTopology(
+        IMesh waterMesh = RegisterMeshWithCausticTopology(
             meshManager,
             waterVertices,
             waterIndices,
@@ -509,7 +512,7 @@ internal static class SampleMaterialShowcaseScene
         const float poolCenterZ = 4.05f;
         const float poolWidth = 2.25f;
         const float poolDepth = 1.55f;
-        MaterialHandle poolMaterial = CreateMaterial(
+        IMaterial poolMaterial = CreateMaterial(
             materialManager,
             new CoreVector3(0.52f, 0.58f, 0.60f),
             metallic: 0f,
@@ -550,7 +553,7 @@ internal static class SampleMaterialShowcaseScene
             new CoreVector3(poolCenterX, 0.22f, poolCenterZ - poolDepth * 0.5f - 0.08f),
             new CoreVector3(poolWidth + 0.32f, 0.44f, 0.16f));
 
-        MaterialHandle waterMaterial = CreateExtensionMaterial(
+        IMaterial waterMaterial = CreateExtensionMaterial(
             materialManager,
             "WaterShowcase.MovingWater",
             new CoreVector3(0.12f, 0.52f, 0.68f),
@@ -586,7 +589,7 @@ internal static class SampleMaterialShowcaseScene
             CoreMatrix4x4.CreateTranslation(
                 new CoreVector3(poolCenterX, 0.32f, poolCenterZ)));
 
-        MaterialHandle backdropMaterial = CreateMaterial(
+        IMaterial backdropMaterial = CreateMaterial(
             materialManager,
             new CoreVector3(0.30f, 0.32f, 0.36f),
             metallic: 0f,
@@ -599,7 +602,7 @@ internal static class SampleMaterialShowcaseScene
             new CoreVector3(0f, 1.3f, -0.75f),
             new CoreVector3(8.8f, 2.6f, 0.12f));
 
-        MaterialHandle reflectionGlassPane = CreateExtensionMaterial(
+        IMaterial reflectionGlassPane = CreateExtensionMaterial(
             materialManager,
             "ReflectionTest.ThinGlassPane",
             new CoreVector3(0.94f, 0.98f, 1.0f),
@@ -727,21 +730,21 @@ internal static class SampleMaterialShowcaseScene
 
         GPUVertex[] sphereVertices = SampleUvSphereMesh.CreateVertices();
         uint[] sphereIndices = SampleUvSphereMesh.CreateIndices();
-        MeshHandle sphereMesh = RegisterMeshWithCausticTopology(
+        IMesh sphereMesh = RegisterMeshWithCausticTopology(
             meshManager,
             sphereVertices,
             sphereIndices,
             "portable all-on GI caustic sphere");
-        MeshHandle boxMesh = meshManager.RegisterMesh(
+        IMesh boxMesh = meshManager.GetResourceView(meshManager.RegisterMesh(
             CreateBoxVertices(),
-            CreateBoxIndices());
+            CreateBoxIndices()));
 
-        MaterialHandle receiver = CreateMaterial(
+        IMaterial receiver = CreateMaterial(
             materialManager,
             new CoreVector3(0.42f, 0.44f, 0.46f),
             metallic: 0f,
             roughness: 0.7f);
-        MaterialHandle caster = CreateExtensionMaterial(
+        IMaterial caster = CreateExtensionMaterial(
             materialManager,
             "GiAllOn.C4.DielectricCaster",
             new CoreVector3(0.92f, 0.98f, 1.0f),
@@ -783,8 +786,8 @@ internal static class SampleMaterialShowcaseScene
 
     private static void AddObject(
         Scene scene,
-        MeshHandle mesh,
-        MaterialHandle material,
+        IMesh mesh,
+        IMaterial material,
         string name,
         CoreMatrix4x4 world)
     {
@@ -798,8 +801,8 @@ internal static class SampleMaterialShowcaseScene
 
     private static void AddSphere(
         Scene scene,
-        MeshHandle mesh,
-        MaterialHandle material,
+        IMesh mesh,
+        IMaterial material,
         string name,
         CoreVector3 position)
     {
@@ -808,8 +811,8 @@ internal static class SampleMaterialShowcaseScene
 
     private static void AddScaledSphere(
         Scene scene,
-        MeshHandle mesh,
-        MaterialHandle material,
+        IMesh mesh,
+        IMaterial material,
         string name,
         CoreVector3 position,
         float radius)
@@ -825,8 +828,8 @@ internal static class SampleMaterialShowcaseScene
 
     private static void AddBox(
         Scene scene,
-        MeshHandle mesh,
-        MaterialHandle material,
+        IMesh mesh,
+        IMaterial material,
         string name,
         CoreVector3 position,
         CoreVector3 scale)
@@ -842,8 +845,8 @@ internal static class SampleMaterialShowcaseScene
 
     private static void AddMaterialTypePanel(
         Scene scene,
-        MeshHandle mesh,
-        MaterialHandle material,
+        IMesh mesh,
+        IMaterial material,
         string name,
         float x)
     {
@@ -856,7 +859,7 @@ internal static class SampleMaterialShowcaseScene
             new CoreVector3(0.82f, 0.58f, 0.035f));
     }
 
-    private static MaterialHandle CreateRenderModeMaterial(
+    private static IMaterial CreateRenderModeMaterial(
         MaterialManager materialManager,
         CoreVector3 albedo,
         float metallic,
@@ -870,7 +873,7 @@ internal static class SampleMaterialShowcaseScene
         CoreVector3 emissive = default,
         float emissiveStrength = 1f)
     {
-        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
+        return materialManager.GetResourceView(materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
             Name = $"MaterialShowcase.{blendMode}",
             BaseColorFactor = new CoreVector4(albedo, Math.Clamp(alpha, 0f, 1f)),
@@ -888,25 +891,25 @@ internal static class SampleMaterialShowcaseScene
             DecalLayer = surfaceFlags.HasFlag(MaterialSurfaceFlags.GeometryDecal) ? 1 : 0,
             DecalDepthBias = surfaceFlags.HasFlag(MaterialSurfaceFlags.GeometryDecal) ? 0.001f : 0f,
             FeatureFlags = featureFlags
-        });
+        }));
     }
 
-    private static MaterialHandle CreateMaterial(
+    private static IMaterial CreateMaterial(
         MaterialManager materialManager,
         CoreVector3 albedo,
         float metallic,
         float roughness)
     {
-        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
+        return materialManager.GetResourceView(materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
             Name = "MaterialShowcase.Pbr",
             BaseColorFactor = new CoreVector4(albedo, 1f),
             MetallicFactor = Math.Clamp(metallic, 0f, 1f),
             RoughnessFactor = Math.Clamp(roughness, 0.04f, 1f)
-        });
+        }));
     }
 
-    private static MaterialHandle CreateExtensionMaterial(
+    private static IMaterial CreateExtensionMaterial(
         MaterialManager materialManager,
         string name,
         CoreVector3 albedo,
@@ -923,7 +926,7 @@ internal static class SampleMaterialShowcaseScene
         bool doubleSided = false)
     {
         MaterialExtensionDefinition extension = configureExtension(MaterialExtensionDefinition.None);
-        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
+        return materialManager.GetResourceView(materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
             Name = name,
             BaseColorFactor = new CoreVector4(albedo, 1f),
@@ -939,7 +942,7 @@ internal static class SampleMaterialShowcaseScene
             ShadingModel = shadingModel,
             FeatureFlags = featureFlags,
             Extensions = extension
-        });
+        }));
     }
 
     private static MaterialAlphaMode ToAlphaMode(MaterialRenderMode renderMode)
@@ -969,7 +972,7 @@ internal static class SampleMaterialShowcaseScene
             RotationRadians = 0f
         };
 
-    private static MeshHandle RegisterMeshWithCausticTopology(
+    private static IMesh RegisterMeshWithCausticTopology(
         MeshManager meshManager,
         GPUVertex[] vertices,
         uint[] indices,
@@ -990,14 +993,14 @@ internal static class SampleMaterialShowcaseScene
                 $"Could not analyze {debugName} topology: {reason}.");
         }
 
-        return meshManager.RegisterMeshes(
+        return meshManager.GetResourceView(meshManager.RegisterMeshes(
         [
             new MeshManager.MeshRegistrationData(
                 vertices,
                 indices,
                 generateMeshlets: true,
                 causticTopologyEvidence: evidence)
-        ])[0];
+        ])[0]);
     }
 
     private static TextureHandle CreateWaterNormalTexture(TextureManager textureManager)

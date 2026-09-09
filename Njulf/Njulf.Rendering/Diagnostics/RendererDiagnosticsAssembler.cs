@@ -4,6 +4,7 @@ using Njulf.Core.Foliage;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Core.Vfx;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using Njulf.Core.Camera;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
@@ -511,7 +512,7 @@ public sealed class SampleProductionSmokeHarnessTests
     {
         using var materialManager = new MaterialManager();
         using var scene = new Scene();
-        scene.Add(new RenderObject(new object(), materialManager.DefaultMaterialHandle));
+        scene.Add(new RenderObject(null, materialManager.GetResourceView(materialManager.DefaultMaterialHandle)));
         var camera = new FirstPersonCamera(new CoreVector3(1f, 2f, 3f), 0.2f, -0.1f);
 
         var workload = new SampleDeterministicLongRunWorkload(
@@ -544,7 +545,7 @@ public sealed class SampleProductionSmokeHarnessTests
             "long-run.json");
         using var materialManager = new MaterialManager();
         using var scene = new Scene();
-        scene.Add(new RenderObject(new object(), materialManager.DefaultMaterialHandle));
+        scene.Add(new RenderObject(null, materialManager.GetResourceView(materialManager.DefaultMaterialHandle)));
         var camera = new FirstPersonCamera();
         SampleSmokeOptions options = CreateOptions(SampleSmokeMode.LongRun) with
         {
@@ -599,7 +600,7 @@ public sealed class SampleProductionSmokeHarnessTests
             "long-run-unavailable.json");
         using var materialManager = new MaterialManager();
         using var scene = new Scene();
-        scene.Add(new RenderObject(new object(), materialManager.DefaultMaterialHandle));
+        scene.Add(new RenderObject(null, materialManager.GetResourceView(materialManager.DefaultMaterialHandle)));
         var workload = new SampleDeterministicLongRunWorkload(
             new FirstPersonCamera(),
             scene,

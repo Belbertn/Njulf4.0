@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using Njulf.Core.Geometry;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Data

@@ -15,6 +15,7 @@ public sealed class SceneDocumentWriter
     public SceneDocument CreateDocument(Scene scene, ISceneLightStore? lights = null, ISceneMaterialOverrideStore? materials = null)
     {
         ArgumentNullException.ThrowIfNull(scene);
+        lights ??= new SceneLightStore(scene);
         var dependencies = new Dictionary<string, string?>(StringComparer.Ordinal);
         ModelLightRuntimeController? importedLights =
             scene.GetComponent<ModelLightRuntimeController>();
@@ -22,6 +23,7 @@ public sealed class SceneDocumentWriter
         {
             Id = scene.Id,
             Name = scene.Name,
+            Environment = scene.Environment is { } environment ? SceneEnvironmentDocument.FromEnvironment(environment) : null,
             AmbientLight = ToSceneColor(scene.AmbientLight),
             ImportedModelLightsEnabled =
                 importedLights?.ImportedModelLightsEnabled ?? false,
@@ -52,6 +54,8 @@ public sealed class SceneDocumentWriter
             if (light.IesProfile is { } profile)
                 AddDependency(profile, light.Id, light.Name, dependencies);
         }
+        if (scene.Environment?.SourcePath is { Length: > 0 } environmentPath)
+            dependencies.TryAdd(environmentPath, null);
         foreach (var edits in document.ImportedLightOverrides)
             if (edits.Values.IesProfile is { } profile)
                 AddDependency(profile, edits.Id, edits.Values.Name, dependencies);

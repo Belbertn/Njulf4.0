@@ -4,6 +4,7 @@ using System.Linq;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -467,7 +468,7 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
         foreach (RenderObject renderObject in scene.RenderObjects)
         {
             if (!renderObject.Visible ||
-                renderObject.Mesh is not MeshHandle meshHandle ||
+                !(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) ||
                 !meshHandle.IsValid)
             {
                 continue;
@@ -497,7 +498,7 @@ public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
 
         foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
         {
-            if (!batch.Visible || batch.Mesh is not MeshHandle meshHandle ||
+            if (!batch.Visible || !(batch.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) ||
                 !meshHandle.IsValid)
             {
                 continue;

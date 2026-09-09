@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using Njulf.Core.Interfaces;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Diagnostics;

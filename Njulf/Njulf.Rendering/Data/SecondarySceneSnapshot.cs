@@ -197,7 +197,7 @@ internal sealed class SecondarySceneSnapshot : IDisposable
         if (record.Initialized && record.Revision == revision) return;
         bool visible = obj?.Visible ?? batch!.Visible;
         object? meshValue = obj is not null ? obj.Mesh : batch!.Mesh;
-        int count = visible && meshValue is MeshHandle { IsValid: true }
+        int count = visible && meshValue.TryGetMeshHandle(out _)
             ? (obj is not null ? 1 : batch!.WorldMatrices.Count) : 0;
         if (count == 0)
         {
@@ -206,7 +206,7 @@ internal sealed class SecondarySceneSnapshot : IDisposable
         }
         else
         {
-            MeshHandle mesh = (MeshHandle)meshValue!;
+            meshValue.TryGetMeshHandle(out MeshHandle mesh);
             MeshInfo info = _readMesh(mesh);
             MaterialHandle handle = SceneDataBuilder.ResolveRenderObjectMaterialHandle(
                 obj is not null ? obj.Material : batch!.Material, _defaultMaterial,

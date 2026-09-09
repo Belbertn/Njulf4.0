@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Njulf.Core.Interfaces;
+using Njulf.Graphics;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Data;
 using NUnit.Framework;

@@ -111,7 +111,7 @@ namespace Njulf.Rendering.Resources
                             skinnedVertexOffset: 0u);
                         continue;
                     }
-                    if (skinned.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                    if (!(skinned.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
                     {
                         ApplySkinningOutputState(
                             skinned,

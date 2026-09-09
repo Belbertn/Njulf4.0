@@ -6,6 +6,7 @@ using Njulf.Assets.Cooked;
 using Njulf.Assets.Validation;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 
@@ -332,12 +333,12 @@ public static class SampleKhronosMaterialGiRenderedSceneBuilder
                  renderObjectIndex++)
             {
                 RenderObject renderObject = instance.RenderObjects[renderObjectIndex];
-                if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                if (!(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
                 {
                     throw new InvalidDataException(
                         $"Runtime Khronos model '{source.Asset.Name}' object {renderObjectIndex} has no valid mesh.");
                 }
-                if (renderObject.Material is not MaterialHandle materialHandle ||
+                if (!(renderObject.Material).TryGetMaterialHandle(out MaterialHandle materialHandle) ||
                     !materialHandle.IsValid)
                 {
                     throw new InvalidDataException(

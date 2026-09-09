@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Njulf.Core.Math
 {
+    /// <summary>Single-precision framework math value; positions and distances use scene units unless an API specifies pixels.</summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct Vector4 : IEquatable<Vector4>
     {

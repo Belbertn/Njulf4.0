@@ -736,6 +736,68 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
+        internal void InsertCustomPass(RenderPassBase pass, string anchor, IReadOnlyList<RenderGraphResourceUsage> usages)
+        {
+            if (_passes.Exists(p => p.Name == pass.Name)) throw new ArgumentException("Pass names must be unique.");
+            int index = _passes.FindIndex(p => p.Name == anchor);
+            if (index < 0) throw new InvalidOperationException($"Custom pass anchor '{anchor}' is unavailable.");
+            _passResourceUsages.Add(pass.Name, new(usages));
+            _passes.Insert(index, pass);
+            AdvanceResourceAllocationGeneration();
+            _concreteResourceBindings.Invalidate();
+        }
+
+        internal void DetachCustomPass(RenderPassBase pass)
+        {
+            _passes.Remove(pass);
+            _passResourceUsages.Remove(pass.Name);
+            AdvanceResourceAllocationGeneration();
+            _concreteResourceBindings.Invalidate();
+        }
+
+        internal void ReplaceCustomPassUsages(RenderPassBase pass, IReadOnlyList<RenderGraphResourceUsage> usages)
+        {
+            _passResourceUsages[pass.Name] = new(usages);
+            AdvanceResourceAllocationGeneration();
+            _concreteResourceBindings.Invalidate();
+        }
+
+        internal void RemoveCustomResource(RenderGraphResourceId id)
+        {
+            if ((int)id < 0x10000) throw new ArgumentOutOfRangeException(nameof(id));
+            _resources.Remove(id);
+            _importedImageTargets.Remove(id);
+            AdvanceResourceAllocationGeneration();
+            _concreteResourceBindings.Invalidate();
+        }
+
+        internal void ReplaceMaterialImageTargets(IReadOnlyList<IRenderGraphLayoutTrackedImage> images)
+        {
+            _importedImageTargets[RenderGraphResourceId.MaterialTextures] = new(images);
+        }
+
+        internal void ReplaceCustomImageTarget(RenderGraphResourceId id, IRenderGraphLayoutTrackedImage image)
+            => _importedImageTargets[id] = new() { image };
+
+        internal void CommitCustomPassLayouts(Njulf.Graphics.Vulkan.VulkanPassBinding[] bindings)
+        {
+            foreach (var binding in bindings)
+            {
+                if (binding.Use is not Njulf.Graphics.Vulkan.VulkanImageUse image || image.FinalLayout == ImageLayout.Undefined) continue;
+                var finalUsage = binding.Usage with { ImageLayout = image.FinalLayout };
+                if (binding.Image is { } imported)
+                {
+                    imported.Layout = image.FinalLayout;
+                    _lastImageUsages[imported] = finalUsage;
+                }
+                else foreach (var target in GetLayoutTrackedRenderTargets(binding.Id))
+                {
+                    target.SetTrackedLayout(image.FinalLayout);
+                    _lastImageUsages[target] = finalUsage;
+                }
+            }
+        }
+
         public void ValidateResourceDeclarations()
         {
             foreach (RenderPassBase pass in _passes)
@@ -988,6 +1050,8 @@ namespace Njulf.Rendering.Pipeline
                 }
 
                 pass.IsRecordingOnComputeQueue = isComputeQueue;
+                if (pass is Njulf.Graphics.Vulkan.VulkanPassAdapter customPass)
+                    ExecuteCustomBufferBarriers(cmd, customPass);
                 ExecuteInterFrameBarriers(cmd, pass, frameIndex);
                 ExecuteGraphPlannedBarriers(
                     cmd,
@@ -1068,6 +1132,28 @@ namespace Njulf.Rendering.Pipeline
             sceneData.SecondaryCommandBufferPassCount++;
             sceneData.CpuSecondaryCommandRecordMicroseconds += elapsedMicroseconds;
             SetPassRecordMicroseconds(sceneData, pass.Name, elapsedMicroseconds);
+        }
+
+        private static unsafe void ExecuteCustomBufferBarriers(CommandBuffer cmd, Njulf.Graphics.Vulkan.VulkanPassAdapter pass)
+        {
+            // Custom storage/transfer buffers remain on graphics. A range-scoped all-command
+            // dependency covers overlapping aliases and prior frames without guessing producer masks.
+            foreach (var binding in pass.Bindings)
+            {
+                if (binding.Use is not Njulf.Graphics.Vulkan.VulkanBufferUse use) continue;
+                var buffer = binding.BufferSlice;
+                var barrier = new BufferMemoryBarrier2
+                {
+                    SType = StructureType.BufferMemoryBarrier2,
+                    SrcStageMask = PipelineStageFlags2.AllCommandsBit,
+                    SrcAccessMask = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit,
+                    DstStageMask = use.Stages, DstAccessMask = use.AccessMask,
+                    SrcQueueFamilyIndex = Vk.QueueFamilyIgnored, DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                    Buffer = buffer.Buffer, Offset = buffer.Offset, Size = buffer.Length
+                };
+                var dependency = new DependencyInfo { SType = StructureType.DependencyInfo, BufferMemoryBarrierCount = 1, PBufferMemoryBarriers = &barrier };
+                pass.Context.Api.CmdPipelineBarrier2(cmd, &dependency);
+            }
         }
 
         private void ExecuteGraphPlannedBarriers(

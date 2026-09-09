@@ -1,3 +1,5 @@
+using Material = SharpGLTF.Schema2.Material;
+using Texture = SharpGLTF.Schema2.Texture;
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
@@ -7,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Njulf.Core.Animation;
 using Njulf.Assets.Validation;
+using Njulf.Graphics;
 using SharpGLTF.Schema2;
 using SharpGLTF.Runtime;
 using SharpGLTF.Transforms;
@@ -32,6 +35,7 @@ using SchemaMesh = SharpGLTF.Schema2.Mesh;
 using SchemaNode = SharpGLTF.Schema2.Node;
 using SchemaPunctualLight = SharpGLTF.Schema2.PunctualLight;
 using SchemaSkin = SharpGLTF.Schema2.Skin;
+using TextureWrapMode = Njulf.Graphics.TextureWrapMode;
 
 namespace Njulf.Assets.Gltf;
 
@@ -1191,7 +1195,7 @@ internal static class SharpGltfModelMeshConverter
         {
             SharpGLTF.Schema2.TextureWrapMode.CLAMP_TO_EDGE => TextureWrapMode.ClampToEdge,
             SharpGLTF.Schema2.TextureWrapMode.MIRRORED_REPEAT => TextureWrapMode.MirroredRepeat,
-            _ => Njulf.Assets.TextureWrapMode.Repeat
+            _ => TextureWrapMode.Repeat
         };
     }
 

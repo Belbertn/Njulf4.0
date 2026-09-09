@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Njulf.Rendering;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;

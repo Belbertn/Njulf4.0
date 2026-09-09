@@ -1,5 +1,6 @@
 using Hexa.NET.ImGui;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NumericsVector3 = System.Numerics.Vector3;

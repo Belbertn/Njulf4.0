@@ -1,3 +1,4 @@
+using Njulf.Graphics;
 using Njulf.Core.Scene;
 using Njulf.Core.Interfaces;
 using NUnit.Framework;
@@ -87,19 +88,18 @@ public sealed class ModelResourceLifetimeTests
         RenderObject edited = first.RenderObjects[0];
 
         tracker.Transfer("material", "editable-material");
-        edited.AdoptTransferredMaterial(
-            "editable-material");
+        edited.TransferMaterialOwnership(edited.Material!, () => new TestGraphicsResources.Reference("editable-material", tracker, tracker.Retain, tracker.Release));
 
         Assert.Multiple(() =>
         {
             Assert.That(
-                template.RenderObjects[0].Material,
+                template.RenderObjects[0].Material!.Name,
                 Is.EqualTo("material"));
             Assert.That(
-                second.RenderObjects[0].Material,
+                second.RenderObjects[0].Material!.Name,
                 Is.EqualTo("material"));
             Assert.That(
-                edited.Material,
+                edited.Material!.Name,
                 Is.EqualTo("editable-material"));
             Assert.That(
                 tracker.Count("material"),
@@ -127,20 +127,10 @@ public sealed class ModelResourceLifetimeTests
     public void ResourceReplacement_RetainsNewBeforeReleasingOld()
     {
         var tracker = new ResourceTracker();
-        var renderObject = new RenderObject(
-            "mesh",
-            "material");
-        tracker.Seed("mesh");
-        tracker.Seed("material");
-        renderObject.AttachResourceLifetime(
-            tracker.Retain,
-            tracker.Release,
-            tracker.Retain,
-            tracker.Release,
-            retainCurrentResources: false);
+        var renderObject = CreateOwnedObject(tracker, "mesh", "material");
 
-        renderObject.Mesh = "next-mesh";
-        renderObject.Material = "next-material";
+        renderObject.Mesh = new TestGraphicsResources.Reference("next-mesh", tracker, tracker.Retain, tracker.Release);
+        renderObject.Material = new TestGraphicsResources.Reference("next-material", tracker, tracker.Retain, tracker.Release);
 
         Assert.Multiple(() =>
         {
@@ -172,17 +162,7 @@ public sealed class ModelResourceLifetimeTests
     public void DisposeFailure_KeepsOnlyFailedReleaseForRetry()
     {
         var tracker = new ResourceTracker();
-        var renderObject = new RenderObject(
-            "mesh",
-            "material");
-        tracker.Seed("mesh");
-        tracker.Seed("material");
-        renderObject.AttachResourceLifetime(
-            tracker.Retain,
-            tracker.Release,
-            tracker.Retain,
-            tracker.Release,
-            retainCurrentResources: false);
+        var renderObject = CreateOwnedObject(tracker, "mesh", "material");
         tracker.FailNextRelease("mesh");
 
         Assert.That(
@@ -284,11 +264,9 @@ public sealed class ModelResourceLifetimeTests
     [Test]
     public void AdoptTransferredMaterial_RequiresAttachedOwnedReference()
     {
-        var unattached = new RenderObject(
-            "mesh",
-            "material");
+        var unattached = new RenderObject();
         Assert.That(
-            () => unattached.AdoptTransferredMaterial("copy"),
+            () => unattached.TransferMaterialOwnership(TestGraphicsResources.Material("old"), () => TestGraphicsResources.Material("copy")),
             Throws.InvalidOperationException);
     }
 
@@ -383,14 +361,8 @@ public sealed class ModelResourceLifetimeTests
     {
         tracker.Seed(mesh);
         tracker.Seed(material);
-        var renderObject =
-            new RenderObject(mesh, material);
-        renderObject.AttachResourceLifetime(
-            tracker.Retain,
-            tracker.Release,
-            tracker.Retain,
-            tracker.Release,
-            retainCurrentResources: false);
+        var renderObject = new RenderObject();
+        renderObject.AdoptResources(new TestGraphicsResources.Reference((string)mesh, tracker, tracker.Retain, tracker.Release), new TestGraphicsResources.Reference((string)material, tracker, tracker.Retain, tracker.Release));
         return renderObject;
     }
 

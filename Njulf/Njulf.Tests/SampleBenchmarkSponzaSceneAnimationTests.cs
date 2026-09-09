@@ -22,7 +22,7 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
             SampleBenchmarkSponzaSceneAnimationContract
                 .ValidateAuthoredObjects(scene));
 
-        var extra = new SkinnedRenderObject("mesh", "material")
+        var extra = new SkinnedRenderObject(TestGraphicsResources.Mesh("mesh"), TestGraphicsResources.Material("material"))
         {
             Id = Guid.NewGuid(),
             Name = "AnimatedCharacter.Strut.Extra",
@@ -109,7 +109,7 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
     public void StableSkinningOutputState_DoesNotRepublishSceneContent()
     {
         var scene = new Scene();
-        var skinned = new SkinnedRenderObject("mesh", "material");
+        var skinned = new SkinnedRenderObject(TestGraphicsResources.Mesh("mesh"), TestGraphicsResources.Material("material"));
         scene.Add(skinned);
 
         SkinningManager.ApplySkinningOutputState(
@@ -983,7 +983,7 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
         Guid id,
         string name,
         string subObject,
-        Animator animator) => new("mesh", "material")
+        Animator animator) => new(TestGraphicsResources.Mesh("mesh"), TestGraphicsResources.Material("material"))
     {
         Id = id,
         Name = name,

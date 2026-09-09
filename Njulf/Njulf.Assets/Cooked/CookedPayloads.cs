@@ -5,6 +5,7 @@ using Njulf.Core.Geometry;
 using Njulf.Core.Math;
 using Njulf.Assets.Validation;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 
 namespace Njulf.Assets.Cooked;
 

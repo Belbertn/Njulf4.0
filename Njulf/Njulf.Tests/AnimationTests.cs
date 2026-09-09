@@ -118,7 +118,7 @@ namespace Njulf.Tests
             model.AddSkeletons(new[] { skeleton });
             model.AddSkins(new[] { skin });
             model.AddAnimationClips(new[] { clip });
-            model.Add(new SkinnedRenderObject("mesh", "material")
+            model.Add(new SkinnedRenderObject(TestGraphicsResources.Mesh("mesh"), TestGraphicsResources.Material("material"))
             {
                 SkinIndex = 0,
                 Animator = new Animator(skeleton, new[] { skin }, new[] { clip }),

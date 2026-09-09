@@ -6,6 +6,7 @@ using Njulf.Core;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Input;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
@@ -306,7 +307,7 @@ internal sealed class HelloGame : Game
     private SampleSceneLoader? _sceneLoader;
     private SampleSceneTransitionCoordinator? _sceneTransition;
     private SampleSceneResidencyCache? _sceneResidency;
-    private IContentUploadPump? _contentUploadPump;
+
     private Scene? _transitionLoadingScene;
     private Scene? _transitionPreviousScene;
     private long _loadingTransitionGeneration;
@@ -637,58 +638,53 @@ internal sealed class HelloGame : Game
 
     protected override void ConfigureServices(IServiceCollection services)
     {
-        if (Window == null)
-            throw new InvalidOperationException("Window must exist before configuring the rendering sample.");
-
-        services.AddNjulfCore();
         services.AddCamera(CreateSampleCamera());
         services.AddSingleton(_startupLog);
-        services.AddRendering(Window, options =>
+    }
+
+    protected override void ConfigureRendering(RenderingOptions options)
+    {
+        options.ValidationSettings = RendererValidationSettings.Default with
         {
-            options.ValidationSettings = RendererValidationSettings.Default with
-            {
-                Mode = _smokeOptions.ValidationMode,
-                FailOnErrorMessage = _smokeOptions.FailOnValidationMessage,
-                StartupLogPath = _smokeOptions.StartupLogPath,
-                HealthReportPath = _smokeOptions.HealthReportPath
-            };
-            options.AdvancedGiPrerequisiteManifestPath =
-                _smokeOptions.AdvancedGiPrerequisiteManifestPath;
-            options.AdvancedGiQualificationManifestPath =
-                _smokeOptions.AdvancedGiQualificationManifestPath;
-            options.AdvancedGiRuntimeEvidenceBundlePath =
-                _smokeOptions.AdvancedGiRuntimeEvidenceBundlePath;
-            options.AdvancedGiStartupProfilePath =
-                _smokeOptions.AdvancedGiStartupProfilePath;
-            // Bistro is reachable through the runtime scene switcher even
-            // when Cornell/GI was the startup scene. Texture admission is a
-            // renderer-creation policy, so waiting until Bistro becomes the
-            // active scene is too late: the transition would otherwise upload
-            // the uncapped cooked mip chains.
-            if (SampleBistroGlobalIlluminationProfile
-                    .ShouldApplyDefaultImportedTextureBudget(
-                        Environment.GetEnvironmentVariable(
-                            "NJULF_MAX_IMPORTED_TEXTURE_SIZE"),
-                        Environment.GetEnvironmentVariable(
-                            "NJULF_TEXTURE_BUDGET_PROFILE")))
-            {
-                options.SetCustomMaxImportedTextureDimension(
-                    SampleBistroGlobalIlluminationProfile
-                        .DefaultImportedTextureDimension);
-            }
-            ApplyPreInitializationRenderSettings(options.InitialSettings);
-            if (_smokeOptions.DdgiOpacityMicromapModeOverride is
-                DdgiOpacityMicromapMode.ExtFourStateExperiment or
-                DdgiOpacityMicromapMode.AutoQualified)
-            {
-                // An explicit C1 override also pins the optional-device request.
-                // Capability, prerequisite, evidence, and static-BLAS gates
-                // still independently fail closed during initialization.
-                options.EnableExtOpacityMicromap = true;
-            }
-        });
-        services.AddAssets(AppContext.BaseDirectory);
-        services.AddInput();
+            Mode = _smokeOptions.ValidationMode,
+            FailOnErrorMessage = _smokeOptions.FailOnValidationMessage,
+            StartupLogPath = _smokeOptions.StartupLogPath,
+            HealthReportPath = _smokeOptions.HealthReportPath
+        };
+        options.AdvancedGiPrerequisiteManifestPath =
+            _smokeOptions.AdvancedGiPrerequisiteManifestPath;
+        options.AdvancedGiQualificationManifestPath =
+            _smokeOptions.AdvancedGiQualificationManifestPath;
+        options.AdvancedGiRuntimeEvidenceBundlePath =
+            _smokeOptions.AdvancedGiRuntimeEvidenceBundlePath;
+        options.AdvancedGiStartupProfilePath =
+            _smokeOptions.AdvancedGiStartupProfilePath;
+        // Bistro is reachable through the runtime scene switcher even
+        // when Cornell/GI was the startup scene. Texture admission is a
+        // renderer-creation policy, so waiting until Bistro becomes the
+        // active scene is too late: the transition would otherwise upload
+        // the uncapped cooked mip chains.
+        if (SampleBistroGlobalIlluminationProfile
+                .ShouldApplyDefaultImportedTextureBudget(
+                    Environment.GetEnvironmentVariable(
+                        "NJULF_MAX_IMPORTED_TEXTURE_SIZE"),
+                    Environment.GetEnvironmentVariable(
+                        "NJULF_TEXTURE_BUDGET_PROFILE")))
+        {
+            options.SetCustomMaxImportedTextureDimension(
+                SampleBistroGlobalIlluminationProfile
+                    .DefaultImportedTextureDimension);
+        }
+        ApplyPreInitializationRenderSettings(options.InitialSettings);
+        if (_smokeOptions.DdgiOpacityMicromapModeOverride is
+            DdgiOpacityMicromapMode.ExtFourStateExperiment or
+            DdgiOpacityMicromapMode.AutoQualified)
+        {
+            // An explicit C1 override also pins the optional-device request.
+            // Capability, prerequisite, evidence, and static-BLAS gates
+            // still independently fail closed during initialization.
+            options.EnableExtOpacityMicromap = true;
+        }
     }
 
     protected override void ConfigureRendererBeforeInitialize(
@@ -809,8 +805,9 @@ internal sealed class HelloGame : Game
                 contentManager.CookedDiagnostics);
         (contentWarning ? Console.Error : Console.Out)
             .WriteLine(contentSummary);
-        _contentUploadPump =
-            services.GetRequiredService<IContentUploadPump>();
+        ContentUploadCpuBudget = TransitionUploadCpuBudget;
+        ContentUploadMaximumCallbacks = TransitionUploadCallbacksPerFrame;
+        ContentUploadMaximumSubmissionBytes = TransitionUploadSubmissionBytes;
         _sceneResidency = new SampleSceneResidencyCache(contentManager);
         _sceneResidency.Capture(
             _sceneKind,
@@ -1587,10 +1584,10 @@ internal sealed class HelloGame : Game
         base.OnResize(width, height);
     }
 
-    protected override void Update(float deltaTime)
+    protected override void Update(GameTime gameTime)
     {
         float simulationDeltaTime = ResolveSimulationDeltaTime(
-            deltaTime,
+            (float)gameTime.ElapsedGameTime.TotalSeconds,
             _smokeOptions.UsesDeterministicSimulationClock);
         AdvanceSceneTransitionHost();
         AdvanceBistroTransitionSmoke();
@@ -1666,7 +1663,7 @@ internal sealed class HelloGame : Game
         // authoritative while retaining the controller's lighting and settings.
         ApplyBenchmarkNamedTrajectoryFrameControls();
 
-        base.Update(simulationDeltaTime);
+        base.Update(new GameTime(gameTime.TotalGameTime, TimeSpan.FromSeconds(simulationDeltaTime)));
         ApplyBenchmarkActivationPreDrawControls();
         if (_benchmarkQualitySequenceRunner != null)
         {
@@ -1999,7 +1996,7 @@ internal sealed class HelloGame : Game
             camera.FarPlane);
     }
 
-    protected override void Draw()
+    protected override void Draw(GameTime gameTime)
     {
         if (Renderer == null)
             throw new InvalidOperationException("Renderer is not available during Draw().");
@@ -2416,7 +2413,7 @@ internal sealed class HelloGame : Game
             _editorController.Save();
         _editorSavePressed = saveDown;
 
-        bool pickDown = input.IsMouseButtonDown((int)MouseButton.Left);
+        bool pickDown = input.IsMouseButtonDown(Njulf.Input.MouseButton.Left);
         if (pickDown && !_editorPickPressed)
             _editorController.TryPick((FirstPersonCamera)Camera!, input.MousePosition, new Njulf.Core.Math.Vector2(WindowWidth, WindowHeight));
         _editorPickPressed = pickDown;
@@ -2507,8 +2504,16 @@ internal sealed class HelloGame : Game
         }
     }
 
+    protected override void OnContentUploadsProcessed(ContentUploadPumpResult upload)
+    {
+        if (upload.ProcessedCount > 0 && _sceneTransition is { } coordinator)
+            coordinator.ObserveHostActivity(coordinator.Snapshot.Generation);
+        ObserveBistroTransitionHitch(upload.ElapsedMicroseconds);
+        if (upload.ElapsedMicroseconds > SampleSceneTransitionLatencyPolicy.HitchTargetMicroseconds)
+            Console.WriteLine($"Scene transition upload hitch: elapsed={upload.ElapsedMicroseconds / 1000.0:F3}ms, remaining={upload.RemainingCount}.");
+    }
     private sealed class DelegateContentLoadProgressSink :
-        IContentLoadProgressSink
+        IProgress<ContentLoadProgressEvent>
     {
         private readonly Action<ContentLoadProgressEvent> _report;
 
@@ -2556,34 +2561,7 @@ internal sealed class HelloGame : Game
 
         SampleSceneBuild Finish(Model model)
         {
-            if (!string.IsNullOrWhiteSpace(
-                    _smokeOptions.GiAllOnQualificationReportPath) &&
-                SampleGiAllOnQualificationContract.IsSupportedScene(sceneKind))
-            {
-                ContentManager qualificationContent =
-                    Services?.GetRequiredService<ContentManager>() ??
-                    throw new InvalidOperationException(
-                        "All-on GI scene qualification requires ContentManager.");
-                SampleGiAllOnSceneRigSummary rig =
-                    SampleGiAllOnSceneRig.Configure(
-                        targetScene,
-                        sceneKind,
-                        qualificationContent,
-                        meshManager,
-                        materialManager);
-                Console.WriteLine(
-                    "All-on GI scene rig attached: " +
-                    $"c1Asset='{rig.C1AssetPath}', " +
-                    $"c1Objects={rig.C1RenderObjectCount}, " +
-                    $"injectedC4HeroObjects={rig.C4HeroRenderObjectCount}, " +
-                    $"scale={rig.FixtureScale:R}.");
-            }
-            if (sceneKind != SampleSceneKind.ReflectionLod)
-                SampleReflectionPolicy.EnsureProbeFree(targetScene);
-            return new SampleSceneBuild(
-                model,
-                sceneLoader,
-                sampleVfxEffects);
+            return FinishSceneBuild(targetScene, sceneKind, meshManager, materialManager, model, sceneLoader, sampleVfxEffects);
         }
 
         if (sceneKind == SampleSceneKind.ReflectionLod)
@@ -2745,6 +2723,39 @@ internal sealed class HelloGame : Game
                 sponzaTextureManager);
         }
         return Finish(model);
+    }
+
+    private SampleSceneBuild FinishSceneBuild(Scene targetScene, SampleSceneKind sceneKind, MeshManager meshManager,
+        MaterialManager materialManager, Model model, SampleSceneLoader? sceneLoader, IReadOnlyList<ParticleEffectInstance> sampleVfxEffects)
+    {
+        if (!string.IsNullOrWhiteSpace(
+                _smokeOptions.GiAllOnQualificationReportPath) &&
+            SampleGiAllOnQualificationContract.IsSupportedScene(sceneKind))
+        {
+            ContentManager qualificationContent =
+                Services?.GetRequiredService<ContentManager>() ??
+                throw new InvalidOperationException(
+                    "All-on GI scene qualification requires ContentManager.");
+            SampleGiAllOnSceneRigSummary rig =
+                SampleGiAllOnSceneRig.Configure(
+                    targetScene,
+                    sceneKind,
+                    qualificationContent,
+                    meshManager,
+                    materialManager);
+            Console.WriteLine(
+                "All-on GI scene rig attached: " +
+                $"c1Asset='{rig.C1AssetPath}', " +
+                $"c1Objects={rig.C1RenderObjectCount}, " +
+                $"injectedC4HeroObjects={rig.C4HeroRenderObjectCount}, " +
+                $"scale={rig.FixtureScale:R}.");
+        }
+        if (sceneKind != SampleSceneKind.ReflectionLod)
+            SampleReflectionPolicy.EnsureProbeFree(targetScene);
+        return new SampleSceneBuild(
+            model,
+            sceneLoader,
+            sampleVfxEffects);
     }
 
     internal static (string Message, bool IsWarning)
@@ -3094,19 +3105,17 @@ internal sealed class HelloGame : Game
 
     private async Task PrepareSceneTransitionAsync(
         SampleSceneKind target,
-        IContentLoadProgressSink progress,
+        IProgress<ContentLoadProgressEvent> progress,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(progress);
         // The coordinator invokes this callback from the input/update thread.
         // Yield before starting cache lookup or content-manager work so the
         // transition request can publish feedback within the host-step budget.
+        long generation = _sceneTransition?.Snapshot.Generation ?? 0L;
+        Volatile.Write(ref _scenePreparationGeneration, generation);
         await Task.Yield();
         cancellationToken.ThrowIfCancellationRequested();
-        long generation = _sceneTransition?.Snapshot.Generation ?? 0L;
-        Volatile.Write(
-            ref _scenePreparationGeneration,
-            generation);
         Task environmentPreparation =
             PrepareSceneEnvironmentResourcesAsync(
                 target,
@@ -3145,8 +3154,8 @@ internal sealed class HelloGame : Game
             return;
         }
 
-        IAsyncContentManager content = Services?
-            .GetRequiredService<IAsyncContentManager>() ??
+        IContentManager content = Services?
+            .GetRequiredService<IContentManager>() ??
             throw new InvalidOperationException(
                 "Asynchronous content services are unavailable.");
         SampleAssetReference[] assets = manifest
@@ -3222,92 +3231,57 @@ internal sealed class HelloGame : Game
         SampleSceneKind target,
         CancellationToken cancellationToken)
     {
-        // Bistro's cached model contains thousands of renderer-owned object
-        // templates. Cloning them at publication used to monopolize the host
-        // thread for hundreds of milliseconds even though GPU upload was
-        // already complete. Build an isolated scene on a worker after preload;
-        // only the final pointer exchange remains on the deterministic host.
         if (target != SampleSceneKind.Bistro)
             return;
 
-        PreparedSceneTransition prepared = await Task.Run(
-                () => CreatePreparedImportedScene(
-                    generation,
-                    target,
-                    cancellationToken),
-                cancellationToken)
-            .ConfigureAwait(false);
-        PreparedSceneTransition? replaced = null;
-        bool accepted = false;
-        lock (_preparedSceneTransitionGate)
-        {
-            if (!cancellationToken.IsCancellationRequested &&
-                Volatile.Read(ref _scenePreparationGeneration) ==
-                    generation)
-            {
-                replaced = _preparedSceneTransition;
-                _preparedSceneTransition = prepared;
-                accepted = true;
-            }
-        }
-
-        replaced?.Scene.Dispose();
-        if (accepted)
-            return;
-
-        prepared.Scene.Dispose();
-        cancellationToken.ThrowIfCancellationRequested();
-        throw new OperationCanceledException(
-            "Scene preparation was superseded by a newer transition.",
-            cancellationToken);
-    }
-
-    private PreparedSceneTransition CreatePreparedImportedScene(
-        long generation,
-        SampleSceneKind target,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
         IServiceProvider services = Services ??
-            throw new InvalidOperationException(
-                "Scene preparation services are unavailable.");
-        MeshManager meshManager =
-            services.GetRequiredService<MeshManager>();
-        MaterialManager materialManager =
-            services.GetRequiredService<MaterialManager>();
-        LightManager lightManager =
-            services.GetRequiredService<LightManager>();
-        SampleAssetManifest manifest = GetModelSceneManifest(target) ??
-            throw new InvalidOperationException(
-                $"Scene '{target}' has no imported asset manifest.");
+            throw new InvalidOperationException("Scene preparation services are unavailable.");
+        SampleAssetManifest manifest = GetModelSceneManifest(target)!;
         bool firstViewOnly = manifest.HasDeferredAssets &&
-            _sceneResidency?.GetState(target) !=
-                SampleSceneResidencyState.FullyResident;
-        var scene = new Scene
+            _sceneResidency?.GetState(target) != SampleSceneResidencyState.FullyResident;
+        var models = new Dictionary<string, Model>(StringComparer.Ordinal);
+        foreach (SampleAssetReference asset in manifest.EnumerateAssets().Where(asset =>
+                     !firstViewOnly || asset.LoadTier == SampleAssetLoadTier.Critical))
         {
-            Name = GetSceneDisplayName(target)
-        };
-        try
-        {
-            SampleSceneBuild build = BuildSampleScene(
-                scene,
-                target,
-                meshManager,
-                materialManager,
-                lightManager,
-                firstViewOnly);
-            cancellationToken.ThrowIfCancellationRequested();
-            return new PreparedSceneTransition(
-                generation,
-                target,
-                scene,
-                build,
-                firstViewOnly);
+            // Cache hits still resolve/authenticate cooked files. Keep that work off the device thread.
+            models[asset.Path] = await services.GetRequiredService<IContentManager>()
+                .LoadAsync<Model>(asset.Path, asset.CreateLoadOptions(), cancellationToken)
+                .ConfigureAwait(false);
         }
-        catch
+        var scene = new Scene();
+        PreparedSceneTransition? prepared = null;
+        var work = new SampleScenePreparationWork(scene, Build(), () =>
         {
-            scene.Dispose();
-            throw;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Volatile.Read(ref _scenePreparationGeneration) != generation)
+                throw new OperationCanceledException("Scene preparation was superseded.", cancellationToken);
+
+            // Publication and disposal both run inside the device-thread pump.
+            DiscardPreparedSceneTransition();
+            lock (_preparedSceneTransitionGate)
+                _preparedSceneTransition = prepared!;
+        });
+        await services.GetRequiredService<IContentUploadDispatcher>()
+            .DispatchAsync(work, cancellationToken).ConfigureAwait(false);
+
+        IEnumerable<object?> Build()
+        {
+            MeshManager meshes = services.GetRequiredService<MeshManager>();
+            MaterialManager materials = services.GetRequiredService<MaterialManager>();
+            LightManager lights = services.GetRequiredService<LightManager>();
+            var loader = new SampleSceneLoader(Content!, materials, meshes, lights, manifest)
+            {
+                PreparedModels = models
+            };
+            foreach (object? step in loader.PrepareLoad(scene, includeDeferredAssets: !firstViewOnly))
+                yield return step;
+
+            // The cached model supplies summary metadata; the scene owns the cloned objects.
+            Model model = loader.ReadModelAsset(manifest.ModelPath);
+            loader.PreparedModels = null;
+            SampleSceneBuild build = FinishSceneBuild(scene, target, meshes, materials,
+                model, loader, Array.Empty<ParticleEffectInstance>());
+            prepared = new PreparedSceneTransition(generation, target, scene, build, firstViewOnly);
         }
     }
 
@@ -3397,33 +3371,6 @@ internal sealed class HelloGame : Game
                 releaseStarted);
         }
 
-        if (_contentUploadPump?.PendingCount > 0)
-        {
-            ContentUploadPumpResult upload =
-                _contentUploadPump.ProcessFrame(
-                    TransitionUploadCpuBudget,
-                    maximumCallbacks:
-                        TransitionUploadCallbacksPerFrame,
-                    maximumSubmissionBytes:
-                        TransitionUploadSubmissionBytes);
-            if (upload.ProcessedCount > 0)
-            {
-                coordinator.ObserveHostActivity(
-                    coordinator.Snapshot.Generation);
-            }
-            ObserveBistroTransitionHitch(
-                upload.ElapsedMicroseconds);
-            if (upload.ElapsedMicroseconds >
-                SampleSceneTransitionLatencyPolicy
-                    .HitchTargetMicroseconds)
-            {
-                Console.WriteLine(
-                    $"Scene transition upload hitch: " +
-                    $"elapsed={upload.ElapsedMicroseconds / 1000.0:F3}ms, " +
-                    $"remaining={upload.RemainingCount}.");
-            }
-        }
-
         long advanceStarted =
             System.Diagnostics.Stopwatch.GetTimestamp();
         SampleSceneTransitionPhase phaseBeforeAdvance =
@@ -3475,8 +3422,7 @@ internal sealed class HelloGame : Game
         {
             Console.Error.WriteLine(
                 $"Scene transition to '{snapshot.Target}' failed: " +
-                $"{snapshot.Failure?.GetType().Name}: " +
-                $"{snapshot.Detail}");
+                $"{snapshot.Failure}");
             FailBistroTransitionSmoke(
                 $"Transition to '{snapshot.Target}' failed: " +
                 snapshot.Detail);
@@ -3869,11 +3815,11 @@ internal sealed class HelloGame : Game
 
     private async Task PreloadDeferredSceneAssetsAsync(
         IReadOnlyList<SampleAssetReference> assets,
-        IContentLoadProgressSink progress,
+        IProgress<ContentLoadProgressEvent> progress,
         CancellationToken cancellationToken)
     {
-        IAsyncContentManager content = Services?
-            .GetRequiredService<IAsyncContentManager>() ??
+        IContentManager content = Services?
+            .GetRequiredService<IContentManager>() ??
             throw new InvalidOperationException(
                 "Asynchronous content services are unavailable.");
         foreach (IGrouping<
@@ -4666,7 +4612,7 @@ internal sealed class HelloGame : Game
 
         (Content ?? throw new InvalidOperationException(
             "Content manager is unavailable during a loading-scene handoff."))
-            .Clear();
+            .UnloadAll();
         _sceneResidency?.ResetAfterContentClear();
         _transitionPreviousScene = null;
         _loadingFramePresented = false;

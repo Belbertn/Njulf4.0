@@ -389,7 +389,7 @@ internal sealed class DdgiSceneInvalidationCoordinator : IDisposable
     {
         bounds = default;
         if (!batch.Visible ||
-            batch.Mesh is not MeshHandle meshHandle ||
+            !(batch.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) ||
             !meshHandle.IsValid ||
             batch.WorldMatrices.Count == 0)
         {
@@ -752,7 +752,7 @@ internal sealed class DdgiSceneInvalidationCoordinator : IDisposable
 
         if (!renderObject.Enabled ||
             !renderObject.Visible ||
-            renderObject.Mesh is not MeshHandle meshHandle ||
+            !(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) ||
             !meshHandle.IsValid)
         {
             return false;
@@ -1174,7 +1174,7 @@ internal sealed class DdgiSceneInvalidationCoordinator : IDisposable
         BoundingBox? localBounds = skinned.AnimatedBoundingBox ??
             skinned.LocalMeshBounds;
         if (!localBounds.HasValue &&
-            skinned.Mesh is MeshHandle mesh &&
+            (skinned.Mesh).TryGetMeshHandle(out MeshHandle mesh) &&
             mesh.IsValid)
         {
             try

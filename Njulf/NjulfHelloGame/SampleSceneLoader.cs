@@ -97,6 +97,8 @@ internal sealed class SampleSceneLoader
     }
 
     public IReadOnlyList<RenderObject> ModelObjects => _modelObjects;
+    // Borrowed results of asynchronous preload; avoids cooked-file resolution on the device thread.
+    internal IReadOnlyDictionary<string, Model>? PreparedModels { get; set; }
     public BoundingBox? LoadedModelBounds => _loadedModelBounds;
     public bool LoadedFromDocument { get; private set; }
     public string ScenePath { get; } = Path.Combine(AppContext.BaseDirectory, "Scenes", "SampleScene.njscene.json");
@@ -106,6 +108,24 @@ internal sealed class SampleSceneLoader
 
     public Model LoadFirstView(Scene scene) =>
         Load(scene, includeDeferredAssets: false);
+
+    // Each MoveNext performs at most one object attachment on the device thread.
+    internal IEnumerable<object?> PrepareLoad(Scene scene, bool includeDeferredAssets)
+    {
+        scene.Name = "Njulf Hello Scene";
+        scene.AmbientLight = _manifest.AmbientLight;
+        foreach (SampleAssetReference asset in EnumerateManifestAssets().Where(asset =>
+                     includeDeferredAssets || asset.LoadTier == SampleAssetLoadTier.Critical))
+        {
+            PreparedAssetAttachment attachment = BeginPreparedAssetAttachment(asset);
+            while (!attachment.Completed)
+            {
+                AdvancePreparedAssetAttachment(scene, attachment, maximumRenderObjects: 1);
+                yield return null;
+            }
+        }
+        CompletePreparedLoad(scene);
+    }
 
     private Model Load(
         Scene scene,
@@ -189,6 +209,13 @@ internal sealed class SampleSceneLoader
             _attachedAssetIdentities.Add(
                 foliageAssets[i].CreateContentIdentity());
         }
+        CompletePreparedLoad(scene);
+
+        return model;
+    }
+
+    private void CompletePreparedLoad(Scene scene)
+    {
         AddStressSceneIfRequested(scene);
 
         if (_manifest.EnableImportedModelLights)
@@ -199,8 +226,6 @@ internal sealed class SampleSceneLoader
                 new LightManagerSceneLightStore(_lightManager),
                 LoadModelAsset);
         }
-
-        return model;
     }
 
     public int AttachPreparedAssets(
@@ -251,9 +276,12 @@ internal sealed class SampleSceneLoader
                 candidate.CreateContentIdentity(),
                 identity,
                 StringComparison.OrdinalIgnoreCase));
+        Model model = ReadModelAsset(asset.Path);
+        if (model.RenderObjects.Count == 0)
+            throw new InvalidOperationException($"Sample model '{asset.Path}' did not produce renderable objects.");
         return new PreparedAssetAttachment(
             asset,
-            LoadModelAsset(asset.Path),
+            model,
             foliage,
             _manifest.CreateModelWorld(rotation: 0f));
     }
@@ -279,6 +307,7 @@ internal sealed class SampleSceneLoader
                attached < maximumRenderObjects)
         {
             int objectIndex = attachment.NextObjectIndex;
+            ValidateUploadedRenderObject(attachment.Asset.Path, attachment.ModelAsset.RenderObjects[objectIndex]);
             long cloneStarted =
                 System.Diagnostics.Stopwatch.GetTimestamp();
             RenderObject renderObject = attachment.ModelAsset
@@ -406,7 +435,7 @@ internal sealed class SampleSceneLoader
         }
 
         RenderObject? source = _modelObjects.Count > 0 ? _modelObjects[0] : null;
-        if (source?.Mesh is not MeshHandle || source.Material is not MaterialHandle)
+        if (source == null || !(source.Mesh).TryGetMeshHandle(out _) || !(source.Material).TryGetMaterialHandle(out _))
             return;
 
         int count = 1000;
@@ -489,12 +518,20 @@ internal sealed class SampleSceneLoader
 
     private Model LoadModelAssetCore(string modelPath)
     {
-        Model modelAsset = (_content as ContentManager)?.Load<Model>(
-            modelPath,
-            CreateModelLoadOptions(modelPath)) ??
-            _content.Load<Model>(modelPath)
-            ?? throw new InvalidOperationException($"Content manager returned null for sample model '{modelPath}'.");
+        var modelAsset = ReadModelAsset(modelPath);
         ValidateUploadedModel(modelAsset, modelPath);
+        return modelAsset;
+    }
+
+    internal Model ReadModelAsset(string modelPath)
+    {
+        if (PreparedModels != null && PreparedModels.TryGetValue(modelPath, out Model? prepared))
+            return prepared;
+        Model modelAsset = (_content as ContentManager)?.Load<Model>(
+                               modelPath,
+                               CreateModelLoadOptions(modelPath)) ??
+                           _content.Load<Model>(modelPath)
+                           ?? throw new InvalidOperationException($"Content manager returned null for sample model '{modelPath}'.");
         return modelAsset;
     }
 
@@ -596,9 +633,9 @@ internal sealed class SampleSceneLoader
             uint seed = explicitSeed ??
                 checked(0x17A1_0000u + (uint)objectIndex);
             var assetReference = new SceneAssetReference { Path = modelPath, SubObject = objectIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) };
-            if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+            if (!(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
                 return;
-            if (renderObject.Material is not MaterialHandle materialHandle || !materialHandle.IsValid)
+            if (!(renderObject.Material).TryGetMaterialHandle(out MaterialHandle materialHandle) || !materialHandle.IsValid)
                 return;
 
             if (IsRigidFoliageGeometry(renderObject.Name))
@@ -653,7 +690,7 @@ internal sealed class SampleSceneLoader
 
     private void IncludeRenderObjectBounds(RenderObject renderObject)
     {
-        if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+        if (!(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
             return;
 
         MeshInfo meshInfo = _meshManager.GetMeshInfo(meshHandle);
@@ -744,24 +781,29 @@ internal sealed class SampleSceneLoader
         {
             RenderObject renderObject = model.RenderObjects[i];
 
-            if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
-                throw new InvalidOperationException($"Sample model '{modelPath}' render object '{renderObject.Name}' does not contain a valid GPU mesh handle.");
-            if (renderObject.Material is not MaterialHandle materialHandle || !materialHandle.IsValid)
-                throw new InvalidOperationException($"Sample model '{modelPath}' render object '{renderObject.Name}' does not contain a valid GPU material handle.");
+            ValidateUploadedRenderObject(modelPath, renderObject);
+        }
+    }
 
-            try
-            {
-                MaterialManager.ValidateMaterialTextureIndices(_materialManager.GetMaterialData(materialHandle));
-                GPUMaterialExtensionData? extensionData = _materialManager.GetMaterialExtensionData(materialHandle);
-                if (extensionData.HasValue)
-                    MaterialManager.ValidateMaterialExtensionTextureIndices(extensionData.Value);
-            }
-            catch (InvalidOperationException ex)
-            {
-                throw new InvalidOperationException(
-                    $"Sample model '{modelPath}' render object '{renderObject.Name}' has invalid material texture indices.",
-                    ex);
-            }
+    private void ValidateUploadedRenderObject(string modelPath, RenderObject renderObject)
+    {
+        if (!(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
+            throw new InvalidOperationException($"Sample model '{modelPath}' render object '{renderObject.Name}' does not contain a valid GPU mesh handle.");
+        if (!(renderObject.Material).TryGetMaterialHandle(out MaterialHandle materialHandle) || !materialHandle.IsValid)
+            throw new InvalidOperationException($"Sample model '{modelPath}' render object '{renderObject.Name}' does not contain a valid GPU material handle.");
+
+        try
+        {
+            MaterialManager.ValidateMaterialTextureIndices(_materialManager.GetMaterialData(materialHandle));
+            GPUMaterialExtensionData? extensionData = _materialManager.GetMaterialExtensionData(materialHandle);
+            if (extensionData.HasValue)
+                MaterialManager.ValidateMaterialExtensionTextureIndices(extensionData.Value);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidOperationException(
+                $"Sample model '{modelPath}' render object '{renderObject.Name}' has invalid material texture indices.",
+                ex);
         }
     }
 

@@ -138,9 +138,9 @@ public sealed class AssetArtifactFileIoTests
             };
 
             Assert.That(
-                () => TextureCooker.AnalyzeTransportStatistics(
+                () => TextureSourceDecoder.AnalyzeTransportStatistics(
                     source,
-                    new TextureCookOptions()),
+                    new TextureDecodeOptions()),
                 Throws.TypeOf<InvalidDataException>()
                     .With.Message.Contains("exceeding"));
         }

@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Njulf.Core.Math
 {
+    /// <summary>Single-precision matrix. Game transforms use row vectors, translation M41..M43, and view * projection order.</summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct Matrix4x4 : IEquatable<Matrix4x4>
     {

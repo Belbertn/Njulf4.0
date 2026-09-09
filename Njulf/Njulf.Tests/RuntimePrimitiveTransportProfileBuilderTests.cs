@@ -1,10 +1,12 @@
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Tests;
 
@@ -173,7 +175,7 @@ public sealed class RuntimePrimitiveTransportProfileBuilderTests
             using (FileStream stream = File.Create(path))
             {
                 stream.SetLength(
-                    TextureCooker.DefaultMaximumRuntimeTransportEncodedBytes +
+                    TextureSourceDecoder.DefaultMaximumRuntimeTransportEncodedBytes +
                     1L);
             }
             var source = new ModelTextureSource

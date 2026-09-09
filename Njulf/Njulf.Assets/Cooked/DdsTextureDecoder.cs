@@ -12,7 +12,7 @@ namespace Njulf.Assets.Cooked;
 public static class DdsTextureDecoder
 {
     public const int DefaultMaximumEncodedBytes =
-        TextureCooker.DefaultMaximumRuntimeTransportEncodedBytes;
+        TextureSourceDecoder.DefaultMaximumRuntimeTransportEncodedBytes;
     public const long DefaultMaximumDecodedPixels =
         WebPTextureDecoder.DefaultMaximumDecodedPixels;
 

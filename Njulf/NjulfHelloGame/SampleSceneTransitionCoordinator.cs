@@ -54,7 +54,7 @@ internal sealed class SampleSceneTransitionCoordinator : IDisposable
         TimeSpan.FromMinutes(5);
     private readonly Func<
         SampleSceneKind,
-        IContentLoadProgressSink,
+        IProgress<ContentLoadProgressEvent>,
         CancellationToken,
         Task> _prepare;
     private readonly Action<SampleSceneKind> _commit;
@@ -71,7 +71,7 @@ internal sealed class SampleSceneTransitionCoordinator : IDisposable
     public SampleSceneTransitionCoordinator(
         Func<
             SampleSceneKind,
-            IContentLoadProgressSink,
+            IProgress<ContentLoadProgressEvent>,
             CancellationToken,
             Task> prepare,
         Action<SampleSceneKind> commit)
@@ -87,7 +87,7 @@ internal sealed class SampleSceneTransitionCoordinator : IDisposable
     internal SampleSceneTransitionCoordinator(
         Func<
             SampleSceneKind,
-            IContentLoadProgressSink,
+            IProgress<ContentLoadProgressEvent>,
             CancellationToken,
             Task> prepare,
         Action<SampleSceneKind> commit,
@@ -597,7 +597,7 @@ internal sealed class SampleSceneTransitionCoordinator : IDisposable
         public Task? Preparation { get; set; }
     }
 
-    private sealed class ProgressSink : IContentLoadProgressSink
+    private sealed class ProgressSink : IProgress<ContentLoadProgressEvent>
     {
         private readonly SampleSceneTransitionCoordinator _owner;
         private readonly long _generation;

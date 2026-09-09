@@ -19,7 +19,7 @@ namespace Njulf.Assets
         CookedModelAsset CookedAsset,
         Model RuntimeModel);
 
-    public class ContentManager : IContentManager, IAsyncContentManager, IDisposable
+    public class ContentManager : IContentManager, IContentLifetime, IDisposable
     {
         private readonly Dictionary<string, object> _cache =
             new(StringComparer.Ordinal);
@@ -41,6 +41,43 @@ namespace Njulf.Assets
         private long _snapshotOwnershipSequence;
         private long _cacheGeneration;
         private bool _disposed;
+        private bool _stopping;
+        private int _activeOperations;
+        private readonly CancellationTokenSource _shutdownCancellation = new();
+
+        public int ActiveOperationCount { get { lock (_stateLock) return _activeOperations; } }
+
+        public void BeginShutdown()
+        {
+            lock (_stateLock)
+            {
+                if (_stopping || _disposed) return;
+                _stopping = true;
+                _cacheGeneration++;
+            }
+            _shutdownCancellation.Cancel();
+        }
+
+        private OperationLease BeginOperation(CancellationToken cancellationToken)
+        {
+            lock (_stateLock)
+            {
+                ThrowIfDisposed();
+                var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCancellation.Token);
+                _activeOperations++;
+                return new OperationLease(this, source);
+            }
+        }
+
+        private sealed class OperationLease(ContentManager owner, CancellationTokenSource source) : IDisposable
+        {
+            public CancellationToken Token => source.Token;
+            public void Dispose()
+            {
+                source.Dispose();
+                lock (owner._stateLock) owner._activeOperations--;
+            }
+        }
 
         private sealed class ModelLoadGate
         {
@@ -386,7 +423,8 @@ namespace Njulf.Assets
             ContentLoadOptions? options = null,
             CancellationToken cancellationToken = default)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            using var operation = BeginOperation(cancellationToken);
+            cancellationToken = operation.Token;
             if (string.IsNullOrEmpty(path))
             {
                 throw new ArgumentException(
@@ -401,22 +439,45 @@ namespace Njulf.Assets
                 ThrowIfDisposed();
             }
 
-            if (typeof(T) == typeof(Model) &&
-                _contentUploadDispatcher is not null)
+            var request = new ContentPreloadRequest(path);
+            ReportContentProgress(options.Progress, request, ContentLoadStage.Queued, null);
+            try
             {
-                return await LoadModelPipelineAsync<T>(
-                    path,
-                    fullPath,
-                    options,
-                    _contentUploadDispatcher,
-                    cancellationToken,
-                    uploadProgress: null).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                ReportContentProgress(options.Progress, request, ContentLoadStage.Started, null);
+                T result;
+                if (typeof(T) == typeof(Model) && _contentUploadDispatcher is not null)
+                {
+                    result = await LoadModelPipelineAsync<T>(
+                        path, fullPath, options, _contentUploadDispatcher, cancellationToken,
+                        progress => ReportContentProgress(options.Progress, request,
+                            progress.Stage, progress.Detail, progress.CompletedBytes, progress.TotalBytes),
+                        message => ReportContentProgress(options.Progress, request,
+                            ContentLoadStage.Preparing, message, isHeartbeat: true)).ConfigureAwait(false);
+                }
+                else
+                {
+                    // Renderer mutation remains on the caller's approved context.
+                    result = Load<T>(path, options);
+                }
+                ReportContentProgress(options.Progress, request, ContentLoadStage.Ready, null);
+                return result;
             }
-
-            // Without an owner-approved dispatcher there is no safe way to
-            // put renderer mutation on a pool thread. Preserve synchronous
-            // ownership semantics rather than merely wrapping Load in Task.Run.
-            return Load<T>(path, options);
+            catch (OperationCanceledException)
+            {
+                ReportContentProgress(options.Progress, request, ContentLoadStage.Cancelled, null);
+                throw;
+            }
+            catch (Exception failure)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    ReportContentProgress(options.Progress, request, ContentLoadStage.Cancelled, null);
+                    throw new OperationCanceledException(cancellationToken);
+                }
+                ReportContentProgress(options.Progress, request, ContentLoadStage.Failed, failure.Message);
+                throw;
+            }
         }
 
         /// <summary>
@@ -429,6 +490,8 @@ namespace Njulf.Assets
             ContentPreloadOptions? options = null,
             CancellationToken cancellationToken = default)
         {
+            using var operation = BeginOperation(cancellationToken);
+            cancellationToken = operation.Token;
             ArgumentNullException.ThrowIfNull(requests);
             options ??= new ContentPreloadOptions();
             if (options.MaxConcurrency <= 0)
@@ -1769,9 +1832,12 @@ namespace Njulf.Assets
         {
             lock (_stateLock)
             {
-                ThrowIfDisposed();
+                ObjectDisposedException.ThrowIf(_disposed, this);
                 if (asset is null)
                     return;
+
+                if (!_cache.Values.Any(cached => ReferenceEquals(cached, asset)))
+                    throw new ArgumentException("Only assets owned by this content cache can be unloaded.", nameof(asset));
 
                 // Keep every authoritative cache entry until disposal
                 // succeeds. A retryable release failure must not orphan the
@@ -1783,13 +1849,13 @@ namespace Njulf.Assets
             }
         }
 
-        public void Clear()
+        public void UnloadAll()
         {
             lock (_stateLock)
             {
-                ThrowIfDisposed();
-                ClearOwnedAssets();
+                ObjectDisposedException.ThrowIf(_disposed, this);
                 _cacheGeneration++;
+                ClearOwnedAssets();
             }
         }
 
@@ -1886,7 +1952,7 @@ namespace Njulf.Assets
         }
 
         private static void ReportContentProgress(
-            IContentLoadProgressSink? sink,
+            IProgress<ContentLoadProgressEvent>? sink,
             ContentPreloadRequest request,
             ContentLoadStage stage,
             string? message,
@@ -1942,7 +2008,7 @@ namespace Njulf.Assets
         }
 
         private void ThrowIfDisposed() =>
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            ObjectDisposedException.ThrowIf(_disposed || _stopping, this);
 
         public void Dispose()
         {
@@ -1959,6 +2025,7 @@ namespace Njulf.Assets
                 if (_modelImporter.IsValueCreated)
                     _modelImporter.Value.Dispose();
                 _disposed = true;
+                _shutdownCancellation.Dispose();
                 GC.SuppressFinalize(this);
             }
         }

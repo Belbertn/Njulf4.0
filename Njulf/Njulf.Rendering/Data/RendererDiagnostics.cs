@@ -2,6 +2,7 @@ using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using System.Collections.Generic;
+using Njulf.Graphics;
 
 namespace Njulf.Rendering.Data
 {

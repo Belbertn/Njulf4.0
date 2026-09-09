@@ -1,5 +1,6 @@
 using System.Reflection;
 using Njulf.Editor;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using NUnit.Framework;
 

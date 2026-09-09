@@ -1,0 +1,33 @@
+using System;
+using Njulf.Core.Math;
+
+namespace Njulf.Graphics;
+
+    public enum DebugOverlayMode : uint
+    {
+        None = 0,
+        LightTiles = 1,
+        DirectionalShadowCascades = 2,
+        ReflectionProbeVolumes = 3,
+        DdgiProbeVolumes = 4,
+        DecalVolumes = 5,
+        ObjectBounds = 6,
+        MeshletBounds = 7,
+        SelectedObject = 8,
+        MaterialInspection = 9,
+        PassTimings = 10,
+        GpuMemory = 11,
+        DdgiProbeActivity = 12,
+        DdgiUpdatedProbes = 13,
+        DdgiProbeRelocation = 14,
+        DdgiProbeAge = 15,
+        DdgiPhysicalSlots = 16,
+        DdgiCascadeBounds = 17,
+        DdgiNewlyExposedCells = 18,
+        DdgiFrustumPriority = 19,
+        DdgiSafetyRefresh = 20,
+        DdgiCascadeBlend = 21,
+        DdgiUpdateReasons = 22,
+        // Appended for persisted-settings and diagnostic numeric compatibility.
+        DdgiProbeSpheres = 23
+    }

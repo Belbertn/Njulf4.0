@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Resources;

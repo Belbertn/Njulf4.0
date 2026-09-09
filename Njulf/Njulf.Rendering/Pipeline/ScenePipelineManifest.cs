@@ -1,4 +1,5 @@
 using System;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Pipeline;

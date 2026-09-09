@@ -9,6 +9,7 @@ using Njulf.Assets.Cooked;
 using Njulf.Core.Animation;
 using Njulf.Core.Geometry;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using CoreBoundingBox = Njulf.Core.Math.BoundingBox;
@@ -16,6 +17,7 @@ using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector2 = Njulf.Core.Math.Vector2;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 using CoreVector4 = Njulf.Core.Math.Vector4;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Rendering.Resources
 {
@@ -34,10 +36,6 @@ namespace Njulf.Rendering.Resources
         private readonly SceneSubmissionSettings? _sceneSubmissionSettings;
         private readonly bool _completeMeshletWorkingSetAdmissionEnabled;
         private readonly Action<MeshHandle> _releaseMeshHandle;
-        private readonly Action<object> _retainMeshResource;
-        private readonly Action<object> _releaseMeshResource;
-        private readonly Action<object> _retainMaterialResource;
-        private readonly Action<object> _releaseMaterialResource;
         private readonly object _lifecycleLock = new();
         private readonly object _diagnosticsLock = new object();
         private ModelUploadOwnershipLedger?
@@ -139,16 +137,7 @@ namespace Njulf.Rendering.Resources
                 completeMeshletWorkingSetAdmissionEnabled;
             _runtimePrimitiveProfiles = new RuntimePrimitiveTransportProfileBuilder();
             _releaseMeshHandle = ReleaseMeshHandle;
-            _retainMeshResource = resource =>
-                RetainMeshHandle(RequireMeshHandle(resource));
-            _releaseMeshResource = resource =>
-                ReleaseMeshHandle(RequireMeshHandle(resource));
-            _retainMaterialResource = resource =>
-                _backend.RetainMaterial(
-                    RequireMaterialHandle(resource));
-            _releaseMaterialResource = resource =>
-                _backend.ReleaseMaterial(
-                    RequireMaterialHandle(resource));
+
         }
 
         public ModelRenderUploadDiagnostics LastUploadDiagnostics
@@ -373,19 +362,18 @@ namespace Njulf.Rendering.Resources
                 for (int i = 0; i < lifetimeMeshes.Length; i++)
                 {
                     RenderObject renderObject = subMeshes[i].SkinIndex >= 0 && subMeshes[i].SkinIndex < model.Skins.Count
-                        ? new SkinnedRenderObject(lifetimeMeshes[i], subMeshMaterials[i])
+                        ? new SkinnedRenderObject()
                         {
                             SkinIndex = subMeshes[i].SkinIndex,
                             Animator = CreateAnimator(model, subMeshes[i].SkinIndex),
                             SkinningBindTransform = subMeshes[i].SkinningBindTransform
                         }
-                        : new RenderObject(lifetimeMeshes[i], subMeshMaterials[i]);
+                        : new RenderObject();
 
                     renderObject.Name = subMeshNames[i];
                     renderObject.LocalMeshBounds = subMeshes[i].BoundingBox;
                     model.Add(renderObject);
-                    AttachRenderObjectResourceLifetime(
-                        renderObject);
+                    AdoptRenderObjectResources(renderObject, lifetimeMeshes[i], subMeshMaterials[i]);
                     rollback.MarkRenderObjectAttached();
                     UploadPublicationFaultInjector?.Invoke(
                         ModelUploadPublicationStage
@@ -649,18 +637,17 @@ namespace Njulf.Rendering.Resources
                 {
                     CookedSubMeshRecord subMesh = payload.SubMeshes[i];
                     RenderObject renderObject = subMesh.SkinIndex >= 0 && subMesh.SkinIndex < model.Skins.Count
-                        ? new SkinnedRenderObject(lifetimeMeshes[i], subMeshMaterials[i])
+                        ? new SkinnedRenderObject()
                         {
                             SkinIndex = subMesh.SkinIndex,
                             Animator = CreateAnimator(model, subMesh.SkinIndex),
                             SkinningBindTransform = subMesh.SkinningBindTransform
                         }
-                        : new RenderObject(lifetimeMeshes[i], subMeshMaterials[i]);
+                        : new RenderObject();
                     renderObject.Name = string.IsNullOrWhiteSpace(subMesh.Name) ? model.Name : subMesh.Name;
                     renderObject.LocalMeshBounds = subMesh.BoundingBox;
                     model.Add(renderObject);
-                    AttachRenderObjectResourceLifetime(
-                        renderObject);
+                    AdoptRenderObjectResources(renderObject, lifetimeMeshes[i], subMeshMaterials[i]);
                     rollback.MarkRenderObjectAttached();
                     UploadPublicationFaultInjector?.Invoke(
                         ModelUploadPublicationStage
@@ -3792,17 +3779,29 @@ namespace Njulf.Rendering.Resources
             GC.SuppressFinalize(this);
         }
 
-        private void AttachRenderObjectResourceLifetime(
-            RenderObject renderObject)
+        private void AdoptRenderObjectResources(RenderObject target, MeshHandle mesh, MaterialHandle material)
         {
-            renderObject.AttachResourceLifetime(
-                _retainMeshResource,
-                _releaseMeshResource,
-                _retainMaterialResource,
-                _releaseMaterialResource,
-                retainCurrentResources: false);
+            var meshView = new Njulf.Graphics.VulkanMesh(_backend.ResourceOwner, mesh,
+                target.LocalMeshBounds ?? default, RetainMeshHandle, ReleaseMeshReference,
+                () => { ValidateResourceAccess(); _backend.GraphicsDevice?.GetMeshBounds(mesh); });
+            var materialView = new Njulf.Graphics.VulkanMaterial(_backend.ResourceOwner, material,
+                _backend.GetMaterialDefinition(material).Name, _backend.RetainMaterial,
+                ReleaseMaterialReference, () => { ValidateResourceAccess(); _backend.GetMaterialDefinition(material); })
+                { NameResolver = handle => _backend.GetMaterialDefinition(handle).Name };
+            target.AdoptResources(meshView, materialView);
         }
 
+        private void ValidateResourceAccess() => _backend.GraphicsDevice?.EnsureUsable();
+        private void ReleaseMeshReference(MeshHandle handle)
+        {
+            if (_backend.GraphicsDevice is {} graphics) graphics.DeferRelease(() => ReleaseMeshHandle(handle));
+            else ReleaseMeshHandle(handle);
+        }
+        private void ReleaseMaterialReference(MaterialHandle handle)
+        {
+            if (_backend.GraphicsDevice is {} graphics) graphics.DeferRelease(() => _backend.ReleaseMaterial(handle));
+            else _backend.ReleaseMaterial(handle);
+        }
         private void RetainMeshHandle(MeshHandle handle)
         {
             _backend.RetainMesh(handle);
@@ -3835,23 +3834,6 @@ namespace Njulf.Rendering.Resources
             // release is intentionally a no-op.
             _opacityMicromapRegistrations.ReleaseMeshReference(handle);
             _backend.ReleaseMesh(handle);
-        }
-
-        private static MeshHandle RequireMeshHandle(object resource)
-        {
-            return resource is MeshHandle handle && handle.IsValid
-                ? handle
-                : throw new InvalidOperationException(
-                    "Render-object mesh resource is not a valid mesh handle.");
-        }
-
-        private static MaterialHandle RequireMaterialHandle(
-            object resource)
-        {
-            return resource is MaterialHandle handle && handle.IsValid
-                ? handle
-                : throw new InvalidOperationException(
-                    "Render-object material resource is not a valid material handle.");
         }
 
         private static void AddDynamicTextureIndex(HashSet<int> indices, int textureIndex)
@@ -4845,9 +4827,7 @@ namespace Njulf.Rendering.Resources
                     RenderObject renderObject =
                         subMesh.SkinIndex >= 0 &&
                         subMesh.SkinIndex < _cpu.Model.Skins.Count
-                            ? new SkinnedRenderObject(
-                                meshes[_renderObjectIndex],
-                                _subMeshMaterials[_renderObjectIndex])
+                            ? new SkinnedRenderObject()
                             {
                                 SkinIndex = subMesh.SkinIndex,
                                 Animator = CreateAnimator(
@@ -4856,15 +4836,13 @@ namespace Njulf.Rendering.Resources
                                 SkinningBindTransform =
                                     subMesh.SkinningBindTransform
                             }
-                            : new RenderObject(
-                                meshes[_renderObjectIndex],
-                                _subMeshMaterials[_renderObjectIndex]);
+                            : new RenderObject();
                     renderObject.Name = string.IsNullOrWhiteSpace(subMesh.Name)
                         ? _cpu.Model.Name
                         : subMesh.Name;
                     renderObject.LocalMeshBounds = subMesh.BoundingBox;
                     _cpu.Model.Add(renderObject);
-                    _owner.AttachRenderObjectResourceLifetime(renderObject);
+                    _owner.AdoptRenderObjectResources(renderObject, meshes[_renderObjectIndex], _subMeshMaterials[_renderObjectIndex]);
                     (_rollback ?? throw new InvalidOperationException(
                         "Model upload rollback ownership is unavailable."))
                         .MarkRenderObjectAttached();

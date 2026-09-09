@@ -8,6 +8,7 @@ using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Core.Vfx;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
@@ -45,8 +46,12 @@ namespace Njulf.Rendering
         IRendererFrameBoundaryTimingSource,
         IProgressiveScenePipelinePreparer,
         IStartupLatencyReporter, IStartupMilestoneLatencyReporter,
-        IRendererDebugTools, IDisposable
+        IRendererDebugTools, Njulf.Graphics.IGraphicsDeviceProvider, IDisposable
     {
+        /// <summary>The graphics API sharing this renderer's device and resource managers.</summary>
+        internal Njulf.Graphics.VulkanGraphicsDevice NativeGraphicsDevice { get; }
+        public Njulf.Graphics.GraphicsDevice GraphicsDevice => NativeGraphicsDevice;
+
         public bool IsFrameInProgress => _lifetime.FrameInProgress;
 
         public bool IsProgressiveStartupEnabled =>
@@ -277,6 +282,7 @@ namespace Njulf.Rendering
 
         // Pipelines
         private MeshPipeline _meshPipeline = null!;
+        private SceneLightingCoordinator? _sceneLighting;
         private ComputePipeline _computePipeline = null!;
         private CompositePipeline _compositePipeline = null!;
         private CompositePipeline _ldrCompositePipeline = null!;
@@ -643,6 +649,10 @@ namespace Njulf.Rendering
         public bool EnableTransparentPass { get; set; } = true;
         public bool EnableMeshletDebugView { get; set; }
         public RenderSettings Settings { get; }
+
+        /// <summary>Activates local shadows explicitly requested by an editor light change.</summary>
+        public void ApplyLightShadowEdit(in Light previous, in Light current) =>
+            _importedLightShadowPolicy.ApplyLightEdit(Settings.Shadows, previous, current);
 
         public AdvancedGiRuntimeContentState AdvancedGiRuntimeContentState =>
             _advancedGiAdmission.RuntimeContentState;
@@ -1358,6 +1368,12 @@ namespace Njulf.Rendering
                     _materialManager,
                     _textureManager);
             _ownsDependencies = ownsDependencies;
+            NativeGraphicsDevice = new Njulf.Graphics.VulkanGraphicsDevice(
+                _context, _bufferManager, _meshManager, _materialManager, _lifetime);
+            NativeGraphicsDevice.AttachSettings(Settings);
+            NativeGraphicsDevice.AttachCustomPasses(_renderGraph, _swapchain, _bindlessHeap);
+            NativeGraphicsDevice.AttachCapabilities(() => Njulf.Graphics.VulkanGraphicsCapabilities.Capture(
+                _context, Settings, _lastDiagnostics, _lastSceneData, NativeGraphicsDevice.QueryRenderTargetSupport()));
         }
 
         private void OnQualityPresetChanging(RenderQualityPreset preset)
@@ -3243,6 +3259,7 @@ namespace Njulf.Rendering
             _completedGraphicsFrameFenceValue = Math.Max(
                 _completedGraphicsFrameFenceValue,
                 submittedSubmission);
+            NativeGraphicsDevice.Releases.Complete(_completedGraphicsFrameFenceValue);
         }
 
         private void WaitForAcquiredSwapchainImageOwner()
@@ -3612,12 +3629,23 @@ namespace Njulf.Rendering
             // recording the next primary command buffer. Recreating targets from DrawScene used
             // to invalidate resources and command-buffer state belonging to the frame that was
             // already in progress.
-            EnsureRenderTargetProfile();
+            try
+            {
+                NativeGraphicsDevice.Settings.BeginFrame();
+                EnsureRenderTargetProfile();
+                NativeGraphicsDevice.CustomPasses.ApplyChanges();
+            }
+            catch (Exception failure)
+            {
+                NativeGraphicsDevice.Settings.Fail(failure);
+                throw;
+            }
 
             // The staging ring slot is safe to reuse after the frame fence has completed.
             _stagingRing.BeginFrame(_currentFrame);
             _uploadBudgetTracker.BeginFrame();
             _context.SetAllocatorCurrentFrameIndex(_allocatorFrameIndex++);
+
 
             EnsureMeshPipelineDiagnosticVariant();
 
@@ -3858,6 +3886,7 @@ namespace Njulf.Rendering
                 _ddgiFrameSerial == ulong.MaxValue
                     ? ulong.MaxValue
                     : _ddgiFrameSerial + 1UL;
+            NativeGraphicsDevice.Releases.Submitted(_submittedGraphicsFrameFenceValues[_currentFrame]);
             _submissionOwnership.MarkSubmitted(
                 _currentFrame,
                 _imageIndex,
@@ -4075,6 +4104,7 @@ namespace Njulf.Rendering
                 _ddgiFrameSerial == ulong.MaxValue
                     ? ulong.MaxValue
                     : _ddgiFrameSerial + 1UL;
+            NativeGraphicsDevice.Releases.Submitted(_submittedGraphicsFrameFenceValues[_currentFrame]);
             _submissionOwnership.MarkSubmitted(
                 _currentFrame,
                 _imageIndex,
@@ -4427,6 +4457,20 @@ namespace Njulf.Rendering
                 _sync.GetInFlightFence(_currentFrame));
             _context.SetAllocatorCurrentFrameIndex(_allocatorFrameIndex++);
 
+            // LoadAsync can await settings while the host presents its bootstrap. Workers
+            // must have released production resources before the device thread changes them.
+            if (NativeGraphicsDevice.Settings.IsPending && _productionInitializationTask?.IsCompletedSuccessfully == true &&
+                _scenePreparationTask?.IsCompleted != false)
+            {
+                try
+                {
+                    NativeGraphicsDevice.Settings.BeginFrame();
+                    EnsureRenderTargetProfile();
+                    NativeGraphicsDevice.Settings.CompleteFrame();
+                }
+                catch (Exception failure) { NativeGraphicsDevice.Settings.Fail(failure); throw; }
+            }
+
             _cmd.ResetGraphicsCommandBuffer(_currentFrame);
             _currentCommandBuffer =
                 _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
@@ -4483,6 +4527,7 @@ namespace Njulf.Rendering
             _lifetime.ThrowIfDisposalStarted();
             ArgumentNullException.ThrowIfNull(scene);
             ArgumentNullException.ThrowIfNull(camera);
+            SynchronizeSceneLighting(scene);
 
             if (RendererBuildConfiguration.ProgressivePipelineStartup)
             {
@@ -4506,6 +4551,7 @@ namespace Njulf.Rendering
             _lifetime.ThrowIfDisposalStarted();
             ArgumentNullException.ThrowIfNull(scene);
             ArgumentNullException.ThrowIfNull(camera);
+            SynchronizeSceneLighting(scene);
 
             if (RendererBuildConfiguration.ProgressivePipelineStartup)
             {
@@ -5138,7 +5184,7 @@ namespace Njulf.Rendering
                     material,
                     _materialManager.DefaultMaterialHandle,
                     objectName);
-            bool hasVertexColor = mesh is MeshHandle meshHandle &&
+            bool hasVertexColor = mesh.TryGetMeshHandle(out MeshHandle meshHandle) &&
                                   meshHandle.IsValid &&
                                   _meshManager.GetMeshInfo(meshHandle)
                                       .HasVertexColor;
@@ -5286,6 +5332,10 @@ namespace Njulf.Rendering
                     destination.Add(beam.Material.BlendMode);
             }
         }
+
+        private void SynchronizeSceneLighting(Scene scene) =>
+            (_sceneLighting ??= new SceneLightingCoordinator(_lightManager)).Synchronize(
+                scene, Settings.Environment, (previous, current) => ApplyLightShadowEdit(previous, current));
 
         public void DrawScene(Scene scene, ICamera camera)
         {
@@ -6103,6 +6153,7 @@ namespace Njulf.Rendering
             // the graph plan is compiled and may have observed an enabled setting, but a
             // graphics-only or validation-fallback execution must never let DDGI's local
             // barriers assume that a compute submission is going to follow.
+            NativeGraphicsDevice.Settings.CompleteFrame();
             sceneData.DdgiAsyncComputeEnabled = 0;
             if (asyncRecordingDecision.RecordAsync)
             {
@@ -6114,13 +6165,21 @@ namespace Njulf.Rendering
             {
                 sceneData.DdgiAsyncComputeEnabled = 0;
                 EnsureSwapchainImageColorAttachment(_currentCommandBuffer);
-                _renderGraph.Execute(
-                    _currentCommandBuffer,
-                    _currentFrame,
-                    sceneData,
-                    _gpuTimestamps,
-                    _cmd,
-                    Settings.UseSecondaryCommandBuffers);
+                try
+                {
+                    _renderGraph.Execute(
+                        _currentCommandBuffer,
+                        _currentFrame,
+                        sceneData,
+                        _gpuTimestamps,
+                        _cmd,
+                        Settings.UseSecondaryCommandBuffers);
+                }
+                catch (Exception failure)
+                {
+                    MarkFrameSubmissionFault($"Render graph recording failed: {failure.Message}", Result.ErrorUnknown);
+                    throw;
+                }
                 sceneData.DdgiAsyncComputeEnabled =
                     frameAsyncComputePlan.IsPathActive(
                         AsyncComputePath.SimpleDdgiUpdate)
@@ -8501,6 +8560,7 @@ namespace Njulf.Rendering
         /// </summary>
         private void MarkFrameSubmissionFault(string reason, Result result)
         {
+            NativeGraphicsDevice.Settings.Fail(new InvalidOperationException(reason));
             RendererSubmissionFault fault =
                 _lifetime.LatchSubmissionFault(
                     reason,
@@ -8783,8 +8843,9 @@ namespace Njulf.Rendering
                 ? new[] { graphicsFamily }
                 : new[] { graphicsFamily, computeFamily };
 
-            foreach (RenderGraphResourceId resource in Enum.GetValues<RenderGraphResourceId>())
+            foreach (RenderGraphResourceDescriptor descriptor in _renderGraph.ResourceInventory)
             {
+                RenderGraphResourceId resource = descriptor.Id;
                 IReadOnlyList<RenderTarget> targets =
                     _renderGraph.GetLayoutTrackedRenderTargets(resource);
                 if (targets.Count == 0)
@@ -9397,6 +9458,12 @@ namespace Njulf.Rendering
                     [_textureManager.DefaultWhiteTexture], queueFamilies, graphicsFamily, new HashSet<ulong>());
             }
 
+            NativeGraphicsDevice.CustomPasses.AddBindings(bindings, queueFamilies, graphicsFamily);
+            var writableMaterialImages = new List<IRenderGraphLayoutTrackedImage>();
+            foreach (TextureHandle handle in materialTextures)
+                if (_textureManager.GetWritableGraphImage(handle) is { } image && !writableMaterialImages.Contains(image))
+                    writableMaterialImages.Add(image);
+            _renderGraph.ReplaceMaterialImageTargets(writableMaterialImages);
             RenderGraphResourcePlan plan = _renderGraph.CreateConcreteResourcePlan(bindings);
             _renderGraph.ActivateConcreteResourcePlan(plan, resetState: true);
             _asyncComputeResourcePlan = plan;
@@ -9582,6 +9649,8 @@ namespace Njulf.Rendering
                 if (!boundImages.Add(texture.Image.Handle))
                     continue;
 
+                var graphImage = _textureManager.GetGraphImage(handle);
+
                 bindings.Add(RenderGraphConcreteResourceBinding.ForImage(
                     resource,
                     $"{name}#{handle.Index}.{handle.Generation}",
@@ -9594,12 +9663,14 @@ namespace Njulf.Rendering
                         BaseArrayLayer = 0,
                         LayerCount = texture.ArrayLayers
                     },
-                    ImageLayout.ShaderReadOnlyOptimal,
+                    graphImage.Layout,
                     queueFamilies,
                     graphicsFamily,
                     SharingMode.Exclusive,
-                    allocationGeneration: texture.Generation == 0 ? 1u : texture.Generation,
-                    lifetime: RenderGraphResourceLifetime.Imported));
+                    allocationGeneration: graphImage.AllocationGeneration,
+                    lifetime: RenderGraphResourceLifetime.Imported,
+                    layoutTracker: graphImage.LayoutTracker,
+                    layoutProvider: graphImage.LayoutProvider));
                 added++;
             }
 
@@ -14031,6 +14102,7 @@ namespace Njulf.Rendering
         {
             if (!disposing)
                 return;
+            NativeGraphicsDevice.Settings.Shutdown();
 
             bool completed = _lifetime.DrainDisposal(
                 CreateResourceDisposalPlan,
@@ -14075,52 +14147,7 @@ namespace Njulf.Rendering
             steps.Add(
                 new StagedDisposalStep(
                     "progressive-startup-drain",
-                    () =>
-                    {
-                        // Stop work that has not entered the Vulkan driver before
-                        // waiting for startup producers and active native calls.
-                        _giPipelineCacheService?.CompilationScheduler
-                            .CancelPending();
-                        try
-                        {
-                            _productionInitializationTask?.GetAwaiter()
-                                .GetResult();
-                        }
-                        catch
-                        {
-                            // Startup failure is surfaced through the host;
-                            // disposal still owns every partially created
-                            // Vulkan resource after the task has stopped.
-                        }
-                        try
-                        {
-                            _scenePreparationTask?.GetAwaiter()
-                                .GetResult();
-                        }
-                        catch
-                        {
-                            // Cancellation or preparation failure is observed
-                            // by the host. The important shutdown invariant is
-                            // that no preparation callback is still touching
-                            // resources when the device-idle stage begins.
-                        }
-                        try
-                        {
-                            // Post-first-present pipeline jobs are intentionally
-                            // not part of scene preparation. They still own pass
-                            // and VkDevice state, so drain them before either
-                            // DeviceWaitIdle or render-graph teardown can race
-                            // publication/destruction.
-                            _giPipelineCacheService?.CompilationScheduler
-                                .WaitForAll();
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            // Pending jobs may be cancelled by an already-started
-                            // cache shutdown; native calls that entered the driver
-                            // have completed before WaitForAll returns.
-                        }
-                    }));
+                    () => { DrainStartupPreparation(); }));
             steps.Add(
                 new StagedDisposalStep(
                     DeviceIdle,
@@ -14131,6 +14158,8 @@ namespace Njulf.Rendering
                             _context.Device));
                     },
                     "progressive-startup-drain"));
+            AddResourceStage("graphics-reference-retirement", () => NativeGraphicsDevice.Releases.Complete(ulong.MaxValue, deviceIdle: true));
+            AddResourceStage("custom-passes", () => NativeGraphicsDevice.CustomPasses.ShutdownAfterDeviceIdle(), "graphics-reference-retirement");
             AddResourceStage(
                 "screenshot-capture-resolution",
                 ResolveScreenshotCapturesForDisposal);
@@ -14176,6 +14205,7 @@ namespace Njulf.Rendering
             AddResourceStage(
                 "render-graph",
                 _renderGraph.Cleanup,
+                "custom-passes",
                 "simple-ddgi-near-field-residual-coordinator",
                 "hybrid-reflection-runtime");
             AddResourceStage(
@@ -14413,7 +14443,8 @@ namespace Njulf.Rendering
                     _stagingRing.Dispose);
                 AddResourceStage(
                     "swapchain",
-                    _swapchain.Dispose);
+                    _swapchain.Dispose,
+                    "custom-passes");
                 AddResourceStage(
                     "command-buffer-manager",
                     _cmd.Dispose);
@@ -14431,7 +14462,9 @@ namespace Njulf.Rendering
                     "model-upload-service",
                     () =>
                         (_modelUploadService as IDisposable)
-                        ?.Dispose());
+                        ?.Dispose(),
+                    "graphics-reference-retirement",
+                    "custom-passes");
                 AddResourceStage(
                     "material-manager",
                     _materialManager.Dispose,
@@ -14478,6 +14511,53 @@ namespace Njulf.Rendering
             }
 
             return new StagedDisposalPlan(steps);
+        }
+
+        internal void DrainStartupPreparation()
+        {
+            // Stop work that has not entered the Vulkan driver before
+            // waiting for startup producers and active native calls.
+            _giPipelineCacheService?.CompilationScheduler
+                .CancelPending();
+            try
+            {
+                _productionInitializationTask?.GetAwaiter()
+                    .GetResult();
+            }
+            catch
+            {
+                // Startup failure is surfaced through the host;
+                // disposal still owns every partially created
+                // Vulkan resource after the task has stopped.
+            }
+            try
+            {
+                _scenePreparationTask?.GetAwaiter()
+                    .GetResult();
+            }
+            catch
+            {
+                // Cancellation or preparation failure is observed
+                // by the host. The important shutdown invariant is
+                // that no preparation callback is still touching
+                // resources when the device-idle stage begins.
+            }
+            try
+            {
+                // Post-first-present pipeline jobs are intentionally
+                // not part of scene preparation. They still own pass
+                // and VkDevice state, so drain them before either
+                // DeviceWaitIdle or render-graph teardown can race
+                // publication/destruction.
+                _giPipelineCacheService?.CompilationScheduler
+                    .WaitForAll();
+            }
+            catch (OperationCanceledException)
+            {
+                // Pending jobs may be cancelled by an already-started
+                // cache shutdown; native calls that entered the driver
+                // have completed before WaitForAll returns.
+            }
         }
 
         private void ResolveScreenshotCapturesForDisposal()

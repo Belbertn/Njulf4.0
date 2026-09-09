@@ -1,8 +1,10 @@
 using System.Text.Json;
+using Njulf.Assets;
 using Njulf.Assets.Scenes;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
@@ -35,7 +37,7 @@ public sealed class SceneMaterialOverridePersistenceTests
             SceneDocumentJson.Serialize(source),
             SceneDocumentJson.Options)!;
 
-        Assert.That(roundTrip.SchemaVersion, Is.EqualTo(11));
+        Assert.That(roundTrip.SchemaVersion, Is.EqualTo(SceneDocument.CurrentSchemaVersion));
         Assert.That(
             roundTrip.Objects
                 .OrderBy(candidate => candidate.Name, StringComparer.Ordinal)
@@ -366,7 +368,7 @@ public sealed class SceneMaterialOverridePersistenceTests
             {
                 Id = Guid.NewGuid(),
                 Name = "Source object",
-                Material = sourceHandle,
+                Material = materials.GetResourceView(sourceHandle),
                 AssetReference = new SceneAssetReference { Path = "roundtrip.glb" }
             };
             var sourceScene = new Scene { Id = Guid.NewGuid(), Name = "Material scene" };
@@ -398,12 +400,12 @@ public sealed class SceneMaterialOverridePersistenceTests
                     Extensions = new MaterialExtensionDefinition { Ior = 1.2f }
                 });
             var model = new Model();
-            model.Add(new RenderObject { Name = "Mesh", Material = targetHandle });
+            model.Add(new RenderObject { Name = "Mesh", Material = materials.GetResourceView(targetHandle) });
             Scene loaded = new SceneDocumentLoader(new ModelContentManager(model))
                 .Load(saved, materials: store);
 
             MaterialHandle loadedHandle =
-                (MaterialHandle)loaded.RenderObjects.Single().Material!;
+                loaded.RenderObjects.Single().Material!.GetMaterialHandle();
             MaterialDefinition actual =
                 materials.GetMaterialDefinition(loadedHandle);
             SceneMaterialOverrideDocument persisted =
@@ -522,7 +524,7 @@ public sealed class SceneMaterialOverridePersistenceTests
                 DiffuseGiParticipation = participation,
                 EmissionGiParticipation = participation
             });
-        var sourceObject = new RenderObject { Material = source };
+        var sourceObject = TestGraphicsResources.AdoptMaterial(materials, source);
         var store = new MaterialManagerSceneMaterialOverrideStore(materials);
         SceneMaterialOverrideDocument captured = store.Capture(sourceObject)!;
 
@@ -537,10 +539,10 @@ public sealed class SceneMaterialOverridePersistenceTests
                     ? GiParticipationOverride.Enabled
                     : GiParticipationOverride.Disabled
             });
-        var targetObject = new RenderObject { Material = target };
+        var targetObject = TestGraphicsResources.AdoptMaterial(materials, target);
         store.Apply(targetObject, captured);
         MaterialDefinition actual = materials.GetMaterialDefinition(
-            (MaterialHandle)targetObject.Material!);
+            (targetObject.Material!).GetMaterialHandle());
 
         Assert.Multiple(() =>
         {
@@ -563,7 +565,7 @@ public sealed class SceneMaterialOverridePersistenceTests
             });
         var store = new MaterialManagerSceneMaterialOverrideStore(materials);
         SceneMaterialOverrideDocument captured =
-            store.Capture(new RenderObject { Material = source })!;
+            store.Capture(TestGraphicsResources.AdoptMaterial(materials, source))!;
 
         MaterialHandle target = materials.RegisterMaterialDefinition(
             new MaterialDefinition
@@ -571,7 +573,7 @@ public sealed class SceneMaterialOverridePersistenceTests
                 Name = "Explicit blend target",
                 RenderBlendModeOverride = MaterialBlendMode.Additive
             });
-        var targetObject = new RenderObject { Material = target };
+        var targetObject = TestGraphicsResources.AdoptMaterial(materials, target);
         store.Apply(targetObject, captured);
 
         Assert.Multiple(() =>
@@ -581,7 +583,7 @@ public sealed class SceneMaterialOverridePersistenceTests
                 Is.EqualTo(SceneMaterialOverrideDocument.AutomaticBlendMode));
             Assert.That(
                 materials.GetMaterialDefinition(
-                    (MaterialHandle)targetObject.Material!).RenderBlendModeOverride,
+                    (targetObject.Material!).GetMaterialHandle()).RenderBlendModeOverride,
                 Is.Null);
         });
     }
@@ -610,14 +612,14 @@ public sealed class SceneMaterialOverridePersistenceTests
         };
         MaterialHandle shared = materials.RegisterMaterialDefinition(definition);
         MaterialHandle alias = materials.RegisterMaterialDefinition(definition);
-        var firstObject = new RenderObject { Material = alias };
+        var firstObject = TestGraphicsResources.AdoptMaterial(materials, alias);
         var store = new MaterialManagerSceneMaterialOverrideStore(materials);
         int materialCount = materials.RegisteredMaterialCount;
 
         store.Apply(firstObject, new SceneMaterialOverrideDocument());
         Assert.Multiple(() =>
         {
-            Assert.That(firstObject.Material, Is.EqualTo(shared));
+            Assert.That(firstObject.Material!.GetMaterialHandle(), Is.EqualTo(shared));
             Assert.That(materials.RegisteredMaterialCount, Is.EqualTo(materialCount));
         });
 
@@ -625,7 +627,7 @@ public sealed class SceneMaterialOverridePersistenceTests
         store.Apply(
             firstObject,
             new SceneMaterialOverrideDocument { AlphaCutoff = cutoff });
-        MaterialHandle edited = (MaterialHandle)firstObject.Material!;
+        MaterialHandle edited = (firstObject.Material!).GetMaterialHandle();
         MaterialDefinition before = materials.GetMaterialDefinition(shared);
         MaterialDefinition actual = materials.GetMaterialDefinition(edited);
 
@@ -653,26 +655,8 @@ public sealed class SceneMaterialOverridePersistenceTests
             materials.RegisterMaterialDefinition(definition);
         MaterialHandle ownedAlias =
             materials.RegisterMaterialDefinition(definition);
-        using var renderObject = new RenderObject
-        {
-            Material = ownedAlias
-        };
-        int retainCalls = 0;
-        int releaseCalls = 0;
-        renderObject.AttachResourceLifetime(
-            static _ => { },
-            static _ => { },
-            material =>
-            {
-                retainCalls++;
-                materials.RetainMaterial((MaterialHandle)material);
-            },
-            material =>
-            {
-                releaseCalls++;
-                materials.ReleaseMaterial((MaterialHandle)material);
-            },
-            retainCurrentResources: false);
+        using var renderObject = TestGraphicsResources.AdoptMaterial(materials, ownedAlias);
+
         var store =
             new MaterialManagerSceneMaterialOverrideStore(materials);
 
@@ -683,13 +667,11 @@ public sealed class SceneMaterialOverridePersistenceTests
                 Roughness = 0.6f
             });
         MaterialHandle editable =
-            (MaterialHandle)renderObject.Material!;
+            (renderObject.Material!).GetMaterialHandle();
 
         Assert.Multiple(() =>
         {
             Assert.That(editable, Is.Not.EqualTo(shared));
-            Assert.That(retainCalls, Is.Zero);
-            Assert.That(releaseCalls, Is.Zero);
             Assert.That(
                 materials.GetMaterialDefinition(shared),
                 Is.EqualTo(definition));
@@ -704,7 +686,6 @@ public sealed class SceneMaterialOverridePersistenceTests
         renderObject.Dispose();
         Assert.Multiple(() =>
         {
-            Assert.That(releaseCalls, Is.EqualTo(1));
             Assert.That(
                 () => materials.GetMaterialDefinition(editable),
                 Throws.InvalidOperationException);
@@ -722,7 +703,7 @@ public sealed class SceneMaterialOverridePersistenceTests
         var definition = new MaterialDefinition { Name = "Shared validation asset" };
         MaterialHandle shared = materials.RegisterMaterialDefinition(definition);
         MaterialHandle alias = materials.RegisterMaterialDefinition(definition);
-        var renderObject = new RenderObject { Material = alias };
+        var renderObject = TestGraphicsResources.AdoptMaterial(materials, alias);
         var store = new MaterialManagerSceneMaterialOverrideStore(materials);
         int materialCount = materials.RegisteredMaterialCount;
 
@@ -773,7 +754,7 @@ public sealed class SceneMaterialOverridePersistenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(renderObject.Material, Is.EqualTo(shared));
+            Assert.That(renderObject.Material!.GetMaterialHandle(), Is.EqualTo(shared));
             Assert.That(materials.RegisteredMaterialCount, Is.EqualTo(materialCount));
             Assert.That(materials.GetMaterialDefinition(shared), Is.EqualTo(definition));
         });
@@ -795,7 +776,7 @@ public sealed class SceneMaterialOverridePersistenceTests
                 DiffuseGiParticipation = GiParticipationOverride.Default,
                 EmissionGiParticipation = GiParticipationOverride.Default
             });
-        var target = new RenderObject { Material = handle };
+        var target = TestGraphicsResources.AdoptMaterial(materials, handle);
         var store = new MaterialManagerSceneMaterialOverrideStore(materials);
 
         store.Apply(
@@ -810,7 +791,7 @@ public sealed class SceneMaterialOverridePersistenceTests
                 ReceivesDiffuseGi = false
             });
         MaterialDefinition actual = materials.GetMaterialDefinition(
-            (MaterialHandle)target.Material!);
+            (target.Material!).GetMaterialHandle());
 
         Assert.Multiple(() =>
         {
@@ -869,7 +850,10 @@ public sealed class SceneMaterialOverridePersistenceTests
     {
         public T Load<T>(string path) => (T)(object)model;
         public void Unload<T>(T asset) { }
-        public void Clear() { }
+        public void UnloadAll() { }
+        public T Load<T>(string path, ContentLoadOptions options) => Load<T>(path);
+        public Task<T> LoadAsync<T>(string path, ContentLoadOptions? options = null, CancellationToken cancellationToken = default) => Task.FromResult(Load<T>(path));
+        public Task<ContentPreloadResult<T>> PreloadAsync<T>(IEnumerable<ContentPreloadRequest> requests, ContentPreloadOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class RecordingMaterialOverrideStore :

@@ -10,14 +10,55 @@ namespace Njulf.Tests
     public class SceneTests
     {
         [Test]
-        public void Clear_RemovesObjectsWithoutDisposingOwnedInstances()
+        public void MembershipTransferPreservesSeparateRenderAndUpdateRoles()
+        {
+            using var first = new Scene();
+            using var second = new Scene();
+            var item = new RenderObject();
+            first.Add(item);
+            first.Add((IUpdateable)item);
+            Assert.Throws<InvalidOperationException>(() => second.Add(item));
+            first.Remove((IUpdateable)item);
+            Assert.That(first.RenderObjects, Does.Contain(item));
+            first.Detach(item);
+            second.Add(item);
+            Assert.That(first.RenderObjects, Is.Empty);
+            Assert.That(second.RenderObjects, Does.Contain(item));
+        }
+
+        [Test]
+        public void ModelInstanceIsOwnedAsGroupAndCanBeTransferred()
+        {
+            using var template = new Model();
+            template.Add(new RenderObject());
+            using var first = new Scene();
+            using var second = new Scene();
+            ModelInstance instance = template.CreateInstance();
+            RenderObject child = instance.RenderObjects[0];
+            first.Add(instance);
+            Assert.That(first.RenderObjects.Single(), Is.SameAs(child));
+            Assert.Throws<InvalidOperationException>(() => second.Add(instance));
+            Assert.Throws<InvalidOperationException>(() => instance.Detach(child));
+            Assert.Throws<InvalidOperationException>(() => first.Remove(child));
+            Assert.Throws<InvalidOperationException>(instance.Dispose);
+            child.Position = new Vector3(1, 2, 3);
+            first.Detach(instance);
+            second.Add(instance);
+            second.Remove(instance);
+            Assert.That(second.RenderObjects, Is.Empty);
+            Assert.That(second.ModelInstances, Is.Empty);
+            Assert.Throws<ObjectDisposedException>(() => instance.CreateInstance());
+        }
+
+        [Test]
+        public void Detach_RemovesObjectsWithoutDisposingOwnedInstances()
         {
             var scene = new Scene();
             var updateable = new DisposableUpdateable();
 
             scene.Add(updateable);
 
-            scene.Clear();
+            scene.Detach(updateable);
             scene.Dispose();
 
             Assert.Multiple(() =>
@@ -34,9 +75,9 @@ namespace Njulf.Tests
             var updateable = new DisposableUpdateable();
 
             scene.Add(updateable);
-            scene.Add(updateable);
+            Assert.Throws<InvalidOperationException>(() => scene.Add(updateable));
 
-            scene.ClearAndDispose();
+            scene.Clear();
 
             Assert.Multiple(() =>
             {
@@ -53,7 +94,7 @@ namespace Njulf.Tests
             var second = new DisposableUpdateable();
             scene.Add(first);
 
-            scene.ClearAndDispose();
+            scene.Clear();
             scene.Add(second);
             scene.Update(0.016f);
             scene.Dispose();
@@ -76,12 +117,12 @@ namespace Njulf.Tests
             scene.Add(healthy);
 
             AggregateException failure =
-                Assert.Throws<AggregateException>(scene.ClearAndDispose)!;
+                Assert.Throws<AggregateException>(scene.Clear)!;
             Assert.That(
                 () => scene.Add(new DisposableUpdateable()),
                 Throws.TypeOf<ObjectDisposedException>());
             failing.DisposeFailure = null;
-            scene.ClearAndDispose();
+            scene.Clear();
             var replacement = new DisposableUpdateable();
             scene.Add(replacement);
             scene.Dispose();
@@ -121,7 +162,7 @@ namespace Njulf.Tests
             var updateable = new DisposableUpdateable();
 
             scene.Add(updateable);
-            scene.Add(updateable);
+            Assert.Throws<InvalidOperationException>(() => scene.Add(updateable));
             scene.Remove(updateable);
 
             scene.Dispose();
@@ -196,7 +237,7 @@ namespace Njulf.Tests
         public void RenderPayloadRevision_TracksGeometryAndStaticInstanceChanges()
         {
             using var scene = new Scene();
-            var renderObject = new RenderObject("mesh", "material");
+            var renderObject = new RenderObject(TestGraphicsResources.Mesh("mesh"), TestGraphicsResources.Material("material"));
             ulong initialRevision = scene.RenderPayloadRevision;
 
             scene.Add(renderObject);
@@ -223,7 +264,7 @@ namespace Njulf.Tests
         public void SkinnedPayloadProperties_AdvanceSceneRenderPayloadRevision()
         {
             using var scene = new Scene();
-            var renderObject = new SkinnedRenderObject("mesh", "material");
+            var renderObject = new SkinnedRenderObject(TestGraphicsResources.Mesh("mesh"), TestGraphicsResources.Material("material"));
             scene.Add(renderObject);
             ulong initialRevision = scene.RenderPayloadRevision;
 
@@ -255,7 +296,7 @@ namespace Njulf.Tests
             scene.Add(volume);
             uint addedRevision = scene.VolumetricDensityRevision;
 
-            var renderObject = new RenderObject("mesh", "material");
+            var renderObject = new RenderObject(TestGraphicsResources.Mesh("mesh"), TestGraphicsResources.Material("material"));
             scene.Add(renderObject);
             renderObject.Position = new Vector3(1f, 2f, 3f);
             uint unrelatedMutationRevision =

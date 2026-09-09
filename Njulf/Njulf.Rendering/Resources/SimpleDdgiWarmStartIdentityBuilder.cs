@@ -75,7 +75,7 @@ internal static class SimpleDdgiWarmStartIdentityBuilder
             Append(transformHash, index);
             Append(transformHash, renderObject.WorldMatrix);
             Append(transformHash, renderObject.LocalMeshBounds);
-            if (renderObject.Mesh is MeshHandle handle && handle.IsValid)
+            if ((renderObject.Mesh).TryGetMeshHandle(out MeshHandle handle) && handle.IsValid)
                 meshHandles.Add(handle);
         }
 
@@ -91,7 +91,7 @@ internal static class SimpleDdgiWarmStartIdentityBuilder
             Append(transformHash, batch.WorldMatrices.Count);
             foreach (Matrix4x4 matrix in batch.WorldMatrices)
                 Append(transformHash, matrix);
-            if (batch.Mesh is MeshHandle handle && handle.IsValid)
+            if ((batch.Mesh).TryGetMeshHandle(out MeshHandle handle) && handle.IsValid)
                 meshHandles.Add(handle);
         }
 
@@ -107,7 +107,7 @@ internal static class SimpleDdgiWarmStartIdentityBuilder
             Append(sceneHash, prototype.CardHeight);
             Append(sceneHash, prototype.CardWidth);
             Append(sceneHash, prototype.FarImpostorEnabled);
-            if (prototype.Mesh is MeshHandle handle && handle.IsValid)
+            if ((prototype.Mesh).TryGetMeshHandle(out MeshHandle handle) && handle.IsValid)
                 meshHandles.Add(handle);
         }
 
@@ -268,6 +268,8 @@ internal static class SimpleDdgiWarmStartIdentityBuilder
         IncrementalHash hash,
         object? resource)
     {
+        if (resource is Njulf.Graphics.IMesh meshView) { AppendResourceIdentity(hash, meshView.GetMeshHandle()); return; }
+        if (resource is Njulf.Graphics.IMaterial materialView) { AppendResourceIdentity(hash, materialView.GetMaterialHandle()); return; }
         switch (resource)
         {
             case MeshHandle mesh:

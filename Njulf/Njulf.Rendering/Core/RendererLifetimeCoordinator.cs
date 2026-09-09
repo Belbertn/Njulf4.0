@@ -41,6 +41,7 @@ internal sealed class RendererLifetimeCoordinator
     }
 
     internal bool InitializationSucceeded => _initializationSucceeded;
+    internal bool SubmissionFaulted => _submissionFaulted;
 
     internal bool FrameInProgress => _frameInProgress;
 

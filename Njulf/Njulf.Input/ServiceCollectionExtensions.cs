@@ -5,8 +5,10 @@ using Silk.NET.Input;
 
 namespace Microsoft.Extensions.DependencyInjection
 {
+    /// <summary>Registers the default game-thread input service.</summary>
     public static class InputServiceCollectionExtensions
     {
+        /// <summary>Registers a container-owned singleton borrowing the registered native input context.</summary>
         public static IServiceCollection AddInput(this IServiceCollection services)
         {
             services.AddSingleton<IInputManager, InputManager>(provider =>
@@ -20,6 +22,7 @@ namespace Microsoft.Extensions.DependencyInjection
             return services;
         }
         
+        /// <summary>Registers a placeholder requiring replacement with a window-created native context before resolution.</summary>
         public static IServiceCollection AddInputContext(this IServiceCollection services)
         {
             services.AddSingleton<IInputContext>(_ =>

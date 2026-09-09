@@ -1,17 +1,12 @@
 using System;
+using Njulf.Graphics;
+
+namespace Njulf.Graphics
+{
+}
 
 namespace Njulf.Rendering.Data
 {
-    public enum MaterialBlendMode : uint
-    {
-        Opaque = 0,
-        Mask = 1,
-        AlphaBlend = 2,
-        PremultipliedAlpha = 3,
-        Additive = 4,
-        Multiply = 5
-    }
-
     [Flags]
     public enum MaterialSurfaceFlags : uint
     {

@@ -6,11 +6,12 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 11;
+    public const int CurrentSchemaVersion = 12;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
     public string Name { get; init; } = "Scene";
+    public SceneEnvironmentDocument? Environment { get; init; }
     public SceneColor AmbientLight { get; init; } = new(0.2f, 0.2f, 0.2f, 1f);
     public bool ImportedModelLightsEnabled { get; init; }
     public bool ImportedDirectionalLightEnabled { get; init; }

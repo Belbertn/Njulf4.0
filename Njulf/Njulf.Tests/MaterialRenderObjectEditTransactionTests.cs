@@ -1,6 +1,7 @@
 using Njulf.Assets.Scenes;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
@@ -48,10 +49,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
             manager.RegisterMaterialDefinition(
                 source,
                 CreateCompilationContext());
-        var renderObject = new RenderObject
-        {
-            Material = alias
-        };
+        var renderObject = TestGraphicsResources.AdoptMaterial(manager, alias);
         MaterialDefinition replacement =
             CreateDefinition(replacementTexture) with
             {
@@ -82,7 +80,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(renderObject.Material, Is.EqualTo(shared));
+            Assert.That(renderObject.Material!.GetMaterialHandle(), Is.EqualTo(shared));
             Assert.That(
                 manager.RegisteredMaterialCount,
                 Is.EqualTo(registeredBefore));
@@ -134,28 +132,8 @@ public sealed class MaterialRenderObjectEditTransactionTests
             manager.RegisterMaterialDefinition(source);
         MaterialHandle alias =
             manager.RegisterMaterialDefinition(source);
-        using var renderObject = new RenderObject
-        {
-            Material = alias
-        };
-        int retainCalls = 0;
-        int releaseCalls = 0;
-        renderObject.AttachResourceLifetime(
-            static _ => { },
-            static _ => { },
-            material =>
-            {
-                retainCalls++;
-                manager.RetainMaterial(
-                    (MaterialHandle)material);
-            },
-            material =>
-            {
-                releaseCalls++;
-                manager.ReleaseMaterial(
-                    (MaterialHandle)material);
-            },
-            retainCurrentResources: false);
+        using var renderObject = TestGraphicsResources.AdoptMaterial(manager, alias);
+
         int registeredBefore =
             manager.RegisteredMaterialCount;
         manager.RegistrationPublicationFaultInjector =
@@ -185,9 +163,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(renderObject.Material, Is.EqualTo(shared));
-            Assert.That(retainCalls, Is.Zero);
-            Assert.That(releaseCalls, Is.Zero);
+            Assert.That(renderObject.Material!.GetMaterialHandle(), Is.EqualTo(shared));
             Assert.That(
                 manager.RegisteredMaterialCount,
                 Is.EqualTo(registeredBefore));
@@ -198,7 +174,6 @@ public sealed class MaterialRenderObjectEditTransactionTests
 
         manager.RegistrationPublicationFaultInjector = null;
         renderObject.Dispose();
-        Assert.That(releaseCalls, Is.EqualTo(1));
         Assert.That(
             manager.GetMaterialDefinition(shared),
             Is.EqualTo(source));
@@ -232,10 +207,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
             manager.RegisterMaterialDefinition(source);
         MaterialHandle alias =
             manager.RegisterMaterialDefinition(source);
-        var renderObject = new RenderObject
-        {
-            Material = alias
-        };
+        var renderObject = TestGraphicsResources.AdoptMaterial(manager, alias);
         var store =
             new MaterialManagerSceneMaterialOverrideStore(
                 manager);
@@ -255,7 +227,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(renderObject.Material, Is.EqualTo(shared));
+            Assert.That(renderObject.Material!.GetMaterialHandle(), Is.EqualTo(shared));
             Assert.That(
                 manager.RegisteredMaterialCount,
                 Is.EqualTo(registeredBefore));
@@ -293,10 +265,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
             manager.RegisterMaterialDefinition(
                 source,
                 CreateCompilationContext());
-        var renderObject = new RenderObject
-        {
-            Material = alias
-        };
+        var renderObject = TestGraphicsResources.AdoptMaterial(manager, alias);
         references.FailRetainCall = 1;
         int registeredBefore =
             manager.RegisteredMaterialCount;
@@ -312,7 +281,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(renderObject.Material, Is.EqualTo(shared));
+            Assert.That(renderObject.Material!.GetMaterialHandle(), Is.EqualTo(shared));
             Assert.That(
                 manager.RegisteredMaterialCount,
                 Is.EqualTo(registeredBefore));
@@ -340,6 +309,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
         MaterialHandle concurrentHandle =
             MaterialHandle.Invalid;
         bool replaceDuringCompilation = false;
+        Njulf.Graphics.IMaterial? concurrentView = null;
         using var manager = new MaterialManager(
             references,
             (binding, _, _) =>
@@ -348,7 +318,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
                 {
                     replaceDuringCompilation = false;
                     renderObject!.Material =
-                        concurrentHandle;
+                        concurrentView;
                 }
                 return MaterialTextureTransportInput.Constant(
                     BindlessIndex.FirstDynamicTextureIndex +
@@ -368,12 +338,10 @@ public sealed class MaterialRenderObjectEditTransactionTests
                 {
                     Name = "Concurrent replacement"
                 });
-        renderObject = new RenderObject
-        {
-            Material = shared
-        };
+        renderObject = TestGraphicsResources.AdoptMaterial(manager, shared);
         int registeredBefore =
             manager.RegisteredMaterialCount;
+        concurrentView = manager.GetResourceView(concurrentHandle);
         replaceDuringCompilation = true;
 
         Assert.That(
@@ -390,7 +358,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                renderObject.Material,
+                renderObject.Material!.GetMaterialHandle(),
                 Is.EqualTo(concurrentHandle));
             Assert.That(
                 manager.RegisteredMaterialCount,
@@ -399,11 +367,11 @@ public sealed class MaterialRenderObjectEditTransactionTests
                 manager.GetMaterialDefinition(shared),
                 Is.EqualTo(source));
             Assert.That(references.RetainCalls, Is.Zero);
-            Assert.That(references.ReleaseCalls, Is.Zero);
+            Assert.That(references.ReleaseCalls, Is.EqualTo(1), "Replacing the binding releases the object-owned source reference.");
         });
 
         manager.ReleaseMaterial(shared);
-        manager.ReleaseMaterial(shared);
+        renderObject.Dispose();
         manager.ReleaseMaterial(concurrentHandle);
     }
 
@@ -436,10 +404,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
         shared =
             manager.RegisterMaterialDefinition(source);
         _ = manager.RegisterMaterialDefinition(source);
-        var renderObject = new RenderObject
-        {
-            Material = shared
-        };
+        var renderObject = TestGraphicsResources.AdoptMaterial(manager, shared);
         int registeredBefore =
             manager.RegisteredMaterialCount;
         retireDuringCompilation = true;
@@ -457,7 +422,7 @@ public sealed class MaterialRenderObjectEditTransactionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(renderObject.Material, Is.EqualTo(shared));
+            Assert.That(renderObject.Material!.GetMaterialHandle(), Is.EqualTo(shared));
             Assert.That(
                 manager.RegisteredMaterialCount,
                 Is.EqualTo(registeredBefore - 1));

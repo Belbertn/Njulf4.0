@@ -1,20 +1,12 @@
 using System;
 using System.Collections.Generic;
 
+namespace Njulf.Graphics
+{
+}
+
 namespace Njulf.Rendering.Data
 {
-    /// <summary>
-    /// Controls how the renderer is allowed to place work on the asynchronous compute queue.
-    /// <see cref="ForceEnabledForValidation"/> still performs every capability and resource-plan
-    /// validation; it only bypasses the profitability decision.
-    /// </summary>
-    public enum AsyncComputeMode
-    {
-        Disabled = 0,
-        Auto = 1,
-        ForceEnabledForValidation = 2
-    }
-
     /// <summary>
     /// A user-addressable asynchronous-compute feature.  A path can contain more than one pass,
     /// but it is always enabled or disabled as one scheduling unit.

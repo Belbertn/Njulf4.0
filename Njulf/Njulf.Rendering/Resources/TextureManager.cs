@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -14,6 +15,7 @@ using GpuAllocator = Vma;
 using Vma;
 using Buffer = System.Buffer;
 using CoreVector4 = Njulf.Core.Math.Vector4;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Rendering.Resources
 {
@@ -24,7 +26,7 @@ namespace Njulf.Rendering.Resources
         internal const ulong DefaultUploadBatchBytes =
             32UL * 1024UL * 1024UL;
         internal const int MaximumRuntimeEncodedTextureBytes =
-            TextureCooker.DefaultMaximumRuntimeTransportEncodedBytes;
+            TextureSourceDecoder.DefaultMaximumRuntimeTransportEncodedBytes;
         internal const long MaximumRuntimeDecodedTexturePixels =
             WebPTextureDecoder.DefaultMaximumDecodedPixels;
         private const int DefaultLargestFileTextureDiagnosticsCount = 10;
@@ -80,6 +82,7 @@ namespace Njulf.Rendering.Resources
 
         private sealed class SharedTextureImage
         {
+            internal Njulf.Graphics.Vulkan.TextureGraphImage? GraphImage;
             public Image Image;
             public Allocation* Allocation;
             public ImageView View;
@@ -1908,14 +1911,11 @@ namespace Njulf.Rendering.Resources
                 MaxLoadedTextureDimension);
             TextureTransportStatistics transportStatistics =
                 authenticatedCookedTexture?.Metadata.TransportStatistics ??
-                TextureCooker.AnalyzeTransportStatistics(
+                TextureSourceDecoder.AnalyzeTransportStatistics(
                     imageBytes,
                     TextureContainerKind.Ktx2,
                     cacheIdentity,
-                    new TextureCookOptions(
-                        ColorSpace: ResolveExpectedColorSpace(srgb, semantic),
-                        TargetFormatPolicy: TextureTargetFormatPolicy.Rgba8,
-                        Semantic: semantic == TextureSemantic.Hdr
+                    new TextureDecodeOptions(ColorSpace: ResolveExpectedColorSpace(srgb, semantic), ForceHdr: false, Semantic: semantic == TextureSemantic.Hdr
                             ? TextureSemantic.Hdr
                             : TextureSemantic.Normal)) with
                 {
@@ -5521,6 +5521,63 @@ namespace Njulf.Rendering.Resources
             }
 
             return false;
+        }
+
+        internal TextureHandle CreateGraphicsTexture(int width, int height, ReadOnlySpan<byte> pixels, bool srgb)
+        {
+            var format = srgb ? Format.R8G8B8A8Srgb : Format.R8G8B8A8Unorm;
+            var statistics = TextureTransportImage.FromRgba8(pixels, width, height,
+                srgb ? TextureColorSpace.Srgb : TextureColorSpace.Linear, TextureSemantic.Data,
+                CookedHash.Bytes(pixels), "Graphics texture").Statistics;
+            TextureHandle handle = CreateTexture((uint)width, (uint)height, format, samplerDescription: TextureSamplerDescription.Default);
+            try
+            {
+                UploadTextureData(handle, pixels, (uint)width, (uint)height, format);
+                lock (_lock)
+                {
+                    var image = GetTextureInfoLocked(handle).SharedImage!;
+                    image.TransportStatistics = statistics;
+                    image.LinearAverageColor = statistics.LinearChannelMean.ToVector4();
+                }
+                return handle;
+            }
+            catch { ReleaseTexture(handle); throw; }
+        }
+
+        internal Njulf.Graphics.Vulkan.TextureGraphImage GetGraphImage(TextureHandle handle, bool writable = false)
+        {
+            lock (_lock)
+            {
+                var shared = GetTextureInfoLocked(handle).SharedImage!;
+                if (shared.GraphImage is { } existing && existing.Image.Image.Handle != shared.Image.Handle)
+                    shared.GraphImage = null;
+                return shared.GraphImage ??= new(_context,
+                    new(shared.Image, shared.View, shared.Format, new(shared.Extent.Width, shared.Extent.Height)),
+                    shared.MipLevels, shared.ArrayLayers, writable);
+            }
+        }
+
+        internal Njulf.Graphics.Vulkan.TextureGraphImage? GetWritableGraphImage(TextureHandle handle)
+        {
+            lock (_lock)
+            {
+                var state = GetTextureInfoLocked(handle).SharedImage?.GraphImage;
+                return state?.Writable == true ? state : null;
+            }
+        }
+
+        internal TextureHandle RetainGraphicsBinding(TextureHandle handle, TextureSamplerDescription sampler)
+        {
+            lock (_lock)
+            {
+                TextureInfo info = GetTextureInfoLocked(handle);
+                if ((info.SamplerDescription ?? TextureSamplerDescription.Default) == sampler)
+                { RetainTexture(handle); return handle; }
+                string key = CreateTextureDescriptorCacheKey($"graphics:{handle.Index}:{handle.Generation}", sampler);
+                if (_textureCache.TryGetValue(key, out var existing))
+                { RetainTexture(existing); return existing; }
+                return CreateSharedTextureAliasLocked(info.SharedImage!, sampler, key);
+            }
         }
 
         private bool HasPendingSamplerDescriptorRetirement(

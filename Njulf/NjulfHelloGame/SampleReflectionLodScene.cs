@@ -1,6 +1,7 @@
 using Njulf.Assets.Validation;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 
@@ -50,7 +51,7 @@ internal static class SampleReflectionLodScene
         void Add(MeshHandle mesh, MaterialHandle material, string name, Vector3 scale,
             Vector3 position, bool floor = false)
         {
-            scene.Add(new RenderObject(mesh, material)
+            scene.Add(new RenderObject(meshes.GetResourceView(mesh), materials.GetResourceView(material))
             {
                 Id = new Guid(++identity, 0, 0, new byte[8]), Name = name,
                 WorldMatrix = Matrix4x4.CreateScale(scale) *

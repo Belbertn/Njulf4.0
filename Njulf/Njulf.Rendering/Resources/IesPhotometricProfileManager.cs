@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Njulf.Assets;
 using Njulf.Assets.Scenes;
+using Njulf.Graphics;
 using Njulf.Rendering.Descriptors;
 using Silk.NET.Vulkan;
 

@@ -1,6 +1,9 @@
+using IMesh = Njulf.Graphics.IMesh;
+using IMaterial = Njulf.Graphics.IMaterial;
 using System;
 using System.Collections.Generic;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
@@ -130,7 +133,7 @@ internal static class SampleVfxShowcaseScene
         scene.Name = "Njulf Volumetric VFX Showcase";
         scene.AmbientLight = new Njulf.Core.Math.Color(0.035f, 0.04f, 0.05f, 1f);
 
-        MeshHandle floorMesh = meshManager.RegisterMesh(CreateFloorVertices(), CreateFloorIndices());
+        IMesh floorMesh = meshManager.GetResourceView(meshManager.RegisterMesh(CreateFloorVertices(), CreateFloorIndices()));
         scene.Add(new RenderObject(floorMesh, CreateFloorMaterial(materialManager))
         {
             Name = "VfxShowcase.Floor",
@@ -138,10 +141,10 @@ internal static class SampleVfxShowcaseScene
             Visible = true
         });
 
-        MeshHandle pillarMesh = meshManager.RegisterMesh(
+        IMesh pillarMesh = meshManager.GetResourceView(meshManager.RegisterMesh(
             CreateBoxVertices(),
-            CreateBoxIndices());
-        MaterialHandle wallMaterial = CreateWallMaterial(materialManager);
+            CreateBoxIndices()));
+        IMaterial wallMaterial = CreateWallMaterial(materialManager);
         AddBoxObject(scene, pillarMesh, wallMaterial,
             "VfxShowcase.BackWall",
             new CoreVector3(10f, 5f, 0.2f),
@@ -243,43 +246,43 @@ internal static class SampleVfxShowcaseScene
         });
     }
 
-    private static MaterialHandle CreateFloorMaterial(MaterialManager materialManager)
+    private static IMaterial CreateFloorMaterial(MaterialManager materialManager)
     {
-        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
+        return materialManager.GetResourceView(materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
             Name = "VfxShowcase.Floor",
             BaseColorFactor = new CoreVector4(0.16f, 0.17f, 0.18f, 1f),
             MetallicFactor = 0f,
             RoughnessFactor = 0.82f
-        });
+        }));
     }
 
-    private static MaterialHandle CreatePillarMaterial(MaterialManager materialManager)
+    private static IMaterial CreatePillarMaterial(MaterialManager materialManager)
     {
-        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
+        return materialManager.GetResourceView(materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
             Name = "VfxShowcase.ShadowPillar",
             BaseColorFactor = new CoreVector4(0.08f, 0.085f, 0.095f, 1f),
             MetallicFactor = 0f,
             RoughnessFactor = 0.72f
-        });
+        }));
     }
 
-    private static MaterialHandle CreateWallMaterial(MaterialManager materialManager)
+    private static IMaterial CreateWallMaterial(MaterialManager materialManager)
     {
-        return materialManager.RegisterMaterialDefinition(new MaterialDefinition
+        return materialManager.GetResourceView(materialManager.RegisterMaterialDefinition(new MaterialDefinition
         {
             Name = "VfxShowcase.Walls",
             BaseColorFactor = new CoreVector4(0.11f, 0.12f, 0.14f, 1f),
             MetallicFactor = 0f,
             RoughnessFactor = 0.9f
-        });
+        }));
     }
 
     private static void AddBoxObject(
         Scene scene,
-        MeshHandle mesh,
-        MaterialHandle material,
+        IMesh mesh,
+        IMaterial material,
         string name,
         CoreVector3 scale,
         CoreVector3 position)

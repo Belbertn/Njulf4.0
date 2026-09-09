@@ -200,6 +200,22 @@ public sealed class RenderThreadContentUploadDispatcherTests
         Assert.That(drained.CancelledCount, Is.EqualTo(1));
     }
 
+    [Test]
+    public void ShutdownKeepsCooperativeWorkPendingUntilCancellationDrains()
+    {
+        using var dispatcher = new RenderThreadContentUploadDispatcher();
+        var work = new DrainingCancellationUploadWork();
+        Task<int> task = dispatcher.DispatchAsync(work, CancellationToken.None);
+        dispatcher.ProcessFrame(TimeSpan.FromMilliseconds(2));
+        dispatcher.BeginShutdown();
+        Assert.That(task.IsCompleted, Is.False);
+        dispatcher.ProcessFrame(TimeSpan.FromMilliseconds(2));
+        Assert.That(task.IsCompleted, Is.False);
+        dispatcher.ProcessFrame(TimeSpan.FromMilliseconds(2));
+        Assert.That(task.IsCanceled, Is.True);
+        Assert.That(dispatcher.PendingCount, Is.Zero);
+    }
+
     private sealed class ThreeStepUploadWork :
         IContentUploadWork<int>
     {

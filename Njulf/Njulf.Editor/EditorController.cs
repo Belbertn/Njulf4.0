@@ -1,9 +1,11 @@
 using System;
+using Njulf.Assets;
 using Njulf.Assets.Scenes;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
@@ -77,6 +79,7 @@ public sealed class EditorController
     public Scene Scene => _scene;
     public FirstPersonCamera? Camera { get; set; }
     public RenderSettings? RendererSettings => _renderer?.Settings;
+    public Njulf.Graphics.GraphicsSettingsController? GraphicsSettings => _renderer?.GraphicsDevice.Settings;
     public RendererDiagnostics? RendererDiagnostics => _renderer?.LastDiagnostics;
     public AdvancedGiEditorStartupContext AdvancedGiStartup =>
         _advancedGiStartup;
@@ -192,6 +195,7 @@ public sealed class EditorController
     public LightHandle AddLight(Light light, string? name = null)
     {
         LightHandle handle = _lightManager.AddLightHandle(light, name);
+        _renderer?.ApplyLightShadowEdit(default, light);
         _lightManager.TryGetLightId(handle, out Guid id);
         MarkDirty(EditorSelection.ForLight(id, handle));
         return handle;
@@ -231,7 +235,8 @@ public sealed class EditorController
             IsDirty = true;
             return true;
         }
-        if (!_lightManager.TryGetLightHandle(Selection.Id, out var handle)) return false;
+        if (!_lightManager.TryGetLightHandle(Selection.Id, out var handle) ||
+            !_lightManager.TryGetLight(handle, out Light previous)) return false;
         if (IsImportedModelLight(Selection.Id))
         {
             string? name = GetLights().First(item => item.Id == Selection.Id).Name;
@@ -241,6 +246,7 @@ public sealed class EditorController
         }
         else if (!_lightManager.UpdateLight(handle, light))
             return false;
+        _renderer?.ApplyLightShadowEdit(previous, light);
         IsDirty = true;
         return true;
     }
@@ -369,7 +375,7 @@ public sealed class EditorController
     {
         ArgumentNullException.ThrowIfNull(definition);
         if (Selection.Kind != EditorSelectionKind.Object ||
-            _scene.FindById(Selection.Id) is not RenderObject { Material: MaterialHandle handle } target)
+            _scene.FindById(Selection.Id) is not RenderObject target || !target.Material.TryGetMaterialHandle(out MaterialHandle handle))
             return false;
 
         // Validate before splitting a shared registration. This keeps an invalid editor draft from
@@ -390,7 +396,7 @@ public sealed class EditorController
 
     public bool TryGetSelectedMaterialDefinition(out MaterialDefinition? material)
     {
-        if (TryGetSelectedObject(out RenderObject? target) && target?.Material is MaterialHandle handle)
+        if (TryGetSelectedObject(out RenderObject? target) && (target?.Material).TryGetMaterialHandle(out MaterialHandle handle))
         {
             try
             {
@@ -407,7 +413,7 @@ public sealed class EditorController
 
     public bool TryGetSelectedMaterialInspection(out EditorMaterialInspection? inspection)
     {
-        if (TryGetSelectedObject(out RenderObject? target) && target?.Material is MaterialHandle handle)
+        if (TryGetSelectedObject(out RenderObject? target) && (target?.Material).TryGetMaterialHandle(out MaterialHandle handle))
         {
             try
             {
@@ -657,7 +663,7 @@ public sealed class EditorController
         if (ScenePath == null)
             throw new InvalidOperationException("No scene path is configured.");
         SceneDocument document = SceneDocumentJson.Read(ScenePath);
-        _scene.ClearAndDispose();
+        _scene.Clear();
         _scene.Id = document.Id;
         _lightStore.Clear();
         new SceneDocumentLoader(_content).Populate(document, _scene, _lightStore, materials: _materialStore);

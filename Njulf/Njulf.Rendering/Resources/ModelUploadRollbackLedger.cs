@@ -1,4 +1,5 @@
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 
 namespace Njulf.Rendering.Resources;
 

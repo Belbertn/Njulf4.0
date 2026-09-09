@@ -371,7 +371,7 @@ public sealed class DdgiFoliageProxyManager : IDisposable
                 continue;
             }
             if (prototype.GeometryMode == FoliageGeometryMode.AuthoredMeshlets &&
-                prototype.Mesh is MeshHandle authoredMesh &&
+                (prototype.Mesh).TryGetMeshHandle(out MeshHandle authoredMesh) &&
                 authoredMesh.IsValid)
             {
                 instances.Add(DdgiFoliageProxyInstance.Authored(
@@ -609,7 +609,7 @@ public sealed class DdgiFoliageProxyManager : IDisposable
                 continue;
             }
             if (prototype.GeometryMode == FoliageGeometryMode.AuthoredMeshlets &&
-                prototype.Mesh is MeshHandle authoredMesh &&
+                (prototype.Mesh).TryGetMeshHandle(out MeshHandle authoredMesh) &&
                 authoredMesh.IsValid)
             {
                 instances.Add(DdgiFoliageProxyInstance.Authored(

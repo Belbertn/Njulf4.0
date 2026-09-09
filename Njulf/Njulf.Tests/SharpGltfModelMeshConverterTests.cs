@@ -4,7 +4,9 @@ using System.Linq;
 using System.Text;
 using Njulf.Assets;
 using Njulf.Core.Animation;
+using Njulf.Graphics;
 using NUnit.Framework;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Tests;
 

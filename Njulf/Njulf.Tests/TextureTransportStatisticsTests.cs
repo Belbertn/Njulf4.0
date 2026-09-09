@@ -5,8 +5,10 @@ using System.Text.Json;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using NUnit.Framework;
 using ZstdSharp;
+using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Tests;
 
@@ -363,11 +365,11 @@ public sealed class TextureTransportStatisticsTests
             path,
             new TextureCookOptions(ColorSpace: TextureColorSpace.Linear));
         byte[] normalizedKtx = File.ReadAllBytes(path);
-        TextureTransportStatistics normalizedStatistics = TextureCooker.AnalyzeTransportStatistics(
+        TextureTransportStatistics normalizedStatistics = TextureSourceDecoder.AnalyzeTransportStatistics(
             normalizedKtx,
             TextureContainerKind.Ktx2,
             "normalized.ktx2",
-            new TextureCookOptions(ColorSpace: TextureColorSpace.Linear));
+            new TextureDecodeOptions(ColorSpace: TextureColorSpace.Linear));
 
         Assert.Multiple(() =>
         {
@@ -395,11 +397,11 @@ public sealed class TextureTransportStatisticsTests
             level: CompressZlib(sourcePixels),
             uncompressedLength: (ulong)sourcePixels.Length);
 
-        TextureTransportStatistics statistics = TextureCooker.AnalyzeTransportStatistics(
+        TextureTransportStatistics statistics = TextureSourceDecoder.AnalyzeTransportStatistics(
             ktx,
             TextureContainerKind.Ktx2,
             "zlib.ktx2",
-            new TextureCookOptions(ColorSpace: TextureColorSpace.Linear));
+            new TextureDecodeOptions(ColorSpace: TextureColorSpace.Linear));
 
         Assert.Multiple(() =>
         {
@@ -429,7 +431,7 @@ public sealed class TextureTransportStatisticsTests
         };
 
         TextureTransportStatistics statistics =
-            TextureCooker.AnalyzeTransportStatistics(source, new TextureCookOptions());
+            TextureSourceDecoder.AnalyzeTransportStatistics(source, new TextureDecodeOptions());
         InvalidDataException? error = Assert.Throws<InvalidDataException>(
             () => new TextureCooker().Cook(source, path, new TextureCookOptions()));
 
@@ -467,7 +469,7 @@ public sealed class TextureTransportStatisticsTests
         string secondPath = Path.Combine(_directory, "basis-second.ktx2");
 
         TextureTransportStatistics sourceStatistics =
-            TextureCooker.AnalyzeTransportStatistics(source, options);
+            TextureSourceDecoder.AnalyzeTransportStatistics(source, (options).ToDecodeOptions());
         if (!SupportsPinnedBasisTranscoder())
         {
             NotSupportedException? error = Assert.Throws<NotSupportedException>(
@@ -486,12 +488,12 @@ public sealed class TextureTransportStatisticsTests
         CookedTextureReport second = new TextureCooker().Cook(source, secondPath, options);
         byte[] firstBytes = File.ReadAllBytes(firstPath);
         (int width, int height, int mipCount, uint format) =
-            TextureCooker.Inspect(firstBytes, "basis-first.ktx2");
-        TextureTransportStatistics cookedStatistics = TextureCooker.AnalyzeTransportStatistics(
+            TextureSourceDecoder.Inspect(firstBytes, "basis-first.ktx2");
+        TextureTransportStatistics cookedStatistics = TextureSourceDecoder.AnalyzeTransportStatistics(
             firstBytes,
             TextureContainerKind.Ktx2,
             "basis-first.ktx2",
-            options);
+            (options).ToDecodeOptions());
 
         Assert.Multiple(() =>
         {
@@ -552,7 +554,7 @@ public sealed class TextureTransportStatisticsTests
         string path = Path.Combine(_directory, "basis-linear.ktx2");
 
         TextureTransportStatistics statistics =
-            TextureCooker.AnalyzeTransportStatistics(source, options);
+            TextureSourceDecoder.AnalyzeTransportStatistics(source, (options).ToDecodeOptions());
         if (!SupportsPinnedBasisTranscoder())
         {
             Assert.That(statistics.Status, Is.EqualTo(TextureTransportStatisticsStatus.UnsupportedEncoding));
@@ -570,7 +572,7 @@ public sealed class TextureTransportStatisticsTests
             Assert.That(statistics.Decoder, Is.EqualTo(TextureTransportStatistics.BasisDecoderVersion));
             Assert.That(report.VulkanFormat, Is.EqualTo(37u));
             Assert.That(report.PassedThrough, Is.False);
-            Assert.That(TextureCooker.Inspect(File.ReadAllBytes(path), path).Format, Is.EqualTo(37u));
+            Assert.That(TextureSourceDecoder.Inspect(File.ReadAllBytes(path), path).Format, Is.EqualTo(37u));
         });
     }
 
@@ -584,11 +586,11 @@ public sealed class TextureTransportStatisticsTests
             uncompressedLength: 5);
         string path = Path.Combine(_directory, "bad-length.ktx2");
 
-        TextureTransportStatistics statistics = TextureCooker.AnalyzeTransportStatistics(
+        TextureTransportStatistics statistics = TextureSourceDecoder.AnalyzeTransportStatistics(
             malformed,
             TextureContainerKind.Ktx2,
             "bad-length.ktx2",
-            new TextureCookOptions(ColorSpace: TextureColorSpace.Linear));
+            new TextureDecodeOptions(ColorSpace: TextureColorSpace.Linear));
         InvalidDataException? error = Assert.Throws<InvalidDataException>(
             () => new TextureCooker().Cook(
                 new ModelTextureSource
@@ -620,11 +622,11 @@ public sealed class TextureTransportStatisticsTests
         string path = Path.Combine(_directory, "corrupt-zstd.ktx2");
         var options = new TextureCookOptions(ColorSpace: TextureColorSpace.Linear);
 
-        TextureTransportStatistics statistics = TextureCooker.AnalyzeTransportStatistics(
+        TextureTransportStatistics statistics = TextureSourceDecoder.AnalyzeTransportStatistics(
             malformed,
             TextureContainerKind.Ktx2,
             "corrupt-zstd.ktx2",
-            options);
+            (options).ToDecodeOptions());
         InvalidDataException? error = Assert.Throws<InvalidDataException>(
             () => new TextureCooker().Cook(
                 new ModelTextureSource
@@ -651,11 +653,11 @@ public sealed class TextureTransportStatisticsTests
         byte[] malformed = CreateKtx2(format: 37, supercompression: 0, level: [0, 0, 0, 255]);
         BinaryPrimitives.WriteUInt64LittleEndian(malformed.AsSpan(80, 8), ulong.MaxValue);
 
-        TextureTransportStatistics statistics = TextureCooker.AnalyzeTransportStatistics(
+        TextureTransportStatistics statistics = TextureSourceDecoder.AnalyzeTransportStatistics(
             malformed,
             TextureContainerKind.Ktx2,
             "overflow.ktx2",
-            new TextureCookOptions(ColorSpace: TextureColorSpace.Linear));
+            new TextureDecodeOptions(ColorSpace: TextureColorSpace.Linear));
 
         Assert.Multiple(() =>
         {
@@ -698,9 +700,9 @@ public sealed class TextureTransportStatisticsTests
             Semantic: TextureSemantic.Data);
 
         TextureTransportStatistics statistics =
-            TextureCooker.AnalyzeTransportStatistics(source, options);
+            TextureSourceDecoder.AnalyzeTransportStatistics(source, (options).ToDecodeOptions());
         CookedTextureReport report = new TextureCooker().Cook(source, path, options);
-        (int width, int height, _, uint format) = TextureCooker.Inspect(
+        (int width, int height, _, uint format) = TextureSourceDecoder.Inspect(
             File.ReadAllBytes(path),
             path);
 
@@ -721,11 +723,11 @@ public sealed class TextureTransportStatisticsTests
     [Test]
     public void AnalyzeTransportStatistics_DoesNotWriteAndReturnsExplicitUnsupportedState()
     {
-        TextureTransportStatistics statistics = TextureCooker.AnalyzeTransportStatistics(
+        TextureTransportStatistics statistics = TextureSourceDecoder.AnalyzeTransportStatistics(
             [1, 2, 3, 4],
             TextureContainerKind.StandardImage,
             "broken.png",
-            new TextureCookOptions(Semantic: TextureSemantic.Color));
+            new TextureDecodeOptions(Semantic: TextureSemantic.Color));
 
         Assert.Multiple(() =>
         {

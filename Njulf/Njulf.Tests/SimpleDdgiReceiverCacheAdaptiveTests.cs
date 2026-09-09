@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Memory;
 using NUnit.Framework;

@@ -131,6 +131,34 @@ namespace Njulf.Rendering.Resources
             AccelerationStructureGeometryInputUsage;
 
         private readonly VulkanContext _context;
+        internal Njulf.Graphics.VulkanGraphicsDevice? GraphicsDevice { get; set; }
+        internal object ResourceOwner => _context;
+        /// <summary>A borrowed view of a handle owned by the caller. Assignment to an object retains it.</summary>
+        public Njulf.Graphics.IMesh GetResourceView(MeshHandle handle) => AdoptResource(handle).AsBorrowedView();
+
+        /// <summary>Acquires an owned typed reference to an existing device-local mesh handle.</summary>
+        public Njulf.Graphics.Mesh RetainResource(MeshHandle handle)
+        {
+            var resource = AdoptResource(handle);
+            RetainMesh(handle);
+            return resource;
+        }
+
+        internal Njulf.Graphics.VulkanMesh AdoptResource(MeshHandle handle)
+        {
+            var info = GetMeshInfo(handle);
+            var bounds = new Njulf.Core.Math.BoundingBox(
+                new(info.BoundingBoxMin.X, info.BoundingBoxMin.Y, info.BoundingBoxMin.Z),
+                new(info.BoundingBoxMax.X, info.BoundingBoxMax.Y, info.BoundingBoxMax.Z));
+            return new(ResourceOwner, handle, bounds, RetainMesh, ReleaseResource,
+                () => { GraphicsDevice?.EnsureUsable(); GetMeshInfo(handle); });
+        }
+
+        private void ReleaseResource(MeshHandle handle)
+        {
+            if (GraphicsDevice != null) GraphicsDevice.ReleaseMesh(handle);
+            else ReleaseMesh(handle);
+        }
         private readonly BufferManager _bufferManager;
         private readonly StagingRing? _stagingRing;
         private readonly FenceBasedDeleter? _deleter;

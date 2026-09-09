@@ -13,12 +13,14 @@ namespace Njulf.Rendering.Resources;
 public sealed class RenderThreadContentUploadDispatcher :
     IContentUploadDispatcher,
     IContentUploadPump,
+    IContentUploadLifetime,
     IDisposable
 {
     private readonly ConcurrentQueue<IUploadWorkItem> _pending = new();
     private readonly object _lifecycleGate = new();
     private int _pendingCount;
     private int _disposed;
+    private bool _stopping;
 
     public int PendingCount => Math.Max(0, Volatile.Read(ref _pendingCount));
 
@@ -33,7 +35,7 @@ public sealed class RenderThreadContentUploadDispatcher :
         var item = new UploadWorkItem<T>(callback, cancellationToken);
         lock (_lifecycleGate)
         {
-            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            ObjectDisposedException.ThrowIf(_disposed != 0 || _stopping, this);
             _pending.Enqueue(item);
             Interlocked.Increment(ref _pendingCount);
         }
@@ -134,6 +136,13 @@ public sealed class RenderThreadContentUploadDispatcher :
 
     public void Dispose()
     {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        BeginShutdown();
+        while (PendingCount > 0)
+        {
+            ProcessFrame(TimeSpan.FromMilliseconds(2));
+            Thread.Yield();
+        }
         lock (_lifecycleGate)
         {
             if (_disposed != 0)
@@ -145,6 +154,16 @@ public sealed class RenderThreadContentUploadDispatcher :
                 Interlocked.Decrement(ref _pendingCount);
                 item.CancelForShutdown();
             }
+        }
+    }
+
+    public void BeginShutdown()
+    {
+        lock (_lifecycleGate)
+        {
+            if (_disposed != 0 || _stopping) return;
+            _stopping = true;
+            foreach (IUploadWorkItem item in _pending) item.CancelForShutdown();
         }
     }
 
@@ -190,6 +209,7 @@ public sealed class RenderThreadContentUploadDispatcher :
         public UploadWorkItemOutcome Execute(
             in ContentUploadSliceBudget budget)
         {
+            if (_completion.Task.IsCompleted) return UploadWorkItemOutcome.Cancelled;
             if (_cancellationToken.IsCancellationRequested)
             {
                 _completion.TrySetCanceled(_cancellationToken);
@@ -283,18 +303,10 @@ public sealed class RenderThreadContentUploadDispatcher :
 
         public void CancelForShutdown()
         {
-            try
+            if (!_cancellationForwarded)
             {
-                if (!_cancellationForwarded)
-                {
-                    _work.RequestCancellation();
-                    _cancellationForwarded = true;
-                }
-            }
-            finally
-            {
-                _completion.TrySetException(new ObjectDisposedException(
-                    nameof(RenderThreadContentUploadDispatcher)));
+                _work.RequestCancellation();
+                _cancellationForwarded = true;
             }
         }
 
@@ -321,6 +333,7 @@ public sealed class RenderThreadContentUploadDispatcher :
         lock (_lifecycleGate)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            if (_stopping) item.CancelForShutdown();
             _pending.Enqueue(item);
             Interlocked.Increment(ref _pendingCount);
         }

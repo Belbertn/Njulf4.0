@@ -6,9 +6,14 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
+
+namespace Njulf.Graphics
+{
+}
 
 namespace Njulf.Rendering.Data
 {
@@ -493,13 +498,6 @@ namespace Njulf.Rendering.Data
         BloomOnly = 4
     }
 
-    public enum ToneMapper : uint
-    {
-        None = 0,
-        Reinhard = 1,
-        AcesFitted = 2
-    }
-
     public sealed class AutoExposureSettings
     {
         private float _targetLuminance = 0.125f;
@@ -612,13 +610,6 @@ namespace Njulf.Rendering.Data
         AmbientOcclusion = 7
     }
 
-    public enum AmbientOcclusionMode : uint
-    {
-        Disabled = 0,
-        Ssao = 1,
-        Gtao = 2
-    }
-
     public enum AmbientOcclusionDebugView : uint
     {
         None = 0,
@@ -655,12 +646,6 @@ namespace Njulf.Rendering.Data
         Disabled = 0,
         Direct = 1,
         DepthAwareUpsample = 2
-    }
-
-    public enum GlobalIlluminationMode : uint
-    {
-        Disabled = 0,
-        Ddgi = 1
     }
 
     public enum DdgiQualityTier : uint
@@ -794,16 +779,6 @@ namespace Njulf.Rendering.Data
         DdgiReceiverCacheRejection = 68
     }
 
-    public enum AntiAliasingMode : uint
-    {
-        None = 0,
-        Fxaa = 1,
-        SmaaLow = 2,
-        SmaaMedium = 3,
-        SmaaHigh = 4,
-        Taa = 5
-    }
-
     public enum AntiAliasingDebugView : uint
     {
         None = 0,
@@ -900,21 +875,6 @@ namespace Njulf.Rendering.Data
     {
         Float16 = 0,
         Float32 = 1
-    }
-
-    public enum ReflectionMode : uint
-    {
-        Disabled = 0,
-        GlobalEnvironmentOnly = 1,
-        StaticProbes = 2,
-        StaticProbesAndSsr = 3,
-        StaticProbesAndPlanar = 4,
-        /// <summary>
-        /// Screen-space reflections first, bounded ray-query recovery second,
-        /// directional DDGI as the stable off-screen base, then local probes
-        /// and the global environment as compatibility fallbacks.
-        /// </summary>
-        HybridRayQuery = 5
     }
 
     /// <summary>
@@ -1118,15 +1078,6 @@ namespace Njulf.Rendering.Data
         HiZRejectedClusters = 5,
         ShadowCasting = 6,
         AlphaCutoff = 7
-    }
-
-    public enum RenderQualityPreset : uint
-    {
-        Low = 0,
-        Medium = 1,
-        High = 2,
-        Ultra = 3,
-        DdgiHigh = 4
     }
 
     /// <summary>

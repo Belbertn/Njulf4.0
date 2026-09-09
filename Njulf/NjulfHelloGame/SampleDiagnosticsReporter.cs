@@ -7,6 +7,7 @@ using Njulf.Core.Camera;
 using Njulf.Assets;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
@@ -95,7 +96,7 @@ internal sealed class SampleDiagnosticsReporter
 
         foreach (RenderObject renderObject in model.RenderObjects)
         {
-            if (renderObject.Material is not MaterialHandle materialHandle || !materialHandle.IsValid)
+            if (!(renderObject.Material).TryGetMaterialHandle(out MaterialHandle materialHandle) || !materialHandle.IsValid)
                 continue;
 
             materialHandles.Add(materialHandle);
@@ -135,7 +136,7 @@ internal sealed class SampleDiagnosticsReporter
         var materialHandles = new HashSet<MaterialHandle>();
         foreach (RenderObject renderObject in scene.RenderObjects)
         {
-            if (renderObject.Material is MaterialHandle materialHandle && materialHandle.IsValid)
+            if ((renderObject.Material).TryGetMaterialHandle(out MaterialHandle materialHandle) && materialHandle.IsValid)
                 materialHandles.Add(materialHandle);
         }
 

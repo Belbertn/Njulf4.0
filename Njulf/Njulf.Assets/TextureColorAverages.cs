@@ -1,5 +1,6 @@
 using Njulf.Core.Math;
 using Njulf.Assets.Cooked;
+using Njulf.Graphics;
 
 namespace Njulf.Assets;
 

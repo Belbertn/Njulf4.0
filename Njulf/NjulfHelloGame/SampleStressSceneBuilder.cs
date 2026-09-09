@@ -4,6 +4,7 @@ using Njulf.Core.Foliage;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Graphics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
@@ -169,7 +170,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildManyMaterials(int count)
     {
         RenderObject? source = FindSourceObject();
-        if (source?.Mesh is not MeshHandle mesh)
+        if (source == null || !(source.Mesh).TryGetMeshHandle(out MeshHandle mesh))
             return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManyMaterials, 0, _lightManager.LightCount, 0, 0, 0, "No source mesh available");
 
         int side = (int)Math.Ceiling(Math.Sqrt(count));
@@ -201,7 +202,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildLargeMeshletCount(int count)
     {
         RenderObject? source = FindSourceObject();
-        if (source?.Mesh is not MeshHandle mesh || source.Material is not MaterialHandle material)
+        if (source == null || !(source.Mesh).TryGetMeshHandle(out MeshHandle mesh) || !(source.Material).TryGetMaterialHandle(out MaterialHandle material))
             return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.LargeMeshletCount, 0, _lightManager.LightCount, 0, 0, 0, "No source mesh/material available");
 
         int side = (int)Math.Ceiling(Math.Sqrt(count));
@@ -1390,7 +1391,7 @@ internal sealed class SampleStressSceneBuilder
         CoreVector3 scale,
         float rotationY)
     {
-        var renderObject = new RenderObject(GetValidationBoxMesh(), material)
+        var renderObject = new RenderObject(_meshManager.GetResourceView(GetValidationBoxMesh()), _materialManager.GetResourceView(material))
         {
             Name = name,
             WorldMatrix = CoreMatrix4x4.CreateScale(scale) *
@@ -1424,7 +1425,7 @@ internal sealed class SampleStressSceneBuilder
         CoreMatrix4x4 rotation,
         float size)
     {
-        var renderObject = new RenderObject(GetQuadMesh(), material)
+        var renderObject = new RenderObject(_meshManager.GetResourceView(GetQuadMesh()), _materialManager.GetResourceView(material))
         {
             Name = name,
             WorldMatrix = CoreMatrix4x4.CreateScale(new CoreVector3(size, size, 1.0f)) *
@@ -1596,7 +1597,7 @@ internal sealed class SampleStressSceneBuilder
     {
         foreach (RenderObject renderObject in _scene.RenderObjects)
         {
-            if (!_objects.Contains(renderObject) && renderObject.Mesh is MeshHandle && renderObject.Material is MaterialHandle)
+            if (!_objects.Contains(renderObject) && (renderObject.Mesh).TryGetMeshHandle(out _) && (renderObject.Material).TryGetMaterialHandle(out _))
                 return renderObject;
         }
 
@@ -1605,7 +1606,7 @@ internal sealed class SampleStressSceneBuilder
 
     private void AddObject(MeshHandle mesh, MaterialHandle material, string name, CoreMatrix4x4 world)
     {
-        var renderObject = new RenderObject(mesh, material)
+        var renderObject = new RenderObject(_meshManager.GetResourceView(mesh), _materialManager.GetResourceView(material))
         {
             Name = name,
             WorldMatrix = world,
