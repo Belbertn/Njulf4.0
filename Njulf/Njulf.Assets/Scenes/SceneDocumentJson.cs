@@ -32,11 +32,18 @@ public static class SceneDocumentJson
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         string fullPath = Path.GetFullPath(path);
         byte[] json = ReadBoundedSnapshot(fullPath);
-        WarnAboutUnknownRootFields(json, fullPath);
-        SceneDocument document =
-            JsonSerializer.Deserialize<SceneDocument>(json, Options)
-            ?? throw new InvalidDataException(
-                $"Scene document '{fullPath}' is empty or invalid.");
+        SceneDocument document;
+        try
+        {
+            WarnAboutUnknownRootFields(json, fullPath);
+            document = JsonSerializer.Deserialize<SceneDocument>(json, Options)
+                ?? throw new InvalidDataException($"Scene document '{fullPath}' is empty or invalid.");
+        }
+        catch (JsonException error)
+        {
+            throw new JsonException(ContentDiagnostic.Format(fullPath, error), error.Path,
+                error.LineNumber, error.BytePositionInLine, error);
+        }
         if (document.SchemaVersion < 1 || document.SchemaVersion > SceneDocument.CurrentSchemaVersion)
         {
             throw new InvalidDataException(

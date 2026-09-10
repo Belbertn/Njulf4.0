@@ -955,6 +955,7 @@ public sealed class ModelAssetCooker : IDisposable
         }
         catch (Exception exception)
         {
+            exception.Data["Njulf.SourcePath"] = sourcePath;
             progress.ReportAssetOutcome(
                 AssetCookProgressEventKind.AssetFailed,
                 AssetCookProgressOutcome.Failed,

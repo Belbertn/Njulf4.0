@@ -39,7 +39,9 @@ public sealed class StaticInstanceBatch :
         {
             if (Equals(_mesh, value))
                 return;
+            if (_mesh is Njulf.Graphics.Mesh previous) previous.ContentChanged -= AdvanceRevision;
             _mesh = value;
+            if (_mesh is Njulf.Graphics.Mesh next) next.ContentChanged += AdvanceRevision;
             AdvanceRevision();
         }
     }
@@ -111,6 +113,7 @@ public sealed class StaticInstanceBatch :
 
     public void Dispose()
     {
+        if (_mesh is Njulf.Graphics.Mesh mesh) mesh.ContentChanged -= AdvanceRevision;
         if (_resourceOwner == null)
             return;
 

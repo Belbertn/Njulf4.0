@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 13,
+  "name": "Content level B",
+  "objects": [
+    { "name": "Shared left", "model": { "path": "Assets/tetrahedron.gltf" }, "position": { "x": -1.5, "y": 0, "z": 0 } },
+    { "name": "Shared right", "model": { "path": "Assets/tetrahedron.gltf" }, "position": { "x": 1.5, "y": 0, "z": 0 } }
+  ],
+  "lights": [
+    { "type": "Directional", "direction": { "x": -0.5, "y": -1, "z": -1 }, "intensity": 3, "castsShadows": true }
+  ]
+}

@@ -59,6 +59,8 @@ namespace Njulf.Rendering.Resources
         public const Format OpaqueVisibilityFormat = Format.R32G32Uint;
         internal RenderTarget? OpaqueVisibility { get; }
 
+        internal bool CustomPostProcessingEnabled { get; set; }
+        internal ulong PostEffectRevision { get; set; }
         public const Format SceneColorFormat = Format.R16G16B16A16Sfloat;
         public const Format FoggedSceneColorFormat = SceneColorFormat;
         public const Format AmbientOcclusionFormat = Format.R8Unorm;
@@ -1176,7 +1178,8 @@ namespace Njulf.Rendering.Resources
         public void RecreateAntiAliasingTargets(Extent2D extent, Extent2D outputExtent, AntiAliasingMode mode, bool motionVectorsEnabled)
         {
             Extent2D antiAliasingExtent = CalculateAntiAliasingExtent(extent, mode);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.LdrSceneColor, LdrSceneColor, RequiresAntiAliasingTarget(mode) ? antiAliasingExtent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.LdrSceneColor, LdrSceneColor,
+                RequiresAntiAliasingTarget(mode) ? antiAliasingExtent : CustomPostProcessingEnabled ? outputExtent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaEdges, SmaaEdges, AntiAliasingSettings.IsSmaaMode(mode) ? antiAliasingExtent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights, AntiAliasingSettings.IsSmaaMode(mode) ? antiAliasingExtent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.MotionVectors, MotionVectors, motionVectorsEnabled ? extent : PlaceholderExtent);

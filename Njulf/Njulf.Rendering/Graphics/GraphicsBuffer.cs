@@ -13,10 +13,11 @@ internal sealed class VulkanGraphicsBuffer : GraphicsBuffer, IDisposable
     internal VulkanGraphicsBuffer(VulkanGraphicsDevice owner, BufferHandle handle, ulong size)
     { Owner = owner; Handle = handle; SizeInBytes = size; }
     internal void Retain() { Owner.EnsureUsable(); checked { References++; } }
-    internal void Release() => Owner.DeferRelease(() =>
+    internal void Release() => Owner.DeferRelease(ReleaseCompleted);
+    internal void ReleaseCompleted()
     {
         if (References == 1) Owner.Buffers.DestroyBuffer(Handle);
         References--;
-    });
+    }
     public override void Dispose() { if (IsDisposed) return; Release(); IsDisposed = true; }
 }

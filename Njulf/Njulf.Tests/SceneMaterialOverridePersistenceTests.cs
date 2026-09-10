@@ -14,6 +14,24 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SceneMaterialOverridePersistenceTests
 {
+    [TestCase(1)]
+    [TestCase(12)]
+    public void OlderScenesWithoutTexturePathsRetainInheritedBindings(int version)
+    {
+        SceneDocument document = ReadTemporary($$"""
+            { "schemaVersion": {{version}}, "objects": [
+                { "model": { "path": "model.glb" }, "materialOverride": { "roughness": 0.4 } }
+            ] }
+            """);
+        SceneMaterialOverrideDocument material = document.Objects.Single().MaterialOverride!;
+        Assert.That(material.Roughness, Is.EqualTo(0.4f));
+        Assert.That(material.BaseColorTexturePath, Is.Null);
+        Assert.That(material.NormalTexturePath, Is.Null);
+        Assert.That(material.MetallicRoughnessTexturePath, Is.Null);
+        Assert.That(material.OcclusionTexturePath, Is.Null);
+        Assert.That(material.EmissiveTexturePath, Is.Null);
+    }
+
     [Test]
     public void Schema11_RoundTripsAutomaticPlanarNullableStates()
     {

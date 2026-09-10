@@ -68,6 +68,23 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void ZeroElapsedDoesNotSpawnAndPreservesExistingParticlesUntilResume()
+        {
+            using var scene = CreateScene(42, 8, 0, 32);
+            var manager = new ParticleSystemManager();
+            var settings = new ParticleSettings();
+            Assert.That(manager.Update(scene, settings, Vector3.Zero, 0).Instances, Is.Empty);
+            var active = CloneFrame(manager.Update(scene, settings, Vector3.Zero, 1f / 60));
+            Assert.That(active.Instances, Has.Count.EqualTo(8));
+            for (int i = 0; i < 3; ++i)
+                Assert.That(manager.Update(scene, settings, Vector3.Zero, 0).Instances,
+                    Is.EqualTo(active.Instances));
+            var resumed = manager.Update(scene, settings, Vector3.Zero, 1f / 60);
+            Assert.That(resumed.Instances, Has.Count.EqualTo(8));
+            Assert.That(resumed.Instances[0].Position, Is.Not.EqualTo(active.Instances[0].Position));
+        }
+
         private static ParticleSimulationFrame SimulateBurst(uint seed)
         {
             var scene = CreateScene(seed, burstCount: 8, spawnRate: 0.0f, maxParticles: 32);

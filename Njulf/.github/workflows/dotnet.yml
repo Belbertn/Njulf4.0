@@ -27,6 +27,9 @@ jobs:
         run: dotnet build Njulf.sln --configuration Release --no-restore
       - name: Test
         run: dotnet test Njulf.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results
+      - name: Verify game template build and publish
+        shell: pwsh
+        run: ./tools/test-game-template.ps1
       - name: Cook animated asset smoke
         shell: pwsh
         run: |

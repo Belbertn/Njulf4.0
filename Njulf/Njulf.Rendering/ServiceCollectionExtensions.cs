@@ -123,6 +123,8 @@ namespace Microsoft.Extensions.DependencyInjection
                         MeshletStreamingResidencyCoordinator>(),
                     provider.GetRequiredService<FenceBasedDeleter>()));
             services.TryAddSingleton<RenderThreadContentUploadDispatcher>();
+            services.TryAddSingleton<Func<Njulf.Graphics.GraphicsDevice>>(provider =>
+                () => Njulf.Graphics.RendererGraphicsExtensions.GetGraphicsDevice(provider.GetRequiredService<IRenderer>()));
             services.TryAddSingleton<IContentUploadDispatcher>(provider =>
                 provider.GetRequiredService<RenderThreadContentUploadDispatcher>());
             services.TryAddSingleton<IContentUploadPump>(provider =>

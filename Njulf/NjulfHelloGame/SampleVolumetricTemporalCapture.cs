@@ -8,6 +8,7 @@ using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 using StbImageSharp;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 
@@ -78,7 +79,7 @@ public static class SampleVolumetricTemporalCaptureContract
             "production-taa-jitter",
             "final-ldr-beauty");
         return "sha256:" + Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+                SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
             .ToLowerInvariant();
     }
 
@@ -177,28 +178,37 @@ public sealed record SampleVolumetricTemporalRunManifest
 {
     public string SchemaVersion { get; init; } =
         SampleVolumetricTemporalCaptureContract.RunSchemaVersion;
+
     public string Status { get; init; } = "running";
     public string Failure { get; init; } = string.Empty;
+
     public RenderQualityPreset QualityPreset { get; init; } =
         RenderQualityPreset.High;
+
     public string ContractFingerprint { get; init; } = string.Empty;
     public string SettingsFingerprint { get; init; } = string.Empty;
     public int Width { get; init; }
     public int Height { get; init; }
+
     public int FramesPerSecond { get; init; } =
         SampleVolumetricTemporalCaptureContract.FramesPerSecond;
+
     public int WarmupFrameCount { get; init; } =
         SampleVolumetricTemporalCaptureContract.WarmupFrameCount;
+
     public int ExpectedFrameCount { get; init; } =
         SampleVolumetricTemporalCaptureContract.CaptureFrameCount;
+
     public int ScreenshotCompletedCountAtStart { get; init; }
     public int ScreenshotCompletedCountAtEnd { get; init; }
     public string GpuDevice { get; init; } = "unknown-device";
     public string GpuDriver { get; init; } = "unknown-driver";
+
     public PerformanceCaptureRunMetadata CaptureRun { get; init; } =
         PerformanceCaptureRunMetadata.Unknown;
-    public IReadOnlyList<SampleVolumetricTemporalFrameArtifact> Frames
-        { get; init; } = Array.Empty<SampleVolumetricTemporalFrameArtifact>();
+
+    public IReadOnlyList<SampleVolumetricTemporalFrameArtifact> Frames { get; init; } =
+        Array.Empty<SampleVolumetricTemporalFrameArtifact>();
 }
 
 public sealed record SampleVolumetricTemporalFrameChange(
@@ -221,6 +231,7 @@ public sealed record SampleVolumetricTemporalQualityReport
 {
     public string SchemaVersion { get; init; } =
         SampleVolumetricTemporalCaptureContract.ReportSchemaVersion;
+
     public bool Passed { get; init; }
     public RenderQualityPreset QualityPreset { get; init; }
     public int FrameCount { get; init; }
@@ -232,10 +243,12 @@ public sealed record SampleVolumetricTemporalQualityReport
     public double MaximumHistoryRejectionRatio { get; init; }
     public long GpuFogP95Microseconds { get; init; }
     public ulong MaximumAllocatedBytes { get; init; }
-    public IReadOnlyList<SampleVolumetricTemporalQualityGate> Gates
-        { get; init; } = Array.Empty<SampleVolumetricTemporalQualityGate>();
-    public IReadOnlyList<SampleVolumetricTemporalFrameChange> Changes
-        { get; init; } = Array.Empty<SampleVolumetricTemporalFrameChange>();
+
+    public IReadOnlyList<SampleVolumetricTemporalQualityGate> Gates { get; init; } =
+        Array.Empty<SampleVolumetricTemporalQualityGate>();
+
+    public IReadOnlyList<SampleVolumetricTemporalFrameChange> Changes { get; init; } =
+        Array.Empty<SampleVolumetricTemporalFrameChange>();
 }
 
 public static class SampleVolumetricTemporalCaptureAnalyzer
@@ -304,18 +317,16 @@ public static class SampleVolumetricTemporalCaptureAnalyzer
                     metrics.MaximumAbsoluteChannelDelta,
                     metrics.ChangedPixelFraction));
             }
+
             previous = current;
         }
 
         double meanDelta = changes.Count == 0
             ? 0.0
             : changes.Average(change => change.MeanAbsoluteRgbDelta);
-        double maximumMeanDelta = changes.Max(
-            change => change.MeanAbsoluteRgbDelta);
-        double maximumP95Delta = changes.Max(
-            change => change.P95AbsoluteChannelDelta);
-        double maximumChangedFraction = changes.Max(
-            change => change.ChangedPixelFraction);
+        double maximumMeanDelta = changes.Max(change => change.MeanAbsoluteRgbDelta);
+        double maximumP95Delta = changes.Max(change => change.P95AbsoluteChannelDelta);
+        double maximumChangedFraction = changes.Max(change => change.ChangedPixelFraction);
         double maximumRejectionRatio = manifest.Frames.Max(frame =>
         {
             long total = (long)frame.HistoryAccepted + frame.HistoryRejected;
@@ -325,8 +336,7 @@ public static class SampleVolumetricTemporalCaptureAnalyzer
             .Select(frame => frame.GpuFogMicroseconds)
             .Where(value => value > 0)
             .ToArray());
-        ulong maximumAllocatedBytes = manifest.Frames.Max(
-            frame => frame.AllocatedBytes);
+        ulong maximumAllocatedBytes = manifest.Frames.Max(frame => frame.AllocatedBytes);
         (uint expectedWidth, uint expectedHeight, uint expectedDepth) =
             SampleVolumetricTemporalCaptureContract.GetExpectedGrid(
                 manifest.QualityPreset);
@@ -425,22 +435,23 @@ public static class SampleVolumetricTemporalCaptureAnalyzer
         (int width, int height) =
             SampleVolumetricTemporalCaptureContract.GetDimensions(preset);
         if (manifest.SchemaVersion !=
-                SampleVolumetricTemporalCaptureContract.RunSchemaVersion ||
+            SampleVolumetricTemporalCaptureContract.RunSchemaVersion ||
             manifest.ContractFingerprint !=
-                SampleVolumetricTemporalCaptureContract.CreateFingerprint(preset) ||
+            SampleVolumetricTemporalCaptureContract.CreateFingerprint(preset) ||
             manifest.Width != width || manifest.Height != height ||
             manifest.FramesPerSecond !=
-                SampleVolumetricTemporalCaptureContract.FramesPerSecond ||
+            SampleVolumetricTemporalCaptureContract.FramesPerSecond ||
             manifest.WarmupFrameCount !=
-                SampleVolumetricTemporalCaptureContract.WarmupFrameCount ||
+            SampleVolumetricTemporalCaptureContract.WarmupFrameCount ||
             manifest.ExpectedFrameCount !=
-                SampleVolumetricTemporalCaptureContract.CaptureFrameCount ||
+            SampleVolumetricTemporalCaptureContract.CaptureFrameCount ||
             manifest.Frames.Count !=
-                SampleVolumetricTemporalCaptureContract.CaptureFrameCount)
+            SampleVolumetricTemporalCaptureContract.CaptureFrameCount)
         {
             throw new InvalidDataException(
                 "Volumetric temporal manifest does not match the capture contract.");
         }
+
         for (int index = 0; index < manifest.Frames.Count; index++)
         {
             SampleVolumetricTemporalFrameArtifact frame = manifest.Frames[index];
@@ -468,6 +479,7 @@ public static class SampleVolumetricTemporalCaptureAnalyzer
             throw new InvalidDataException(
                 $"Volumetric frame hash changed: {frame.RelativePath}.");
         }
+
         ImageResult image = ImageResult.FromMemory(
             encoded, ColorComponents.RedGreenBlueAlpha);
         if (image.Width != manifest.Width || image.Height != manifest.Height ||
@@ -477,6 +489,7 @@ public static class SampleVolumetricTemporalCaptureAnalyzer
                 $"Volumetric frame has unexpected dimensions: " +
                 $"{frame.RelativePath} ({image.Width}x{image.Height}).");
         }
+
         return new DecodedImage(image.Width, image.Height, image.Data);
     }
 
@@ -579,7 +592,7 @@ public sealed class SampleVolumetricTemporalCaptureRunner
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         _viewportSize = viewportSize ??
-            throw new ArgumentNullException(nameof(viewportSize));
+                        throw new ArgumentNullException(nameof(viewportSize));
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _outputDirectory = Path.GetFullPath(outputDirectory);
         EnsureEmptyOutputDirectory(_outputDirectory);
@@ -632,11 +645,12 @@ public sealed class SampleVolumetricTemporalCaptureRunner
                     $"{expectedWidth}x{expectedHeight}, current viewport is " +
                     $"{width}x{height}.");
             }
+
             ApplyFixedCamera(width, height);
             if (_warmupFrames >=
-                    SampleVolumetricTemporalCaptureContract.WarmupFrameCount &&
+                SampleVolumetricTemporalCaptureContract.WarmupFrameCount &&
                 _frames.Count <
-                    SampleVolumetricTemporalCaptureContract.CaptureFrameCount)
+                SampleVolumetricTemporalCaptureContract.CaptureFrameCount)
             {
                 string relativePath =
                     SampleVolumetricTemporalCaptureContract
@@ -646,6 +660,7 @@ public sealed class SampleVolumetricTemporalCaptureRunner
                     Path.GetDirectoryName(path) ?? _outputDirectory);
                 _renderer.RequestScreenshot(path);
             }
+
             _prepared = true;
         }
         catch (Exception exception)
@@ -677,12 +692,14 @@ public sealed class SampleVolumetricTemporalCaptureRunner
                     "The production froxel path cannot start: " +
                     diagnostics.VolumetricFogStatus);
             }
+
             if (_warmupFrames <
                 SampleVolumetricTemporalCaptureContract.WarmupFrameCount)
             {
                 _warmupFrames++;
                 return;
             }
+
             if (_frames.Count <
                 SampleVolumetricTemporalCaptureContract.CaptureFrameCount)
             {
@@ -698,6 +715,7 @@ public sealed class SampleVolumetricTemporalCaptureRunner
                 Complete(diagnostics);
                 return;
             }
+
             _drainFrames++;
             if (_drainFrames >=
                 SampleVolumetricTemporalCaptureContract.MaximumDrainFrameCount)
@@ -741,7 +759,9 @@ public sealed class SampleVolumetricTemporalCaptureRunner
         {
             volume.FlowVelocity = new CoreVector3(0f);
         }
+
         _renderer.CaptureScenario = "VolumetricTemporalStability";
+        scene.Environment = SceneEnvironmentSettings.Capture(settings.Environment);
     }
 
     private void ApplyFixedCamera(int width, int height)
@@ -850,6 +870,7 @@ public sealed class SampleVolumetricTemporalCaptureRunner
                 $"Could not write failed volumetric manifest: " +
                 manifestException.Message);
         }
+
         Environment.ExitCode = 1;
         Console.Error.WriteLine(
             $"Volumetric temporal capture failed: {failure}");

@@ -730,7 +730,10 @@ namespace Njulf.Core.Scene
 
         private void EnsureCanAdd(IIdentifiedSceneEntity entity)
         {
-            EnsureMutable();
+            // Light-controller cleanup can restore authored lights before the
+            // final collection clear. Resource-owning entities remain blocked.
+            if (entity is not SceneLight || !_disposeInProgress)
+                EnsureMutable();
             ArgumentNullException.ThrowIfNull(entity);
             if (entity.Id == Guid.Empty)
                 throw new ArgumentException("Scene entity IDs must not be empty.", nameof(entity));

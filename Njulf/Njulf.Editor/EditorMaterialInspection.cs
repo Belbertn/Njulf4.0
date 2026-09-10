@@ -4,6 +4,9 @@ using Njulf.Rendering.Resources;
 
 namespace Njulf.Editor;
 
+/// <summary>Whether an inspector edit affects one object or all aliases of its material.</summary>
+public enum MaterialEditScope { ThisObject, SharedMaterial }
+
 /// <summary>
 /// Immutable editor view of an authored material and its renderer-derived transport state.
 /// Derived values are intentionally exposed without setters so the inspector cannot author

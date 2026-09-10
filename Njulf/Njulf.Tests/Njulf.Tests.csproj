@@ -27,6 +27,10 @@
 
     <ItemGroup>
       <None Update="Fixtures\loaded-shader-identity-v1.json" CopyToOutputDirectory="PreserveNewest" />
+      <None Include="..\Njulf.ApiExamples\Assets\Content\Sprites\*" Link="Fixtures\Sprites\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+      <None Update="Fixtures\Effects\*.njeffect.json" CopyToOutputDirectory="PreserveNewest" />
+      <NjulfEffectShader Include="Fixtures\Effects\*.frag;Fixtures\Effects\*.comp" />
     </ItemGroup>
 
+    <Import Project="..\Njulf.ShaderBuild\Njulf.Effects.targets" />
 </Project>

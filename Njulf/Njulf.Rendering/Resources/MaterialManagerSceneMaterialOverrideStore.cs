@@ -32,14 +32,35 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
         // transfers the object's logical material reference. Invalid scene data
         // must not split a shared material or leave the object attached to an
         // unchanged private copy.
-        MaterialDefinition material = _materials.GetMaterialDefinition(handle);
+        MaterialDefinition material = renderObject.Material!.Definition;
         MaterialDefinition updated = BuildValidatedOverride(material, source);
-        if (updated == material)
-            return;
-
-        _materials.UpdateRenderObjectMaterialDefinition(
-            renderObject,
-            updated);
+        string?[] paths = [source.BaseColorTexturePath, source.NormalTexturePath,
+            source.MetallicRoughnessTexturePath, source.OcclusionTexturePath, source.EmissiveTexturePath];
+        var assignments = new List<MaterialTextureAssignment>(5);
+        Exception? failure = null;
+        try
+        {
+            for (int i = 0; i < paths.Length; i++)
+            {
+                if (paths[i] is not { } path) continue;
+                var slot = (MaterialTextureSlot)i;
+                Texture? texture = path.Length == 0 ? null : _materials.LoadMaterialTexture(path, slot);
+                assignments.Add(new(slot, texture));
+            }
+            if (updated != material || assignments.Count != 0)
+                renderObject.UpdateMaterial(updated, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(assignments));
+        }
+        catch (Exception error) { failure = error; }
+        List<Exception>? failures = null;
+        foreach (var assignment in assignments)
+            try { (assignment.Texture as IDisposable)?.Dispose(); }
+            catch (Exception error) { (failures ??= []).Add(error); }
+        if (failures != null)
+        {
+            if (failure != null) failures.Insert(0, failure);
+            throw new AggregateException("Scene material texture cleanup failed.", failures);
+        }
+        if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
     private static MaterialDefinition BuildValidatedOverride(
@@ -173,9 +194,14 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
         ArgumentNullException.ThrowIfNull(renderObject);
         if (!(renderObject.Material).TryGetMaterialHandle(out MaterialHandle handle))
             return null;
-        MaterialDefinition material = _materials.GetMaterialDefinition(handle);
+        MaterialDefinition material = renderObject.Material!.Definition;
         return new SceneMaterialOverrideDocument
         {
+            BaseColorTexturePath = _materials.GetMaterialTexturePath(renderObject.Material, MaterialTextureSlot.BaseColor),
+            NormalTexturePath = _materials.GetMaterialTexturePath(renderObject.Material, MaterialTextureSlot.Normal),
+            MetallicRoughnessTexturePath = _materials.GetMaterialTexturePath(renderObject.Material, MaterialTextureSlot.MetallicRoughness),
+            OcclusionTexturePath = _materials.GetMaterialTexturePath(renderObject.Material, MaterialTextureSlot.Occlusion),
+            EmissiveTexturePath = _materials.GetMaterialTexturePath(renderObject.Material, MaterialTextureSlot.Emissive),
             Name = material.Name,
             Albedo = new SceneColor(
                 material.BaseColorFactor.X,

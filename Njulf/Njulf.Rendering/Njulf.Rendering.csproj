@@ -22,9 +22,7 @@
       <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
       <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.23.0" />
       <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />
-      <PackageReference Include="StbImageSharp" Version="2.30.15">
-        <ExcludeAssets Condition="'$(CookedAssetsOnly)' == 'true'">runtime</ExcludeAssets>
-      </PackageReference>
+      <PackageReference Include="StbImageSharp" Version="2.30.15" />
     </ItemGroup>
 
     <ItemGroup>

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Core.Camera;
+using Njulf.Core.Scene;
 using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
@@ -478,7 +479,7 @@ public sealed class SampleMaterialGiCaptureRunner
 {
     private readonly VulkanRenderer _renderer;
     private readonly FirstPersonCamera _camera;
-    private readonly LightManager _lightManager;
+    private readonly Scene _scene;
     private readonly string _outputDirectory;
     private readonly Action _exit;
     private readonly Func<(int Width, int Height)> _getWindowSize;
@@ -491,10 +492,9 @@ public sealed class SampleMaterialGiCaptureRunner
     private bool _captureQueuedForInstruction;
     private bool _terminalPublicationWritten;
 
-    public SampleMaterialGiCaptureRunner(
-        VulkanRenderer renderer,
+    public SampleMaterialGiCaptureRunner(VulkanRenderer renderer,
         FirstPersonCamera camera,
-        LightManager lightManager,
+        Scene scene,
         string outputDirectory,
         Func<(int Width, int Height)> getWindowSize,
         Action exit,
@@ -502,7 +502,7 @@ public sealed class SampleMaterialGiCaptureRunner
     {
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
-        _lightManager = lightManager ?? throw new ArgumentNullException(nameof(lightManager));
+        _scene = scene ?? throw new ArgumentNullException(nameof(scene));
         _outputDirectory = Path.GetFullPath(
             string.IsNullOrWhiteSpace(outputDirectory)
                 ? throw new ArgumentException("A material/GI capture directory is required.", nameof(outputDirectory))
@@ -725,8 +725,8 @@ public sealed class SampleMaterialGiCaptureRunner
     {
         CoreVector3 direction = SampleMaterialGiConformanceCatalog.DirectionalLightDirection;
         CoreVector3 color = SampleMaterialGiConformanceCatalog.DirectionalLightColor;
-        _lightManager.ClearLights();
-        _lightManager.AddLight(new Light
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Directional,
             Direction = Vector3.Normalize(new Vector3(direction.X, direction.Y, direction.Z)),

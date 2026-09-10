@@ -12,6 +12,7 @@ layout(push_constant) uniform ImGuiPushConstants
     vec2 displayPosition;
     vec2 displaySize;
     uint textureIndex;
+    uint encodeOutput;
 } pc;
 
 void main()

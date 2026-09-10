@@ -1,5 +1,15 @@
 # Shader build pipeline
 
+Application-owned fullscreen/compute shaders can import `Njulf.ShaderBuild/Njulf.Effects.targets`
+and declare `NjulfEffectShader` items. The import reuses `CompileNjulfShaderArtifacts` and deploys
+compiled bytes beside application effect manifests without a runtime build-tool dependency.
+See [custom effects](CustomEffects.md) for the asset ABI and example.
+
+Custom effect modules participate in the loaded-shader inventory with source kind `effect`,
+canonical `effect-<sha256-of-logical-name>.spv` names, and the content-relative asset name as source
+identity. Parameter changes do not add variants. Logical names stay stable across deployment roots,
+while changing bytecode still changes the shader hash and is detected by shared-module comparisons.
+
 `Njulf.Shaders` models every active base shader and generated variant as an independent artifact. The build task hashes each artifact's source and transitive includes, exact compiler arguments, and the `glslangValidator` binary and version. Independent misses compile concurrently; unchanged outputs and cache objects are verified before reuse. Source templates such as `ddgi_simple_trace.comp` remain inputs to their declared variants without being emitted as unspecialized runtime artifacts.
 
 Production configurations retain their existing output names, embedded

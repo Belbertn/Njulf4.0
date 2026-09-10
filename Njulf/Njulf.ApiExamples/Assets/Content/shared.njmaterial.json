@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "name": "Shared blue",
+  "baseColor": { "r": 0.15, "g": 0.4, "b": 1, "a": 1 },
+  "roughness": 0.65,
+  "baseColorTexturePath": "shared.png"
+}

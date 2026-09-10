@@ -16,7 +16,7 @@ using Njulf.Input;
 namespace Njulf.Core
 {
     /// <summary>Default application host. Owns the window, services and current scene; callbacks run on the game/device thread.</summary>
-        public abstract class Game : IDisposable
+        public abstract partial class Game : IDisposable
     {
         private IServiceProvider? _services;
         private IWindow? _window;
@@ -27,6 +27,7 @@ namespace Njulf.Core
         private ICamera? _camera;
         private Scene.Scene _scene = null!;
         private bool _isRunning = false;
+        private bool _windowFocused = true;
         private bool _isShuttingDown = false;
         private bool _isUpdatingFrame = false;
         private bool _isRenderingFrame = false;
@@ -108,6 +109,8 @@ namespace Njulf.Core
         public long LastFramePacingWaitMicroseconds { get; private set; }
         /// <summary>Whether the host is running and exit has not been requested.</summary>
         public bool IsRunning => _isRunning;
+        /// <summary>Whether the host window currently has input focus.</summary>
+        public bool IsWindowFocused => _windowFocused;
 
         /// <summary>Root for relative content paths; defaults to AppContext.BaseDirectory. Set before Run.</summary>
         public string ContentRoot { get; set; } = AppContext.BaseDirectory;
@@ -127,6 +130,10 @@ namespace Njulf.Core
         public Scene.Scene Scene => Require(_scene, nameof(Scene));
         /// <summary>Borrowed graphics device on the existing renderer. Resource operations require the device thread.</summary>
         public GraphicsDevice GraphicsDevice => Renderer.GetGraphicsDevice();
+        private SpriteBatch? _sprites;
+        /// <summary>Host-owned batch for logical window-pixel drawing during Draw or DrawLoading.</summary>
+        public SpriteBatch Sprites => _sprites ??= GraphicsDevice.CreateSpriteBatch();
+        public DiagnosticDrawing DebugDraw => GraphicsDevice.DebugDraw;
 
         private T Require<T>(T? value, string name) where T : class
         {
@@ -151,6 +158,7 @@ namespace Njulf.Core
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_runStarted) throw new InvalidOperationException("A Game instance can only run once.");
             _runStarted = true;
+            _timingThreadId = Environment.CurrentManagedThreadId;
             _isRunning = true;
             _isShuttingDown = false;
             _runStartedTimestamp = Stopwatch.GetTimestamp();
@@ -223,6 +231,7 @@ namespace Njulf.Core
             _content = _services.GetRequiredService<IContentManager>();
             _contentUploadPump = _services.GetService<IContentUploadPump>();
             _input = _services.GetRequiredService<IInputManager>();
+            if (_input is InputManager input) input.SetFocused(_windowFocused);
             _camera = _services.GetRequiredService<ICamera>();
 
             if (_renderer != null)
@@ -271,10 +280,17 @@ namespace Njulf.Core
         /// <summary>Updates the scene by default. Input is already published; call base to retain scene updates.</summary>
         protected virtual void Update(GameTime gameTime)
         {
-            if (!_isRunning)
+            if (!_isRunning || IsFixedTimeStep || IsSimulationPaused)
                 return;
 
             _scene.Update((float)gameTime.ElapsedGameTime.TotalSeconds);
+        }
+
+        /// <summary>Runs fixed simulation when enabled. Call base to retain scene updates.</summary>
+        protected virtual void FixedUpdate(GameTime gameTime)
+        {
+            if (_isRunning && IsFixedTimeStep && !IsSimulationPaused)
+                _scene.Update((float)gameTime.ElapsedGameTime.TotalSeconds);
         }
 
         /// <summary>Renders the current scene and camera by default. Elapsed time belongs to the draw stream.</summary>
@@ -282,6 +298,9 @@ namespace Njulf.Core
         {
             Renderer.DrawScene(Scene, Camera);
         }
+
+        /// <summary>Draws while content or production scene pipelines load, after the first bootstrap present.</summary>
+        protected virtual void DrawLoading(GameTime gameTime) => Renderer.Clear(Color.Black);
 
         /// <summary>Called after a frame has been submitted and presented.</summary>
         protected virtual void OnFramePresented()
@@ -406,6 +425,7 @@ namespace Njulf.Core
             window.Render += SafeWindowRender;
             window.FramebufferResize += SafeWindowResize;
             window.Closing += OnWindowClosing;
+            window.FocusChanged += SafeWindowFocusChanged;
         }
 
         private void CallbackFailed(Exception error)
@@ -417,6 +437,17 @@ namespace Njulf.Core
         private void SafeWindowUpdate(double delta) { try { OnWindowUpdate(delta); } catch (Exception e) { CallbackFailed(e); } }
         private void SafeWindowRender(double delta) { try { OnWindowRender(delta); } catch (Exception e) { CallbackFailed(e); } }
         private void SafeWindowResize(Vector2D<int> size) { try { OnWindowFramebufferResize(size); } catch (Exception e) { CallbackFailed(e); } }
+        internal void SafeWindowFocusChanged(bool focused)
+        {
+            if (_isShuttingDown || _disposed) return;
+            try
+            {
+                _windowFocused = focused;
+                ConfigureClock();
+                if (_isRunning && _input is InputManager input) input.SetFocused(focused);
+            }
+            catch (Exception e) { CallbackFailed(e); }
+        }
 
         private void OnWindowLoad()
         {
@@ -499,7 +530,12 @@ namespace Njulf.Core
             {
                 _input?.Update();
                 if (_isRunning && _contentLoaded)
-                    Update(_gameClock.Update(TimeSpan.FromMicroseconds(RunElapsedMicroseconds)));
+                {
+                    TimeSpan now = TimeSpan.FromMicroseconds(RunElapsedMicroseconds);
+                    Update(_gameClock.Update(now));
+                    while (_isRunning && _gameClock.TryFixedUpdate(now, out GameTime fixedTime))
+                        FixedUpdate(fixedTime);
+                }
             }
             finally
             {
@@ -543,8 +579,21 @@ namespace Njulf.Core
                 {
                     if (!_firstFrameLogged)
                         RunStartupStep("FirstFrame.Begin", () => { });
-                    if (_contentLoaded)
-                        Draw(_gameClock.Draw(TimeSpan.FromMicroseconds(RunElapsedMicroseconds)));
+                    if (renderer is VulkanRenderer spriteRenderer)
+                        spriteRenderer.SetSpriteDisplaySize(new(System.Math.Max(1, Window.Size.X), System.Math.Max(1, Window.Size.Y)));
+                    bool loading = !_contentLoaded || renderer is VulkanRenderer startupRenderer && !startupRenderer.StartupSnapshot.IsFullQuality;
+                    if (loading && renderer is VulkanRenderer readyRenderer && readyRenderer.StartupSnapshot.BootstrapPresented)
+                    {
+                        GameTime time = _gameClock.Draw(TimeSpan.FromMicroseconds(RunElapsedMicroseconds));
+                        DrawLoading(time);
+                    }
+                    else if (_contentLoaded)
+                    {
+                        GameTime time = _gameClock.Draw(TimeSpan.FromMicroseconds(RunElapsedMicroseconds));
+                        if (renderer is IRendererGameTime rendererTime)
+                            rendererTime.SetGameTime(time, TimeScale, IsSimulationPaused);
+                        Draw(time);
+                    }
                     else
                         renderer.Clear(Color.Black);
                 }
@@ -799,6 +848,7 @@ namespace Njulf.Core
                     Cleanup(Unload);
                 }
                 Cleanup(_scene.Dispose);
+                Cleanup(() => _sprites?.Dispose());
                 Cleanup(() => _renderer?.Dispose());
                 if (_services is IDisposable disposableServices) Cleanup(disposableServices.Dispose);
                 Cleanup(() => _inputContext?.Dispose());

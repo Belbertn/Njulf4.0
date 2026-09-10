@@ -23,18 +23,24 @@ public sealed class EditorController
     private readonly IContentManager _content;
     private readonly LightManager _lightManager;
     private readonly MaterialManager _materialManager;
-    private readonly LightManagerSceneLightStore _lightStore;
+    private SceneLightStore _lightStore;
+    private readonly LightManagerSceneLightStore _lightCodec;
     private readonly ISceneMaterialOverrideStore _materialStore;
     private readonly SceneDocumentWriter _writer = new();
     private readonly IEditorOverlayHost? _overlay;
     private readonly VulkanRenderer? _renderer;
     private readonly AdvancedGiEditorStartupContext _advancedGiStartup;
     private readonly Action<string>? _requestAdvancedGiRestart;
+
     private readonly Action<AdvancedGiFeatureSelection>?
         _requestAdvancedGiFeatureRestart;
+
     private readonly Func<string, Model>? _loadModel;
     private bool _previousDebugEnabled;
     private bool _previousCpuSnapshotsEnabled;
+    private readonly EnvironmentSettings _environmentDraft = new();
+    private SceneEnvironment? _environmentDraftSource;
+    private bool _environmentDraftInitialized;
 
     public EditorController(
         Scene scene,
@@ -57,13 +63,14 @@ public sealed class EditorController
         _overlay = overlay;
         _renderer = renderer;
         _advancedGiStartup = advancedGiStartup ??
-            AdvancedGiEditorStartupContext.Unconfigured;
+                             AdvancedGiEditorStartupContext.Unconfigured;
         _requestAdvancedGiRestart = requestAdvancedGiRestart;
         _requestAdvancedGiFeatureRestart =
             requestAdvancedGiFeatureRestart;
         _loadModel = loadModel;
         Camera = camera;
-        _lightStore = new LightManagerSceneLightStore(_lightManager);
+        _lightStore = new SceneLightStore(_scene);
+        _lightCodec = new LightManagerSceneLightStore(_lightManager);
         _materialStore = new MaterialManagerSceneMaterialOverrideStore(_materialManager);
         ModelLightRuntimeController.Attach(
             _scene,
@@ -76,23 +83,61 @@ public sealed class EditorController
     public bool IsDirty { get; private set; }
     public string? ScenePath { get; private set; }
     public EditorSelection Selection { get; private set; } = EditorSelection.None;
+    public MaterialEditScope MaterialScope { get; set; } = MaterialEditScope.ThisObject;
     public Scene Scene => _scene;
     public FirstPersonCamera? Camera { get; set; }
     public RenderSettings? RendererSettings => _renderer?.Settings;
+
+    public EnvironmentSettings EditableEnvironment
+    {
+        get
+        {
+            if (!_environmentDraftInitialized || !ReferenceEquals(_environmentDraftSource, _scene.Environment))
+            {
+                SceneEnvironmentSettings.Apply(_scene.Environment ??
+                                               SceneEnvironmentSettings.Capture(_renderer?.Settings.Environment ??
+                                                   new EnvironmentSettings()),
+                    _environmentDraft);
+                _environmentDraftSource = _scene.Environment;
+                _environmentDraftInitialized = true;
+            }
+
+            return _environmentDraft;
+        }
+    }
+
+    public void CommitEnvironmentEdits()
+    {
+        SceneEnvironment next = SceneEnvironmentSettings.Capture(EditableEnvironment);
+        if (Equals(next, _scene.Environment)) return;
+        _scene.Environment = next;
+        _environmentDraftSource = next;
+        IsDirty = true;
+    }
+
     public Njulf.Graphics.GraphicsSettingsController? GraphicsSettings => _renderer?.GraphicsDevice.Settings;
     public RendererDiagnostics? RendererDiagnostics => _renderer?.LastDiagnostics;
+
     public AdvancedGiEditorStartupContext AdvancedGiStartup =>
         _advancedGiStartup;
+
     public AdvancedGiRuntimeContentState AdvancedGiRuntimeContentState =>
         _renderer?.AdvancedGiRuntimeContentState ??
         AdvancedGiRuntimeContentState.Unconfigured;
+
     public string AdvancedGiCandidateProfileStatus =>
         _renderer?.AdvancedGiCandidateProfileStatus ?? "renderer-unavailable";
+
     public bool CanRestartForAdvancedGi =>
         _requestAdvancedGiRestart is not null;
+
     public bool CanRestartAdvancedGiFeatures =>
         _requestAdvancedGiFeatureRestart is not null;
-    public bool SuppressGameInput => Enabled && (_overlay?.WantCaptureKeyboard == true || _overlay?.WantCaptureMouse == true);
+
+    public bool SuppressGameInput =>
+        Enabled && (Gizmos.IsDragging || _overlay?.WantCaptureKeyboard == true || _overlay?.WantCaptureMouse == true);
+
+    public EditorGizmoController Gizmos { get; } = new();
 
     public event Action<EditorSelection>? SelectionChanged;
 
@@ -108,8 +153,12 @@ public sealed class EditorController
         if (ReferenceEquals(_scene, scene))
             return;
 
+        Gizmos.Cancel(this);
         _scene = scene;
+        _environmentDraftInitialized = false;
+        _lightStore = new SceneLightStore(scene);
         Selection = EditorSelection.None;
+        MaterialScope = MaterialEditScope.ThisObject;
         IsDirty = false;
         SelectionChanged?.Invoke(Selection);
         ModelLightRuntimeController.Attach(
@@ -124,6 +173,7 @@ public sealed class EditorController
         if (Enabled == enabled)
             return;
         Enabled = enabled;
+        if (!enabled) Gizmos.Cancel(this);
         _overlay?.SetEnabled(enabled);
         if (_renderer != null)
         {
@@ -141,6 +191,7 @@ public sealed class EditorController
                 _renderer.Settings.Debug.CpuSnapshotsEnabled = _previousCpuSnapshotsEnabled;
             }
         }
+
         if (!enabled)
             Select(EditorSelection.None);
     }
@@ -154,7 +205,7 @@ public sealed class EditorController
     public bool TryPick(FirstPersonCamera camera, Vector2 screenPosition, Vector2 viewportSize)
     {
         ArgumentNullException.ThrowIfNull(camera);
-        if (!Enabled || _overlay?.WantCaptureMouse == true)
+        if (!Enabled || Gizmos.ConsumesPointer || _overlay?.WantCaptureMouse == true)
             return false;
         Ray ray = camera.ScreenPointToRay(screenPosition, viewportSize);
         if (ScenePicker.TryPickRenderObject(_scene, ray, out RenderObject? objectHit, out float nearest))
@@ -162,14 +213,18 @@ public sealed class EditorController
             Select(EditorSelection.ForEntity(EditorSelectionKind.Object, objectHit!.Id));
             return true;
         }
+
         foreach (LightRecord light in GetLights())
         {
-            var sphere = new BoundingSphere(new Vector3(light.Light.Position.X, light.Light.Position.Y, light.Light.Position.Z), 0.35f);
+            var sphere =
+                new BoundingSphere(new Vector3(light.Light.Position.X, light.Light.Position.Y, light.Light.Position.Z),
+                    0.35f);
             if (!ray.Intersects(sphere, out float distance) || distance >= nearest)
                 continue;
             nearest = distance;
             Select(EditorSelection.ForLight(light.Id, light.Handle));
         }
+
         if (float.IsPositiveInfinity(nearest))
             Select(EditorSelection.None);
         return !Selection.IsEmpty;
@@ -179,41 +234,57 @@ public sealed class EditorController
     {
         ArgumentNullException.ThrowIfNull(reference);
         reference.Validate();
-        Model source = _content.Load<Model>(reference.Path) ?? throw new InvalidOperationException($"Could not load model '{reference.Path}'.");
-        Model instance = source.CreateInstance();
-        RenderObject? objectToAdd = SelectOne(instance, reference.SubObject);
+        Model source = _content.Load<Model>(reference.Path) ??
+                       throw new InvalidOperationException($"Could not load model '{reference.Path}'.");
+        RenderObject? objectToAdd = SelectOne(source, reference.SubObject);
         if (objectToAdd == null)
-            throw new InvalidOperationException($"Model '{reference.Path}' does not contain sub-object '{reference.SubObject}'.");
-        objectToAdd.AssetReference = reference;
-        objectToAdd.Position = position;
-        objectToAdd.IsStatic = objectToAdd is not SkinnedRenderObject;
-        _scene.Add(objectToAdd);
+            throw new InvalidOperationException(
+                $"Model '{reference.Path}' does not contain sub-object '{reference.SubObject}'.");
+        try
+        {
+            objectToAdd.AssetReference = reference;
+            objectToAdd.Position = position;
+            objectToAdd.IsStatic = objectToAdd is not SkinnedRenderObject;
+            _scene.Add(objectToAdd);
+        }
+        catch
+        {
+            objectToAdd.Dispose();
+            throw;
+        }
+
         MarkDirty(EditorSelection.ForEntity(EditorSelectionKind.Object, objectToAdd.Id));
         return objectToAdd;
     }
 
-    public LightHandle AddLight(Light light, string? name = null)
+    public Guid AddLight(Light light, string? name = null)
     {
-        LightHandle handle = _lightManager.AddLightHandle(light, name);
-        _renderer?.ApplyLightShadowEdit(default, light);
-        _lightManager.TryGetLightId(handle, out Guid id);
-        MarkDirty(EditorSelection.ForLight(id, handle));
-        return handle;
+        Guid id = Guid.NewGuid();
+        _lightStore.Add(id, _lightCodec.Describe(id, name, light));
+        MarkDirty(EditorSelection.ForLight(id, default));
+        return id;
     }
 
     public bool DeleteSelection()
     {
+        Gizmos.Cancel(this);
         bool deleted = Selection.Kind switch
         {
-            EditorSelectionKind.Object => Remove<RenderObject>(_scene.FindById(Selection.Id), _scene.Remove),
-            EditorSelectionKind.ReflectionProbe => Remove<ReflectionProbe>(_scene.FindById(Selection.Id), _scene.Remove),
-            EditorSelectionKind.GiVolume => Remove<GlobalIlluminationProbeVolume>(_scene.FindById(Selection.Id), _scene.Remove),
-            EditorSelectionKind.FoliagePatch => Remove<Njulf.Core.Foliage.FoliagePatch>(_scene.FindById(Selection.Id), _scene.Remove),
-            EditorSelectionKind.FoliagePrototype => Remove<Njulf.Core.Foliage.FoliagePrototype>(_scene.FindById(Selection.Id), _scene.Remove),
-            EditorSelectionKind.ParticleEffect => Remove<ParticleEffectInstance>(_scene.FindById(Selection.Id), _scene.Remove),
-            EditorSelectionKind.InstanceBatch => Remove<StaticInstanceBatch>(_scene.FindById(Selection.Id), _scene.Remove),
+            EditorSelectionKind.Object => RemoveSelectedObject(),
+            EditorSelectionKind.ReflectionProbe =>
+                Remove<ReflectionProbe>(_scene.FindById(Selection.Id), _scene.Remove),
+            EditorSelectionKind.GiVolume => Remove<GlobalIlluminationProbeVolume>(_scene.FindById(Selection.Id),
+                _scene.Remove),
+            EditorSelectionKind.FoliagePatch => Remove<Njulf.Core.Foliage.FoliagePatch>(_scene.FindById(Selection.Id),
+                _scene.Remove),
+            EditorSelectionKind.FoliagePrototype => Remove<Njulf.Core.Foliage.FoliagePrototype>(
+                _scene.FindById(Selection.Id), _scene.Remove),
+            EditorSelectionKind.ParticleEffect => Remove<ParticleEffectInstance>(_scene.FindById(Selection.Id),
+                _scene.Remove),
+            EditorSelectionKind.InstanceBatch => Remove<StaticInstanceBatch>(_scene.FindById(Selection.Id),
+                _scene.Remove),
             EditorSelectionKind.Light when !IsImportedModelLight(Selection.Id) =>
-                _lightManager.TryGetLightHandle(Selection.Id, out var handle) && _lightManager.RemoveLight(handle),
+                _lightStore.TryRemove(Selection.Id),
             _ => false
         };
         if (!deleted)
@@ -225,64 +296,48 @@ public sealed class EditorController
 
     public bool UpdateSelectedLight(in Light light)
     {
-        if (Selection.Kind != EditorSelectionKind.Light)
+        if (Selection.Kind != EditorSelectionKind.Light || GetSelectedLightDocument() is not { } source)
             return false;
-        if (IsSceneLightSuspended(Selection.Id))
-        {
-            var source = GetSelectedLightDocument()!;
-            if (!GetImportedModelLightController().TryUpdateSuspendedDirectionalLight(
-                    _lightStore.Describe(source.Id, source.Name, light))) return false;
-            IsDirty = true;
-            return true;
-        }
-        if (!_lightManager.TryGetLightHandle(Selection.Id, out var handle) ||
-            !_lightManager.TryGetLight(handle, out Light previous)) return false;
-        if (IsImportedModelLight(Selection.Id))
-        {
-            string? name = GetLights().First(item => item.Id == Selection.Id).Name;
-            var document = _lightStore.Describe(Selection.Id, name, light);
-            if (!GetImportedModelLightController().TryUpdateImportedLight(document))
-                return false;
-        }
-        else if (!_lightManager.UpdateLight(handle, light))
-            return false;
-        _renderer?.ApplyLightShadowEdit(previous, light);
-        IsDirty = true;
-        return true;
+        return UpdateLightDocument(
+            LightManagerSceneLightStore.Describe(source.Id, source.Name, light, source.IesProfile));
     }
 
     public bool SetSelectedLightName(string name)
     {
-        if (!TryGetSelectedLight(out var light)) return false;
-        if (IsSceneLightSuspended(Selection.Id))
-        {
-            if (!GetImportedModelLightController().TryUpdateSuspendedDirectionalLight(
-                    _lightStore.Describe(Selection.Id, name, light))) return false;
-        }
-        else if (IsImportedModelLight(Selection.Id))
-        {
-            var document = _lightStore.Describe(Selection.Id, name, light);
-            if (!GetImportedModelLightController().TryUpdateImportedLight(document)) return false;
-        }
-        else if (!_lightManager.TryGetLightHandle(Selection.Id, out var handle) ||
-                 !_lightManager.SetLightName(handle, name)) return false;
-        IsDirty = true;
-        return true;
+        if (Selection.Kind != EditorSelectionKind.Light || GetSelectedLightDocument() is not { } source)
+            return false;
+        var authored = SceneLightStore.FromDocument(source.Id, source);
+        authored.Name = name;
+        return UpdateLightDocument(SceneLightStore.ToDocument(authored));
+    }
+
+    private bool UpdateLightDocument(SceneLightDocument document)
+    {
+        bool updated = IsSceneLightSuspended(document.Id)
+            ? GetImportedModelLightController().TryUpdateSuspendedDirectionalLight(document)
+            : IsImportedModelLight(document.Id)
+                ? GetImportedModelLightController().TryUpdateImportedLight(document)
+                : _lightStore.TryUpdate(document.Id, document);
+        if (updated) IsDirty = true;
+        return updated;
     }
 
     /// <summary>Returns scene lights, including imported lights and temporarily replaced scene suns.</summary>
     public IReadOnlyList<LightRecord> GetLights()
     {
-        var live = _lightManager.GetLightRecords();
-        var suspended = GetImportedModelLightController().GetSuspendedDirectionalLights();
-        if (suspended.Count == 0) return live;
-        return live.Concat(suspended.Select(light =>
-            new LightRecord(default, light.Id, light.Name, _lightStore.Resolve(light)))).ToArray();
+        return _lightStore.Enumerate()
+            .Concat(GetImportedModelLightController().GetSuspendedDirectionalLights())
+            .Select(light =>
+            {
+                _lightManager.TryGetLightHandle(light.Id, out LightHandle handle);
+                return new LightRecord(handle, light.Id, light.Name, _lightCodec.Resolve(light));
+            }).ToArray();
     }
 
     public bool SelectedLightIsImported => IsImportedModelLight(Selection.Id);
     public bool SelectedLightHasOverrides => GetImportedModelLightController().HasLightOverride(Selection.Id);
     public bool IsSceneLightImported(Guid id) => IsImportedModelLight(id);
+
     public bool IsSceneLightSuspended(Guid id) =>
         GetImportedModelLightController().GetSuspendedDirectionalLights().Any(light => light.Id == id);
 
@@ -294,23 +349,21 @@ public sealed class EditorController
 
     public SceneLightDocument? GetSelectedLightDocument() =>
         _lightStore.Enumerate().FirstOrDefault(light => light.Id == Selection.Id) ??
-        GetImportedModelLightController().GetSuspendedDirectionalLights().FirstOrDefault(light => light.Id == Selection.Id);
+        GetImportedModelLightController().GetSuspendedDirectionalLights()
+            .FirstOrDefault(light => light.Id == Selection.Id);
 
     public void SetSelectedLightIesProfile(string? path)
     {
-        if (!TryGetSelectedLight(out var light)) return;
+        if (!TryGetSelectedLight(out var light) || GetSelectedLightDocument() is not { } source) return;
         if (!AnalyticalLightGeometry.IsPunctual(light.Type))
             throw new InvalidOperationException("IES profiles apply to point and spot lights.");
-        if (string.IsNullOrWhiteSpace(path))
-            light.PhotometricProfile = default;
-        else if (_lightManager.PhotometricProfiles is not { } profiles ||
-                 !profiles.TryResolve(new SceneAssetReferenceDocument(path), out light.PhotometricProfile))
+        SceneAssetReferenceDocument? profile = string.IsNullOrWhiteSpace(path)
+            ? null
+            : new SceneAssetReferenceDocument(path);
+        if (profile is not null && _lightManager.PhotometricProfiles is { } profiles &&
+            !profiles.TryResolve(profile, out _))
             throw new InvalidOperationException("Could not load the IES profile. Check the path and file format.");
-        UpdateSelectedLight(light);
-        // Keep serialization metadata in sync when clearing or replacing a profile.
-        var record = _lightStore.Describe(Selection.Id,
-            GetLights().First(item => item.Id == Selection.Id).Name, light);
-        _lightStore.TryUpdate(Selection.Id, record);
+        UpdateLightDocument(LightManagerSceneLightStore.Describe(source.Id, source.Name, light, profile));
     }
 
     public ImportedModelLightEditorStatus GetImportedModelLightStatus()
@@ -359,67 +412,86 @@ public sealed class EditorController
 
     public bool TryGetSelectedLight(out Light light)
     {
-        if (Selection.Kind == EditorSelectionKind.Light && IsSceneLightSuspended(Selection.Id))
+        if (Selection.Kind == EditorSelectionKind.Light && GetSelectedLightDocument() is { } source)
         {
-            light = _lightStore.Resolve(GetSelectedLightDocument()!);
+            light = _lightCodec.Resolve(source);
             return true;
         }
-        if (Selection.Kind == EditorSelectionKind.Light &&
-            _lightManager.TryGetLightHandle(Selection.Id, out var handle))
-            return _lightManager.TryGetLight(handle, out light);
+
         light = default;
         return false;
     }
 
     public bool UpdateSelectedMaterialDefinition(MaterialDefinition definition)
+        => ApplySelectedMaterial(definition, default);
+
+    private bool ApplySelectedMaterial(MaterialDefinition definition, ReadOnlySpan<MaterialTextureAssignment> textures)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        if (Selection.Kind != EditorSelectionKind.Object ||
-            _scene.FindById(Selection.Id) is not RenderObject target || !target.Material.TryGetMaterialHandle(out MaterialHandle handle))
+        if (!TryGetSelectedObject(out RenderObject? target) || target!.Material is not { } material)
             return false;
-
-        // Validate before splitting a shared registration. This keeps an invalid editor draft from
-        // changing object/material ownership and ensures every published definition is canonical.
-        MaterialDefinition normalized = MaterialDefinitionValidator.ValidateAndNormalize(definition);
-        _materialManager.UpdateRenderObjectMaterialDefinition(
-            target,
-            normalized);
+        switch (MaterialScope)
+        {
+            case MaterialEditScope.ThisObject: target.UpdateMaterial(definition, textures); break;
+            case MaterialEditScope.SharedMaterial: material.UpdateShared(definition, textures); break;
+            default: throw new ArgumentOutOfRangeException(nameof(MaterialScope));
+        }
         IsDirty = true;
         return true;
     }
 
+    /// <summary>Assigns a file texture, or clears the slot when path is empty, using the current edit scope.</summary>
+    public bool SetSelectedMaterialTexture(MaterialTextureSlot slot, string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (slot is < MaterialTextureSlot.BaseColor or > MaterialTextureSlot.Emissive)
+            throw new ArgumentOutOfRangeException(nameof(slot));
+        if (!TryGetSelectedMaterialDefinition(out MaterialDefinition? definition)) return false;
+        using Texture? texture = path.Length == 0 ? null : _materialManager.LoadMaterialTexture(path, slot);
+        return ApplySelectedMaterial(definition!, [new(slot, texture)]);
+    }
+
+    public string? GetSelectedMaterialTexturePath(MaterialTextureSlot slot) =>
+        TryGetSelectedObject(out RenderObject? target) && target!.Material is { } material
+            ? _materialManager.GetMaterialTexturePath(material, slot) : null;
+
     public bool TryGetSelectedObject(out RenderObject? renderObject)
     {
-        renderObject = Selection.Kind == EditorSelectionKind.Object ? _scene.FindById(Selection.Id) as RenderObject : null;
+        renderObject = Selection.Kind == EditorSelectionKind.Object
+            ? _scene.FindById(Selection.Id) as RenderObject
+            : null;
         return renderObject != null;
     }
 
     public bool TryGetSelectedMaterialDefinition(out MaterialDefinition? material)
     {
-        if (TryGetSelectedObject(out RenderObject? target) && (target?.Material).TryGetMaterialHandle(out MaterialHandle handle))
+        if (TryGetSelectedObject(out RenderObject? target) &&
+            (target?.Material).TryGetMaterialHandle(out MaterialHandle handle))
         {
             try
             {
-                material = _materialManager.GetMaterialDefinition(handle);
+                material = target!.Material!.Definition;
                 return true;
             }
             catch (InvalidOperationException)
             {
             }
         }
+
         material = null;
         return false;
     }
 
     public bool TryGetSelectedMaterialInspection(out EditorMaterialInspection? inspection)
     {
-        if (TryGetSelectedObject(out RenderObject? target) && (target?.Material).TryGetMaterialHandle(out MaterialHandle handle))
+        if (TryGetSelectedObject(out RenderObject? target) &&
+            (target?.Material).TryGetMaterialHandle(out MaterialHandle handle))
         {
             try
             {
                 inspection = new EditorMaterialInspection(
                     handle,
-                    _materialManager.GetMaterialDefinition(handle),
+                    target!.Material!.Definition,
                     _materialManager.GetMaterialTransportProfile(handle),
                     _materialManager.GetMaterialAspectRevisions(handle),
                     _materialManager.GetMaterialCompileDiagnostics(handle));
@@ -445,36 +517,39 @@ public sealed class EditorController
         .OrderBy(static item => item.Path, StringComparer.Ordinal)
         .ThenBy(static item => item.SubObject, StringComparer.Ordinal).ToArray();
 
-    public LightHandle AddLightAtCamera(LightType type)
+    public Guid AddLightAtCamera(LightType type)
     {
-        FirstPersonCamera camera = Camera ?? throw new InvalidOperationException("An editor camera is required to add a light.");
+        FirstPersonCamera camera =
+            Camera ?? throw new InvalidOperationException("An editor camera is required to add a light.");
         return AddLight(new Light
-        {
-            Type = type,
-            Position = new System.Numerics.Vector3(camera.Position.X, camera.Position.Y, camera.Position.Z),
-            Direction = new System.Numerics.Vector3(camera.Forward.X, camera.Forward.Y, camera.Forward.Z),
-            Up = new System.Numerics.Vector3(camera.Up.X, camera.Up.Y, camera.Up.Z),
-            Size = type switch
             {
-                LightType.Tube => new System.Numerics.Vector2(2f, 0.25f),
-                _ => new System.Numerics.Vector2(1f, 1f)
-            },
-            Color = System.Numerics.Vector3.One,
-            Intensity = type == LightType.Directional ? 3f : 10f,
-            Range = 12f,
-            SpotAngle = MathF.PI / 4f,
-            ShadowStrength = 1f,
-            ShadowNearPlane = 0.1f,
-            ShadowFarPlane = 100f
-        }, $"{type} Light");
+                Type = type,
+                Position = new System.Numerics.Vector3(camera.Position.X, camera.Position.Y, camera.Position.Z),
+                Direction = new System.Numerics.Vector3(camera.Forward.X, camera.Forward.Y, camera.Forward.Z),
+                Up = new System.Numerics.Vector3(camera.Up.X, camera.Up.Y, camera.Up.Z),
+                Size = type switch
+                {
+                    LightType.Tube => new System.Numerics.Vector2(2f, 0.25f),
+                    _ => new System.Numerics.Vector2(1f, 1f)
+                },
+                Color = System.Numerics.Vector3.One,
+                Intensity = type == LightType.Directional ? 3f : 10f,
+                Range = 12f,
+                SpotAngle = MathF.PI / 4f,
+                ShadowStrength = 1f,
+                ShadowNearPlane = 0.1f,
+                ShadowFarPlane = 100f
+            }, $"{type} Light");
     }
 
     public int AddSimpleDdgiAuthoredVolumeAtCamera()
     {
         GlobalIlluminationSettings settings = RendererSettings?.GlobalIllumination ??
-            throw new InvalidOperationException("A Vulkan renderer is required to edit live GI settings.");
+                                              throw new InvalidOperationException(
+                                                  "A Vulkan renderer is required to edit live GI settings.");
         if (settings.SimpleDdgiAuthoredVolumes.Count >= GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount)
-            throw new InvalidOperationException($"Simple DDGI supports at most {GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount} authored overrides.");
+            throw new InvalidOperationException(
+                $"Simple DDGI supports at most {GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount} authored overrides.");
 
         Vector3 center = Camera?.Position ?? Vector3.Zero;
         var halfSize = new Vector3(6f, 3f, 6f);
@@ -521,7 +596,8 @@ public sealed class EditorController
     public void SaveRenderSettings(string path)
     {
         RenderSettings settings = RendererSettings ??
-            throw new InvalidOperationException("A Vulkan renderer is required to save live render settings.");
+                                  throw new InvalidOperationException(
+                                      "A Vulkan renderer is required to save live render settings.");
         settings.Save(path);
     }
 
@@ -538,6 +614,7 @@ public sealed class EditorController
             throw new InvalidOperationException(
                 "A Vulkan renderer is required to change Advanced GI features.");
         }
+
         Action<AdvancedGiFeatureSelection> restart =
             _requestAdvancedGiFeatureRestart ??
             throw new InvalidOperationException(
@@ -551,8 +628,8 @@ public sealed class EditorController
     {
         ArgumentNullException.ThrowIfNull(draft);
         RenderSettings live = RendererSettings ??
-            throw new InvalidOperationException(
-                "A Vulkan renderer is required to stage Advanced GI settings.");
+                              throw new InvalidOperationException(
+                                  "A Vulkan renderer is required to stage Advanced GI settings.");
         RenderSettings snapshot = draft.CreateSettingsSnapshot(live);
         return AdvancedGiStartupProfilePreflight.Evaluate(
             snapshot,
@@ -573,8 +650,8 @@ public sealed class EditorController
         }
 
         RenderSettings live = RendererSettings ??
-            throw new InvalidOperationException(
-                "A Vulkan renderer is required to stage Advanced GI settings.");
+                              throw new InvalidOperationException(
+                                  "A Vulkan renderer is required to stage Advanced GI settings.");
         RenderSettings snapshot = draft.CreateSettingsSnapshot(live);
         AdvancedGiStartupProfilePreflightResult result =
             AdvancedGiStartupProfilePreflight.SaveValidated(
@@ -602,7 +679,8 @@ public sealed class EditorController
 
     public RenderObject AddObjectAtCamera(SceneAssetReference reference, float forwardDistance = 3f)
     {
-        FirstPersonCamera camera = Camera ?? throw new InvalidOperationException("An editor camera is required to add an object.");
+        FirstPersonCamera camera =
+            Camera ?? throw new InvalidOperationException("An editor camera is required to add an object.");
         return AddObject(reference, camera.Position + camera.Forward * forwardDistance);
     }
 
@@ -617,22 +695,30 @@ public sealed class EditorController
                 _renderer.Settings.Debug.SelectedObjectIndex = index;
                 _renderer.Settings.Debug.Mode = DebugOverlayMode.SelectedObject;
             }
+
             return;
         }
+
         _renderer.Settings.Debug.SelectedObjectIndex = -1;
         var color = new Vector4(1f, 0.75f, 0.1f, 1f);
         switch (Selection.Kind)
         {
             case EditorSelectionKind.Light when TryGetSelectedLight(out Light light):
-                _renderer.DebugDraw.Sphere(new Vector3(light.Position.X, light.Position.Y, light.Position.Z), 0.45f, color, depthMode: DebugDrawDepthMode.XRay);
+                _renderer.DebugDraw.Sphere(new Vector3(light.Position.X, light.Position.Y, light.Position.Z), 0.45f,
+                    color, depthMode: DebugDrawDepthMode.XRay);
                 break;
             case EditorSelectionKind.ReflectionProbe when _scene.FindById(Selection.Id) is ReflectionProbe probe:
-                _renderer.DebugDraw.OrientedBox(probe.Rotation.ToMatrix4x4() * Matrix4x4.CreateTranslation(probe.Position), probe.BoxExtents, color, depthMode: DebugDrawDepthMode.XRay);
+                _renderer.DebugDraw.OrientedBox(
+                    probe.Rotation.ToMatrix4x4() * Matrix4x4.CreateTranslation(probe.Position), probe.BoxExtents, color,
+                    depthMode: DebugDrawDepthMode.XRay);
                 break;
-            case EditorSelectionKind.GiVolume when _scene.FindById(Selection.Id) is GlobalIlluminationProbeVolume volume:
-                _renderer.DebugDraw.Box(new BoundingBox(volume.Origin, volume.Origin + volume.Size), color, DebugDrawDepthMode.XRay);
+            case EditorSelectionKind.GiVolume
+                when _scene.FindById(Selection.Id) is GlobalIlluminationProbeVolume volume:
+                _renderer.DebugDraw.Box(new BoundingBox(volume.Origin, volume.Origin + volume.Size), color,
+                    DebugDrawDepthMode.XRay);
                 break;
-            case EditorSelectionKind.FoliagePatch when _scene.FindById(Selection.Id) is Njulf.Core.Foliage.FoliagePatch patch:
+            case EditorSelectionKind.FoliagePatch
+                when _scene.FindById(Selection.Id) is Njulf.Core.Foliage.FoliagePatch patch:
                 _renderer.DebugDraw.Box(patch.Bounds, color, DebugDrawDepthMode.XRay);
                 break;
         }
@@ -646,8 +732,10 @@ public sealed class EditorController
 
     public void Save()
     {
+        Gizmos.Cancel(this);
         if (ScenePath == null)
-            throw new InvalidOperationException("No scene path is configured. Use Save As before saving a code-built scene.");
+            throw new InvalidOperationException(
+                "No scene path is configured. Use Save As before saving a code-built scene.");
         _writer.Write(ScenePath, _scene, _lightStore, _materialStore);
         IsDirty = false;
     }
@@ -660,6 +748,7 @@ public sealed class EditorController
 
     public void Reload()
     {
+        Gizmos.Cancel(this);
         if (ScenePath == null)
             throw new InvalidOperationException("No scene path is configured.");
         SceneDocument document = SceneDocumentJson.Read(ScenePath);
@@ -684,9 +773,9 @@ public sealed class EditorController
         do
         {
             name = $"{baseName} {suffix++}";
-        }
-        while (_scene.GlobalIlluminationProbeVolumes.Any(volume =>
-            string.Equals(volume.Name, name, StringComparison.OrdinalIgnoreCase)));
+        } while (_scene.GlobalIlluminationProbeVolumes.Any(volume =>
+                     string.Equals(volume.Name, name, StringComparison.OrdinalIgnoreCase)));
+
         return name;
     }
 
@@ -694,36 +783,43 @@ public sealed class EditorController
     {
         if (kind == EditorSelectionKind.Light)
         {
-            if (!_lightManager.TryGetLightHandle(id, out LightHandle handle) && !IsSceneLightSuspended(id))
+            if (!_scene.Lights.Any(light => light.Id == id) && !IsSceneLightSuspended(id))
                 return false;
-            Select(EditorSelection.ForLight(id, handle));
+            Select(EditorSelection.ForLight(id, default));
             return true;
         }
+
         if (_scene.FindById(id) == null)
             return false;
         Select(EditorSelection.ForEntity(kind, id));
         return true;
     }
 
-    public bool UpdateSelectedObject(string name, bool visible, bool isStatic, Vector3 position, Quaternion rotation, Vector3 scale)
+    public bool UpdateSelectedObject(string name, bool visible, bool isStatic, Vector3 position, Quaternion rotation,
+        Vector3 scale)
     {
         if (Selection.Kind != EditorSelectionKind.Object || _scene.FindById(Selection.Id) is not RenderObject target)
             return false;
         target.Name = name;
         target.Visible = visible;
         target.IsStatic = isStatic;
-        target.Position = position;
-        target.Rotation = rotation;
-        target.Scale = scale;
-        IsDirty = true;
+        ApplyGizmoTransform(target, new(position, rotation, scale), true);
         return true;
+    }
+
+    internal void ApplyGizmoTransform(RenderObject target, GizmoTransform value, bool markDirty)
+    {
+        target.Position = value.Position; target.Rotation = value.Rotation; target.Scale = value.Scale;
+        if (markDirty) IsDirty = true;
     }
 
     private void Select(EditorSelection selection)
     {
         if (Selection == selection)
             return;
+        Gizmos.Cancel(this);
         Selection = selection;
+        MaterialScope = MaterialEditScope.ThisObject;
         SelectionChanged?.Invoke(selection);
     }
 
@@ -741,16 +837,27 @@ public sealed class EditorController
     private static RenderObject? SelectOne(Model model, string selector)
     {
         if (selector == "*")
-            return model.RenderObjects.Count == 1 ? model.RenderObjects[0] : null;
+            return model.RenderObjects.Count == 1 ? model.CreateRenderObjectInstance(0) : null;
         if (int.TryParse(selector, out int index))
-            return index >= 0 && index < model.RenderObjects.Count ? model.RenderObjects[index] : null;
-        foreach (RenderObject item in model.RenderObjects)
-            if (string.Equals(item.Name, selector, StringComparison.Ordinal))
-                return item;
+            return index >= 0 && index < model.RenderObjects.Count ? model.CreateRenderObjectInstance(index) : null;
+        for (int i = 0; i < model.RenderObjects.Count; i++)
+            if (string.Equals(model.RenderObjects[i].Name, selector, StringComparison.Ordinal))
+                return model.CreateRenderObjectInstance(i);
         return null;
     }
 
-    private static bool Remove<T>(IIdentifiedSceneEntity? value, Action<T> remove) where T : class, IIdentifiedSceneEntity
+    private bool RemoveSelectedObject()
+    {
+        if (_scene.FindById(Selection.Id) is not RenderObject child) return false;
+        if (_scene.FindOwningInstance(child) is { } instance)
+            _scene.Remove(instance);
+        else
+            _scene.Remove(child);
+        return true;
+    }
+
+    private static bool Remove<T>(IIdentifiedSceneEntity? value, Action<T> remove)
+        where T : class, IIdentifiedSceneEntity
     {
         if (value is not T typed)
             return false;

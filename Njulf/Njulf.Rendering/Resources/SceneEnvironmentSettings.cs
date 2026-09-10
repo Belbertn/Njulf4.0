@@ -1,8 +1,9 @@
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
+
 namespace Njulf.Rendering.Resources;
 
-internal static class SceneEnvironmentSettings
+public static class SceneEnvironmentSettings
 {
     public static SceneEnvironment Capture(EnvironmentSettings source) => new()
     {
@@ -31,6 +32,7 @@ internal static class SceneEnvironmentSettings
         SpecularIntensity = source.SpecularIntensity,
         RotationRadians = source.RotationRadians,
     };
+
     public static void Apply(SceneEnvironment source, EnvironmentSettings destination)
     {
         destination.Enabled = source.Enabled;
@@ -47,7 +49,8 @@ internal static class SceneEnvironmentSettings
         destination.DayOfYear = source.DayOfYear;
         destination.NorthOffsetDegrees = source.NorthOffsetDegrees;
         destination.TimeScale = source.TimeScale;
-        destination.DirectSunDirection = new(source.DirectSunDirection.X, source.DirectSunDirection.Y, source.DirectSunDirection.Z);
+        destination.DirectSunDirection = new(source.DirectSunDirection.X, source.DirectSunDirection.Y,
+            source.DirectSunDirection.Z);
         destination.AtmosphereIntensity = source.AtmosphereIntensity;
         destination.SolarIrradianceScale = source.SolarIrradianceScale;
         destination.MoonIrradianceScale = source.MoonIrradianceScale;
@@ -59,4 +62,3 @@ internal static class SceneEnvironmentSettings
         destination.RotationRadians = source.RotationRadians;
     }
 }
-

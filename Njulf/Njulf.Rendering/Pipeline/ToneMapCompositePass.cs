@@ -40,7 +40,8 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            bool antiAliasingEnabled = _settings.AntiAliasing.EffectiveMode != AntiAliasingMode.None;
+            bool antiAliasingEnabled = _settings.AntiAliasing.EffectiveMode != AntiAliasingMode.None ||
+                _renderTargets.CustomPostProcessingEnabled;
             bool displayReferredFogDebug = FogDebugViewPolicy.IsDisplayReferred(
                 _settings.Fog.DebugView);
             CompositePipeline pipeline = antiAliasingEnabled ? _ldrCompositePipeline : _compositePipeline;

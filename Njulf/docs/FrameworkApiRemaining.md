@@ -26,6 +26,17 @@ The full approved implementation is not complete. Remaining work from that plan:
 
 Later roadmap work:
 
+Optional fixed simulation, bounded catch-up, interpolation, scaled/unscaled time and
+explicit/focus pause are implemented alongside the existing variable-step default.
+Renderer animation honors pause and scaling while retaining render-step updates;
+see [simulation timing](GameTiming.md) and `--example timing`. Automatic scene-wide
+interpolation and fixed GPU simulation substeps remain outside this implementation.
+
+Item 11 extracts production pipeline construction, preparation, recreation and staged release
+into an internal owner. Frame ordering and synchronization remain in `VulkanRenderer`.
+See [production pipeline ownership](ProductionPipelineOwnership.md) for the handoff and
+failure-cleanup contracts. This does not change the outstanding view and scene work above.
+
 Items 9–10 establish the Core/Graphics/Input/Assets/Rendering/Framework dependency boundaries
 and separate Assets.Tooling from runtime loading. Public resources are abstract Graphics
 contracts with internal Vulkan implementations. Typed button actions, namespace cleanup,
@@ -38,10 +49,21 @@ and supported/active capabilities for the current single view. Multiple views, p
 shader/command abstractions, custom async-queue scheduling and exhaustive specialist-setting
 classification were explicitly outside that implementation scope.
 
-- **Resource extensions:** add richer vertex input, texture formats/mips and content conveniences only for demonstrated use cases. Preserve typed ownership and existing managers.
+Custom effects now provide shader assets with explicit parameter/resource metadata, content loading,
+fullscreen/compute execution, and automatic post-tone-mapping composition through the existing graph.
+See [custom effects](CustomEffects.md). This is a bounded convenience API, not a general shader/RHI
+abstraction; reflection, hot reload, a generic editor panel and multi-view execution remain deferred.
+
+- **Resource extensions:** Standard authored vertices, fixed-topology dynamic meshes, portable texture formats/mips, explicit updates, buffer uploads and asynchronous readback are implemented; see [resource updates](GraphicsResourceUpdates.md). Compressed uploads, arbitrary vertex layouts and topology mutation remain deferred. Content loads PNG/JPEG textures, basic PBR material files and existing scene documents with independent scopes; cooked material/scene packages remain separate work.
 - **API consistency:** as each area changes, align naming, defaults, XML documentation,
   failure behavior and disposal with the runnable examples. Split assemblies only when
   dependency boundaries require it.
+
+Gameplay input now includes float/Vector2 state and delta actions, standard gamepads, dead zones,
+exclusive contexts plus globals, interactive rebinding and binding persistence. Cursor capture and
+platform text are exposed through `Game.Input`; see [gameplay input](GameplayInput.md) and
+`--example input`. Layered input consumption, player/device assignment, rumble and IME composition
+UI remain outside this implementation.
 
 Avoid a generic RHI, new backend, scene rewrite, compatibility wrappers or broad manager
 extractions as prerequisites. For each follow-up, update one real example and add focused

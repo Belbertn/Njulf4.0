@@ -29,12 +29,25 @@ internal sealed class SampleScenePreparationWork(
         if (Volatile.Read(ref _cancelled) != 0 || _failure != null)
         {
             // Remove from the end so a cancelled large scene also yields between frames.
-            for (int i = 0; i < MaximumObjectsPerStep && scene.RenderObjects.Count > 0; i++)
+            for (int removed = 0; removed < MaximumObjectsPerStep && scene.RenderObjects.Count > 0;)
             {
-                scene.Remove(scene.RenderObjects[^1]);
+                RenderObject child = scene.RenderObjects[^1];
+                if (scene.FindOwningInstance(child) is { } instance)
+                {
+                    // A placement is indivisible. Count all released children against this slice.
+                    removed += instance.RenderObjects.Count;
+                    scene.Remove(instance);
+                }
+                else
+                {
+                    scene.Remove(child);
+                    removed++;
+                }
+
                 if (BudgetUsed(started, budget))
                     return ContentUploadStepResult.Yield();
             }
+
             if (scene.RenderObjects.Count > 0)
                 return ContentUploadStepResult.Yield();
             _steps?.Dispose();
@@ -55,6 +68,7 @@ internal sealed class SampleScenePreparationWork(
                     _published = true; // Ownership has passed to the host.
                     return ContentUploadStepResult.Complete();
                 }
+
                 if (Volatile.Read(ref _cancelled) != 0 || BudgetUsed(started, budget))
                     break;
             }
@@ -64,6 +78,7 @@ internal sealed class SampleScenePreparationWork(
             // Keep the item queued until its partially constructed scene is released.
             _failure = ExceptionDispatchInfo.Capture(failure);
         }
+
         return ContentUploadStepResult.Yield();
     }
 

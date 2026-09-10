@@ -61,12 +61,12 @@ namespace Njulf.Rendering.Resources
         uint Revision)
     {
         public bool IsValid => Value > 0 && Revision > 0 &&
-            TextureIndex >= BindlessIndex.FirstDynamicTextureIndex &&
-            BindlessIndex.IsTextureIndex(TextureIndex);
+                               TextureIndex >= BindlessIndex.FirstDynamicTextureIndex &&
+                               BindlessIndex.IsTextureIndex(TextureIndex);
     }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct Light
+    public struct Light : IEquatable<Light>
     {
         public Vector3 Position;
         public float Intensity;
@@ -87,13 +87,61 @@ namespace Njulf.Rendering.Resources
         public float ShadowFarPlane;
         public int ShadowPriority;
         public Vector3 Up;
+
         /// <summary>
         /// Rectangle width/height; disk equal X/Y diameters; tube length/diameter.
         /// </summary>
         public Vector2 Size;
+
         public bool TwoSided;
         public PhotometricProfileHandle PhotometricProfile;
         public float IesRotationRadians;
+
+        public bool Equals(Light other) =>
+            Position.Equals(other.Position) && Intensity.Equals(other.Intensity) &&
+            Color.Equals(other.Color) && Range.Equals(other.Range) &&
+            Direction.Equals(other.Direction) && SpotAngle.Equals(other.SpotAngle) &&
+            InnerSpotAngle.Equals(other.InnerSpotAngle) && AttenuationMode == other.AttenuationMode &&
+            AttenuationConstant.Equals(other.AttenuationConstant) &&
+            AttenuationLinear.Equals(other.AttenuationLinear) &&
+            AttenuationQuadratic.Equals(other.AttenuationQuadratic) && Type == other.Type &&
+            CastsShadows == other.CastsShadows && ShadowStrength.Equals(other.ShadowStrength) &&
+            ShadowMapSizeOverride == other.ShadowMapSizeOverride &&
+            ShadowNearPlane.Equals(other.ShadowNearPlane) && ShadowFarPlane.Equals(other.ShadowFarPlane) &&
+            ShadowPriority == other.ShadowPriority && Up.Equals(other.Up) && Size.Equals(other.Size) &&
+            TwoSided == other.TwoSided && PhotometricProfile.Equals(other.PhotometricProfile) &&
+            IesRotationRadians.Equals(other.IesRotationRadians);
+
+        public override bool Equals(object? obj) => obj is Light other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            var hash = new HashCode();
+            hash.Add(Position);
+            hash.Add(Intensity);
+            hash.Add(Color);
+            hash.Add(Range);
+            hash.Add(Direction);
+            hash.Add(SpotAngle);
+            hash.Add(InnerSpotAngle);
+            hash.Add(AttenuationMode);
+            hash.Add(AttenuationConstant);
+            hash.Add(AttenuationLinear);
+            hash.Add(AttenuationQuadratic);
+            hash.Add(Type);
+            hash.Add(CastsShadows);
+            hash.Add(ShadowStrength);
+            hash.Add(ShadowMapSizeOverride);
+            hash.Add(ShadowNearPlane);
+            hash.Add(ShadowFarPlane);
+            hash.Add(ShadowPriority);
+            hash.Add(Up);
+            hash.Add(Size);
+            hash.Add(TwoSided);
+            hash.Add(PhotometricProfile);
+            hash.Add(IesRotationRadians);
+            return hash.ToHashCode();
+        }
     }
 
     public readonly struct LightFrameSnapshot
@@ -152,23 +200,27 @@ namespace Njulf.Rendering.Resources
                     case LightType.Tube: tube++; break;
                 }
             }
+
             if (observedDirectionalCount != directionalLightCount)
             {
                 throw new ArgumentException(
                     "The supplied directional-light count does not match the light snapshot.",
                     nameof(directionalLightCount));
             }
+
             if (observedDirectionalCount > LightManager.MaxDirectionalLights)
             {
                 throw new InvalidOperationException(
                     $"Forward+ supports at most {LightManager.MaxDirectionalLights} directional lights.");
             }
+
             if (shadowCastingDirectionalCount >
                 LightManager.MaxShadowCastingDirectionalLights)
             {
                 throw new InvalidOperationException(
                     "Forward+ supports only one shadow-casting directional light.");
             }
+
             DirectionalLightIndex0 = directionalLightIndex0;
             DirectionalLightIndex1 = directionalLightIndex1;
             PointLightCount = point;
@@ -193,8 +245,10 @@ namespace Njulf.Rendering.Resources
         public bool HasShadowCastingDirectionalLight => FirstShadowCastingDirectionalLightIndex >= 0;
         public int FirstShadowCastingDirectionalLightIndex { get; }
         public Light FirstShadowCastingDirectionalLight { get; }
+
         /// <summary>Revision of packed GPU-light data.</summary>
         public ulong Revision { get; }
+
         public ulong TopologyRevision { get; }
         public ulong ContentRevision { get; }
         public ReadOnlyMemory<uint> StableIdentities { get; }
@@ -219,15 +273,17 @@ namespace Njulf.Rendering.Resources
         Guid Id,
         Light? Previous,
         Light? Current);
-    
+
     public sealed unsafe class LightManager : IDisposable, IDdgiLightMutationSource
     {
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
         private readonly object _lock = new object();
-        
+
         private BufferHandle _lightBuffer;
+
         private Light[] _cpuLights;
+
         // Lights remain densely packed for the renderer. These tables provide stable editor-facing identity.
         private readonly int[] _slotToIndex = new int[MaxLights];
         private readonly int[] _indexToSlot = new int[MaxLights];
@@ -256,17 +312,19 @@ namespace Njulf.Rendering.Resources
         /// A null resolver is a supported fail-open configuration.
         /// </summary>
         public IPhotometricProfileResolver? PhotometricProfiles { get; internal set; }
-        
+
         public const int MaxLights = 1024;
         public const int MaxDirectionalLights = 2;
         public const int MaxShadowCastingDirectionalLights = 1;
         private static readonly ulong LightStride = (ulong)Marshal.SizeOf<GPULight>();
+
         public static readonly ulong LightBufferStateOffset =
             checked((ulong)MaxLights * LightStride);
+
         private static readonly ulong LightBufferSize = checked(
             LightBufferStateOffset +
             (ulong)Marshal.SizeOf<GPUDdgiLightBufferState>());
-        
+
         public LightManager(VulkanContext context, BufferManager bufferManager)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -279,19 +337,20 @@ namespace Njulf.Rendering.Resources
                 _slotGenerations[slot] = 1;
                 _freeSlots.Push(slot);
             }
+
             _lightCount = 0;
             _needsUpload = false;
-            
+
             _lightBuffer = _bufferManager.CreateDeviceBuffer(
                 LightBufferSize,
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
                 true,
                 MemoryBudgetCategory.LightBuffers,
                 "Light Buffer");
-            
+
             System.Diagnostics.Debug.WriteLine("Light manager created");
         }
-        
+
         public int AddLight(Light light)
         {
             (int index, LightHandle handle) added;
@@ -303,6 +362,7 @@ namespace Njulf.Rendering.Resources
                 id = _slotIds[added.handle.Slot];
                 revision = _revision;
             }
+
             PublishMutation(new LightMutation(
                 revision,
                 LightMutationKind.Added,
@@ -325,6 +385,7 @@ namespace Njulf.Rendering.Resources
                 stableId = _slotIds[added.handle.Slot];
                 revision = _revision;
             }
+
             PublishMutation(new LightMutation(
                 revision,
                 LightMutationKind.Added,
@@ -334,7 +395,7 @@ namespace Njulf.Rendering.Resources
                 light));
             return added.handle;
         }
-        
+
         public void RemoveLight(int index)
         {
             LightMutation? mutation = null;
@@ -347,9 +408,10 @@ namespace Njulf.Rendering.Resources
                 RemoveAtIndexUnsafe(index);
                 mutation = mutation.Value with { Revision = _revision };
             }
+
             PublishMutation(mutation.Value);
         }
-        
+
         public void UpdateLight(int index, Light light)
         {
             LightMutation? mutation = null;
@@ -376,6 +438,7 @@ namespace Njulf.Rendering.Resources
                     previous,
                     light);
             }
+
             PublishMutation(mutation.Value);
         }
 
@@ -391,6 +454,7 @@ namespace Njulf.Rendering.Resources
                 RemoveAtIndexUnsafe(index);
                 mutation = mutation.Value with { Revision = _revision };
             }
+
             PublishMutation(mutation.Value);
             return true;
         }
@@ -421,6 +485,7 @@ namespace Njulf.Rendering.Resources
                     previous,
                     light);
             }
+
             PublishMutation(mutation.Value);
             return true;
         }
@@ -514,7 +579,7 @@ namespace Njulf.Rendering.Resources
                 return true;
             }
         }
-        
+
         public void ClearLights()
         {
             bool changed;
@@ -532,6 +597,7 @@ namespace Njulf.Rendering.Resources
                     ReleaseSlotUnsafe(slot);
                     _indexToSlot[index] = -1;
                 }
+
                 _lightCount = 0;
                 _needsUpload = true;
                 _revision++;
@@ -540,6 +606,7 @@ namespace Njulf.Rendering.Resources
                     _topologyRevision++;
                 revision = _revision;
             }
+
             if (changed)
             {
                 PublishMutation(new LightMutation(
@@ -551,11 +618,12 @@ namespace Njulf.Rendering.Resources
                     null));
             }
         }
-        
+
         public BufferHandle LightBuffer => _lightBuffer;
         public ulong LightBufferAllocatedBytes => LightBufferSize;
         public int LightCount => _lightCount;
         public int MaxLightCount => MaxLights;
+
         public ulong LightBufferRevision
         {
             get
@@ -564,6 +632,7 @@ namespace Njulf.Rendering.Resources
                     return _revision;
             }
         }
+
         public ulong LightTreeTopologyRevision
         {
             get
@@ -572,6 +641,7 @@ namespace Njulf.Rendering.Resources
                     return _topologyRevision;
             }
         }
+
         public ulong LightTreeContentRevision
         {
             get
@@ -580,6 +650,7 @@ namespace Njulf.Rendering.Resources
                     return _contentRevision;
             }
         }
+
         public ulong LastUploadBytes
         {
             get
@@ -596,6 +667,7 @@ namespace Njulf.Rendering.Resources
         public int DiskLightCount => CountLights(LightType.Disk);
         public int TubeLightCount => CountLights(LightType.Tube);
         public int AreaLightCount => RectangleLightCount + DiskLightCount + TubeLightCount;
+
         public int LocalLightCount
         {
             get
@@ -737,13 +809,14 @@ namespace Njulf.Rendering.Resources
                 0,
                 Vk.WholeSize);
         }
-        
+
         public void UploadToGPU(StagingRing stagingRing, CommandBuffer commandBuffer)
         {
             if (stagingRing == null)
                 throw new ArgumentNullException(nameof(stagingRing));
             if (commandBuffer.Handle == 0)
-                throw new ArgumentException("A valid command buffer is required for light upload.", nameof(commandBuffer));
+                throw new ArgumentException("A valid command buffer is required for light upload.",
+                    nameof(commandBuffer));
 
             if (!_needsUpload)
             {
@@ -751,7 +824,7 @@ namespace Njulf.Rendering.Resources
                     _lastUploadBytes = 0;
                 return;
             }
-            
+
             lock (_lock)
             {
                 _lastUploadBytes = 0;
@@ -781,7 +854,7 @@ namespace Njulf.Rendering.Resources
                         _gpuLightScratch.AsSpan(0, _lightCount),
                         barrierDescription: new UploadBarrierDescription(
                             PipelineStageFlags2.ComputeShaderBit |
-                                PipelineStageFlags2.FragmentShaderBit,
+                            PipelineStageFlags2.FragmentShaderBit,
                             AccessFlags2.ShaderStorageReadBit)).ByteCount;
                 }
 
@@ -805,17 +878,17 @@ namespace Njulf.Rendering.Resources
                 };
                 _lastUploadBytes = checked(
                     _lastUploadBytes + GpuBufferUploader.UploadValueToBuffer(
-                    _context,
-                    _bufferManager,
-                    stagingRing,
-                    commandBuffer,
-                    _lightBuffer,
-                    state,
-                    destinationOffset: LightBufferStateOffset,
-                    barrierDescription: new UploadBarrierDescription(
-                        PipelineStageFlags2.ComputeShaderBit |
+                        _context,
+                        _bufferManager,
+                        stagingRing,
+                        commandBuffer,
+                        _lightBuffer,
+                        state,
+                        destinationOffset: LightBufferStateOffset,
+                        barrierDescription: new UploadBarrierDescription(
+                            PipelineStageFlags2.ComputeShaderBit |
                             PipelineStageFlags2.FragmentShaderBit,
-                        AccessFlags2.ShaderStorageReadBit)).ByteCount);
+                            AccessFlags2.ShaderStorageReadBit)).ByteCount);
                 _needsUpload = false;
             }
         }
@@ -846,7 +919,7 @@ namespace Njulf.Rendering.Resources
                 SizeX = light.Size.X,
                 SizeY = light.Size.Y,
                 IesTextureIndex = AnalyticalLightGeometry.IsPunctual(light.Type) &&
-                    light.PhotometricProfile.IsValid
+                                  light.PhotometricProfile.IsValid
                     ? light.PhotometricProfile.TextureIndex
                     : -1,
                 IesRotationRadians = float.IsFinite(light.IesRotationRadians)
@@ -896,6 +969,7 @@ namespace Njulf.Rendering.Resources
                         _slotNames[slot],
                         _cpuLights[index]);
                 }
+
                 return records;
             }
         }
@@ -956,6 +1030,7 @@ namespace Njulf.Rendering.Resources
                 throw new InvalidOperationException(
                     $"Forward+ supports at most {MaxDirectionalLights} directional lights.");
             }
+
             if (shadowCastingDirectionalCount >
                 MaxShadowCastingDirectionalLights)
             {
@@ -1025,7 +1100,8 @@ namespace Njulf.Rendering.Resources
             _freeSlots.Push(slot);
         }
 
-        public static uint GetStableIdentity(LightHandle handle) => handle.IsValid ? PackStableIdentity(handle.Slot, handle.Generation) : 0;
+        public static uint GetStableIdentity(LightHandle handle) =>
+            handle.IsValid ? PackStableIdentity(handle.Slot, handle.Generation) : 0;
 
         internal static uint PackStableIdentity(int slot, int generation)
         {
@@ -1060,24 +1136,24 @@ namespace Njulf.Rendering.Resources
             float flux = AnalyticalLightGeometry.ComputePowerWeight(light);
             return float.IsFinite(flux) && flux > 1e-20f;
         }
-        
+
         public void Dispose()
         {
             Dispose(true);
             GC.SuppressFinalize(this);
         }
-        
+
         private void Dispose(bool disposing)
         {
             if (_disposed) return;
             _disposed = true;
-            
+
             lock (_lock)
             {
                 if (_lightBuffer.IsValid)
                     _bufferManager.DestroyBuffer(_lightBuffer);
             }
-            
+
             System.Diagnostics.Debug.WriteLine("Light manager disposed.");
         }
     }

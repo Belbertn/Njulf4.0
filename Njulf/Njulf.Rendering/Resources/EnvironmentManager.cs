@@ -461,16 +461,18 @@ namespace Njulf.Rendering.Resources
             return hash * prime;
         }
 
+        internal float? HostElapsedSeconds { get; set; }
+
         private void AdvanceAstronomicalClock(EnvironmentSettings environment)
         {
             long now = Stopwatch.GetTimestamp();
-            if (_lastAtmosphereTimestamp == 0)
+            if (_lastAtmosphereTimestamp == 0 && !HostElapsedSeconds.HasValue)
             {
                 _lastAtmosphereTimestamp = now;
                 return;
             }
 
-            float elapsedSeconds = (float)Math.Min(
+            float elapsedSeconds = HostElapsedSeconds ?? (float)Math.Min(
                 Stopwatch.GetElapsedTime(_lastAtmosphereTimestamp, now).TotalSeconds,
                 0.25);
             _lastAtmosphereTimestamp = now;

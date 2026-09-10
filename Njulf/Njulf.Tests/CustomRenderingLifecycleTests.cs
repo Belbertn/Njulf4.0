@@ -13,6 +13,75 @@ namespace Njulf.Tests;
 [TestFixture, NonParallelizable]
 public sealed class CustomRenderingLifecycleTests
 {
+    private sealed class RecreationGame : Game
+    {
+        internal VulkanRenderer NativeRenderer = null!;
+        internal bool Resized, EnabledObserved, DisabledObserved;
+        internal string ResizeReason = "";
+        private int _phase;
+
+        protected override void ConfigureRendering(RenderingOptions options) => options.ValidationSettings =
+            RendererValidationSettings.Default with { Mode = RendererValidationMode.Standard, FailOnErrorMessage = true };
+        protected override void ConfigureRendererBeforeInitialize(Njulf.Core.Interfaces.IRenderer renderer) =>
+            ((VulkanRenderer)renderer).Settings.Diagnostics.GpuMeshletCountersEnabled = false;
+        protected override void Initialize()
+        {
+            Window.IsVisible = false;
+            NativeRenderer = Services.GetRequiredService<VulkanRenderer>();
+        }
+        protected override void Load()
+        {
+            using var mesh = GraphicsDevice.CreateMesh(
+                [new Njulf.Core.Math.Vector3(-1, -1, 0), new Njulf.Core.Math.Vector3(1, -1, 0), new Njulf.Core.Math.Vector3(0, 1, 0)],
+                [0u, 1u, 2u]);
+            using var material = GraphicsDevice.CreateMaterial(MaterialDefinition.Default);
+            Scene.Add(GraphicsDevice.CreateRenderObject(mesh, material));
+        }
+        protected override void OnResize(int width, int height)
+        {
+            if (width == 320 && height == 240) Resized = true;
+        }
+        protected override void Update(GameTime time)
+        {
+            if (time.TotalGameTime > TimeSpan.FromMinutes(2)) throw new TimeoutException($"Pipeline recreation did not complete: phase={_phase}, resized={Resized}, window={Window.Size}, framebuffer={Window.FramebufferSize}, counters={NativeRenderer.LastDiagnostics.GpuMeshletCountersEnabled}, quality={NativeRenderer.StartupSnapshot.IsFullQuality}, reason={NativeRenderer.LastDiagnostics.LastRenderTargetRecreateReason}.");
+            base.Update(time);
+        }
+        protected override void OnFramePresented()
+        {
+            if (!NativeRenderer.StartupSnapshot.IsFullQuality) return;
+            if (_phase == 0)
+            {
+                Window.Size = new Silk.NET.Maths.Vector2D<int>(320, 240);
+                NativeRenderer.Settings.Diagnostics.GpuMeshletCountersEnabled = true;
+                _phase = 1;
+            }
+            else if (_phase == 1 && Resized && NativeRenderer.LastDiagnostics.GpuMeshletCountersEnabled == 1)
+            {
+                EnabledObserved = true;
+                ResizeReason = NativeRenderer.LastDiagnostics.LastRenderTargetRecreateReason;
+                NativeRenderer.Settings.Diagnostics.GpuMeshletCountersEnabled = false;
+                _phase = 2;
+            }
+            else if (_phase == 2 && NativeRenderer.LastDiagnostics.GpuMeshletCountersEnabled == 0)
+            {
+                DisabledObserved = true;
+                Assert.That(Camera.AspectRatio, Is.EqualTo(320f / 240f).Within(.001f));
+                Exit();
+            }
+        }
+    }
+
+    [Test]
+    public void WindowResizeAndDiagnosticVariants_RecreateAndPresentWithoutValidationErrors()
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Ignore("Requires Vulkan window support.");
+        using var game = new RecreationGame { WindowWidth = 256, WindowHeight = 192 };
+        game.Run();
+        Assert.That(game.Resized && game.EnabledObserved && game.DisabledObserved, Is.True);
+        Assert.That(game.ResizeReason, Is.EqualTo("Swapchain resize"));
+        Assert.That(game.NativeRenderer.ValidationMessageSnapshot.ErrorCount, Is.Zero);
+    }
+
     private sealed class CallbackFailure : Exception;
     private sealed class Pass(List<string> order, string name, bool fail) : IVulkanRenderPass
     {

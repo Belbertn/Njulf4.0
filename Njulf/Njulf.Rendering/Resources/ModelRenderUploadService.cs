@@ -3787,7 +3787,8 @@ namespace Njulf.Rendering.Resources
             var materialView = new Njulf.Graphics.VulkanMaterial(_backend.ResourceOwner, material,
                 _backend.GetMaterialDefinition(material).Name, _backend.RetainMaterial,
                 ReleaseMaterialReference, () => { ValidateResourceAccess(); _backend.GetMaterialDefinition(material); })
-                { NameResolver = handle => _backend.GetMaterialDefinition(handle).Name };
+                { NameResolver = handle => _backend.GetMaterialDefinition(handle).Name,
+                    DefinitionResolver = _backend.GetMaterialDefinition, Materials = _backend.MaterialResources };
             target.AdoptResources(meshView, materialView);
         }
 

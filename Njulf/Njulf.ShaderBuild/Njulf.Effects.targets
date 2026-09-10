@@ -1,0 +1,41 @@
+<Project>
+  <!-- Import from an application project and declare NjulfEffectShader items (unique basenames).
+       The compiler remains a build-only tool; GLSL includes are hashed by the existing task. -->
+  <PropertyGroup>
+    <_NjulfEffectTaskProject>$(MSBuildThisFileDirectory)Njulf.ShaderBuild.csproj</_NjulfEffectTaskProject>
+    <_NjulfEffectTaskSource>$(MSBuildThisFileDirectory)CompileNjulfShaderArtifacts.cs</_NjulfEffectTaskSource>
+    <_NjulfEffectTaskHash>$([MSBuild]::StableStringHash($([System.IO.File]::ReadAllText('$(_NjulfEffectTaskSource)')), 'Sha256'))</_NjulfEffectTaskHash>
+    <_NjulfEffectTaskAssembly>$(MSBuildThisFileDirectory)obj\effect-task\$(_NjulfEffectTaskHash)\Njulf.ShaderBuild.dll</_NjulfEffectTaskAssembly>
+    <NjulfEffectShaderCacheDirectory Condition="'$(NjulfEffectShaderCacheDirectory)' == ''">$(MSBuildThisFileDirectory)..\artifacts\shader-cache\v1</NjulfEffectShaderCacheDirectory>
+    <NjulfGlslangValidator Condition="'$(NjulfGlslangValidator)' == ''">glslangValidator</NjulfGlslangValidator>
+  </PropertyGroup>
+  <UsingTask TaskName="Njulf.ShaderBuild.CompileNjulfShaderArtifacts" AssemblyFile="$(_NjulfEffectTaskAssembly)" />
+  <Target Name="BuildNjulfEffectTask" Inputs="$(_NjulfEffectTaskProject);$(_NjulfEffectTaskSource)" Outputs="$(_NjulfEffectTaskAssembly)">
+    <MSBuild Projects="$(_NjulfEffectTaskProject)" Targets="Restore;Build" Properties="Configuration=Release;RestoreLockedMode=false"
+             RemoveProperties="ArtifactsPath;BaseIntermediateOutputPath;IntermediateOutputPath;MSBuildProjectExtensionsPath;OutputPath;OutDir" BuildInParallel="false" />
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(_NjulfEffectTaskAssembly)'))" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)bin\Release\net10.0\Njulf.ShaderBuild.dll" DestinationFiles="$(_NjulfEffectTaskAssembly)" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CompileNjulfEffects" BeforeTargets="AssignTargetPaths" DependsOnTargets="BuildNjulfEffectTask"
+          Condition="'$(DesignTimeBuild)' != 'true' and '@(NjulfEffectShader)' != ''">
+    <ItemGroup>
+      <_NjulfEffectArtifact Include="@(NjulfEffectShader -> '%(Filename)%(Extension)')">
+        <Source>%(NjulfEffectShader.FullPath)</Source>
+      </_NjulfEffectArtifact>
+    </ItemGroup>
+    <CompileNjulfShaderArtifacts Artifacts="@(_NjulfEffectArtifact)" ShaderRoot="$(MSBuildProjectDirectory)"
+        IntermediateShaderDirectory="$(IntermediateOutputPath)Effects" CacheDirectory="$(NjulfEffectShaderCacheDirectory)"
+        CompilerPath="$(NjulfGlslangValidator)" GlobalCompileOptions="-Os" />
+    <ItemGroup>
+      <Content Include="@(NjulfEffectShader -> '$(IntermediateOutputPath)Effects\%(Filename)%(Extension).spv')">
+        <Link>%(NjulfEffectShader.RelativeDir)%(NjulfEffectShader.Filename)%(NjulfEffectShader.Extension).spv</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </Content>
+      <FileWrites Include="$(IntermediateOutputPath)Effects\**\*" />
+    </ItemGroup>
+  </Target>
+  <ItemGroup>
+    <UpToDateCheckInput Include="@(NjulfEffectShader);**\*.glsl;**\*.njeffect.json" Exclude="bin\**;obj\**" />
+  </ItemGroup>
+</Project>

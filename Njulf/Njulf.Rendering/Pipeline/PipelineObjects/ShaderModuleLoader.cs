@@ -9,6 +9,30 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects;
 
 internal static unsafe class ShaderModuleLoader
 {
+    internal static LoadedShaderModuleIdentity EffectIdentity(Njulf.Graphics.ShaderEffectAsset asset)
+    {
+        string nameHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(asset.Name))).ToLowerInvariant();
+        string codeHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(asset.ShaderCode)).ToLowerInvariant();
+        return new($"effect-{nameHash}.spv", codeHash, asset.ShaderCode.Length, "effect", asset.Name);
+    }
+    internal static ShaderModule LoadEffect(VulkanContext context, Njulf.Graphics.ShaderEffectAsset asset)
+    {
+        fixed (byte* code = asset.ShaderCode)
+        {
+            var info = new ShaderModuleCreateInfo { SType = StructureType.ShaderModuleCreateInfo,
+                CodeSize = (nuint)asset.ShaderCode.Length, PCode = (uint*)code };
+            Result result = context.Api.CreateShaderModule(context.Device, &info, null, out var module);
+            if (result != Result.Success) throw new VulkanException($"Failed to create effect shader '{asset.Name}'", result);
+            try
+            {
+                // Hash logical names, not bytes: shared-module comparisons must still detect
+                // bytecode changes for the same asset across feature-isolation captures.
+                context.ShaderModuleIdentities.Record(EffectIdentity(asset));
+                return module;
+            }
+            catch { context.Api.DestroyShaderModule(context.Device, module, null); throw; }
+        }
+    }
     internal const int MaximumShaderModuleBytes = ShaderArtifactResolver.MaximumShaderModuleBytes;
 
     public static ShaderModule Load(VulkanContext context, string shaderFileName)

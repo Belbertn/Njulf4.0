@@ -56,6 +56,14 @@ public sealed class SceneDocumentWriter
         }
         if (scene.Environment?.SourcePath is { Length: > 0 } environmentPath)
             dependencies.TryAdd(environmentPath, null);
+        foreach (var item in document.Objects)
+        {
+            if (item.MaterialOverride is not { } material) continue;
+            string?[] paths = [material.BaseColorTexturePath, material.NormalTexturePath,
+                material.MetallicRoughnessTexturePath, material.OcclusionTexturePath, material.EmissiveTexturePath];
+            foreach (string? texturePath in paths)
+                if (!string.IsNullOrEmpty(texturePath)) dependencies.TryAdd(texturePath, null);
+        }
         foreach (var edits in document.ImportedLightOverrides)
             if (edits.Values.IesProfile is { } profile)
                 AddDependency(profile, edits.Id, edits.Values.Name, dependencies);

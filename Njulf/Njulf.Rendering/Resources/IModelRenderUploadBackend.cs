@@ -16,6 +16,7 @@ internal interface IModelRenderUploadBackend
 {
     object ResourceOwner => this;
     Njulf.Graphics.VulkanGraphicsDevice? GraphicsDevice => null;
+    MaterialManager? MaterialResources => null;
     TextureHandle DefaultWhiteTexture { get; }
 
     TextureHandle DefaultNormalTexture { get; }
@@ -101,6 +102,7 @@ internal sealed class ModelRenderUploadBackend : IModelRenderUploadBackend
 {
     public object ResourceOwner => _meshManager.ResourceOwner;
     public Njulf.Graphics.VulkanGraphicsDevice? GraphicsDevice => _meshManager.GraphicsDevice;
+    public MaterialManager? MaterialResources => _materialManager;
     private readonly MeshManager _meshManager;
     private readonly TextureManager _textureManager;
     private readonly MaterialManager _materialManager;

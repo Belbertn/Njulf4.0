@@ -51,9 +51,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _depthFormat = depthFormat;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
-            ValidatePushConstantRange((uint)Marshal.SizeOf<GPUSkyboxPushConstants>());
-            if (createPipeline)
-                Prepare();
+            try
+            {
+                ValidatePushConstantRange((uint)Marshal.SizeOf<GPUSkyboxPushConstants>());
+                if (createPipeline)
+                    Prepare();
+            }
+            catch (Exception initializationFailure)
+            {
+                // A failed constructor has not transferred ownership to the production assembly.
+                try { Dispose(); }
+                catch (Exception cleanupFailure) { initializationFailure.Data["Njulf.PipelineCleanupFailure"] = cleanupFailure; }
+                throw;
+            }
         }
 
         public VkPipeline Pipeline

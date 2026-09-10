@@ -42,7 +42,11 @@ internal sealed unsafe class ShadowEditorPanel
 
     public void Render(EditorController editor)
     {
-        ImGui.Begin("Shadows");
+        if (!ImGui.Begin(EditorDockLayout.ShadowsWindow))
+        {
+            ImGui.End();
+            return;
+        }
         RenderRuntimeSummary(editor.RendererDiagnostics);
         if (editor.RendererDiagnostics is { } local)
         {

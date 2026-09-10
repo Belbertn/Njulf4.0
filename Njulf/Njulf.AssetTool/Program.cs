@@ -42,9 +42,34 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"{ex.GetType().Name}: {ex.Message}");
+            WriteDiagnostic(ex);
             return 1;
         }
+    }
+
+    private static void WriteDiagnostic(Exception error)
+    {
+        if (error is AggregateException aggregate)
+        {
+            foreach (Exception inner in aggregate.Flatten().InnerExceptions) WriteDiagnostic(inner);
+            return;
+        }
+        string? source = null;
+        JsonException? json = null;
+        string? dependency = null;
+        var messages = new List<string>();
+        for (Exception? current = error; current != null; current = current.InnerException)
+        {
+            source ??= current.Data["Njulf.SourcePath"] as string;
+            json ??= current as JsonException;
+            dependency ??= (current as FileNotFoundException)?.FileName;
+            messages.Add(current.Message);
+        }
+        string file = source ?? dependency ?? "Njulf.AssetTool";
+        string location = json?.LineNumber is long line
+            ? $"({line + 1},{(json.BytePositionInLine ?? 0) + 1})" : "";
+        Console.Error.WriteLine($"{file}{location}: error NJASSET: {error.GetType().Name}: " +
+            string.Join(" --> ", messages).Replace('\r', ' ').Replace('\n', ' '));
     }
 
     private static async Task<int> RunValidate(string[] args, bool writeJson, bool singleAsset = false)

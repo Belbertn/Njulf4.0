@@ -207,9 +207,8 @@ namespace Njulf.Rendering.Pipeline
         protected virtual void Dispose(bool disposing)
         {
             if (_disposed) return;
-            _disposed = true;
-            
             Cleanup();
+            _disposed = true;
             System.Diagnostics.Debug.WriteLine($"Render pass '{Name}' disposed.");
         }
     }

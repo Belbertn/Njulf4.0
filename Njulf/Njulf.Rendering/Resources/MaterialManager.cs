@@ -17,7 +17,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class MaterialManager : IDisposable, IDdgiMaterialMutationSource
+    public sealed unsafe partial class MaterialManager : IDisposable, IDdgiMaterialMutationSource
     {
         private const uint InitialMaterialCapacity = 1024;
         private static readonly ulong MaterialStride = (ulong)Marshal.SizeOf<GPUMaterialData>();
@@ -57,7 +57,7 @@ namespace Njulf.Rendering.Resources
             new(ResourceOwner, handle, GetMaterialDefinition(handle).Name,
                 RetainMaterial, ReleaseResource,
                 () => { GraphicsDevice?.EnsureUsable(); GetMaterialDefinition(handle); })
-                { NameResolver = handle => GetMaterialDefinition(handle).Name };
+                { NameResolver = handle => GetMaterialDefinition(handle).Name, Materials = this };
 
         private void ReleaseResource(MaterialHandle handle)
         {
@@ -1203,7 +1203,7 @@ namespace Njulf.Rendering.Resources
                             Njulf.Graphics.IMaterial boxedReplacement = new Njulf.Graphics.VulkanMaterial(
                                 ResourceOwner, anticipatedHandle, compiled.Definition.Name,
                                 RetainMaterial, ReleaseResource, () => { GraphicsDevice?.EnsureUsable(); GetMaterialDefinition(anticipatedHandle); })
-                                { NameResolver = handle => GetMaterialDefinition(handle).Name };
+                                { NameResolver = handle => GetMaterialDefinition(handle).Name, Materials = this };
 
                             try
                             {

@@ -1978,6 +1978,13 @@ internal sealed class ProductionRenderPipelineDeclaration
         RenderGraph graph,
         IReadOnlyDictionary<string, RenderPassBase> passes,
         in AdvancedGiRenderGraphModes modes)
+        => RegisterPasses(graph, passes, modes, static (owner, pass) => owner.AddPass(pass));
+
+    internal void RegisterPasses(
+        RenderGraph graph,
+        IReadOnlyDictionary<string, RenderPassBase> passes,
+        in AdvancedGiRenderGraphModes modes,
+        Action<RenderGraph, RenderPassBase> register)
     {
         if (graph == null)
             throw new ArgumentNullException(nameof(graph));
@@ -1992,7 +1999,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                     $"Production pipeline pass '{passName}' was not provided by the renderer.");
             }
 
-            graph.AddPass(pass);
+            register(graph, pass);
         }
     }
 

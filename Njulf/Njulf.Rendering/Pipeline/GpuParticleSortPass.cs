@@ -50,10 +50,20 @@ namespace Njulf.Rendering.Pipeline
             _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
-            ValidatePushConstantRange((uint)Marshal.SizeOf<GPUParticleSortPushConstants>());
-            CreatePipelineCache();
-            CreatePipelineLayout();
-            CreatePipeline();
+            try
+            {
+                ValidatePushConstantRange((uint)Marshal.SizeOf<GPUParticleSortPushConstants>());
+                CreatePipelineCache();
+                CreatePipelineLayout();
+                CreatePipeline();
+            }
+            catch (Exception initializationFailure)
+            {
+                // A failed constructor has not transferred ownership to the production assembly.
+                try { Dispose(); }
+                catch (Exception cleanupFailure) { initializationFailure.Data["Njulf.PipelineCleanupFailure"] = cleanupFailure; }
+                throw;
+            }
         }
 
         public void Execute(

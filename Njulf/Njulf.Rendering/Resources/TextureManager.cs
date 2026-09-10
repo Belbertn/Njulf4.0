@@ -19,7 +19,7 @@ using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class TextureManager : IDisposable,
+    public sealed unsafe partial class TextureManager : IDisposable,
         IBulkTextureReferenceManager
     {
         private const int UnassignedBindlessIndex = -1;
@@ -3124,6 +3124,8 @@ namespace Njulf.Rendering.Resources
             // the retired image so normal destruction/accounting remains the
             // single resource-release path.
             (target.Image, replacement.Image) = (replacement.Image, target.Image);
+            _graphicsPixels.Remove(target);
+            _graphicsPixels.Remove(replacement);
             Allocation* retiredAllocation = target.Allocation;
             target.Allocation = replacement.Allocation;
             replacement.Allocation = retiredAllocation;
@@ -5538,6 +5540,8 @@ namespace Njulf.Rendering.Resources
                     var image = GetTextureInfoLocked(handle).SharedImage!;
                     image.TransportStatistics = statistics;
                     image.LinearAverageColor = statistics.LinearChannelMean.ToVector4();
+                    image.Srgb = srgb;
+                    _graphicsPixels.Add(image, new GraphicsPixelShadow { Bytes = pixels.ToArray() });
                 }
                 return handle;
             }
@@ -5563,6 +5567,22 @@ namespace Njulf.Rendering.Resources
             {
                 var state = GetTextureInfoLocked(handle).SharedImage?.GraphImage;
                 return state?.Writable == true ? state : null;
+            }
+        }
+
+        internal Njulf.Graphics.TextureColorSpace GetGraphicsTextureColorSpace(TextureHandle handle)
+        {
+            lock (_lock)
+                return GetTextureInfoLocked(handle).SharedImage!.Srgb
+                    ? Njulf.Graphics.TextureColorSpace.Srgb : Njulf.Graphics.TextureColorSpace.Linear;
+        }
+
+        internal string? GetGraphicsTextureSourcePath(TextureHandle handle)
+        {
+            lock (_lock)
+            {
+                string? path = GetTextureInfoLocked(handle).SharedImage?.SourcePath;
+                return string.IsNullOrEmpty(path) ? null : Path.GetFullPath(path);
             }
         }
 

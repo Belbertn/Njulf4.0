@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Njulf",
+  "identity": "Njulf.Game",
+  "name": "Njulf game (local engine checkout)",
+  "shortName": "njulf-game",
+  "sourceName": "NjulfGame",
+  "preferNameDirectory": true,
+  "tags": { "language": "C#", "type": "project" },
+  "symbols": {
+    "engine-root": {
+      "type": "parameter",
+      "datatype": "string",
+      "isRequired": true,
+      "description": "Absolute path to the Njulf engine checkout",
+      "replaces": "NJULF_ENGINE_ROOT"
+    }
+  }
+}

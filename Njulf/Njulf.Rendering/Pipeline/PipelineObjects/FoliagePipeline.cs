@@ -128,19 +128,30 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         out _);
             _hybridReflectionConfiguration = hybridReflectionConfiguration;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
-            _colorFormat = colorFormat;
-            _motionVectorFormat = motionVectorFormat;
-            _depthFormat = depthFormat;
 
-            ValidatePushConstantRange((uint)Math.Max(
-                Marshal.SizeOf<GPUFoliageCullPushConstants>(),
-                Math.Max(
-                    Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
-                    Marshal.SizeOf<GPUMotionVectorPushConstants>())));
-            CreatePipelineCache();
-            CreateLayouts();
-            if (createPipelines)
-                Prepare();
+            try
+            {
+                _colorFormat = colorFormat;
+                _motionVectorFormat = motionVectorFormat;
+                _depthFormat = depthFormat;
+
+                ValidatePushConstantRange((uint)Math.Max(
+                    Marshal.SizeOf<GPUFoliageCullPushConstants>(),
+                    Math.Max(
+                        Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
+                        Marshal.SizeOf<GPUMotionVectorPushConstants>())));
+                CreatePipelineCache();
+                CreateLayouts();
+                if (createPipelines)
+                    Prepare();
+            }
+            catch (Exception initializationFailure)
+            {
+                // A failed constructor has not transferred ownership to the production assembly.
+                try { Dispose(); }
+                catch (Exception cleanupFailure) { initializationFailure.Data["Njulf.PipelineCleanupFailure"] = cleanupFailure; }
+                throw;
+            }
         }
 
         public PipelineLayout ComputeLayout => _computeLayout;

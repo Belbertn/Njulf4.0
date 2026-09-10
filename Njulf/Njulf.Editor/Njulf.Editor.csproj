@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
+    <InternalsVisibleTo Include="Njulf.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />

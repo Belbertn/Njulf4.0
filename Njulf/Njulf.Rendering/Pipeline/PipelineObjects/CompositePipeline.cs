@@ -43,13 +43,23 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
-            GraphicsPipelineFactory.ValidatePushConstantRange(_context, (uint)Marshal.SizeOf<GPUCompositePushConstants>(), "Composite pass");
-            _pipelineCache = _pipelineCacheService?.Cache ??
-                GraphicsPipelineFactory.CreatePipelineCache(
-                    _context,
-                    "Tone Map Composite Pipeline Cache");
-            CreatePipelineLayout();
-            CreatePipeline(colorFormat);
+            try
+            {
+                GraphicsPipelineFactory.ValidatePushConstantRange(_context, (uint)Marshal.SizeOf<GPUCompositePushConstants>(), "Composite pass");
+                _pipelineCache = _pipelineCacheService?.Cache ??
+                    GraphicsPipelineFactory.CreatePipelineCache(
+                        _context,
+                        "Tone Map Composite Pipeline Cache");
+                CreatePipelineLayout();
+                CreatePipeline(colorFormat);
+            }
+            catch (Exception initializationFailure)
+            {
+                // A failed constructor has not transferred ownership to the production assembly.
+                try { Dispose(); }
+                catch (Exception cleanupFailure) { initializationFailure.Data["Njulf.PipelineCleanupFailure"] = cleanupFailure; }
+                throw;
+            }
         }
 
         public VkPipeline Pipeline => _pipeline;

@@ -1,0 +1,48 @@
+{
+  "sourceRevision": "10440367",
+  "sourceState": "dirty; existing user changes preserved",
+  "date": "2026-09-10",
+  "hardware": "Ryzen 5 5600H; RTX 3060 Laptop GPU, driver 32.0.16.1062",
+  "checks": {
+    "unchangedCookSkipped": 2,
+    "removedBuildAndPublishContentPruned": true,
+    "missingOutputRepaired": true,
+    "unaffectedCookSkipped": 1,
+    "locatedContentFailure": true,
+    "cookerRegressionTestsPassed": 7,
+    "shaderTestsPassed": 2,
+    "templateFirstBuild": true,
+    "unsafeCookRootRejected": true,
+    "engineLockFilesUnchanged": true,
+    "sourceAndToolingExcluded": true,
+    "locatedShaderFailure": true,
+    "dependencyEditRecooked": 1,
+    "contentDiagnosticTestsPassed": 2,
+    "designTimeAndNoBuildSkipCooking": true
+  },
+  "observedBuildSeconds": {
+    "firstBuild": 43.2,
+    "publish": 33.9932346,
+    "removedSourcePublish": 36.8238945,
+    "removedSourceBuild": 32.6880802,
+    "dependencyEdit": 30.4,
+    "noOp": 32.0,
+    "missingOutputRepair": 31.5
+  },
+  "runtime": {
+    "exitCode": 0,
+    "fullyRenderedFrames": 30,
+    "elapsedSeconds": 16.926866,
+    "sourceAssetsAvailable": false,
+    "vulkanSdkOnPath": false,
+    "quality": "Low at native resolution"
+  },
+  "tailLatency": "Not measured; functional smoke, no performance claim",
+  "evidenceRoot": "artifacts/game-template/7429ca7ca31d4e639d20c3f74036836a",
+  "limitations": [
+    "Windows x64 only",
+    "First Release shader validation can be lengthy",
+    "Low graphics preset at native resolution; no high-quality performance qualification",
+    "Validation ran in focused stages after fixing template issues"
+  ]
+}

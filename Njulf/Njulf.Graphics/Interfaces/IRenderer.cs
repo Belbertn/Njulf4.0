@@ -22,6 +22,13 @@ namespace Njulf.Core.Interfaces
         bool IsFrameInProgress { get; }
     }
 
+    /// <summary>Optional host timing for render-driven animation. Supply once after BeginFrame and before drawing.</summary>
+    public interface IRendererGameTime
+    {
+        /// <summary>Sets scaled/unscaled draw timing. Pause wins over effect-specific timing overrides.</summary>
+        void SetGameTime(GameTime time, double timeScale, bool isPaused);
+    }
+
     public readonly record struct RendererFrameBoundaryTiming(
         long FrameFenceWaitMicroseconds,
         long SwapchainAcquireMicroseconds);

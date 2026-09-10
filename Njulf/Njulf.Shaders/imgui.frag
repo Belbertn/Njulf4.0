@@ -11,9 +11,14 @@ layout(push_constant) uniform ImGuiPushConstants
     vec2 displayPosition;
     vec2 displaySize;
     uint textureIndex;
+    uint encodeOutput;
 } pc;
 
 void main()
 {
     outColor = inColor * texture(textures[nonuniformEXT(pc.textureIndex)], inUv);
+    if (pc.encodeOutput != 0u) {
+        vec3 rgb = clamp(outColor.rgb, 0.0, 1.0);
+        outColor.rgb = mix(1.055 * pow(rgb, vec3(1.0 / 2.4)) - 0.055, rgb * 12.92, lessThanEqual(rgb, vec3(0.0031308)));
+    }
 }

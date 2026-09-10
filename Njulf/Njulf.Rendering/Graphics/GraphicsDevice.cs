@@ -23,6 +23,7 @@ internal sealed partial class VulkanGraphicsDevice : GraphicsDevice
     internal VulkanContext Context { get; }
     internal BufferManager Buffers { get; }
     internal MeshManager Meshes => _meshes;
+    internal MaterialManager Materials => _materials;
     /// <summary>Common settings, applied at production frame boundaries.</summary>
     private VulkanGraphicsSettingsController _settingsController = null!;
     public override VulkanGraphicsSettingsController Settings => _settingsController;

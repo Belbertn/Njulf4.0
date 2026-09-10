@@ -10,19 +10,36 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SampleScenePreparationWorkTests
 {
-    [TestCase("complete")]
-    [TestCase("cancel-before-start")]
-    [TestCase("cancel")]
-    [TestCase("shutdown")]
-    [TestCase("failure")]
-    [TestCase("superseded")]
-    public void WorkerRequestsAssembleAndReleaseOnlyOnThePumpThread(string outcome)
+    [TestCase("complete", false)]
+    [TestCase("cancel-before-start", false)]
+    [TestCase("cancel", false)]
+    [TestCase("shutdown", false)]
+    [TestCase("failure", false)]
+    [TestCase("superseded", false)]
+    [TestCase("complete", true)]
+    [TestCase("cancel-before-start", true)]
+    [TestCase("cancel", true)]
+    [TestCase("shutdown", true)]
+    [TestCase("failure", true)]
+    [TestCase("superseded", true)]
+    public void WorkerRequestsAssembleAndReleaseOnlyOnThePumpThread(string outcome, bool grouped)
     {
         int ownerThread = Environment.CurrentManagedThreadId;
         int references = 2;
         void CheckThread() => Assert.That(Environment.CurrentManagedThreadId, Is.EqualTo(ownerThread));
-        void Retain() { CheckThread(); references++; }
-        void Release() { CheckThread(); references--; }
+
+        void Retain()
+        {
+            CheckThread();
+            references++;
+        }
+
+        void Release()
+        {
+            CheckThread();
+            references--;
+        }
+
         object owner = new();
         using var mesh = new VulkanMesh(owner, new MeshHandle(1, 1), default,
             _ => Retain(), _ => Release(), CheckThread);
@@ -30,6 +47,8 @@ public sealed class SampleScenePreparationWorkTests
             _ => Retain(), _ => Release(), CheckThread);
         using var template = new Model();
         template.Add(new RenderObject(mesh, material));
+        if (grouped) template.Add(new RenderObject(mesh, material));
+        int objectsPerPlacement = grouped ? 2 : 1;
         int baselineReferences = references;
         using var scene = new Scene();
         using var dispatcher = new RenderThreadContentUploadDispatcher();
@@ -44,7 +63,8 @@ public sealed class SampleScenePreparationWorkTests
                 CheckThread();
                 if (outcome == "failure" && i == 513)
                     throw failure;
-                scene.Add(template.CreateRenderObjectInstance(0));
+                if (grouped) scene.Add(template.CreateInstance());
+                else scene.Add(template.CreateRenderObjectInstance(0));
                 yield return null;
             }
         }
@@ -57,6 +77,7 @@ public sealed class SampleScenePreparationWorkTests
                 cancellation.Cancel();
                 cancellation.Token.ThrowIfCancellationRequested();
             }
+
             publications++;
         });
         Task<bool>? preparation = null;
@@ -71,10 +92,11 @@ public sealed class SampleScenePreparationWorkTests
         dispatcher.ProcessFrame(TimeSpan.Zero, maximumCallbacks: 1);
         if (outcome != "cancel-before-start")
         {
-            Assert.That(scene.RenderObjects.Count, Is.EqualTo(512));
+            Assert.That(scene.RenderObjects.Count, Is.EqualTo(512 * objectsPerPlacement));
             Assert.That(preparation!.IsCompleted, Is.False);
             Assert.That(publications, Is.Zero);
         }
+
         if (outcome == "cancel")
             Task.Run(cancellation.Cancel).GetAwaiter().GetResult();
         if (outcome == "shutdown")
@@ -88,8 +110,8 @@ public sealed class SampleScenePreparationWorkTests
         {
             Assert.That(preparation.GetAwaiter().GetResult(), Is.True);
             Assert.That(publications, Is.EqualTo(1));
-            Assert.That(scene.RenderObjects.Count, Is.EqualTo(520));
-            Assert.That(references, Is.EqualTo(baselineReferences + 1040));
+            Assert.That(scene.RenderObjects.Count, Is.EqualTo(520 * objectsPerPlacement));
+            Assert.That(references, Is.EqualTo(baselineReferences + 1040 * objectsPerPlacement));
             scene.Dispose();
         }
         else
@@ -101,6 +123,7 @@ public sealed class SampleScenePreparationWorkTests
             Assert.That(publications, Is.Zero);
             Assert.That(scene.RenderObjects, Is.Empty);
         }
+
         Assert.That(references, Is.EqualTo(baselineReferences));
     }
 }

@@ -9,6 +9,7 @@ public sealed class LightManagerSceneLightStore : IMutableSceneLightStore
 {
     private readonly LightManager _lights;
     private readonly IPhotometricProfileResolver? _photometricProfiles;
+
     private readonly Dictionary<Guid, SceneAssetReferenceDocument>
         _photometricSources = new();
 
@@ -41,9 +42,15 @@ public sealed class LightManagerSceneLightStore : IMutableSceneLightStore
 
     public SceneLightDocument Describe(Guid id, string? name, Light light) =>
         ToDocument(id, name, light, AnalyticalLightGeometry.IsPunctual(light.Type)
-            ? ResolvePhotometricProfileReference(light.PhotometricProfile) : null);
+            ? ResolvePhotometricProfileReference(light.PhotometricProfile)
+            : null);
 
     public Light Resolve(SceneLightDocument light) => ToLight(light);
+
+    /// <summary>Preserves the authored profile even when it has not been resolved by the renderer.</summary>
+    public static SceneLightDocument
+        Describe(Guid id, string? name, Light light, SceneAssetReferenceDocument? profile) =>
+        ToDocument(id, name, light, AnalyticalLightGeometry.IsPunctual(light.Type) ? profile : null);
 
     public bool TryUpdate(Guid id, SceneLightDocument source)
     {
@@ -61,7 +68,7 @@ public sealed class LightManagerSceneLightStore : IMutableSceneLightStore
     public bool TryRemove(Guid id)
     {
         bool removed = _lights.TryGetLightHandle(id, out LightHandle handle) &&
-            _lights.RemoveLight(handle);
+                       _lights.RemoveLight(handle);
         if (removed)
             _photometricSources.Remove(id);
         return removed;
@@ -97,7 +104,8 @@ public sealed class LightManagerSceneLightStore : IMutableSceneLightStore
     private SceneLightDocument ToDocument(Guid id, string? name, Light source) =>
         ToDocument(id, name, source, AnalyticalLightGeometry.IsPunctual(source.Type)
             ? _photometricSources.TryGetValue(id, out var profileSource)
-                ? profileSource : ResolvePhotometricProfileReference(source.PhotometricProfile)
+                ? profileSource
+                : ResolvePhotometricProfileReference(source.PhotometricProfile)
             : null);
 
     private static SceneLightDocument ToDocument(
@@ -160,8 +168,8 @@ public sealed class LightManagerSceneLightStore : IMutableSceneLightStore
     private static LightType ParseType(string source) =>
         Enum.TryParse(source, ignoreCase: true, out LightType value) &&
         Enum.IsDefined(value)
-        ? value
-        : throw new InvalidDataException($"Unsupported light type '{source}'.");
+            ? value
+            : throw new InvalidDataException($"Unsupported light type '{source}'.");
 
     private static LightAttenuationMode ParseAttenuationMode(string source) =>
         Enum.TryParse(

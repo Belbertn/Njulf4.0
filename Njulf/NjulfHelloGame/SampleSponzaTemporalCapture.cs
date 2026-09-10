@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Core.Camera;
+using Njulf.Core.Scene;
 using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
@@ -39,8 +40,10 @@ public sealed class SampleSponzaTemporalCaptureSequence
     public const int MaximumDrainFrameCount = 120;
 
     private readonly SampleSponzaGiCaptureContract _contract;
+
     private SampleSponzaTemporalCaptureStage _stage =
         SampleSponzaTemporalCaptureStage.Warmup;
+
     private int _stageFrameIndex;
 
     public SampleSponzaTemporalCaptureSequence(
@@ -293,7 +296,7 @@ public static class SampleSponzaTemporalCaptureContract
             "final-ldr-beauty",
             "presentation-overlay");
         return "sha256:" + Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+                SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
             .ToLowerInvariant();
     }
 }
@@ -341,8 +344,7 @@ public sealed record SampleSponzaTemporalFrameArtifact
     public uint DdgiScrollTracedCount { get; init; }
     public uint DdgiScrollCommittedCount { get; init; }
     public uint DdgiScrollUnbucketedCount { get; init; }
-    public SimpleDdgiScrollCohortFailureReason DdgiScrollCohortFailure
-        { get; init; }
+    public SimpleDdgiScrollCohortFailureReason DdgiScrollCohortFailure { get; init; }
     public uint DdgiRebuildingRingMask { get; init; }
     public SimpleDdgiRebaseState DdgiNearRebaseState { get; init; }
     public SimpleDdgiRebaseState DdgiMidRebaseState { get; init; }
@@ -353,25 +355,35 @@ public sealed record SampleSponzaTemporalRunManifest
 {
     public string SchemaVersion { get; init; } =
         SampleSponzaTemporalCaptureContract.RunSchemaVersion;
+
     public string Status { get; init; } = "running";
+
     public string ContractFingerprint { get; init; } =
         SampleSponzaTemporalCaptureContract.Fingerprint;
+
     public string SettingsFingerprint { get; init; } = string.Empty;
     public int Width { get; init; } = SampleSponzaTemporalCaptureContract.Width;
     public int Height { get; init; } = SampleSponzaTemporalCaptureContract.Height;
+
     public int FramesPerSecond { get; init; } =
         SampleSponzaTemporalCaptureContract.FramesPerSecond;
+
     public int WarmupFrameCount { get; init; } =
         SampleSponzaTemporalCaptureContract.WarmupFrameCount;
+
     public int ExpectedFrameCount { get; init; } =
         SampleSponzaTemporalCaptureContract.ExpectedFrameCount;
+
     public int ScreenshotCompletedCountAtStart { get; init; }
     public int ScreenshotCompletedCountAtEnd { get; init; }
     public string GpuDevice { get; init; } = "unknown-device";
     public string GpuDriver { get; init; } = "unknown-driver";
+
     public PerformanceCaptureRunMetadata CaptureRun { get; init; } =
         PerformanceCaptureRunMetadata.Unknown;
+
     public string Failure { get; init; } = string.Empty;
+
     public IReadOnlyList<SampleSponzaTemporalFrameArtifact> Frames { get; init; } =
         Array.Empty<SampleSponzaTemporalFrameArtifact>();
 }
@@ -398,26 +410,25 @@ public sealed class SampleSponzaTemporalCaptureRunner
     private bool _renderDocRecenterCaptureAttempted;
     private bool _stopped;
 
-    public SampleSponzaTemporalCaptureRunner(
-        VulkanRenderer renderer,
+    public SampleSponzaTemporalCaptureRunner(VulkanRenderer renderer,
         FirstPersonCamera camera,
-        LightManager lightManager,
+        Scene scene,
         string outputDirectory,
         Func<(int Width, int Height)> viewportSize,
         Action exit)
     {
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
-        ArgumentNullException.ThrowIfNull(lightManager);
+        ArgumentNullException.ThrowIfNull(scene);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         _viewportSize = viewportSize ??
-            throw new ArgumentNullException(nameof(viewportSize));
+                        throw new ArgumentNullException(nameof(viewportSize));
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _outputDirectory = Path.GetFullPath(outputDirectory);
 
         EnsureEmptyOutputDirectory(_outputDirectory);
         Directory.CreateDirectory(_outputDirectory);
-        ConfigureRenderer(lightManager);
+        ConfigureRenderer(scene);
         _settingsFingerprint =
             SampleRenderSettingsFingerprint.Capture(_renderer.Settings);
         _completedAtStart =
@@ -448,6 +459,7 @@ public sealed class SampleSponzaTemporalCaptureRunner
                 throw new InvalidOperationException(
                     "A Sponza temporal frame was prepared twice without being rendered.");
             }
+
             if (viewportWidth != SampleSponzaTemporalCaptureContract.Width ||
                 viewportHeight != SampleSponzaTemporalCaptureContract.Height)
             {
@@ -523,15 +535,15 @@ public sealed class SampleSponzaTemporalCaptureRunner
         }
     }
 
-    private void ConfigureRenderer(LightManager lightManager)
+    private void ConfigureRenderer(Scene scene)
     {
-        SampleLighting.Configure(lightManager, SampleLightingMode.DirectionalKey);
+        SampleLighting.Configure(scene, SampleLightingMode.DirectionalKey);
         SampleLighting.ConfigureRenderSettings(
             _renderer.Settings,
             SampleLightingMode.DirectionalKey);
-        SampleEnvironment.Configure(
-            _renderer,
+        SampleEnvironment.Configure(scene,
             SampleEnvironmentMode.ProceduralOutdoor);
+        SceneEnvironmentSettings.Apply(scene.Environment!, _renderer.Settings.Environment);
         SampleGlobalIlluminationValidation.ConfigureSponzaCaptureSettings(
             _renderer.Settings);
         SampleSponzaGlobalIlluminationProfile.ApplyPresentationOverlay(
@@ -556,6 +568,7 @@ public sealed class SampleSponzaTemporalCaptureRunner
         settings.Debug.CpuSnapshotsEnabled = false;
         settings.Debug.AllowGpuTiming = true;
         _renderer.CaptureScenario = "SponzaTemporalStability";
+        scene.Environment = SceneEnvironmentSettings.Capture(settings.Environment);
     }
 
     private void QueueFirstLateralRecenterRenderDocCapture(
@@ -601,7 +614,7 @@ public sealed class SampleSponzaTemporalCaptureRunner
             Phase = instruction.Phase,
             RouteFrameIndex = instruction.StageFrameIndex,
             SimulationTimeSeconds = instruction.StageFrameIndex /
-                (float)SampleSponzaTemporalCaptureContract.FramesPerSecond,
+                                    (float)SampleSponzaTemporalCaptureContract.FramesPerSecond,
             RelativePath = relativePath,
             RendererFrameSerial = diagnostics.CaptureFrame.FrameSerial,
             TemporalSampleIndex = diagnostics.TemporalSampleIndex,

@@ -26,6 +26,10 @@ internal static class TestGraphicsResources
         Action<object>? retain = null, Action<object>? release = null) : IMesh, IMaterial, IResourceReference
     {
         public string Name => name;
+        public MaterialDefinition Definition => MaterialDefinition.Default with { Name = name };
+        public Texture? RetainTexture(MaterialTextureSlot slot) => null;
+        public void UpdateShared(MaterialDefinition definition, ReadOnlySpan<MaterialTextureAssignment> textures = default)
+            => throw new NotSupportedException("Lifetime-only fixture.");
         public BoundingBox Bounds => new(new Vector3(-1), new Vector3(1));
         public bool IsDisposed { get; private set; }
         public object OwnerIdentity => owner;

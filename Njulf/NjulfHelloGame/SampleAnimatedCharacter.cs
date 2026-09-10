@@ -79,13 +79,14 @@ internal static class SampleAnimatedCharacter
         foreach ((string identity, Animator animator) in animators)
         {
             AnimationClip clip = animator.CurrentClip ??
-                throw new InvalidOperationException(
-                    $"Activation animator '{identity}' has no current clip.");
+                                 throw new InvalidOperationException(
+                                     $"Activation animator '{identity}' has no current clip.");
             if (animator.Enabled || !animator.IsPlaying || !animator.Looping)
             {
                 throw new InvalidOperationException(
                     $"Activation animator '{identity}' left its locked route state.");
             }
+
             uint[] matrixBits = CapturePoseMatrixBits(animator);
             states.Add(new SampleBenchmarkActivationAnimatorState(
                 identity,
@@ -133,10 +134,10 @@ internal static class SampleAnimatedCharacter
             scene);
         RenderObject joints = scene.RenderObjects.Single(renderObject =>
             renderObject.Id ==
-                SampleBenchmarkSponzaSceneAnimationContract.JointObjectId);
+            SampleBenchmarkSponzaSceneAnimationContract.JointObjectId);
         RenderObject surface = scene.RenderObjects.Single(renderObject =>
             renderObject.Id ==
-                SampleBenchmarkSponzaSceneAnimationContract.SurfaceObjectId);
+            SampleBenchmarkSponzaSceneAnimationContract.SurfaceObjectId);
         (string Identity, Animator Animator)[] animators =
             ResolveBenchmarkAnimators([joints, surface]);
         if (animators.Length != 2 ||
@@ -154,6 +155,7 @@ internal static class SampleAnimatedCharacter
                 "The authored Sponza Strut must resolve to its exact two " +
                 "distinct animators in stable object-ID order.");
         }
+
         return animators;
     }
 
@@ -183,6 +185,7 @@ internal static class SampleAnimatedCharacter
             throw new InvalidOperationException(
                 "The authored Sponza activation requires at least one Strut animator.");
         }
+
         return animators;
     }
 
@@ -197,6 +200,7 @@ internal static class SampleAnimatedCharacter
                 throw new InvalidOperationException(
                     $"Activation animator '{identity}' has no authored clip.");
             }
+
             AnimationClip clip = animator.Clips[0];
             if (routeFrameIndex == 0)
                 animator.Play(clip, loop: true);
@@ -226,39 +230,53 @@ internal static class SampleAnimatedCharacter
             throw new ArgumentNullException(nameof(content));
 
         Model asset = content.Load<Model>(CharacterPath)
-            ?? throw new InvalidOperationException($"Content manager returned null for animated character '{CharacterPath}'.");
-        Model character = asset.CreateInstance()
-            ?? throw new InvalidOperationException($"Animated character '{CharacterPath}' did not create an instance.");
+                      ?? throw new InvalidOperationException(
+                          $"Content manager returned null for animated character '{CharacterPath}'.");
+        ModelInstance character = asset.CreateInstance()
+                                  ?? throw new InvalidOperationException(
+                                      $"Animated character '{CharacterPath}' did not create an instance.");
 
-        int playingAnimators = StartFirstAnimationClip(character);
-        CoreMatrix4x4 world = CreateCharacterWorld(character);
-        if (character.RenderObjects.Count != 2)
+        try
         {
-            throw new InvalidDataException(
-                $"The authored Sponza animation fixture requires exactly two " +
-                $"Strut render objects; loaded {character.RenderObjects.Count}.");
+            int playingAnimators = StartFirstAnimationClip(character);
+            CoreMatrix4x4 world = CreateCharacterWorld(character);
+            if (character.RenderObjects.Count != 2)
+            {
+                throw new InvalidDataException(
+                    $"The authored Sponza animation fixture requires exactly two " +
+                    $"Strut render objects; loaded {character.RenderObjects.Count}.");
+            }
+
+            for (int i = 0; i < character.RenderObjects.Count; i++)
+            {
+                RenderObject renderObject = character.RenderObjects[i];
+                renderObject.Name = $"AnimatedCharacter.Strut.{renderObject.Name}";
+                renderObject.AssetReference = new SceneAssetReference
+                    { Path = CharacterPath, SubObject = i.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+                renderObject.Id = i == 0
+                    ? SampleBenchmarkSponzaSceneAnimationContract.JointObjectId
+                    : SampleBenchmarkSponzaSceneAnimationContract.SurfaceObjectId;
+                renderObject.WorldMatrix = world;
+                renderObject.Visible = true;
+            }
+
+            scene.Add(character);
+            foreach (RenderObject renderObject in character.RenderObjects)
+            {
+                if (renderObject is IUpdateable updateable)
+                    scene.Add(updateable);
+            }
+
+            Console.WriteLine(
+                $"Loaded animated character '{CharacterPath}': objects={character.RenderObjects.Count}, " +
+                $"skeletons={character.Skeletons.Count}, skins={character.Skins.Count}, clips={character.AnimationClips.Count}, playingAnimators={playingAnimators}.");
+
+            return character;
         }
-        for (int i = 0; i < character.RenderObjects.Count; i++)
+        finally
         {
-            RenderObject renderObject = character.RenderObjects[i];
-            renderObject.Name = $"AnimatedCharacter.Strut.{renderObject.Name}";
-            renderObject.AssetReference = new SceneAssetReference { Path = CharacterPath, SubObject = i.ToString(System.Globalization.CultureInfo.InvariantCulture) };
-            renderObject.Id = i == 0
-                ? SampleBenchmarkSponzaSceneAnimationContract.JointObjectId
-                : SampleBenchmarkSponzaSceneAnimationContract.SurfaceObjectId;
-            renderObject.WorldMatrix = world;
-            renderObject.Visible = true;
-            scene.Add(renderObject);
-
-            if (renderObject is IUpdateable updateable)
-                scene.Add(updateable);
+            if (!scene.ModelInstances.Contains(character)) character.Dispose();
         }
-
-        Console.WriteLine(
-            $"Loaded animated character '{CharacterPath}': objects={character.RenderObjects.Count}, " +
-            $"skeletons={character.Skeletons.Count}, skins={character.Skins.Count}, clips={character.AnimationClips.Count}, playingAnimators={playingAnimators}.");
-
-        return character;
     }
 
     private static int StartFirstAnimationClip(Model character)
@@ -313,6 +331,7 @@ internal static class SampleAnimatedCharacter
                 hash.AppendData(bytes);
             }
         }
+
         return "sha256:" + Convert.ToHexString(hash.GetHashAndReset())
             .ToLowerInvariant();
     }
@@ -328,6 +347,7 @@ internal static class SampleAnimatedCharacter
                 bits);
             hash.AppendData(bytes);
         }
+
         return "sha256:" + Convert.ToHexString(hash.GetHashAndReset())
             .ToLowerInvariant();
     }
@@ -348,6 +368,7 @@ internal static class SampleAnimatedCharacter
                     BitConverter.SingleToUInt32Bits(matrix[row, column]);
             }
         }
+
         return bits;
     }
 }
@@ -386,6 +407,7 @@ internal sealed class SampleBenchmarkActivationAnimationCapture
                 _componentOffsets[index] +
                 _animators[index].Animator.CurrentPose.GlobalMatrices.Length * 16);
         }
+
         _componentCountPerFrame = _componentOffsets[^1];
         _times = new float[checked(maximumFrameCount * _animators.Length)];
         _revisions = new ulong[_times.Length];
@@ -405,6 +427,7 @@ internal sealed class SampleBenchmarkActivationAnimationCapture
             ValidatePhaseZeroHold();
             return;
         }
+
         SampleAnimatedCharacter.ApplyBenchmarkAnimationFrame(_animators, 0);
         CaptureCurrent(
             _heldTimes,
@@ -437,6 +460,7 @@ internal sealed class SampleBenchmarkActivationAnimationCapture
             throw new InvalidOperationException(
                 $"Activation evidence frame {evidenceFrameIndex} was recorded twice.");
         }
+
         SampleAnimatedCharacter.ApplyBenchmarkAnimationFrame(
             _animators,
             routeFrameIndex);
@@ -454,6 +478,7 @@ internal sealed class SampleBenchmarkActivationAnimationCapture
             throw new InvalidOperationException(
                 $"Activation evidence frame {evidenceFrameIndex} was recorded twice.");
         }
+
         _routeFrameIndices[evidenceFrameIndex] = routeFrameIndex;
         int animatorBase = checked(evidenceFrameIndex * _animators.Length);
         int matrixBase = checked(
@@ -479,6 +504,7 @@ internal sealed class SampleBenchmarkActivationAnimationCapture
                 "The held Sponza animation frame was not recorded by the " +
                 "measured route.");
         }
+
         int animatorBase = checked(evidenceFrameIndex * _animators.Length);
         int matrixBase = checked(
             evidenceFrameIndex * _componentCountPerFrame);
@@ -532,14 +558,15 @@ internal sealed class SampleBenchmarkActivationAnimationCapture
             (string identity, Animator animator) = _animators[animatorIndex];
             if (animator.Enabled || !animator.IsPlaying || !animator.Looping ||
                 BitConverter.SingleToInt32Bits(animator.TimeSeconds) !=
-                    BitConverter.SingleToInt32Bits(
-                        times[animatorBase + animatorIndex]) ||
+                BitConverter.SingleToInt32Bits(
+                    times[animatorBase + animatorIndex]) ||
                 animator.PoseRevision !=
-                    revisions[animatorBase + animatorIndex])
+                revisions[animatorBase + animatorIndex])
             {
                 throw new InvalidDataException(
                     $"Sponza animator '{identity}' changed during {role}.");
             }
+
             ReadOnlySpan<CoreMatrix4x4> matrices =
                 animator.CurrentPose.GlobalMatrices;
             int component = matrixBase + _componentOffsets[animatorIndex];
@@ -599,6 +626,7 @@ internal sealed class SampleBenchmarkActivationAnimationCapture
                 throw new InvalidOperationException(
                     $"Activation evidence frame {frameIndex} was not recorded.");
             }
+
             var states = new SampleBenchmarkActivationAnimatorState[
                 _animators.Length];
             int animatorBase = checked(frameIndex * _animators.Length);
@@ -633,6 +661,7 @@ internal sealed class SampleBenchmarkActivationAnimationCapture
                         GlobalMatrixComponentBits = Array.AsReadOnly(bits)
                     };
             }
+
             int routeFrameIndex = _routeFrameIndices[frameIndex];
             string configuration = SampleBenchmarkActivationFrameState
                 .CreateConfigurationFingerprint(states);
@@ -646,6 +675,7 @@ internal sealed class SampleBenchmarkActivationAnimationCapture
                     states),
                 Array.AsReadOnly(states));
         }
+
         return Array.AsReadOnly(frames);
     }
 }

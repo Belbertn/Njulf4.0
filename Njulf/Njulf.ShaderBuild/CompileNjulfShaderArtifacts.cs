@@ -229,7 +229,7 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask, ICancelableTask
                     }
                     catch (Exception exception)
                     {
-                        failures.Add(new ArtifactFailure(item.Artifact.OutputName, exception.Message));
+                        failures.Add(new ArtifactFailure(item.Artifact.OutputName, item.Artifact.SourcePath, exception.Message));
                         RequestCancellation();
                     }
                 });
@@ -242,7 +242,7 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask, ICancelableTask
             if (!failures.IsEmpty)
             {
                 foreach (ArtifactFailure failure in failures.OrderBy(failure => failure.OutputName, StringComparer.Ordinal))
-                    Log.LogError("Shader '{0}' failed:{1}{2}", failure.OutputName, Environment.NewLine, failure.Message);
+                    LogArtifactFailure(failure.OutputName, failure.SourcePath, failure.Message);
                 return false;
             }
 
@@ -1181,7 +1181,35 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask, ICancelableTask
 
     private sealed record Toolchain(string ExecutablePath, string Fingerprint);
 
-    private sealed record ArtifactFailure(string OutputName, string Message);
+    internal void LogArtifactFailure(string outputName, string sourcePath, string message)
+    {
+        bool located = false;
+        foreach (string line in message.Split('\n'))
+        {
+            // glslang reports ERROR: path:line: message (and sometimes a column).
+            // The lazy path match still accepts Windows drive colons and spaces.
+            var match = System.Text.RegularExpressions.Regex.Match(line.Trim(),
+                @"^ERROR:\s+(?<file>.+?):(?<line>\d+):(?:(?<column>\d+):)?\s*(?<message>.*)$");
+            if (!match.Success) continue;
+            string file = match.Groups["file"].Value;
+            if (file == "0") file = sourcePath;
+            else if (int.TryParse(file, out _)) continue; // Unknown compiler source-string ID.
+            file = Path.GetFullPath(file, Path.GetFullPath(ShaderRoot));
+            if (!int.TryParse(match.Groups["line"].Value, out int lineNumber)) continue;
+            int.TryParse(match.Groups["column"].Value, out int column);
+            Log.LogError(null, "NJSHADER", null, file, lineNumber, column, 0, 0,
+                "{0} [shader artifact: {1}]", match.Groups["message"].Value, outputName);
+            located = true;
+        }
+        if (!located)
+            Log.LogError(null, "NJSHADER", null, sourcePath, 0, 0, 0, 0,
+                "Shader '{0}' failed: {1}", outputName, message);
+        else
+            Log.LogMessage(MessageImportance.High, "Shader '{0}' compiler output:{1}{2}",
+                outputName, Environment.NewLine, message);
+    }
+
+    private sealed record ArtifactFailure(string OutputName, string SourcePath, string Message);
 
     private sealed record ArtifactTiming(string OutputName, TimeSpan Elapsed);
 

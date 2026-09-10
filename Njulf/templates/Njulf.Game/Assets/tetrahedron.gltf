@@ -1,0 +1,98 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Njulf API example (original fixture)"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Tetrahedron",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0
+          },
+          "indices": 1,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "Blue",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.2,
+          0.65,
+          0.95,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.65
+      }
+    }
+  ],
+  "buffers": [
+    {
+      "uri": "data:application/octet-stream;base64,AAAAAAAAgD8AAAAAAACAvwAAgL8AAIA/AACAPwAAgL8AAIA/AAAAAAAAgL8AAIC/AAABAAIAAAACAAMAAAADAAEAAQADAAIA",
+      "byteLength": 72
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 48,
+      "byteLength": 24,
+      "target": 34963
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        -1,
+        -1,
+        -1
+      ],
+      "max": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5123,
+      "count": 12,
+      "type": "SCALAR",
+      "min": [
+        0
+      ],
+      "max": [
+        3
+      ]
+    }
+  ]
+}

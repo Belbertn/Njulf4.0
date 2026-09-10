@@ -1,0 +1,19 @@
+{
+  "date": "2026-09-10",
+  "cleanupStatus": "blocked by automatic approval review",
+  "deletedFiles": 0,
+  "reason": "blocked by policy",
+  "retention": "ignored generated artifacts; remove superseded payloads when permitted, final raw evidence within two days",
+  "storage": [
+    {
+      "root": "artifacts/game-workflow",
+      "files": 820,
+      "bytes": 720796074.0
+    },
+    {
+      "root": "artifacts/game-template",
+      "files": 3308,
+      "bytes": 2940837309.0
+    }
+  ]
+}

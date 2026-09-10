@@ -113,7 +113,8 @@ public static class SampleKhronosMaterialGiLayout
         for (int index = 0; index < items.Count; index++)
         {
             SampleKhronosMaterialGiLayoutItem item = items[index] ??
-                throw new ArgumentException("Layout items cannot be null.", nameof(items));
+                                                     throw new ArgumentException("Layout items cannot be null.",
+                                                         nameof(items));
             if (string.IsNullOrWhiteSpace(item.Name) || item.RenderObjectCount <= 0)
                 throw new ArgumentException("Layout items require a name and render objects.", nameof(items));
 
@@ -240,11 +241,13 @@ public static class SampleKhronosMaterialGiRenderedSceneBuilder
             throw new InvalidOperationException(
                 $"{CookedRuntimePolicy.StrictVariable}=true is required by the Khronos rendered gate.");
         }
+
         if (CookedRuntimePolicy.AllowSourceFallback)
         {
             throw new InvalidOperationException(
                 $"{CookedRuntimePolicy.AllowSourceFallbackVariable} must be disabled for the Khronos rendered gate.");
         }
+
         if (!Directory.Exists(options.CookedRoot))
             throw new DirectoryNotFoundException($"Cooked root '{options.CookedRoot}' was not found.");
 
@@ -256,8 +259,8 @@ public static class SampleKhronosMaterialGiRenderedSceneBuilder
         var preflight = new List<PreflightAsset>(authenticated.Manifest.Assets.Count);
         foreach (KhronosMaterialGiAsset asset in authenticated.Manifest.Assets)
         {
-            KhronosMaterialGiGateEntry gateEntry = authenticated.GateReport.Entries.Single(
-                entry => string.Equals(entry.Name, asset.Name, StringComparison.Ordinal));
+            KhronosMaterialGiGateEntry gateEntry = authenticated.GateReport.Entries.Single(entry =>
+                string.Equals(entry.Name, asset.Name, StringComparison.Ordinal));
             string packagePath = ResolveContainedPackagePath(options.CookedRoot, asset.Name);
             CookedModelPackageSnapshot snapshot = CookedPackage.CaptureModelSnapshot(
                 packagePath,
@@ -281,6 +284,7 @@ public static class SampleKhronosMaterialGiRenderedSceneBuilder
                             $"Cooked Khronos model '{asset.Name}' failed semantic revalidation: " +
                             string.Join(" ", cookedErrors));
                     }
+
                     if (cooked.Materials.Materials.Count != gateEntry.MaterialCount ||
                         cooked.Mesh.SubMeshes.Count != gateEntry.SubMeshCount ||
                         cooked.Materials.PrimitiveTransportProfiles.Count !=
@@ -315,114 +319,122 @@ public static class SampleKhronosMaterialGiRenderedSceneBuilder
         {
             PreflightAsset source = preflight[assetIndex];
             SampleKhronosMaterialGiLayoutPlacement placement = placements[assetIndex];
-            Model instance = source.RuntimeModel.CreateInstance();
-            if (instance.RenderObjects.Count != source.GateEntry.SubMeshCount)
+            ModelInstance instance = source.RuntimeModel.CreateInstance();
+            try
             {
-                throw new InvalidDataException(
-                    $"Runtime Khronos model '{source.Asset.Name}' contains {instance.RenderObjects.Count} " +
-                    $"render objects; the authenticated gate requires {source.GateEntry.SubMeshCount}.");
-            }
-
-            var runtimeMaterials = new Dictionary<MaterialHandle, MaterialDefinition>();
-            var unlitObjects = new List<SampleKhronosUnlitRenderObjectEvidence>();
-            Matrix4x4 world =
-                Matrix4x4.CreateScale(new Vector3(placement.UniformScale)) *
-                Matrix4x4.CreateTranslation(placement.Translation);
-            for (int renderObjectIndex = 0;
-                 renderObjectIndex < instance.RenderObjects.Count;
-                 renderObjectIndex++)
-            {
-                RenderObject renderObject = instance.RenderObjects[renderObjectIndex];
-                if (!(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
+                if (instance.RenderObjects.Count != source.GateEntry.SubMeshCount)
                 {
                     throw new InvalidDataException(
-                        $"Runtime Khronos model '{source.Asset.Name}' object {renderObjectIndex} has no valid mesh.");
+                        $"Runtime Khronos model '{source.Asset.Name}' contains {instance.RenderObjects.Count} " +
+                        $"render objects; the authenticated gate requires {source.GateEntry.SubMeshCount}.");
                 }
-                if (!(renderObject.Material).TryGetMaterialHandle(out MaterialHandle materialHandle) ||
-                    !materialHandle.IsValid)
+
+                var runtimeMaterials = new Dictionary<MaterialHandle, MaterialDefinition>();
+                var unlitObjects = new List<SampleKhronosUnlitRenderObjectEvidence>();
+                Matrix4x4 world =
+                    Matrix4x4.CreateScale(new Vector3(placement.UniformScale)) *
+                    Matrix4x4.CreateTranslation(placement.Translation);
+                for (int renderObjectIndex = 0;
+                     renderObjectIndex < instance.RenderObjects.Count;
+                     renderObjectIndex++)
+                {
+                    RenderObject renderObject = instance.RenderObjects[renderObjectIndex];
+                    if (!(renderObject.Mesh).TryGetMeshHandle(out MeshHandle meshHandle) || !meshHandle.IsValid)
+                    {
+                        throw new InvalidDataException(
+                            $"Runtime Khronos model '{source.Asset.Name}' object {renderObjectIndex} has no valid mesh.");
+                    }
+
+                    if (!(renderObject.Material).TryGetMaterialHandle(out MaterialHandle materialHandle) ||
+                        !materialHandle.IsValid)
+                    {
+                        throw new InvalidDataException(
+                            $"Runtime Khronos model '{source.Asset.Name}' object {renderObjectIndex} has no valid material.");
+                    }
+
+                    MaterialDefinition definition = materialManager.GetMaterialDefinition(materialHandle);
+                    runtimeMaterials.TryAdd(materialHandle, definition);
+                    allMaterials.Add(materialHandle);
+                    if (definition.ShadingModel == MaterialShadingModel.Unlit)
+                    {
+                        allUnlitMaterials.Add(materialHandle);
+                        unlitObjects.Add(new SampleKhronosUnlitRenderObjectEvidence(
+                            SampleKhronosMaterialGiLayout.CreateStableId(
+                                authenticated.Manifest.Commit,
+                                source.Asset.Name,
+                                renderObjectIndex),
+                            renderObject.Name,
+                            materialHandle.Index,
+                            definition.Name));
+                    }
+
+                    renderObject.Id = SampleKhronosMaterialGiLayout.CreateStableId(
+                        authenticated.Manifest.Commit,
+                        source.Asset.Name,
+                        renderObjectIndex);
+                    renderObject.Name =
+                        $"Khronos.{source.Asset.Name}.{renderObjectIndex:D3}.{renderObject.Name}";
+                    renderObject.AssetReference = new SceneAssetReference
+                    {
+                        Path = source.PackagePath,
+                        SubObject = renderObjectIndex.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture)
+                    };
+                    renderObject.WorldMatrix = world;
+                    renderObject.Visible = true;
+                    renderObject.Enabled = true;
+                    renderObject.IsStatic = renderObject is not SkinnedRenderObject;
+                }
+
+                int runtimeUnlitMaterialCount = runtimeMaterials.Count(static entry =>
+                    entry.Value.ShadingModel == MaterialShadingModel.Unlit);
+                if (source.Asset.Expectations.MinimumUnlitCount > 0 &&
+                    (runtimeUnlitMaterialCount < source.Asset.Expectations.MinimumUnlitCount ||
+                     unlitObjects.Count < source.Asset.Expectations.MinimumUnlitCount))
                 {
                     throw new InvalidDataException(
-                        $"Runtime Khronos model '{source.Asset.Name}' object {renderObjectIndex} has no valid material.");
+                        $"Runtime Khronos model '{source.Asset.Name}' retained " +
+                        $"{runtimeUnlitMaterialCount} unlit materials and {unlitObjects.Count} unlit render objects; " +
+                        $"at least {source.Asset.Expectations.MinimumUnlitCount} of each are required.");
                 }
 
-                MaterialDefinition definition = materialManager.GetMaterialDefinition(materialHandle);
-                runtimeMaterials.TryAdd(materialHandle, definition);
-                allMaterials.Add(materialHandle);
-                if (definition.ShadingModel == MaterialShadingModel.Unlit)
-                {
-                    allUnlitMaterials.Add(materialHandle);
-                    unlitObjects.Add(new SampleKhronosUnlitRenderObjectEvidence(
-                        SampleKhronosMaterialGiLayout.CreateStableId(
-                            authenticated.Manifest.Commit,
-                            source.Asset.Name,
-                            renderObjectIndex),
-                        renderObject.Name,
-                        materialHandle.Index,
-                        definition.Name));
-                }
-
-                renderObject.Id = SampleKhronosMaterialGiLayout.CreateStableId(
-                    authenticated.Manifest.Commit,
+                SampleKhronosRuntimeMaterialEvidence[] materialEvidence = runtimeMaterials
+                    .OrderBy(static entry => entry.Key.Index)
+                    .ThenBy(static entry => entry.Key.Generation)
+                    .Select(static entry => new SampleKhronosRuntimeMaterialEvidence(
+                        entry.Key.Index,
+                        entry.Key.Generation,
+                        entry.Value.Name,
+                        entry.Value.ShadingModel))
+                    .ToArray();
+                evidence.Add(new SampleKhronosMaterialGiRenderedAssetEvidence(
                     source.Asset.Name,
-                    renderObjectIndex);
-                renderObject.Name =
-                    $"Khronos.{source.Asset.Name}.{renderObjectIndex:D3}.{renderObject.Name}";
-                renderObject.AssetReference = new SceneAssetReference
-                {
-                    Path = source.PackagePath,
-                    SubObject = renderObjectIndex.ToString(
-                        System.Globalization.CultureInfo.InvariantCulture)
-                };
-                renderObject.WorldMatrix = world;
-                renderObject.Visible = true;
-                renderObject.Enabled = true;
-                renderObject.IsStatic = renderObject is not SkinnedRenderObject;
-                scene.Add(renderObject);
+                    source.Asset.Sha256,
+                    source.Asset.Bytes,
+                    source.PackagePath,
+                    source.PackageSha256,
+                    source.PackageBytes,
+                    source.GateEntry.MaterialCount,
+                    source.GateEntry.SubMeshCount,
+                    source.GateEntry.PrimitiveProfileCount,
+                    runtimeMaterials.Count,
+                    instance.RenderObjects.Count,
+                    runtimeUnlitMaterialCount,
+                    unlitObjects.Count,
+                    instance.RenderObjects.Count,
+                    placement.UniformScale,
+                    placement.Translation,
+                    true,
+                    materialEvidence,
+                    unlitObjects));
+                totalUnlitRenderObjects += unlitObjects.Count;
+                totalRenderObjects += instance.RenderObjects.Count;
+                scene.Add(instance);
             }
-
-            int runtimeUnlitMaterialCount = runtimeMaterials.Count(
-                static entry => entry.Value.ShadingModel == MaterialShadingModel.Unlit);
-            if (source.Asset.Expectations.MinimumUnlitCount > 0 &&
-                (runtimeUnlitMaterialCount < source.Asset.Expectations.MinimumUnlitCount ||
-                 unlitObjects.Count < source.Asset.Expectations.MinimumUnlitCount))
+            finally
             {
-                throw new InvalidDataException(
-                    $"Runtime Khronos model '{source.Asset.Name}' retained " +
-                    $"{runtimeUnlitMaterialCount} unlit materials and {unlitObjects.Count} unlit render objects; " +
-                    $"at least {source.Asset.Expectations.MinimumUnlitCount} of each are required.");
+                if (!scene.ModelInstances.Contains(instance)) instance.Dispose();
             }
-
-            SampleKhronosRuntimeMaterialEvidence[] materialEvidence = runtimeMaterials
-                .OrderBy(static entry => entry.Key.Index)
-                .ThenBy(static entry => entry.Key.Generation)
-                .Select(static entry => new SampleKhronosRuntimeMaterialEvidence(
-                    entry.Key.Index,
-                    entry.Key.Generation,
-                    entry.Value.Name,
-                    entry.Value.ShadingModel))
-                .ToArray();
-            evidence.Add(new SampleKhronosMaterialGiRenderedAssetEvidence(
-                source.Asset.Name,
-                source.Asset.Sha256,
-                source.Asset.Bytes,
-                source.PackagePath,
-                source.PackageSha256,
-                source.PackageBytes,
-                source.GateEntry.MaterialCount,
-                source.GateEntry.SubMeshCount,
-                source.GateEntry.PrimitiveProfileCount,
-                runtimeMaterials.Count,
-                instance.RenderObjects.Count,
-                runtimeUnlitMaterialCount,
-                unlitObjects.Count,
-                instance.RenderObjects.Count,
-                placement.UniformScale,
-                placement.Translation,
-                true,
-                materialEvidence,
-                unlitObjects));
-            totalUnlitRenderObjects += unlitObjects.Count;
-            totalRenderObjects += instance.RenderObjects.Count;
         }
 
         CookedContentDiagnosticEntry[] loadEntries = content.CookedDiagnostics.Entries
@@ -434,6 +446,7 @@ public static class SampleKhronosMaterialGiRenderedSceneBuilder
             throw new InvalidDataException(
                 "Every Khronos model must produce exactly one cooked ContentManager load diagnostic.");
         }
+
         foreach (PreflightAsset asset in preflight)
         {
             int matchingLoads = loadEntries.Count(entry =>
@@ -489,6 +502,7 @@ public static class SampleKhronosMaterialGiRenderedSceneBuilder
             AppendFramed(hash, size);
             count++;
         }
+
         if (count == 0)
             throw new ArgumentException("At least one package is required.", nameof(packages));
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();

@@ -786,6 +786,7 @@ namespace Njulf.Rendering.Resources
                     dynamicPolicy);
             }
 
+            dynamicPolicy = dynamicPolicy with { HasMutableMeshGeometry = _preparedInstanceScratch.Any(instance => instance.MeshInfo.IsDynamic) };
             ulong contentSignature = CreateRaySceneContentSignature(
                 enabled && Supported,
                 sceneContentRevision,
@@ -1215,6 +1216,11 @@ namespace Njulf.Rendering.Resources
                             : materialContract.GeometryFlags,
                     FrameSlot = frameSlot
                 };
+                if (meshInfo.IsDynamic)
+                    instance = instance with { UsesDynamicBlas = true, RepresentationGeneration = meshInfo.ContentRevision,
+                        GeometryVertexBuffer = _meshManager.VertexPositionBuffer,
+                        GeometryIndexBuffer = _meshManager.IndexBuffer,
+                        GeometryFlags = instance.GeometryFlags | DdgiRayGeometryFlags.DynamicVertexSource };
                 if (renderObject is SkinnedRenderObject skinned &&
                     skinnedGeometryMode == DdgiSkinnedGeometryMode.CurrentPose &&
                     skinned.SkinningEnabled)
@@ -1278,6 +1284,10 @@ namespace Njulf.Rendering.Resources
                         instanceFlags)
                     {
                         ObjectIdentity = batch.Id,
+                        UsesDynamicBlas = meshInfo.IsDynamic,
+                        RepresentationGeneration = meshInfo.IsDynamic ? meshInfo.ContentRevision : 1u,
+                        GeometryVertexBuffer = meshInfo.IsDynamic ? _meshManager.VertexPositionBuffer : BufferHandle.Invalid,
+                        GeometryIndexBuffer = meshInfo.IsDynamic ? _meshManager.IndexBuffer : BufferHandle.Invalid,
                         StableInstanceIdentity = stableIdentity,
                         MaterialRevision = materialContract.MaterialRevision,
                         TransformRevision =
@@ -2517,7 +2527,7 @@ namespace Njulf.Rendering.Resources
                                 ? residentClassStorage[classIndex] - removedStorage
                                 : 0UL;
                     }
-                    if (instance.ExternalDynamicGeometry ||
+                    if (instance.ExternalDynamicGeometry || instance.MeshInfo.IsDynamic ||
                         instance.GeometryClass ==
                             DdgiRayGeometryClass.ProceduralFoliageProxy)
                     {
@@ -6216,6 +6226,7 @@ namespace Njulf.Rendering.Resources
         int MaximumPrimitivesPerFrame,
         int DecalCandidateLimit)
     {
+        internal bool HasMutableMeshGeometry { get; init; }
         /// <summary>
         /// Enables scene-provided terrain, topology-changing, water, and other
         /// dynamic triangle submissions. Existing skinned and foliage paths do
@@ -6249,14 +6260,14 @@ namespace Njulf.Rendering.Resources
             SkinnedGeometryMode == DdgiSkinnedGeometryMode.CurrentPose ||
             FoliageGeometryMode ==
                 DdgiFoliageGeometryMode.AuthoredAndProceduralProxy ||
-            DynamicProviderGeometryEnabled
+            DynamicProviderGeometryEnabled || HasMutableMeshGeometry
                 ? DynamicStorageBudgetBytes
                 : 0UL;
         internal ulong EffectiveDynamicScratchBudgetBytes =>
             SkinnedGeometryMode == DdgiSkinnedGeometryMode.CurrentPose ||
             FoliageGeometryMode ==
                 DdgiFoliageGeometryMode.AuthoredAndProceduralProxy ||
-            DynamicProviderGeometryEnabled
+            DynamicProviderGeometryEnabled || HasMutableMeshGeometry
                 ? DynamicScratchBudgetBytes
                 : 0UL;
         internal int EffectiveMaximumBuildsPerFrame => Math.Max(0, MaximumBuildsPerFrame);

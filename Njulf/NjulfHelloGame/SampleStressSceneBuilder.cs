@@ -10,6 +10,7 @@ using Njulf.Rendering.Resources;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 using CoreVector4 = Njulf.Core.Math.Vector4;
+using Vector3 = System.Numerics.Vector3;
 
 namespace NjulfHelloGame;
 
@@ -34,7 +35,6 @@ internal sealed class SampleStressSceneBuilder
     private readonly Scene _scene;
     private readonly MeshManager _meshManager;
     private readonly MaterialManager _materialManager;
-    private readonly LightManager _lightManager;
     private readonly SampleLightingMode _normalLightingMode;
     private readonly SampleStressSceneResourceCache _resourceCache;
     private readonly List<RenderObject> _objects = new();
@@ -45,18 +45,15 @@ internal sealed class SampleStressSceneBuilder
     private readonly List<IUpdateable> _updateables = new();
     private readonly List<RenderObject> _hiddenRenderObjects = new();
     private readonly FoliageManager _foliageManager = new();
-    public SampleStressSceneBuilder(
-        Scene scene,
+    public SampleStressSceneBuilder(Scene scene,
         MeshManager meshManager,
         MaterialManager materialManager,
-        LightManager lightManager,
         SampleLightingMode normalLightingMode,
         SampleStressSceneResourceCache? resourceCache = null)
     {
         _scene = scene ?? throw new ArgumentNullException(nameof(scene));
         _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
         _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
-        _lightManager = lightManager ?? throw new ArgumentNullException(nameof(lightManager));
         _normalLightingMode = normalLightingMode;
         _resourceCache = resourceCache ?? new SampleStressSceneResourceCache();
     }
@@ -68,7 +65,7 @@ internal sealed class SampleStressSceneBuilder
         // Replacing it with the generic stress-scene key would invalidate both
         // its radiometric relight event and the visual comparison target.
         if (scenario != SamplePerformanceScenario.BistroQualityMotionRelight)
-            SampleLighting.Configure(_lightManager, _normalLightingMode);
+            SampleLighting.Configure(_scene, _normalLightingMode);
 
         SamplePerformanceScenarioSummary summary = scenario switch
         {
@@ -117,7 +114,7 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.GiInstancedCityStress => BuildGiInstancedCityStress(),
             SamplePerformanceScenario.UploadBurst => BuildUploadBurst(),
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
-            _ => new SamplePerformanceScenarioSummary(SamplePerformanceScenario.Normal, 0, _lightManager.LightCount, 0, 0, 0, "Normal sample scene")
+            _ => new SamplePerformanceScenarioSummary(SamplePerformanceScenario.Normal, 0, _scene.Lights.Count, 0, 0, 0, "Normal sample scene")
         };
 
         SampleReflectionPolicy.EnsureProbeFree(_scene);
@@ -130,7 +127,7 @@ internal sealed class SampleStressSceneBuilder
         // A small mixed-resolution fixture; renderer capacity is configured independently.
         for (int i = 0; i < 16; i++)
         {
-            _lightManager.AddLight(new Light
+            SampleLighting.Add(_scene, new Light
             {
                 Type = i < 8 ? LightType.Point : LightType.Spot,
                 Position = new System.Numerics.Vector3(-2.1f + (i % 4) * 1.4f, 3.2f, -3.8f - (i % 2) * 3f),
@@ -145,13 +142,13 @@ internal sealed class SampleStressSceneBuilder
 
     private SamplePerformanceScenarioSummary BuildManyLights()
     {
-        _lightManager.ClearLights();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
         const int count = 256;
         for (int i = 0; i < count; i++)
         {
             int x = i % 16;
             int z = i / 16;
-            _lightManager.AddLight(new Light
+            SampleLighting.Add(_scene, new Light
             {
                 Type = LightType.Point,
                 Position = new System.Numerics.Vector3((x - 7.5f) * 3.0f, 2.0f + (i % 3) * 0.7f, z * 3.0f - 18.0f),
@@ -171,7 +168,7 @@ internal sealed class SampleStressSceneBuilder
     {
         RenderObject? source = FindSourceObject();
         if (source == null || !(source.Mesh).TryGetMeshHandle(out MeshHandle mesh))
-            return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManyMaterials, 0, _lightManager.LightCount, 0, 0, 0, "No source mesh available");
+            return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManyMaterials, 0, _scene.Lights.Count, 0, 0, 0, "No source mesh available");
 
         int side = (int)Math.Ceiling(Math.Sqrt(count));
         for (int i = 0; i < count; i++)
@@ -180,7 +177,7 @@ internal sealed class SampleStressSceneBuilder
             AddObject(mesh, material, $"Perf.Material.{i}", GridTransform(i, side, 1.5f, -10.0f));
         }
 
-        return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManyMaterials, count, _lightManager.LightCount, count, 0, 0, $"{count} unique materials");
+        return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManyMaterials, count, _scene.Lights.Count, count, 0, 0, $"{count} unique materials");
     }
 
     private SamplePerformanceScenarioSummary BuildTransparentObjects(int count)
@@ -196,20 +193,20 @@ internal sealed class SampleStressSceneBuilder
         for (int i = 0; i < count; i++)
             AddObject(mesh, material, $"Perf.Transparent.{i}", GridTransform(i, side, 0.65f, -8.0f, 0.05f * (i % 16)));
 
-        return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManyTransparentObjects, count, _lightManager.LightCount, 1, count, 0, $"{count} layered transparent quads");
+        return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManyTransparentObjects, count, _scene.Lights.Count, 1, count, 0, $"{count} layered transparent quads");
     }
 
     private SamplePerformanceScenarioSummary BuildLargeMeshletCount(int count)
     {
         RenderObject? source = FindSourceObject();
         if (source == null || !(source.Mesh).TryGetMeshHandle(out MeshHandle mesh) || !(source.Material).TryGetMaterialHandle(out MaterialHandle material))
-            return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.LargeMeshletCount, 0, _lightManager.LightCount, 0, 0, 0, "No source mesh/material available");
+            return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.LargeMeshletCount, 0, _scene.Lights.Count, 0, 0, 0, "No source mesh/material available");
 
         int side = (int)Math.Ceiling(Math.Sqrt(count));
         for (int i = 0; i < count; i++)
             AddObject(mesh, material, $"Perf.Meshlet.{i}", GridTransform(i, side, 2.0f, 8.0f));
 
-        return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.LargeMeshletCount, count, _lightManager.LightCount, 0, 0, 0, $"{count} repeated mesh instances");
+        return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.LargeMeshletCount, count, _scene.Lights.Count, 0, 0, 0, $"{count} repeated mesh instances");
     }
 
     private SamplePerformanceScenarioSummary BuildFoliageLikeStaticInstances(int count)
@@ -242,7 +239,7 @@ internal sealed class SampleStressSceneBuilder
         return new SamplePerformanceScenarioSummary(
             SamplePerformanceScenario.FoliageLikeStaticInstances,
             count,
-            _lightManager.LightCount,
+            _scene.Lights.Count,
             1,
             0,
             0,
@@ -308,7 +305,7 @@ internal sealed class SampleStressSceneBuilder
         return new SamplePerformanceScenarioSummary(
             SamplePerformanceScenario.FoliageDebugFallback,
             fallback.GeneratedInstanceCount,
-            _lightManager.LightCount,
+            _scene.Lights.Count,
             2,
             0,
             0,
@@ -318,7 +315,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildDenseGrassField()
     {
         HideBaseRenderObjects();
-        SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
+        SampleLighting.Configure(_scene, SampleLightingMode.DirectionalKey);
 
         MaterialHandle groundMaterial = _materialManager.RegisterMaterialDefinition(CreateGroundMaterial());
         AddObject(GetGroundPlaneMesh(), groundMaterial, "DenseGrass.Ground", CoreMatrix4x4.Identity);
@@ -360,7 +357,7 @@ internal sealed class SampleStressSceneBuilder
         return new SamplePerformanceScenarioSummary(
             SamplePerformanceScenario.DenseGrassField,
             _objects.Count,
-            _lightManager.LightCount,
+            _scene.Lights.Count,
             _foliagePrototypes.Count,
             0,
             0,
@@ -370,7 +367,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildShrubFoliage()
     {
         HideBaseRenderObjects();
-        SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
+        SampleLighting.Configure(_scene, SampleLightingMode.DirectionalKey);
 
         MaterialHandle groundMaterial = _materialManager.RegisterMaterialDefinition(CreateGroundMaterial());
         AddObject(GetGroundPlaneMesh(), groundMaterial, "Shrubs.Ground", CoreMatrix4x4.Identity);
@@ -408,7 +405,7 @@ internal sealed class SampleStressSceneBuilder
         return new SamplePerformanceScenarioSummary(
             SamplePerformanceScenario.ShrubFoliage,
             _objects.Count,
-            _lightManager.LightCount,
+            _scene.Lights.Count,
             _foliagePrototypes.Count,
             0,
             0,
@@ -419,7 +416,7 @@ internal sealed class SampleStressSceneBuilder
     {
         HideBaseRenderObjects();
         if (shadowsEnabled)
-            SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
+            SampleLighting.Configure(_scene, SampleLightingMode.DirectionalKey);
         else
             ConfigureUnshadowedDirectionalKey();
 
@@ -483,7 +480,7 @@ internal sealed class SampleStressSceneBuilder
         return new SamplePerformanceScenarioSummary(
             scenario,
             _objects.Count,
-            _lightManager.LightCount,
+            _scene.Lights.Count,
             _foliagePrototypes.Count,
             0,
             0,
@@ -575,8 +572,8 @@ internal sealed class SampleStressSceneBuilder
 
     private void ConfigureUnshadowedDirectionalKey()
     {
-        _lightManager.ClearLights();
-        _lightManager.AddLight(new Light
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Directional,
             Direction = new System.Numerics.Vector3(0.0f, -0.5f, -1.0f),
@@ -670,7 +667,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiCornellRoom(bool includePointLight = true)
     {
         HideBaseRenderObjects();
-        _lightManager.ClearLights();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
 
         AddValidationPanelRoom(
             "GI.Cornell",
@@ -698,7 +695,7 @@ internal sealed class SampleStressSceneBuilder
         if (includePointLight)
         {
             AddValidationPointLightMarker("GI.Cornell.PointLightMarker", lightPosition, size: 0.42f, intensity: CornellPointLightMarkerIntensity);
-            _lightManager.AddLight(new Light
+            SampleLighting.Add(_scene, new Light
             {
                 Type = LightType.Point,
                 Position = new System.Numerics.Vector3(lightPosition.X, lightPosition.Y, lightPosition.Z),
@@ -716,7 +713,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiSimpleDdgiFurnace()
     {
         HideBaseRenderObjects();
-        _lightManager.ClearLights();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
 
         const float albedo = 0.5f;
         const float emittedRadiance = 0.25f;
@@ -781,7 +778,7 @@ internal sealed class SampleStressSceneBuilder
             CoreMatrix4x4.CreateRotationX(MathF.PI * 0.5f),
             size: 1.1f);
 
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Directional,
             Direction = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(0.35f, -0.68f, -0.64f)),
@@ -801,7 +798,7 @@ internal sealed class SampleStressSceneBuilder
         return new SamplePerformanceScenarioSummary(
             SamplePerformanceScenario.GiQualityInterior,
             _objects.Count,
-            _lightManager.LightCount,
+            _scene.Lights.Count,
             0,
             2,
             0,
@@ -811,7 +808,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiThinWallLeakTest()
     {
         HideBaseRenderObjects();
-        _lightManager.ClearLights();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
 
         MaterialHandle wallMaterial = RegisterValidationMaterial(new CoreVector3(0.74f, 0.74f, 0.70f), roughness: 0.95f);
         MaterialHandle coldMaterial = RegisterValidationMaterial(new CoreVector3(0.24f, 0.34f, 0.76f), roughness: 0.9f);
@@ -820,7 +817,7 @@ internal sealed class SampleStressSceneBuilder
         AddValidationRoom("GI.ThinWall.Right", centerZ: -5.5f, width: 4.0f, height: 3.2f, depth: 5.0f, wallMaterial, warmMaterial, wallMaterial, includeFrontWall: false, centerX: 2.05f);
         AddValidationWall("GI.ThinWall.Separator", wallMaterial, new CoreVector3(0.0f, 1.6f, -5.5f), CoreMatrix4x4.CreateRotationY(-MathF.PI * 0.5f), new CoreVector3(5.0f, 3.2f, 1.0f));
 
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(-2.4f, 2.35f, -5.4f),
@@ -831,7 +828,7 @@ internal sealed class SampleStressSceneBuilder
             ShadowStrength = 0.95f,
             ShadowPriority = 10
         });
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(2.4f, 2.2f, -5.4f),
@@ -847,7 +844,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiVerticalityRings()
     {
         HideBaseRenderObjects();
-        _lightManager.ClearLights();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
 
         MaterialHandle groundMaterial = RegisterValidationMaterial(new CoreVector3(0.42f, 0.48f, 0.40f), roughness: 0.86f);
         MaterialHandle towerMaterial = RegisterValidationMaterial(new CoreVector3(0.58f, 0.56f, 0.52f), roughness: 0.82f);
@@ -873,7 +870,7 @@ internal sealed class SampleStressSceneBuilder
             CoreMatrix4x4.CreateRotationX(MathF.PI * 0.5f),
             size: 2.0f);
 
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Directional,
             Direction = new System.Numerics.Vector3(0.35f, -0.72f, 0.58f),
@@ -883,7 +880,7 @@ internal sealed class SampleStressSceneBuilder
             ShadowStrength = 0.75f,
             ShadowPriority = 8
         });
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(-6.0f, 28.0f, -18.0f),
@@ -901,7 +898,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiInstancedCityStress()
     {
         HideBaseRenderObjects();
-        _lightManager.ClearLights();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
 
         MaterialHandle groundMaterial = RegisterValidationMaterial(new CoreVector3(0.36f, 0.39f, 0.38f), roughness: 0.92f);
         MaterialHandle concreteMaterial = RegisterValidationMaterial(new CoreVector3(0.55f, 0.56f, 0.58f), roughness: 0.86f);
@@ -946,7 +943,7 @@ internal sealed class SampleStressSceneBuilder
             CoreMatrix4x4.CreateRotationX(MathF.PI * 0.5f),
             size: 2.4f);
 
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Directional,
             Direction = new System.Numerics.Vector3(0.42f, -0.78f, 0.46f),
@@ -956,7 +953,7 @@ internal sealed class SampleStressSceneBuilder
             ShadowStrength = 0.82f,
             ShadowPriority = 9
         });
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(-18.0f, 14.0f, -22.0f),
@@ -974,12 +971,12 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiMovingPointLight()
     {
         BuildGiCornellRoom(includePointLight: false);
-        _lightManager.ClearLights();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
         var lightCenter = new System.Numerics.Vector3(0.0f, 2.55f, -5.5f);
         const float radiusX = 1.85f;
         const float radiusZ = 1.15f;
         const float angularSpeed = 0.85f;
-        int lightIndex = _lightManager.AddLight(new Light
+        SceneLight movingLight = SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(0.0f, 2.5f, -5.5f),
@@ -990,9 +987,7 @@ internal sealed class SampleStressSceneBuilder
             ShadowStrength = 0.9f,
             ShadowPriority = 10
         });
-        AddUpdateable(new MovingPointLightAnimator(
-            _lightManager,
-            lightIndex,
+        AddUpdateable(new MovingPointLightAnimator(movingLight,
             lightCenter,
             radiusX,
             radiusZ,
@@ -1036,7 +1031,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiBrightExteriorRoom()
     {
         HideBaseRenderObjects();
-        _lightManager.ClearLights();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
 
         MaterialHandle wallMaterial = RegisterValidationMaterial(new CoreVector3(0.62f, 0.63f, 0.60f), roughness: 0.92f);
         MaterialHandle floorMaterial = RegisterValidationMaterial(new CoreVector3(0.34f, 0.34f, 0.31f), roughness: 0.85f);
@@ -1045,7 +1040,7 @@ internal sealed class SampleStressSceneBuilder
         AddValidationWall("GI.BrightExterior.Window", exteriorMaterial, new CoreVector3(0.0f, 1.8f, -3.08f), CoreMatrix4x4.Identity, new CoreVector3(1.45f, 1.15f, 1.0f));
         AddObject(GetGroundPlaneMesh(), floorMaterial, "GI.BrightExterior.FloorTint", CoreMatrix4x4.CreateScale(new CoreVector3(5.2f / 30f, 1f, 4.7f / 30f)) * CoreMatrix4x4.CreateTranslation(new CoreVector3(0f, 0.01f, -5.6f)));
 
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Directional,
             Direction = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(-0.3f, -0.55f, -0.9f)),
@@ -1056,7 +1051,7 @@ internal sealed class SampleStressSceneBuilder
             ShadowStrength = 0.8f,
             ShadowPriority = 10
         });
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(0.0f, 1.9f, -2.5f),
@@ -1072,7 +1067,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiLongCorridorOcclusion()
     {
         HideBaseRenderObjects();
-        _lightManager.ClearLights();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
 
         MaterialHandle wallMaterial = RegisterValidationMaterial(new CoreVector3(0.56f, 0.57f, 0.54f), roughness: 0.94f);
         MaterialHandle floorMaterial = RegisterValidationMaterial(new CoreVector3(0.28f, 0.30f, 0.32f), roughness: 0.9f);
@@ -1091,7 +1086,7 @@ internal sealed class SampleStressSceneBuilder
                 rotationY: i % 2 == 0 ? 0.15f : -0.15f);
         }
 
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(0.0f, 2.45f, -3.2f),
@@ -1102,7 +1097,7 @@ internal sealed class SampleStressSceneBuilder
             ShadowStrength = 0.9f,
             ShadowPriority = 10
         });
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(0.0f, 2.2f, -26.5f),
@@ -1155,7 +1150,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiLocalVolumeStreaming()
     {
         HideBaseRenderObjects();
-        _lightManager.ClearLights();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
 
         MaterialHandle wallMaterial = RegisterValidationMaterial(new CoreVector3(0.68f, 0.68f, 0.62f), roughness: 0.9f);
         MaterialHandle warmMaterial = RegisterValidationMaterial(new CoreVector3(0.86f, 0.48f, 0.22f), roughness: 0.86f);
@@ -1164,7 +1159,7 @@ internal sealed class SampleStressSceneBuilder
         AddValidationRoom("GI.Streaming.RightRoom", centerZ: -6.0f, width: 5.0f, height: 3.4f, depth: 5.0f, wallMaterial, coolMaterial, wallMaterial, includeFrontWall: false, centerX: 3.0f);
         AddValidationWall("GI.Streaming.DoorDivider", wallMaterial, new CoreVector3(0.0f, 1.7f, -8.5f), CoreMatrix4x4.Identity, new CoreVector3(2.0f, 3.4f, 1.0f));
 
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(-3.0f, 2.25f, -6.0f),
@@ -1175,7 +1170,7 @@ internal sealed class SampleStressSceneBuilder
             ShadowStrength = 0.85f,
             ShadowPriority = 10
         });
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(3.0f, 2.25f, -6.0f),
@@ -1193,7 +1188,7 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiFastTraversalTeleport()
     {
         SamplePerformanceScenarioSummary corridor = BuildGiLongCorridorOcclusion();
-        _lightManager.AddLight(new Light
+        SampleLighting.Add(_scene, new Light
         {
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(0.0f, 2.4f, -34.0f),
@@ -1207,7 +1202,7 @@ internal sealed class SampleStressSceneBuilder
         {
             Scenario = SamplePerformanceScenario.GiFastTraversalTeleport,
             ObjectCount = _objects.Count,
-            LightCount = _lightManager.LightCount,
+            LightCount = _scene.Lights.Count,
             ReflectionProbeCount = 0,
             Notes = "Long traversal corridor with distant arrival volume for fast-scroll and teleport validation"
         };
@@ -1237,7 +1232,7 @@ internal sealed class SampleStressSceneBuilder
         return new SamplePerformanceScenarioSummary(
             SamplePerformanceScenario.CombinedWorstCase,
             _objects.Count,
-            _lightManager.LightCount,
+            _scene.Lights.Count,
             129,
             256,
             0,
@@ -1535,7 +1530,7 @@ internal sealed class SampleStressSceneBuilder
         new(
             scenario,
             _objects.Count,
-            _lightManager.LightCount,
+            _scene.Lights.Count,
             0,
             0,
             0,
@@ -1547,7 +1542,7 @@ internal sealed class SampleStressSceneBuilder
         new(
             scenario,
             _scene.RenderObjects.Count,
-            _lightManager.LightCount,
+            _scene.Lights.Count,
             0,
             0,
             _scene.ReflectionProbes.Count,
@@ -2024,24 +2019,20 @@ internal sealed class SampleStressSceneBuilder
 
     private sealed class MovingPointLightAnimator : IUpdateable
     {
-        private readonly LightManager _lightManager;
-        private readonly int _lightIndex;
+        private readonly SceneLight _light;
         private readonly System.Numerics.Vector3 _center;
         private readonly float _radiusX;
         private readonly float _radiusZ;
         private readonly float _angularSpeed;
         private float _time;
 
-        public MovingPointLightAnimator(
-            LightManager lightManager,
-            int lightIndex,
-            System.Numerics.Vector3 center,
+        public MovingPointLightAnimator(SceneLight light,
+            Vector3 center,
             float radiusX,
             float radiusZ,
             float angularSpeed)
         {
-            _lightManager = lightManager;
-            _lightIndex = lightIndex;
+            _light = light;
             _center = center;
             _radiusX = radiusX;
             _radiusZ = radiusZ;
@@ -2054,21 +2045,10 @@ internal sealed class SampleStressSceneBuilder
         public void Update(float deltaTime)
         {
             _time += MathF.Max(0.0f, deltaTime) * _angularSpeed;
-            var light = new Light
-            {
-                Type = LightType.Point,
-                Position = new System.Numerics.Vector3(
+            _light.Position = new CoreVector3(
                     _center.X + MathF.Cos(_time) * _radiusX,
                     _center.Y + MathF.Sin(_time * 0.7f) * 0.25f,
-                    _center.Z + MathF.Sin(_time) * _radiusZ),
-                Color = new System.Numerics.Vector3(1.0f, 0.82f, 0.42f),
-                Intensity = MovingPointLightIntensity,
-                Range = 6.5f,
-                CastsShadows = true,
-                ShadowStrength = 0.9f,
-                ShadowPriority = 10
-            };
-            _lightManager.UpdateLight(_lightIndex, light);
+                    _center.Z + MathF.Sin(_time) * _radiusZ);
         }
     }
 

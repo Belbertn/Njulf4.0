@@ -1,0 +1,60 @@
+{
+  "Date": "2026-09-10",
+  "Revision": "10440367",
+  "Dirty": true,
+  "Scope": "Authored scene ownership migration; full view implementation incomplete",
+  "PerformanceGate": "Open: CPU tail increases repeated; GPU tail increase on repeat; no causal attribution established",
+  "Runs": [
+    {
+      "Run": "baseline-blocking",
+      "CpuP50Ms": 8.051,
+      "CpuP95Ms": 9.939,
+      "CpuP99Ms": 14.486,
+      "GpuP50Ms": 21.918,
+      "GpuP95Ms": 22.177,
+      "GpuP99Ms": 22.344,
+      "HdrRelativeRmse": 0.0019609917238494617,
+      "HdrPassed": true,
+      "ProductionTiming": true,
+      "Comparable": true,
+      "ValidGpuSamples": 480,
+      "ShaderFingerprint": "sha256:645816488d2623b0e9857a489b6b0d995107854117a5c7ae5d0df9cc61b00029",
+      "ExecutableHash": "sha256:3a7f948d1345b7774dc4237e73f138e9f7e283506a943873f7cafca8df280c17",
+      "RebuiltFrames": 0
+    },
+    {
+      "Run": "stage1-timing",
+      "CpuP50Ms": 8.305499999999999,
+      "CpuP95Ms": 10.961,
+      "CpuP99Ms": 13.651,
+      "GpuP50Ms": 21.8975,
+      "GpuP95Ms": 22.252,
+      "GpuP99Ms": 22.544,
+      "HdrRelativeRmse": 0.001036103776270316,
+      "HdrPassed": true,
+      "ProductionTiming": true,
+      "Comparable": true,
+      "ValidGpuSamples": 480,
+      "ShaderFingerprint": "sha256:645816488d2623b0e9857a489b6b0d995107854117a5c7ae5d0df9cc61b00029",
+      "ExecutableHash": "sha256:c061209b5697b18d86f9b29316b958a89bf4fe52b654eb3f6ab320e3e2f072d9",
+      "RebuiltFrames": 0
+    },
+    {
+      "Run": "stage1-timing-repeat",
+      "CpuP50Ms": 7.8004999999999995,
+      "CpuP95Ms": 11.601,
+      "CpuP99Ms": 17.357,
+      "GpuP50Ms": 21.6875,
+      "GpuP95Ms": 23.734,
+      "GpuP99Ms": 25.83,
+      "HdrRelativeRmse": 0.0024159702880482852,
+      "HdrPassed": true,
+      "ProductionTiming": true,
+      "Comparable": true,
+      "ValidGpuSamples": 480,
+      "ShaderFingerprint": "sha256:645816488d2623b0e9857a489b6b0d995107854117a5c7ae5d0df9cc61b00029",
+      "ExecutableHash": "sha256:c061209b5697b18d86f9b29316b958a89bf4fe52b654eb3f6ab320e3e2f072d9",
+      "RebuiltFrames": 0
+    }
+  ]
+}

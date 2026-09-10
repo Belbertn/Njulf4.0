@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Assets.Validation;
 using Njulf.Core.Camera;
+using Njulf.Core.Scene;
 using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
@@ -1146,7 +1147,7 @@ public sealed class SampleKhronosMaterialGiRenderedGateRunner
     private readonly SampleKhronosMaterialGiRenderedSceneBuild _scene;
     private readonly VulkanRenderer _renderer;
     private readonly FirstPersonCamera _camera;
-    private readonly LightManager _lightManager;
+    private readonly Scene _authoredScene;
     private readonly Func<(int Width, int Height)> _getWindowSize;
     private readonly Action _exit;
     private readonly SampleKhronosMaterialGiRenderedGateSequence _sequence = new();
@@ -1166,18 +1167,17 @@ public sealed class SampleKhronosMaterialGiRenderedGateRunner
     private bool _terminalReportWritten;
     private bool _exitRequested;
 
-    public SampleKhronosMaterialGiRenderedGateRunner(
-        SampleKhronosMaterialGiRenderedSceneBuild scene,
+    public SampleKhronosMaterialGiRenderedGateRunner(SampleKhronosMaterialGiRenderedSceneBuild scene,
         VulkanRenderer renderer,
         FirstPersonCamera camera,
-        LightManager lightManager,
+        Scene authoredScene,
         Func<(int Width, int Height)> getWindowSize,
         Action exit)
     {
         _scene = scene ?? throw new ArgumentNullException(nameof(scene));
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
-        _lightManager = lightManager ?? throw new ArgumentNullException(nameof(lightManager));
+        _authoredScene = authoredScene ?? throw new ArgumentNullException(nameof(authoredScene));
         _getWindowSize = getWindowSize ?? throw new ArgumentNullException(nameof(getWindowSize));
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
 
@@ -1198,7 +1198,7 @@ public sealed class SampleKhronosMaterialGiRenderedGateRunner
 
         ApplyLockedCamera(_camera);
         ApplyLockedSettings(_renderer.Settings);
-        ConfigureLockedLighting(_lightManager);
+        ConfigureLockedLighting(_authoredScene);
         _renderer.CaptureScenario = SampleKhronosMaterialGiRenderedGateReport.CurrentSchema;
         SampleKhronosMaterialGiRenderedGateReportPublisher.WriteInProgress(_scene);
     }
@@ -1333,11 +1333,11 @@ public sealed class SampleKhronosMaterialGiRenderedGateRunner
         camera.Update();
     }
 
-    public static void ConfigureLockedLighting(LightManager lightManager)
+    public static void ConfigureLockedLighting(Scene scene)
     {
-        ArgumentNullException.ThrowIfNull(lightManager);
-        lightManager.ClearLights();
-        lightManager.AddLight(new Light
+        ArgumentNullException.ThrowIfNull(scene);
+        new Njulf.Assets.Scenes.SceneLightStore(scene).Clear();
+        SampleLighting.Add(scene, new Light
         {
             Type = LightType.Directional,
             Direction = NumericsVector3.Normalize(new NumericsVector3(-0.44f, -0.82f, -0.36f)),
@@ -1500,7 +1500,7 @@ public sealed class SampleKhronosMaterialGiRenderedGateRunner
         _semanticWarmupFrames = 0;
         _semanticReadbackFrames = 0;
         if (stage == SemanticCaptureStage.LightingOffWarmup)
-            _lightManager.ClearLights();
+            new Njulf.Assets.Scenes.SceneLightStore(_authoredScene).Clear();
     }
 
     private bool IsSemanticWarmupComplete() =>

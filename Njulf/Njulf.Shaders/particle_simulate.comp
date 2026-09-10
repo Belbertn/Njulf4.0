@@ -477,7 +477,7 @@ void SpawnParticle(
     uint aliveIndexBufferIndex,
     uint indirectBufferIndex)
 {
-    if (pc.Push.MaxSpawnPerEmitter == 0u)
+    if (pc.Push.MaxSpawnPerEmitter == 0u || pc.Push.DeltaSeconds <= 0.0)
         return;
 
     uint emitterIndex = spawnIndex / pc.Push.MaxSpawnPerEmitter;

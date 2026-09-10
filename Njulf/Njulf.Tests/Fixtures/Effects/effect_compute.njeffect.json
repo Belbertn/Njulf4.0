@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1, "kind": "Compute", "shader": "effect_compute.comp.spv",
+  "workgroupSize": { "x": 8, "y": 8, "z": 1 },
+  "parameters": [
+    { "name": "Tint", "type": "Vector3", "default": [1, 1, 1] },
+    { "name": "Marker", "type": "UInt", "default": 17 }
+  ],
+  "resources": [
+    { "name": "SourceColor", "binding": 0, "kind": "SampledTexture2D" },
+    { "name": "Destination", "binding": 1, "kind": "StorageImage2D", "access": "Write" },
+    { "name": "Data", "binding": 2, "kind": "StorageBuffer", "access": "Write" }
+  ]
+}

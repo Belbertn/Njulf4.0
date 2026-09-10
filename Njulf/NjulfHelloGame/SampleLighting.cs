@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
 using Njulf.Assets.Scenes;
+using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 
@@ -29,7 +30,7 @@ internal static class SampleLighting
             throw new ArgumentNullException(nameof(settings));
 
         bool areaLightShowcase = mode ==
-            SampleLightingMode.AnalyticalAreaLightShowcase;
+                                 SampleLightingMode.AnalyticalAreaLightShowcase;
         settings.Shadows.DirectionalShadowsEnabled = !areaLightShowcase;
         bool spotShadows = mode is SampleLightingMode.SpotShadowDemo or
             SampleLightingMode.VolumetricShowcase;
@@ -44,53 +45,52 @@ internal static class SampleLighting
         settings.Shadows.AreaShadowSampleCount = areaLightShowcase ? 2 : 1;
     }
 
-    public static void Configure(LightManager lightManager, SampleLightingMode mode)
+    public static void Configure(Scene scene, SampleLightingMode mode)
     {
-        if (lightManager == null)
-            throw new ArgumentNullException(nameof(lightManager));
-
-        lightManager.ClearLights();
+        ArgumentNullException.ThrowIfNull(scene);
+        new SceneLightStore(scene).Clear();
 
         switch (mode)
         {
             case SampleLightingMode.DirectionalKey:
-                AddDirectionalKey(lightManager);
+                AddDirectionalKey(scene);
                 break;
             case SampleLightingMode.ThreePointDemo:
-                AddThreePointDemo(lightManager);
+                AddThreePointDemo(scene);
                 break;
             case SampleLightingMode.SpotShadowDemo:
-                AddSpotShadowDemo(lightManager);
+                AddSpotShadowDemo(scene);
                 break;
             case SampleLightingMode.PointShadowDemo:
-                AddPointShadowDemo(lightManager);
+                AddPointShadowDemo(scene);
                 break;
             case SampleLightingMode.AnalyticalAreaLightShowcase:
                 foreach (Light light in CreateAnalyticalAreaLightShowcaseLights())
                 {
-                    lightManager.AddLightHandle(
+                    Add(scene,
                         light,
                         $"AreaLightRoom.{light.Type}");
                 }
-                AddAnalyticalAreaLightIesShowcase(lightManager);
+
+                AddAnalyticalAreaLightIesShowcase(scene);
                 break;
             case SampleLightingMode.VolumetricShowcase:
                 foreach (Light light in CreateVolumetricShowcaseLights())
-                    lightManager.AddLight(light);
+                    Add(scene, light);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown sample lighting mode.");
         }
     }
 
-    private static void AddDirectionalKey(LightManager lightManager)
+    private static void AddDirectionalKey(Scene scene)
     {
-        lightManager.AddLight(SampleSponzaLightingProfile.CreateDirectionalKey());
+        Add(scene, SampleSponzaLightingProfile.CreateDirectionalKey());
     }
 
-    private static void AddThreePointDemo(LightManager lightManager)
+    private static void AddThreePointDemo(Scene scene)
     {
-        lightManager.AddLight(new Light
+        Add(scene, new Light
         {
             Type = LightType.Point,
             Position = new Vector3(-2.5f, 2.6f, 3.0f),
@@ -98,7 +98,7 @@ internal static class SampleLighting
             Intensity = 22f,
             Range = 8f
         });
-        lightManager.AddLight(new Light
+        Add(scene, new Light
         {
             Type = LightType.Point,
             Position = new Vector3(2.5f, 1.4f, 1.5f),
@@ -106,7 +106,7 @@ internal static class SampleLighting
             Intensity = 12f,
             Range = 6f
         });
-        lightManager.AddLight(new Light
+        Add(scene, new Light
         {
             Type = LightType.Point,
             Position = new Vector3(0.0f, 3.0f, -2.75f),
@@ -116,10 +116,10 @@ internal static class SampleLighting
         });
     }
 
-    private static void AddSpotShadowDemo(LightManager lightManager)
+    private static void AddSpotShadowDemo(Scene scene)
     {
-        AddDirectionalKey(lightManager);
-        lightManager.AddLight(new Light
+        AddDirectionalKey(scene);
+        Add(scene, new Light
         {
             Type = LightType.Spot,
             Position = new Vector3(-2.4f, 4.0f, 2.4f),
@@ -132,7 +132,7 @@ internal static class SampleLighting
             ShadowStrength = 0.9f,
             ShadowPriority = 10
         });
-        lightManager.AddLight(new Light
+        Add(scene, new Light
         {
             Type = LightType.Spot,
             Position = new Vector3(2.5f, 3.2f, -1.5f),
@@ -147,10 +147,10 @@ internal static class SampleLighting
         });
     }
 
-    private static void AddPointShadowDemo(LightManager lightManager)
+    private static void AddPointShadowDemo(Scene scene)
     {
-        AddDirectionalKey(lightManager);
-        lightManager.AddLight(new Light
+        AddDirectionalKey(scene);
+        Add(scene, new Light
         {
             Type = LightType.Point,
             Position = new Vector3(0.0f, 2.6f, 0.2f),
@@ -161,7 +161,7 @@ internal static class SampleLighting
             ShadowStrength = 0.9f,
             ShadowPriority = 10
         });
-        lightManager.AddLight(new Light
+        Add(scene, new Light
         {
             Type = LightType.Point,
             Position = new Vector3(-3.0f, 1.5f, 3.0f),
@@ -282,8 +282,7 @@ internal static class SampleLighting
         PhotometricProfile = profile
     };
 
-    private static void AddAnalyticalAreaLightIesShowcase(
-        LightManager lightManager)
+    private static void AddAnalyticalAreaLightIesShowcase(Scene scene)
     {
         string profilePath = Path.Combine(
             AppContext.BaseDirectory,
@@ -291,25 +290,17 @@ internal static class SampleLighting
             "Photometry",
             AnalyticalAreaLightIesFileName);
         var source = new SceneAssetReferenceDocument(profilePath);
-        PhotometricProfileHandle profile = default;
-        bool loaded = lightManager.PhotometricProfiles?.TryResolve(
-            source,
-            out profile) == true;
+        Add(scene, CreateAnalyticalAreaLightIesShowcaseLight(default),
+            "AreaLightRoom.IES.CrossProfileSpot", source);
+    }
 
-        lightManager.AddLightHandle(
-            CreateAnalyticalAreaLightIesShowcaseLight(profile),
-            "AreaLightRoom.IES.CrossProfileSpot");
-
-        if (loaded)
-        {
-            Console.WriteLine(
-                $"Analytical area-light room IES profile: {profilePath}");
-        }
-        else
-        {
-            Console.Error.WriteLine(
-                $"Analytical area-light room IES profile was unavailable: " +
-                $"{profilePath}. The demonstration spot uses its unit profile.");
-        }
+    internal static SceneLight Add(Scene scene, Light value, string? name = null,
+        SceneAssetReferenceDocument? profile = null)
+    {
+        Guid id = Guid.NewGuid();
+        SceneLight light = SceneLightStore.FromDocument(id,
+            LightManagerSceneLightStore.Describe(id, name, value, profile));
+        scene.Add(light);
+        return light;
     }
 }

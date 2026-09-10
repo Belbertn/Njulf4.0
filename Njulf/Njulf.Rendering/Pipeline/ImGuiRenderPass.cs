@@ -55,10 +55,10 @@ public sealed unsafe class ImGuiRenderPass : RenderPassBase
         if (data == null || data.IsEmpty) return;
         EnsureInitialized();
         int frame = Math.Clamp(frameIndex, 0, _frames.Length - 1);
-        EnsureCapacity(frame, data.Vertices.Length, data.Indices.Length);
-        GpuBufferUploader.UploadSpanToBuffer(_context, _buffers, _staging, cmd, _frames[frame].Vertex, data.Vertices.AsSpan(),
+        EnsureCapacity(frame, data.VertexCount, data.IndexCount);
+        GpuBufferUploader.UploadSpanToBuffer(_context, _buffers, _staging, cmd, _frames[frame].Vertex, data.Vertices.AsSpan(0, data.VertexCount),
             barrierDescription: new UploadBarrierDescription(PipelineStageFlags2.VertexAttributeInputBit, AccessFlags2.VertexAttributeReadBit));
-        GpuBufferUploader.UploadSpanToBuffer(_context, _buffers, _staging, cmd, _frames[frame].Index, data.Indices.AsSpan(),
+        GpuBufferUploader.UploadSpanToBuffer(_context, _buffers, _staging, cmd, _frames[frame].Index, data.Indices.AsSpan(0, data.IndexCount),
             barrierDescription: new UploadBarrierDescription(PipelineStageFlags2.IndexInputBit, AccessFlags2.IndexReadBit));
 
         uint imageIndex = sceneData.ImageIndex < _swapchain.ImageCount ? sceneData.ImageIndex : (uint)frame;
@@ -74,19 +74,20 @@ public sealed unsafe class ImGuiRenderPass : RenderPassBase
         var viewport = new Viewport { Width = _swapchain.Extent.Width, Height = _swapchain.Extent.Height, MaxDepth = 1f };
         _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
 
-        foreach (OverlayDrawCommand command in data.Commands)
+        foreach (OverlayDrawCommand command in data.Commands.AsSpan(0, data.CommandCount))
         {
             float l = (command.ClipRectangle.X - data.DisplayPosition.X) * data.FramebufferScale.X;
             float t = (command.ClipRectangle.Y - data.DisplayPosition.Y) * data.FramebufferScale.Y;
             float r = (command.ClipRectangle.Z - data.DisplayPosition.X) * data.FramebufferScale.X;
             float b = (command.ClipRectangle.W - data.DisplayPosition.Y) * data.FramebufferScale.Y;
-            int x = Math.Max(0, (int)l), y = Math.Max(0, (int)t);
+            int x = Math.Max(0, (int)MathF.Floor(l)), y = Math.Max(0, (int)MathF.Floor(t));
             int maxX = Math.Min((int)_swapchain.Extent.Width, (int)MathF.Ceiling(r));
             int maxY = Math.Min((int)_swapchain.Extent.Height, (int)MathF.Ceiling(b));
             if (maxX <= x || maxY <= y || command.ElementCount == 0) continue;
             var scissor = new Rect2D(new Offset2D(x, y), new Extent2D((uint)(maxX - x), (uint)(maxY - y)));
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
             var push = new Push { DisplayPosition = data.DisplayPosition, DisplaySize = data.DisplaySize, TextureIndex = (uint)Math.Max(command.TextureIndex, BindlessIndex.DefaultWhiteTexture) };
+            push.EncodeOutput = command.LinearColor && _swapchain.SurfaceFormat is not (Format.B8G8R8A8Srgb or Format.R8G8B8A8Srgb) ? 1u : 0u;
             _context.Api.CmdPushConstants(cmd, _layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)Marshal.SizeOf<Push>(), &push);
             _context.Api.CmdDrawIndexed(cmd, command.ElementCount, 1, command.IndexOffset, command.VertexOffset, 0);
         }
@@ -186,6 +187,6 @@ public sealed unsafe class ImGuiRenderPass : RenderPassBase
         finally { if (vs.Handle != 0) _context.Api.DestroyShaderModule(_context.Device, vs, null); if (fs.Handle != 0) _context.Api.DestroyShaderModule(_context.Device, fs, null); }
     }
     private void DestroyPipeline() { if (_pipeline.Handle != 0) _context.Api.DestroyPipeline(_context.Device, _pipeline, null); _pipeline = default; }
-    [StructLayout(LayoutKind.Sequential, Pack = 4)] private struct Push { public Vector2 DisplayPosition; public Vector2 DisplaySize; public uint TextureIndex; }
+    [StructLayout(LayoutKind.Sequential, Pack = 4)] private struct Push { public Vector2 DisplayPosition; public Vector2 DisplaySize; public uint TextureIndex; public uint EncodeOutput; }
     private readonly record struct FrameBuffers(BufferHandle Vertex, BufferHandle Index, int VertexCapacity, int IndexCapacity);
 }

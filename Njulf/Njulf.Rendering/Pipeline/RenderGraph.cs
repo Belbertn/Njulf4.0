@@ -52,6 +52,7 @@ namespace Njulf.Rendering.Pipeline
         internal int InterFrameConservativePassCount { get; private set; }
         internal int InterFrameBarrierCount { get; private set; }
         private bool _cleanedUp;
+        private StagedDisposalPlan? _cleanupPlan;
         private bool _disposed;
 
         public IReadOnlyList<string> PassNames => _passes.ConvertAll(pass => pass.Name);
@@ -1767,19 +1768,30 @@ namespace Njulf.Rendering.Pipeline
 
             // VulkanRenderer performs graph cleanup while its dependencies are still alive;
             // the DI container later disposes this graph as well. Keep that second path a no-op.
-            _cleanedUp = true;
-            foreach (var pass in _passes)
-                pass.Cleanup();
-
-            foreach (List<RenderTarget> targets in _ownedRenderTargets.Values)
+            if (_cleanupPlan == null)
             {
-                foreach (RenderTarget target in targets)
-                    target.Dispose();
+                var steps = new List<StagedDisposalStep>();
+                var passStages = new string[_passes.Count];
+                for (int index = 0; index < _passes.Count; index++)
+                {
+                    RenderPassBase pass = _passes[index];
+                    passStages[index] = $"graph-pass-{index}:{pass.Name}";
+                    steps.Add(new StagedDisposalStep(passStages[index], pass.Cleanup));
+                }
+                steps.Add(new StagedDisposalStep("graph-passes", static () => { }, passStages));
+                int targetIndex = 0;
+                foreach (List<RenderTarget> targets in _ownedRenderTargets.Values)
+                    foreach (RenderTarget target in targets)
+                        steps.Add(new StagedDisposalStep($"graph-target-{targetIndex++}", target.Dispose, "graph-passes"));
+                _cleanupPlan = new StagedDisposalPlan(steps);
             }
+
+            if (_cleanupPlan.TryDrain() is { } failure) throw failure;
 
             _importedRenderTargets.Clear();
             _importedImageTargets.Clear();
             _publishedOwnedRenderTargets.Clear();
+            _cleanedUp = true;
         }
         
         public void Dispose()
@@ -1791,8 +1803,8 @@ namespace Njulf.Rendering.Pipeline
         private void Dispose(bool disposing)
         {
             if (_disposed) return;
-            _disposed = true;
             Cleanup();
+            _disposed = true;
             System.Diagnostics.Debug.WriteLine("Render graph disposed.");
         }
     }

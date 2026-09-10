@@ -342,6 +342,28 @@ public sealed class CompileNjulfShaderArtifactsTests
     }
 
     [Test]
+    public void ShaderDiagnosticsRetainIncludeLocationsAndUnparsedOutput()
+    {
+        var engine = new RecordingBuildEngine();
+        var task = new CompileNjulfShaderArtifacts { BuildEngine = engine, ShaderRoot = _shaderRoot };
+        string source = Path.Combine(_shaderRoot, "sample.comp");
+        string include = Path.Combine(_shaderRoot, "shared values.glsl");
+        task.LogArtifactFailure("sample_variant.comp", source,
+            $"ERROR: {include}:7:3: unknown identifier\nlinker detail without a source location");
+        Assert.That(engine.Errors, Has.Count.EqualTo(1));
+        Assert.That(engine.Errors[0].File, Is.EqualTo(include));
+        Assert.That(engine.Errors[0].LineNumber, Is.EqualTo(7));
+        Assert.That(engine.Errors[0].ColumnNumber, Is.EqualTo(3));
+        Assert.That(engine.Errors[0].Message, Does.Contain("sample_variant.comp"));
+        Assert.That(engine.ContainsMessage("linker detail without a source location"), Is.True);
+
+        task.LogArtifactFailure("sample.comp", source, "compiler timed out");
+        Assert.That(engine.Errors[1].File, Is.EqualTo(source));
+        Assert.That(engine.Errors[1].LineNumber, Is.Zero);
+        Assert.That(engine.Errors[1].Message, Does.Contain("compiler timed out"));
+    }
+
+    [Test]
     public void CompilerFailureDoesNotReplacePublishedOutputOrLeaveTemporaryFiles()
     {
         string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 5);
@@ -357,6 +379,8 @@ public sealed class CompileNjulfShaderArtifactsTests
 
         Assert.That(failed.Execute(), Is.False);
         Assert.That(engine.Errors, Is.Not.Empty);
+        Assert.That(engine.Errors.Any(error => error.File == sourcePath && error.LineNumber == 2), Is.True,
+            engine.FormatErrors());
         Assert.That(File.ReadAllBytes(outputPath), Is.EqualTo(published));
         Assert.That(
             Directory.GetFiles(_outputDirectory, ".*", SearchOption.TopDirectoryOnly)

@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
+using Njulf.Core;
 using System.IO;
 using Njulf.Assets;
 using Njulf.Core.Interfaces;
@@ -41,7 +42,7 @@ namespace Njulf.Rendering
     /// - VulkanRenderer RECORDS COMMANDS ONLY: does not own Vulkan objects, only records commands into managers' resources
     /// - Passes ONLY RECORD COMMANDS: VulkanRenderer calls methods on passes which record into command buffers
     /// </summary>
-    public unsafe class VulkanRenderer : IRenderer, IRendererFrameState,
+    public unsafe partial class VulkanRenderer : IRenderer, IRendererFrameState, IRendererGameTime,
         IRendererFramePacingDiagnostics,
         IRendererFrameBoundaryTimingSource,
         IProgressiveScenePipelinePreparer,
@@ -137,6 +138,8 @@ namespace Njulf.Rendering
         private readonly LightManager _lightManager;
         private readonly BindlessHeap _bindlessHeap;
         private readonly RenderGraph _renderGraph;
+        private readonly ProductionPipelineOwner _productionPipelines = new();
+        private readonly Action _publishPipelineSpecializations;
         private readonly SceneDataBuilder _sceneDataBuilder;
         private readonly StagingRing _stagingRing;
         private readonly FenceBasedDeleter _deleter;
@@ -201,11 +204,6 @@ namespace Njulf.Rendering
         private ReflectionProbeManager? _reflectionProbeManager;
         private AutomaticPlanarReflectionManager
             _automaticPlanarReflectionManager = null!;
-        private ForwardPlusPass? _forwardPlusPass;
-        private ReflectionProbeCapturePass? _reflectionProbeCapturePass;
-        private ReflectionProbePrefilterPass? _reflectionProbePrefilterPass;
-        private ReflectionProbePublishPass? _reflectionProbePublishPass;
-        private readonly ReflectionProbeCompletionValueProvider _reflectionProbeCompletionValues = new();
         private SimpleDdgiVolumeManager? _simpleDdgiVolumeManager;
 
         private SimpleDdgiLightTreeGpuResources? _simpleDdgiLightTreeResources;
@@ -254,11 +252,10 @@ namespace Njulf.Rendering
         private AutoExposureManager? _autoExposureManager;
         private GiPipelineCacheService? _giPipelineCacheService;
         private HybridReflectionVulkanRuntime? _hybridReflectionRuntime;
-        private int _hybridReflectionReceiverPipelinesPrepared;
-        private int _hybridReflectionReceiverPerformancePipelinesPrepared;
         private SmaaResources? _smaaResources;
         private SkinningManager _skinningManager = null!;
         private GpuParticleRuntimeManager _gpuParticleRuntimeManager = null!;
+        internal GpuParticleRuntimeBuffers GetGpuParticleBuffers(int frameIndex) => _gpuParticleRuntimeManager.GetBuffers(frameIndex);
         private readonly LocalShadowSelector _localShadowSelector = new();
         private readonly GPUSpotShadow[] _spotShadowScratch = new GPUSpotShadow[LightManager.MaxLights];
         private readonly GPUPointShadow[] _pointShadowScratch = new GPUPointShadow[LightManager.MaxLights];
@@ -279,49 +276,8 @@ namespace Njulf.Rendering
         private bool _hasSpotShadowRecordSignature;
 
         private bool _hasPointShadowRecordSignature;
-
-        // Pipelines
-        private MeshPipeline _meshPipeline = null!;
         private SceneLightingCoordinator? _sceneLighting;
-        private ComputePipeline _computePipeline = null!;
-        private CompositePipeline _compositePipeline = null!;
-        private CompositePipeline _ldrCompositePipeline = null!;
-        private WeightedOitCompositePipeline _weightedOitCompositePipeline = null!;
-        private SkyboxPipeline _skyboxPipeline = null!;
-        private ParticlePipeline _particlePipeline = null!;
-        private FogPass _fogPass = null!;
-        private SimpleDdgiTracePass? _simpleDdgiTracePass;
-        private SimpleDdgiSchedulePass? _simpleDdgiSchedulePass;
-        private SimpleDdgiPageDemandPass? _simpleDdgiPageDemandPass;
-        private SimpleDdgiPageResidencyPass? _simpleDdgiPageResidencyPass;
-        private SimpleDdgiPageFeedbackPass? _simpleDdgiPageFeedbackPass;
-        private SimpleDdgiRelocateClassifyPass? _simpleDdgiRelocateClassifyPass;
-
-        private SimpleDdgiDirectionalRadiancePass?
-            _simpleDdgiDirectionalRadiancePass;
-
-        private SimpleDdgiAcceleratedSolvePass? _simpleDdgiAcceleratedSolvePass;
-        private SimpleDdgiTransportPass? _simpleDdgiTransportPass;
-        private SimpleDdgiBlendPass? _simpleDdgiBlendPass;
-        private SimpleDdgiPublishPass? _simpleDdgiPublishPass;
-        private SimpleDdgiTransportAuditPass? _simpleDdgiTransportAuditPass;
-        private SimpleDdgiSchedulerCommitPass? _simpleDdgiSchedulerCommitPass;
-        private SkinningPass _skinningPass = null!;
-
-        private DdgiFoliageProxyGenerationPass?
-            _ddgiFoliageProxyGenerationPass;
-
-        private GpuParticleResetPass _gpuParticleResetPass = null!;
-        private GpuParticleSimulatePass _gpuParticleSimulatePass = null!;
-        private GpuParticleSortPass _gpuParticleSortPass = null!;
-        private GpuParticleResetGraphPass _gpuParticleResetGraphPass = null!;
-        private GpuParticleSimulateGraphPass _gpuParticleSimulateGraphPass = null!;
-        private GpuParticleSortGraphPass _gpuParticleSortGraphPass = null!;
         private FoliageManager _foliageManager = null!;
-        private FoliagePipeline _foliagePipeline = null!;
-        private FoliageCullPass _foliageCullPass = null!;
-        private SceneOpaqueCompactionPass _sceneOpaqueCompactionPass = null!;
-        private ForwardVisibilityCompactionPass _forwardVisibilityCompactionPass = null!;
         private readonly HashSet<ParticleBlendMode> _particleBlendModeScratch = new();
         private bool _initialScenePipelinesPrepared;
         private bool _pipelineCachePersistenceScheduled;
@@ -351,9 +307,6 @@ namespace Njulf.Rendering
         private bool _startupScenePresented;
         private bool _fullQualityPresented;
         private bool _productionFrameWasFullQuality;
-        private DirectionalShadowPass? _directionalShadowPass;
-        private DirectionalRayShadowPass? _directionalRayShadowPass;
-        private AreaRayShadowPass? _areaRayShadowPass;
 
         // State
         private int _currentFrame = 0;
@@ -436,6 +389,16 @@ namespace Njulf.Rendering
         private bool _previousHiZCameraMotionSuppressedThisFrame;
         private long _lastParticleTimestamp;
         private float _particleTimeSeconds;
+        private readonly RendererAnimationClock _animationClock = new();
+        private RendererAnimationTime _animationTime;
+
+        /// <inheritdoc />
+        public void SetGameTime(GameTime time, double timeScale, bool isPaused)
+        {
+            _lifetime.ThrowIfDisposalStarted();
+            _lifetime.EnsureFrameInProgress(nameof(SetGameTime));
+            _animationClock.SetGameTime(time, timeScale, isPaused);
+        }
         private long _lastAcquireImageMicroseconds;
         private long _lastSwapchainImageOwnerWaitMicroseconds;
         private long _lastFrameResourceRecycleWaitMicroseconds;
@@ -614,7 +577,7 @@ namespace Njulf.Rendering
             }
         }
 
-        private bool MeshletDiagnosticCountersActive => _meshPipeline?.GpuMeshletCountersEnabled == true;
+        private bool MeshletDiagnosticCountersActive => _productionPipelines.MeshPipeline?.GpuMeshletCountersEnabled == true;
 
         public SelectedObjectInspection? SelectedObject
         {
@@ -1029,7 +992,7 @@ namespace Njulf.Rendering
         public void QueueOverlayDrawData(OverlayDrawData? drawData)
         {
             _lifetime.ThrowIfDisposalStarted();
-            _overlayDrawData.Set(drawData);
+            _editorOverlayDrawData = drawData;
         }
 
         public int CreateOverlayTexture(ReadOnlySpan<byte> pixels, uint width, uint height, string? name = null)
@@ -1289,6 +1252,7 @@ namespace Njulf.Rendering
             VulkanMeshletPhysicalResidencyResources?
                 meshletPhysicalResidencyResources = null)
         {
+            _publishPipelineSpecializations = () => Volatile.Write(ref _postFirstPresentPipelineSpecializationsReady, 1);
             _window = window ?? throw new ArgumentNullException(nameof(window));
             _startupLog = startupLog;
             _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -1371,6 +1335,8 @@ namespace Njulf.Rendering
             NativeGraphicsDevice = new Njulf.Graphics.VulkanGraphicsDevice(
                 _context, _bufferManager, _meshManager, _materialManager, _lifetime);
             NativeGraphicsDevice.AttachSettings(Settings);
+            NativeGraphicsDevice.AttachSprites(this);
+            SpriteDisplaySize = new(_swapchain.Extent.Width, _swapchain.Extent.Height);
             NativeGraphicsDevice.AttachCustomPasses(_renderGraph, _swapchain, _bindlessHeap);
             NativeGraphicsDevice.AttachCapabilities(() => Njulf.Graphics.VulkanGraphicsCapabilities.Capture(
                 _context, Settings, _lastDiagnostics, _lastSceneData, NativeGraphicsDevice.QueryRenderTargetSupport()));
@@ -1685,15 +1651,54 @@ namespace Njulf.Rendering
                 RegisterSceneBuffers();
             }
         }
-
         private void InitializeProductionPipelinesAndGraph()
         {
-            _lifetime.RunStartupStep(
-                "VulkanRenderer.CreatePipelines",
-                CreatePipelines);
-            _lifetime.RunStartupStep(
-                "VulkanRenderer.InitializeRenderGraph",
-                InitializeRenderGraph);
+            _productionPipelines.Initialize(new ProductionPipelineDependencies
+            {
+                AccelerationStructureManager = _accelerationStructureManager,
+                AdvancedGiAdmission = _advancedGiAdmission,
+                AutoExposureManager = _autoExposureManager,
+                AutomaticPlanarReflectionManager = _automaticPlanarReflectionManager,
+                BindlessHeap = _bindlessHeap,
+                BufferManager = _bufferManager,
+                Context = _context,
+                Deleter = _deleter,
+                DirectionalShadowHistoryResources = _directionalShadowHistoryResources,
+                DirectionalShadowResources = _directionalShadowResources,
+                EnvironmentManager = _environmentManager,
+                FarFieldClipmapManager = _farFieldClipmapManager,
+                FoliageManager = _foliageManager,
+                GiCaustic = _giCaustic,
+                GiPipelineCacheService = _giPipelineCacheService,
+                GpuParticleRuntimeManager = _gpuParticleRuntimeManager,
+                GtaoRuntimeSupported = _gtaoRuntimeSupported,
+                HizDepthPyramid = _hizDepthPyramid,
+                HybridReflectionRuntime = _hybridReflectionRuntime,
+                Lifetime = _lifetime,
+                NearFieldResidual = _nearFieldResidual,
+                OverlayDrawData = _overlayDrawData,
+                PointShadowCubemapArray = _pointShadowCubemapArray,
+                RaySceneDescriptorBank = _raySceneDescriptorBank,
+                ReflectionProbeManager = _reflectionProbeManager,
+                RenderGraph = _renderGraph,
+                RenderTargets = _renderTargets,
+                SceneDataBuilder = _sceneDataBuilder,
+                SimpleDdgiGuidingFrameCoordinator = _simpleDdgiGuidingFrameCoordinator,
+                SimpleDdgiGuidingRuntime = _simpleDdgiGuidingRuntime,
+                SimpleDdgiLightTreeResources = _simpleDdgiLightTreeResources,
+                SimpleDdgiReceiverFeedback = _simpleDdgiReceiverFeedback,
+                SimpleDdgiVolumeManager = _simpleDdgiVolumeManager,
+                SkinningManager = _skinningManager,
+                SmaaResources = _smaaResources,
+                SpotShadowAtlas = _spotShadowAtlas,
+                StagingRing = _stagingRing,
+                Swapchain = _swapchain,
+                Sync = _sync,
+                TemporalSurfaceValidityResources = _temporalSurfaceValidityResources,
+                ResolveSurfaceHistoryConsumers = ResolveSurfaceHistoryConsumers,
+                HasIncompatibleVariableRateShadingForwardOutput = HasIncompatibleVariableRateShadingForwardOutput,
+                Settings = Settings
+            });
             Volatile.Write(ref _productionGraphReady, 1);
         }
 
@@ -1830,906 +1835,6 @@ namespace Njulf.Rendering
                     CreateNearFieldResidualVulkanRuntime);
             ApplyNearFieldResidualPublication(
                 _nearFieldResidual.InitializeRuntime(backend));
-        }
-
-        private void CreatePipelines()
-        {
-            System.Diagnostics.Debug.WriteLine("Creating pipelines...");
-            bool receiverFeedbackGraphicsPipelinesRequested =
-                (_simpleDdgiReceiverFeedback ??
-                 throw new InvalidOperationException(
-                     "The receiver-feedback coordinator must exist before pipeline creation."))
-                .GraphicsPipelinesRequested;
-
-            // Create mesh pipeline for depth prepass and forward pass
-            _lifetime.RunStartupStep("Pipeline.Create.Mesh", () =>
-            {
-                _meshPipeline = new MeshPipeline(
-                    _context,
-                    _bindlessHeap,
-                    RenderTargetManager.SceneColorFormat,
-                    _swapchain.DepthFormat,
-                    Settings,
-                    _nearFieldResidual.PipelineConfiguration,
-                    _giCaustic.ReceiverPipelineConfiguration,
-                    ForwardHybridReflectionReceiverPipelineConfiguration
-                        .Production,
-                    receiverFeedbackGraphicsPipelinesRequested,
-                    _raySceneDescriptorBank,
-                    _giPipelineCacheService,
-                    _lifetime.RunStartupStep);
-            });
-            _lifetime.RunStartupStep("Pipeline.Create.Foliage", () =>
-            {
-                _foliagePipeline = new FoliagePipeline(
-                    _context,
-                    _bindlessHeap,
-                    RenderTargetManager.SceneColorFormat,
-                    RenderTargetManager.MotionVectorFormat,
-                    _swapchain.DepthFormat,
-                    Settings,
-                    receiverFeedbackGraphicsPipelinesRequested,
-                    _nearFieldResidual.PipelineConfiguration,
-                    _giCaustic.ReceiverPipelineConfiguration,
-                    ForwardHybridReflectionReceiverPipelineConfiguration
-                        .Production,
-                    _giPipelineCacheService,
-                    createPipelines: false);
-            });
-
-            // Create compute pipeline for light culling
-            _lifetime.RunStartupStep(
-                "Pipeline.Create.LightCulling",
-                () => _computePipeline = new ComputePipeline(
-                    _context,
-                    _bindlessHeap,
-                    _giPipelineCacheService));
-
-            _lifetime.RunStartupStep("Pipeline.Create.Composite", () =>
-            {
-                _compositePipeline = new CompositePipeline(
-                    _context,
-                    _bindlessHeap,
-                    _swapchain.SurfaceFormat,
-                    _giPipelineCacheService);
-                _ldrCompositePipeline = new CompositePipeline(
-                    _context,
-                    _bindlessHeap,
-                    RenderTargetManager.LdrSceneColorFormat,
-                    _giPipelineCacheService);
-                _weightedOitCompositePipeline = new WeightedOitCompositePipeline(
-                    _context,
-                    _bindlessHeap,
-                    RenderTargetManager.SceneColorFormat,
-                    _giPipelineCacheService,
-                    createPipeline:
-                        RendererBuildConfiguration.PipelineStartupMode ==
-                            RendererPipelineStartupMode.Exhaustive ||
-                        Settings.Transparency.Enabled &&
-                        Settings.Transparency.Mode ==
-                            TransparencyMode.WeightedBlendedOit);
-            });
-            _lifetime.RunStartupStep("Pipeline.Create.Skybox", () =>
-            {
-                _skyboxPipeline = new SkyboxPipeline(
-                    _context,
-                    _bindlessHeap,
-                    RenderTargetManager.SceneColorFormat,
-                    _swapchain.DepthFormat,
-                    _giPipelineCacheService,
-                    createPipeline:
-                        RendererBuildConfiguration.PipelineStartupMode ==
-                            RendererPipelineStartupMode.Exhaustive ||
-                        Settings.Environment.Enabled);
-            });
-            _lifetime.RunStartupStep("Pipeline.Create.Particle", () =>
-            {
-                _particlePipeline = new ParticlePipeline(
-                    _context,
-                    _bindlessHeap,
-                    RenderTargetManager.SceneColorFormat,
-                    _swapchain.DepthFormat,
-                    receiverFeedbackGraphicsPipelinesRequested,
-                    _giPipelineCacheService,
-                    createPipelines: false);
-            });
-            _skinningPass = new SkinningPass(
-                _context,
-                _bindlessHeap,
-                _bufferManager,
-                _skinningManager,
-                _giPipelineCacheService);
-            _ddgiFoliageProxyGenerationPass =
-                new DdgiFoliageProxyGenerationPass(
-                    _context,
-                    _bindlessHeap,
-                    _bufferManager,
-                    _giPipelineCacheService);
-            _gpuParticleResetPass =
-                new GpuParticleResetPass(
-                    _context,
-                    _bindlessHeap,
-                    _bufferManager,
-                    _gpuParticleRuntimeManager,
-                    _giPipelineCacheService);
-            _gpuParticleSimulatePass =
-                new GpuParticleSimulatePass(
-                    _context,
-                    _bindlessHeap,
-                    _bufferManager,
-                    _gpuParticleRuntimeManager,
-                    _giPipelineCacheService);
-            _gpuParticleSortPass =
-                new GpuParticleSortPass(
-                    _context,
-                    _bindlessHeap,
-                    _bufferManager,
-                    _gpuParticleRuntimeManager,
-                    _giPipelineCacheService);
-            _gpuParticleResetGraphPass =
-                new GpuParticleResetGraphPass(_context, _swapchain, _bindlessHeap, _gpuParticleResetPass);
-            _gpuParticleSimulateGraphPass =
-                new GpuParticleSimulateGraphPass(_context, _swapchain, _bindlessHeap, _gpuParticleSimulatePass);
-            _gpuParticleSortGraphPass = new GpuParticleSortGraphPass(_context, _swapchain, _bindlessHeap,
-                _gpuParticleSortPass, _gpuParticleRuntimeManager);
-            _foliageCullPass =
-                new FoliageCullPass(_context, _bindlessHeap, _bufferManager, _foliageManager, _foliagePipeline);
-            _sceneOpaqueCompactionPass =
-                new SceneOpaqueCompactionPass(
-                    _context,
-                    _swapchain,
-                    _bindlessHeap,
-                    _meshPipeline,
-                    _bufferManager,
-                    _deleter,
-                    _sync,
-                    Settings.IsPerformanceOptimizationEnabled(
-                        PerformanceOptimizationFeature
-                            .AsymmetricSidedDrawStreams));
-            _forwardVisibilityCompactionPass = new ForwardVisibilityCompactionPass(_context, _swapchain, _bindlessHeap,
-                _meshPipeline, _bufferManager);
-
-            System.Diagnostics.Debug.WriteLine("Pipelines created.");
-        }
-
-        private void InitializeRenderGraph()
-        {
-            System.Diagnostics.Debug.WriteLine("Initializing render graph...");
-
-            // The selected state is computed only from effective modes and is
-            // frozen for this renderer lifetime.  A mode transition therefore
-            // cannot leave a graph declaration, resource descriptor, or pass
-            // instance from a previous generation alive.
-            ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(
-                _renderGraph,
-                _advancedGiAdmission.GraphModes,
-                Settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled);
-
-            var passInstances = new Dictionary<string, RenderPassBase>(StringComparer.Ordinal);
-
-            void AddPassInstance(RenderPassBase pass)
-            {
-                passInstances.Add(pass.Name, pass);
-            }
-
-            AddPassInstance(_sceneOpaqueCompactionPass);
-
-            var directionalShadowPass = new DirectionalShadowPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _meshPipeline,
-                _directionalShadowResources!,
-                Settings.Shadows,
-                _foliagePipeline,
-                _bufferManager,
-                _foliageManager);
-            _directionalShadowPass = directionalShadowPass;
-            _sceneOpaqueCompactionPass.SetDirectionalStaticShadowRefreshQuery(directionalShadowPass
-                .GetStaticCacheRefreshMask);
-            AddPassInstance(directionalShadowPass);
-
-            var spotShadowPass = new SpotShadowPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _meshPipeline,
-                _spotShadowAtlas!,
-                Settings.Shadows,
-                _foliagePipeline,
-                _foliageManager);
-            AddPassInstance(spotShadowPass);
-
-            var pointShadowPass = new PointShadowPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _meshPipeline,
-                _pointShadowCubemapArray!,
-                Settings.Shadows,
-                _foliagePipeline,
-                _foliageManager);
-            AddPassInstance(pointShadowPass);
-
-            // Create depth pre-pass
-            var depthPrePass = new DepthPrePass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, _foliagePipeline, _bufferManager,
-                _foliageManager);
-            AddPassInstance(depthPrePass);
-
-            var motionVectorPass = new MotionVectorPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _meshPipeline,
-                _renderTargets!,
-                Settings,
-                _foliagePipeline,
-                _bufferManager,
-                _foliageManager,
-                ResolveSurfaceHistoryConsumers,
-                _temporalSurfaceValidityResources);
-            motionVectorPass.DirectionalHistoryResources = _directionalShadowHistoryResources;
-            depthPrePass.MotionVectorProducer = motionVectorPass;
-            AddPassInstance(motionVectorPass);
-
-            var hizBuildPass = new HiZBuildPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _hizDepthPyramid!,
-                _renderTargets!,
-                _giPipelineCacheService);
-            AddPassInstance(hizBuildPass);
-
-            var directionalRayShadowPass = new DirectionalRayShadowPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings.Shadows,
-                _bufferManager,
-                _accelerationStructureManager!,
-                _raySceneDescriptorBank!,
-                _directionalShadowHistoryResources!,
-                _giPipelineCacheService);
-            _directionalRayShadowPass = directionalRayShadowPass;
-            AddPassInstance(directionalRayShadowPass);
-
-            var areaRayShadowPass = new AreaRayShadowPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings.Shadows,
-                _bufferManager,
-                _accelerationStructureManager!,
-                _raySceneDescriptorBank!,
-                _giPipelineCacheService);
-            _areaRayShadowPass = areaRayShadowPass;
-            AddPassInstance(areaRayShadowPass);
-
-            AddPassInstance(new DirectionalShadowTemporalPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                _directionalShadowHistoryResources!,
-                _temporalSurfaceValidityResources!,
-                Settings.Shadows,
-                _bufferManager,
-                _giPipelineCacheService));
-            AddPassInstance(new DirectionalShadowSpatialPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _directionalShadowHistoryResources!,
-                directionalRayShadowPass,
-                Settings.Shadows,
-                _bufferManager,
-                _giPipelineCacheService));
-
-            AddPassInstance(_forwardVisibilityCompactionPass);
-
-            var ambientOcclusionPass = new AmbientOcclusionPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings,
-                _gtaoRuntimeSupported,
-                _giPipelineCacheService);
-            AddPassInstance(ambientOcclusionPass);
-
-            var ambientOcclusionBlurPass = new AmbientOcclusionBlurPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings,
-                _giPipelineCacheService);
-            AddPassInstance(ambientOcclusionBlurPass);
-
-            var gtaoHistoryState = new GtaoHistoryState();
-            AddPassInstance(new GtaoPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                _hizDepthPyramid!,
-                Settings,
-                _giPipelineCacheService));
-            AddPassInstance(new GtaoTemporalPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings,
-                gtaoHistoryState,
-                _giPipelineCacheService));
-            AddPassInstance(new GtaoSpatialPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings,
-                _giPipelineCacheService));
-
-            // Create tiled light culling pass
-            var lightCullingPass = new TiledLightCullingPass(
-                _context, _swapchain, _bindlessHeap, _computePipeline, _bufferManager, _renderTargets!);
-            AddPassInstance(lightCullingPass);
-
-            AddPassInstance(new VariableRateShadingPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings,
-                HasIncompatibleVariableRateShadingForwardOutput,
-                _giPipelineCacheService));
-
-            AddPassInstance(new EnvironmentPrefilterPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _environmentManager!,
-                _giPipelineCacheService));
-
-            AddPassInstance(new SimpleDdgiLightTreePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _simpleDdgiLightTreeResources!,
-                _giPipelineCacheService));
-
-            // Create forward+ rendering pass
-            ForwardNearFieldDirectSourceAttachmentBinding?
-                nearFieldDirectSourceBinding =
-                    _advancedGiAdmission.GraphModes.UsesNearFieldHiZResidual
-                        ? new ForwardNearFieldDirectSourceAttachmentBinding(
-                            _renderTargets!.NearFieldDirectSource!,
-                            _renderTargets.NearFieldReceiverPayload!,
-                            _renderTargets.NearFieldTraceRasterDepth,
-                            _nearFieldResidual.PipelineConfiguration)
-                        : null;
-            ForwardGiCausticReceiverAttachmentBinding?
-                giCausticReceiverBinding =
-                    _advancedGiAdmission.GraphModes.UsesCausticWorldCache
-                        ? new ForwardGiCausticReceiverAttachmentBinding(
-                            _renderTargets!.GiCausticReceiverPayload!,
-                            _giCaustic.ReceiverPipelineConfiguration)
-                        : null;
-            var hybridReflectionReceiverBinding =
-                new ForwardHybridReflectionReceiverAttachmentBinding(
-                    _renderTargets!.HybridReflectionReceiverPayload!,
-                    _renderTargets.HybridReflectionRawMetadata!,
-                    ForwardHybridReflectionReceiverPipelineConfiguration
-                        .Production);
-            var forwardPass = new ForwardPlusPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _meshPipeline,
-                _renderTargets!,
-                Settings,
-                _foliagePipeline,
-                _bufferManager,
-                _foliageManager,
-                _skyboxPipeline,
-                _giPipelineCacheService,
-                nearFieldDirectSourceBinding,
-                nearFieldDirectSourceRuntimeAvailable: () =>
-                    _nearFieldResidual.IsGenerationExecutable,
-                giCausticReceiverBinding: giCausticReceiverBinding,
-                giCausticRuntimeAvailable: () =>
-                    _giCaustic.FrameAvailable,
-                hybridReflectionReceiverBinding:
-                hybridReflectionReceiverBinding,
-                simpleDdgiReceiverFeedbackRuntime:
-                _simpleDdgiReceiverFeedback,
-                nearFieldDirectSourceExecutionExtent: () =>
-                    _nearFieldResidual.CaptureGraphResources().Runtime?
-                        .ExecutionExtent ?? default);
-            _forwardPlusPass = forwardPass;
-            forwardPass.ConfigureSecondaryViews(_sceneDataBuilder, _foliageCullPass, _automaticPlanarReflectionManager);
-            AddPassInstance(forwardPass);
-
-            if (_advancedGiAdmission.GraphModes.UsesDirectionalGuiding)
-            {
-                SimpleDdgiGuidingFrameCoordinator guidingCoordinator =
-                    _simpleDdgiGuidingFrameCoordinator ??
-                    throw new InvalidOperationException(
-                        "The admitted C3 graph has no frame coordinator.");
-                AddPassInstance(new SimpleDdgiGuidingSampleGraphPass(
-                    _context, _swapchain, _bindlessHeap, guidingCoordinator));
-                AddPassInstance(new SimpleDdgiGuidingTrainGraphPass(
-                    _context, _swapchain, _bindlessHeap, guidingCoordinator));
-                AddPassInstance(new SimpleDdgiGuidingBuildGraphPass(
-                    _context, _swapchain, _bindlessHeap, guidingCoordinator));
-                AddPassInstance(new SimpleDdgiGuidingValidateGraphPass(
-                    _context, _swapchain, _bindlessHeap, guidingCoordinator));
-            }
-
-            if (_advancedGiAdmission.GraphModes.UsesCausticWorldCache)
-            {
-                GiCausticVulkanRuntime causticRuntime =
-                    _giCaustic.CaptureGraphResources().Runtime ??
-                    throw new InvalidOperationException(
-                        "The admitted C4 graph has no concrete Vulkan runtime.");
-                AddPassInstance(new GiCausticTaskGraphPass(
-                    _context, _swapchain, _bindlessHeap, causticRuntime));
-                AddPassInstance(new GiCausticTraceGraphPass(
-                    _context, _swapchain, _bindlessHeap, causticRuntime));
-                AddPassInstance(new GiCausticCacheBuildGraphPass(
-                    _context, _swapchain, _bindlessHeap, causticRuntime));
-                AddPassInstance(new GiCausticResolveGraphPass(
-                    _context, _swapchain, _bindlessHeap, causticRuntime));
-                AddPassInstance(new GiCausticCompositeGraphPass(
-                    _context, _swapchain, _bindlessHeap, causticRuntime));
-            }
-
-            if (_advancedGiAdmission.GraphModes.UsesNearFieldHiZResidual)
-            {
-                NearFieldResidualGraphResourceSnapshot nearFieldResources =
-                    _nearFieldResidual.CaptureGraphResources();
-                if (nearFieldResources.Runtime is null)
-                    throw new InvalidOperationException(
-                        "The admitted C5 graph has no concrete Vulkan runtime.");
-                Func<SimpleDdgiNearFieldResidualVulkanRuntime?>
-                    nearFieldRuntimeProvider = () =>
-                        _nearFieldResidual.CaptureGraphResources().Runtime;
-                AddPassInstance(new SimpleDdgiNearFieldResidualResetPass(
-                    _context, _swapchain, _bindlessHeap,
-                    nearFieldRuntimeProvider));
-                AddPassInstance(new SimpleDdgiNearFieldResidualPreparePass(
-                    _context, _swapchain, _bindlessHeap,
-                    nearFieldRuntimeProvider));
-                AddPassInstance(new SimpleDdgiNearFieldResidualClassifyPass(
-                    _context, _swapchain, _bindlessHeap,
-                    nearFieldRuntimeProvider));
-                AddPassInstance(new SimpleDdgiNearFieldResidualTracePass(
-                    _context, _swapchain, _bindlessHeap,
-                    nearFieldRuntimeProvider));
-                AddPassInstance(new SimpleDdgiNearFieldResidualTemporalPass(
-                    _context, _swapchain, _bindlessHeap,
-                    nearFieldRuntimeProvider));
-                AddPassInstance(new SimpleDdgiNearFieldResidualFinalizePass(
-                    _context, _swapchain, _bindlessHeap,
-                    nearFieldRuntimeProvider));
-                for (int iteration = 0;
-                     iteration < _nearFieldResidual.Plan.Layout
-                         .FilterIterationCount;
-                     iteration++)
-                {
-                    AddPassInstance(new SimpleDdgiNearFieldResidualFilterPass(
-                        _context,
-                        _swapchain,
-                        _bindlessHeap,
-                        nearFieldRuntimeProvider,
-                        iteration));
-                }
-
-                AddPassInstance(
-                    new SimpleDdgiNearFieldResidualFrequencySeparationPass(
-                        _context, _swapchain, _bindlessHeap,
-                        nearFieldRuntimeProvider));
-                AddPassInstance(new SimpleDdgiNearFieldResidualCompositePass(
-                    _context, _swapchain, _bindlessHeap,
-                    nearFieldRuntimeProvider));
-            }
-
-            var simpleDdgiPageDemandPass = new SimpleDdgiPageDemandPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _renderTargets!,
-                _simpleDdgiVolumeManager!,
-                _giPipelineCacheService);
-            _simpleDdgiPageDemandPass = simpleDdgiPageDemandPass;
-            AddPassInstance(simpleDdgiPageDemandPass);
-
-            var simpleDdgiPageResidencyPass = new SimpleDdgiPageResidencyPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _giPipelineCacheService);
-            _simpleDdgiPageResidencyPass = simpleDdgiPageResidencyPass;
-            AddPassInstance(simpleDdgiPageResidencyPass);
-
-            // Reflection work is graphics-only and is recorded after the main graph has consumed
-            // the old published layer. It has its own conditional pass trio because the graph's
-            // fixed production order remains the latency-critical main-view contract.
-            _reflectionProbeCapturePass = new ReflectionProbeCapturePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _reflectionProbeManager!,
-                Settings.Reflections,
-                new ForwardPlusReflectionProbeCaptureSceneRenderer(forwardPass));
-            _reflectionProbePrefilterPass = new ReflectionProbePrefilterPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _reflectionProbeManager!,
-                Settings.Reflections,
-                _giPipelineCacheService);
-            _reflectionProbePublishPass = new ReflectionProbePublishPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _reflectionProbeManager!,
-                Settings.Reflections,
-                _reflectionProbeCompletionValues);
-            _lifetime.RunStartupStep(
-                "RenderPass.Initialize.ReflectionProbeCapturePass",
-                _reflectionProbeCapturePass.Initialize);
-            _lifetime.RunStartupStep(
-                "RenderPass.Initialize.ReflectionProbePrefilterPass",
-                _reflectionProbePrefilterPass.Initialize);
-            _lifetime.RunStartupStep(
-                "RenderPass.Initialize.ReflectionProbePublishPass",
-                _reflectionProbePublishPass.Initialize);
-
-            var farFieldClipmapBakePass = new FarFieldClipmapBakePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _farFieldClipmapManager!,
-                _giPipelineCacheService);
-            AddPassInstance(farFieldClipmapBakePass);
-
-            var simpleDdgiSchedulePass = new SimpleDdgiSchedulePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _giPipelineCacheService);
-            _simpleDdgiSchedulePass = simpleDdgiSchedulePass;
-            AddPassInstance(simpleDdgiSchedulePass);
-
-            var simpleDdgiTracePass = new SimpleDdgiTracePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _farFieldClipmapManager!,
-                _accelerationStructureManager!,
-                _simpleDdgiLightTreeResources!,
-                _advancedGiAdmission.GraphModes.UsesDirectionalGuiding,
-                _giPipelineCacheService);
-            _simpleDdgiTracePass = simpleDdgiTracePass;
-            AddPassInstance(simpleDdgiTracePass);
-
-            var simpleDdgiRelocateClassifyPass = new SimpleDdgiRelocateClassifyPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _farFieldClipmapManager!,
-                _advancedGiAdmission.GraphModes.UsesDirectionalGuiding,
-                _giPipelineCacheService);
-            _simpleDdgiRelocateClassifyPass = simpleDdgiRelocateClassifyPass;
-            AddPassInstance(simpleDdgiRelocateClassifyPass);
-
-            var simpleDdgiAcceleratedSolvePass = new SimpleDdgiAcceleratedSolvePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _advancedGiAdmission.GraphModes.UsesDirectionalGuiding,
-                _giPipelineCacheService);
-            _simpleDdgiAcceleratedSolvePass = simpleDdgiAcceleratedSolvePass;
-            AddPassInstance(simpleDdgiAcceleratedSolvePass);
-
-            var simpleDdgiTransportPass = new SimpleDdgiTransportPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _farFieldClipmapManager!,
-                _advancedGiAdmission.GraphModes.UsesDirectionalGuiding,
-                _giPipelineCacheService);
-            _simpleDdgiTransportPass = simpleDdgiTransportPass;
-            AddPassInstance(simpleDdgiTransportPass);
-
-            var simpleDdgiBlendPass = new SimpleDdgiBlendPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _farFieldClipmapManager!,
-                _advancedGiAdmission.GraphModes.UsesDirectionalGuiding,
-                _giPipelineCacheService);
-            _simpleDdgiBlendPass = simpleDdgiBlendPass;
-            AddPassInstance(simpleDdgiBlendPass);
-
-            var simpleDdgiDirectionalRadiancePass =
-                new SimpleDdgiDirectionalRadiancePass(
-                    _context,
-                    _swapchain,
-                    _bindlessHeap,
-                    Settings,
-                    _simpleDdgiVolumeManager!,
-                    _farFieldClipmapManager!,
-                    _advancedGiAdmission.GraphModes.UsesDirectionalGuiding,
-                    _giPipelineCacheService);
-            _simpleDdgiDirectionalRadiancePass =
-                simpleDdgiDirectionalRadiancePass;
-            AddPassInstance(simpleDdgiDirectionalRadiancePass);
-
-            var simpleDdgiPublishPass = new SimpleDdgiPublishPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _giPipelineCacheService);
-            _simpleDdgiPublishPass = simpleDdgiPublishPass;
-            AddPassInstance(simpleDdgiPublishPass);
-
-            var simpleDdgiTransportAuditPass = new SimpleDdgiTransportAuditPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _advancedGiAdmission.GraphModes.UsesDirectionalGuiding,
-                _giPipelineCacheService);
-            _simpleDdgiTransportAuditPass = simpleDdgiTransportAuditPass;
-            AddPassInstance(simpleDdgiTransportAuditPass);
-
-            var simpleDdgiSchedulerCommitPass = new SimpleDdgiSchedulerCommitPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _giPipelineCacheService);
-            _simpleDdgiSchedulerCommitPass = simpleDdgiSchedulerCommitPass;
-            AddPassInstance(simpleDdgiSchedulerCommitPass);
-
-            AddPassInstance(new SimpleDdgiUrgentRelightPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                simpleDdgiSchedulePass,
-                simpleDdgiTracePass,
-                simpleDdgiRelocateClassifyPass,
-                simpleDdgiDirectionalRadiancePass,
-                simpleDdgiAcceleratedSolvePass,
-                simpleDdgiTransportPass,
-                simpleDdgiBlendPass,
-                simpleDdgiPublishPass,
-                simpleDdgiSchedulerCommitPass));
-
-            var simpleDdgiPageFeedbackPass = new SimpleDdgiPageFeedbackPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                Settings,
-                _simpleDdgiVolumeManager!,
-                _giPipelineCacheService);
-            _simpleDdgiPageFeedbackPass = simpleDdgiPageFeedbackPass;
-            AddPassInstance(simpleDdgiPageFeedbackPass);
-
-            var skyboxPass = new SkyboxPass(
-                _context, _swapchain, _bindlessHeap, _skyboxPipeline, _renderTargets!, Settings);
-            AddPassInstance(skyboxPass);
-
-            AddPassInstance(new AutomaticPlanarReflectionPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _automaticPlanarReflectionManager,
-                forwardPass,
-                _giPipelineCacheService));
-
-            HybridReflectionVulkanRuntime hybridReflectionRuntime =
-                _hybridReflectionRuntime ?? throw new InvalidOperationException(
-                    "The hybrid reflection graph requires its shared runtime.");
-            AddPassInstance(new HybridReflectionClassifyPass(
-                _context, _swapchain, _bindlessHeap,
-                hybridReflectionRuntime));
-            AddPassInstance(new HybridReflectionDdgiBasePass(
-                _context, _swapchain, _bindlessHeap,
-                hybridReflectionRuntime));
-            AddPassInstance(new HybridReflectionSsrPass(
-                _context, _swapchain, _bindlessHeap,
-                hybridReflectionRuntime));
-            AddPassInstance(new HybridReflectionRayQueryPass(
-                _context, _swapchain, _bindlessHeap,
-                hybridReflectionRuntime));
-            AddPassInstance(new HybridReflectionResolvePass(
-                _context, _swapchain, _bindlessHeap,
-                hybridReflectionRuntime));
-            AddPassInstance(new HybridReflectionTemporalPass(
-                _context, _swapchain, _bindlessHeap,
-                hybridReflectionRuntime));
-            AddPassInstance(new HybridReflectionSpatialPass(
-                _context, _swapchain, _bindlessHeap,
-                hybridReflectionRuntime));
-            AddPassInstance(new HybridReflectionCompositePass(
-                _context, _swapchain, _bindlessHeap,
-                hybridReflectionRuntime));
-            AddPassInstance(new OpaqueSceneColorSnapshotPass(
-                _context, _swapchain, _bindlessHeap,
-                hybridReflectionRuntime));
-
-            var transparentForwardPass = new TransparentForwardPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _meshPipeline,
-                _renderTargets!,
-                forwardPass,
-                _raySceneDescriptorBank,
-                _simpleDdgiReceiverFeedback);
-            AddPassInstance(transparentForwardPass);
-
-            var weightedTransparentPass = new WeightedTransparentPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _meshPipeline,
-                _renderTargets!,
-                forwardPass,
-                _raySceneDescriptorBank,
-                _simpleDdgiReceiverFeedback);
-            AddPassInstance(weightedTransparentPass);
-
-            var weightedOitCompositePass = new WeightedOitCompositePass(
-                _context, _swapchain, _bindlessHeap, _weightedOitCompositePipeline, _renderTargets!);
-            AddPassInstance(weightedOitCompositePass);
-
-            var particlePass = new ParticlePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _particlePipeline,
-                _bufferManager,
-                _renderTargets!,
-                Settings.Particles,
-                _simpleDdgiReceiverFeedback);
-            AddPassInstance(_gpuParticleResetGraphPass);
-            AddPassInstance(_gpuParticleSimulateGraphPass);
-            AddPassInstance(_gpuParticleSortGraphPass);
-            AddPassInstance(particlePass);
-
-            var simpleDdgiProbeDebugPass = new SimpleDdgiProbeDebugPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _bufferManager,
-                _stagingRing,
-                _renderTargets!,
-                _giPipelineCacheService);
-            AddPassInstance(simpleDdgiProbeDebugPass);
-
-            var debugDrawPass = new DebugDrawPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _bufferManager,
-                _stagingRing,
-                _renderTargets!,
-                _giPipelineCacheService);
-            AddPassInstance(debugDrawPass);
-
-            var debugOverlayPass = new DebugOverlayPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                _giPipelineCacheService);
-            AddPassInstance(debugOverlayPass);
-
-            var fogPass = new FogPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _bufferManager,
-                _renderTargets!,
-                Settings,
-                _simpleDdgiVolumeManager,
-                _raySceneDescriptorBank!,
-                _simpleDdgiReceiverFeedback,
-                _giPipelineCacheService);
-            _fogPass = fogPass;
-            AddPassInstance(fogPass);
-
-            var autoExposurePass = new AutoExposurePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings,
-                _autoExposureManager!,
-                _giPipelineCacheService);
-            AddPassInstance(autoExposurePass);
-
-            var bloomPass = new BloomPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings,
-                _giPipelineCacheService);
-            AddPassInstance(bloomPass);
-
-            var toneMapCompositePass = new ToneMapCompositePass(
-                _context, _swapchain, _bindlessHeap, _compositePipeline, _ldrCompositePipeline, _renderTargets!,
-                Settings);
-            AddPassInstance(toneMapCompositePass);
-
-            var antiAliasingPass = new AntiAliasingPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings,
-                () => _smaaResources?.IsReady == true,
-                _giPipelineCacheService);
-            AddPassInstance(antiAliasingPass);
-            AddPassInstance(new ImGuiRenderPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _bufferManager,
-                _stagingRing,
-                _overlayDrawData,
-                _giPipelineCacheService));
-            ProductionRenderPipelineDeclaration.Instance.RegisterPasses(
-                _renderGraph,
-                passInstances,
-                _advancedGiAdmission.GraphModes);
-            foreach (RenderPassBase asyncCandidate in passInstances.Values.Where(pass => pass.SupportsAsyncCompute))
-            {
-                if (!AsyncComputePassCatalog.IsProductionCandidate(asyncCandidate.Name))
-                {
-                    throw new InvalidOperationException(
-                        $"Async-capable pass '{asyncCandidate.Name}' has no production async-compute audit classification.");
-                }
-            }
-
-            ProductionRenderPipelineDeclaration.Instance.ValidatePassOrder(
-                _renderGraph.PassNames,
-                _advancedGiAdmission.GraphModes);
-
-            _renderGraph.Initialize(_lifetime.RunStartupStep);
-            System.Diagnostics.Debug.WriteLine("Render graph initialized.");
         }
 
         private bool TrySelectNearFieldRuntimeEvidence(
@@ -3260,6 +2365,7 @@ namespace Njulf.Rendering
                 _completedGraphicsFrameFenceValue,
                 submittedSubmission);
             NativeGraphicsDevice.Releases.Complete(_completedGraphicsFrameFenceValue);
+            NativeGraphicsDevice.CompleteResourceTransfers(_completedGraphicsFrameFenceValue);
         }
 
         private void WaitForAcquiredSwapchainImageOwner()
@@ -3470,8 +2576,8 @@ namespace Njulf.Rendering
 
             _gpuParticleRuntimeManager.ReadCompletedFrame(_currentFrame);
             _foliageManager.ReadCompletedFrame(_currentFrame);
-            _sceneOpaqueCompactionPass?.ReadCompletedFrame(_currentFrame);
-            _forwardVisibilityCompactionPass?.ReadCompletedFrame(_currentFrame);
+            _productionPipelines.SceneOpaqueCompactionPass?.ReadCompletedFrame(_currentFrame);
+            _productionPipelines.ForwardVisibilityCompactionPass?.ReadCompletedFrame(_currentFrame);
             _autoExposureManager?.ReadCompletedFrame(_currentFrame);
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
             _completedDdgiForwardEstimateCounters =
@@ -3511,7 +2617,7 @@ namespace Njulf.Rendering
             _completedDdgiAreaLightCounters =
                 _diagnosticsBuffer.GetLastCompletedDdgiAreaLightCounters(
                     _currentFrame);
-            _forwardPlusPass?.ObserveCompletedSimpleDdgiReceiverCacheCounters(
+            _productionPipelines.ForwardPlusPass?.ObserveCompletedSimpleDdgiReceiverCacheCounters(
                 _diagnosticsBuffer
                     .GetLastCompletedSimpleDdgiReceiverCacheCounters(
                         _currentFrame));
@@ -3520,13 +2626,13 @@ namespace Njulf.Rendering
                     _currentFrame));
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
-            _completedSceneSubmissionCounters = _sceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ??
+            _completedSceneSubmissionCounters = _productionPipelines.SceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ??
                                                 SceneSubmissionCounterSnapshot.Invalid;
             _completedForwardVisibilityCounters =
-                _forwardVisibilityCompactionPass?.GetLastCompletedCounters(_currentFrame) ??
+                _productionPipelines.ForwardVisibilityCompactionPass?.GetLastCompletedCounters(_currentFrame) ??
                 SceneSubmissionCounterSnapshot.Invalid;
             _completedSceneSubmissionValidation =
-                _sceneOpaqueCompactionPass?.GetLastCompletedValidation(_currentFrame) ??
+                _productionPipelines.SceneOpaqueCompactionPass?.GetLastCompletedValidation(_currentFrame) ??
                 SceneSubmissionValidationSnapshot.Invalid;
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
             _accelerationStructureManager?
@@ -3633,6 +2739,8 @@ namespace Njulf.Rendering
             {
                 NativeGraphicsDevice.Settings.BeginFrame();
                 EnsureRenderTargetProfile();
+                NativeGraphicsDevice.PrepareEffects();
+                _renderTargets!.PostEffectRevision = NativeGraphicsDevice.PostEffectRevision;
                 NativeGraphicsDevice.CustomPasses.ApplyChanges();
             }
             catch (Exception failure)
@@ -3682,6 +2790,7 @@ namespace Njulf.Rendering
             {
                 InsertInterFrameSharedResourceDependency(_currentCommandBuffer);
             }
+            NativeGraphicsDevice.RecordResourceUploads(_currentCommandBuffer);
             _meshletPhysicalResidencyResources?.RecordFrameUploads(
                 _currentCommandBuffer,
                 _currentFrame,
@@ -3705,6 +2814,7 @@ namespace Njulf.Rendering
                 _ddgiFrameSerial,
                 _gpuTimestamps.Supported && gpuTimingRequested);
             _lifetime.MarkFrameStarted();
+            SpriteFrameSerial++;
             _gpuTimestamps.BeginFrame(
                 _currentCommandBuffer,
                 _currentFrame,
@@ -3737,6 +2847,7 @@ namespace Njulf.Rendering
         {
             _lifetime.ThrowIfDisposalStarted();
             _lifetime.EnsureCanEndFrame();
+            RecordTerminalOverlays();
 
             if (_progressiveFrame)
             {
@@ -3759,6 +2870,7 @@ namespace Njulf.Rendering
             }
 
             // End command buffer recording
+            NativeGraphicsDevice.RecordResourceReadbacks(_currentCommandBuffer);
             Result result = vk.EndCommandBuffer(_currentCommandBuffer);
             if (result != Result.Success)
             {
@@ -3887,6 +2999,7 @@ namespace Njulf.Rendering
                     ? ulong.MaxValue
                     : _ddgiFrameSerial + 1UL;
             NativeGraphicsDevice.Releases.Submitted(_submittedGraphicsFrameFenceValues[_currentFrame]);
+            NativeGraphicsDevice.MarkResourceTransfersSubmitted(_submittedGraphicsFrameFenceValues[_currentFrame]);
             _submissionOwnership.MarkSubmitted(
                 _currentFrame,
                 _imageIndex,
@@ -3909,7 +3022,7 @@ namespace Njulf.Rendering
             // another command buffer until the owning graphics submission has
             // been accepted. All later graphics submissions are ordered after
             // this one, while resource replacement waits for device idle.
-            _directionalShadowPass?.ConfirmCurrentFrameSubmission();
+            _productionPipelines.DirectionalShadowPass?.ConfirmCurrentFrameSubmission();
 
             // The terminal graphics submit owns both the acquired swapchain
             // image and its readback copy. Do not permit CPU mapping until this
@@ -3993,6 +3106,7 @@ namespace Njulf.Rendering
         private void EndProgressiveFrame()
         {
             var vk = _context.Api;
+            NativeGraphicsDevice.RecordResourceReadbacks(_currentCommandBuffer);
             if (_swapchainImageTransitionedThisFrame)
             {
                 TransitionSwapchainImage(
@@ -4105,6 +3219,7 @@ namespace Njulf.Rendering
                     ? ulong.MaxValue
                     : _ddgiFrameSerial + 1UL;
             NativeGraphicsDevice.Releases.Submitted(_submittedGraphicsFrameFenceValues[_currentFrame]);
+            NativeGraphicsDevice.MarkResourceTransfersSubmitted(_submittedGraphicsFrameFenceValues[_currentFrame]);
             _submissionOwnership.MarkSubmitted(
                 _currentFrame,
                 _imageIndex,
@@ -4132,6 +3247,7 @@ namespace Njulf.Rendering
             _lifetime.EnsureFrameInProgress(nameof(Clear));
 
             _clearColor = color;
+            _frameClearColor = color;
             if (_progressiveFrame)
             {
                 RecordProgressiveClear(color);
@@ -4231,7 +3347,7 @@ namespace Njulf.Rendering
                 _hybridReflectionRuntime ?? throw new InvalidOperationException(
                     "Hybrid reflection runtime is not initialized.");
             _ = runtime.BeginInitializeAsync(
-                PrepareHybridReflectionReceiverPipelines);
+                _productionPipelines.PrepareHybridReflectionReceiverPipelines);
         }
 
         /// <summary>
@@ -4275,132 +3391,9 @@ namespace Njulf.Rendering
             HybridReflectionVulkanRuntime runtime =
                 _hybridReflectionRuntime ?? throw new InvalidOperationException(
                     "Hybrid reflection runtime is not initialized.");
-            if (Volatile.Read(
-                    ref _hybridReflectionReceiverPipelinesPrepared) == 0)
+            if (!_productionPipelines.HybridReflectionReceiversPrepared)
             {
                 runtime.DeferInitialize();
-            }
-        }
-
-        private bool PrepareHybridReflectionReceiverPipelines()
-        {
-            // Screen-pipeline publication waits only for the exact opaque and
-            // foliage receivers. Cache-specialized lanes preserve identical
-            // output but are not quality-critical and are prepared after the
-            // first full-quality present in progressive startup.
-            if (!TryPrepareHybridReflectionExactReceiverCombination(
-                    nearFieldDirectSource: false,
-                    giCausticReceiver: false))
-            {
-                return false;
-            }
-
-            bool nearFieldDirectSource =
-                _advancedGiAdmission.GraphModes.UsesNearFieldHiZResidual &&
-                _meshPipeline.NearFieldDirectSourceConfiguration
-                    .SourceProducerMode ==
-                SimpleDdgiNearFieldSourceProducerMode.ForwardMrt;
-            bool giCausticReceiver =
-                _advancedGiAdmission.GraphModes.UsesCausticWorldCache;
-            if (nearFieldDirectSource && giCausticReceiver &&
-                !_meshPipeline.CombinedAdvancedGiAttachmentEnabled)
-            {
-                giCausticReceiver = false;
-            }
-
-            if ((nearFieldDirectSource || giCausticReceiver) &&
-                !TryPrepareHybridReflectionExactReceiverCombination(
-                    nearFieldDirectSource,
-                    giCausticReceiver))
-            {
-                return false;
-            }
-
-            Volatile.Write(
-                ref _hybridReflectionReceiverPipelinesPrepared,
-                1);
-            return true;
-        }
-
-        private bool TryPrepareHybridReflectionExactReceiverCombination(
-            bool nearFieldDirectSource,
-            bool giCausticReceiver)
-        {
-            if (!_meshPipeline.TryPrepareHybridReflectionExactPipelines(
-                    nearFieldDirectSource,
-                    giCausticReceiver))
-            {
-                return false;
-            }
-
-            return !_foliagePipeline.IsPrepared ||
-                _foliagePipeline.TryPrepareHybridReflectionExactPipelines(
-                    nearFieldDirectSource,
-                    giCausticReceiver);
-        }
-
-        private bool PrepareHybridReflectionReceiverPerformancePipelines()
-        {
-            if (!_meshPipeline
-                    .TryPrepareHybridReflectionPerformancePipelineBank() ||
-                !_meshPipeline
-                    .AreHybridReflectionPerformancePipelineBankReady())
-            {
-                return false;
-            }
-
-            Volatile.Write(
-                ref _hybridReflectionReceiverPerformancePipelinesPrepared,
-                1);
-            return true;
-        }
-
-        private bool AreReceiverCachePerformancePipelinesRequested()
-        {
-            SimpleDdgiReceiverCacheMode requestedMode =
-                SimpleDdgiReceiverCachePolicy.ResolveRequestedMode(
-                    Settings.GlobalIllumination.SimpleDdgiReceiverCacheMode,
-                    Settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark,
-                    Settings.Diagnostics.ForceExactForwardGiGatherForBenchmark);
-            return requestedMode.UsesCache();
-        }
-
-        private void PrepareHybridReflectionsForFullQuality()
-        {
-            HybridReflectionVulkanRuntime runtime =
-                _hybridReflectionRuntime ?? throw new InvalidOperationException(
-                    "Hybrid reflection runtime is not initialized.");
-
-            // BeginInitializeAsync also releases a claim made by
-            // DeferInitialize. Exact receiver readiness is the quality gate;
-            // the cache-specialized lanes are output-equivalent acceleration
-            // paths and may safely retain the exact opaque fallback.
-            runtime.BeginInitializeAsync(
-                    PrepareHybridReflectionReceiverPipelines)
-                .GetAwaiter()
-                .GetResult();
-
-            // An already-published runtime does not invoke the callback. Run
-            // the idempotent preparation once more so newly prepared foliage
-            // families on a scene transition are covered as well.
-            if (!PrepareHybridReflectionReceiverPipelines() ||
-                !runtime.ScreenPipelinesAvailable)
-            {
-                throw new InvalidOperationException(
-                    "Hybrid reflections were requested, but their exact " +
-                    "screen and receiver pipeline bank is unavailable. " +
-                    $"Runtime: {runtime.FailureDetail}; mesh: " +
-                    $"{_meshPipeline.HybridReflectionFailureReason}; foliage: " +
-                    _foliagePipeline.HybridReflectionPipelineFailureReason);
-            }
-
-            if (!RendererBuildConfiguration.ProgressivePipelineStartup &&
-                !PrepareHybridReflectionReceiverPerformancePipelines())
-            {
-                throw new InvalidOperationException(
-                    "Hybrid reflections were requested in blocking startup, " +
-                    "but their cache-specialized receiver pipeline bank is unavailable. " +
-                    _meshPipeline.HybridReflectionFailureReason);
             }
         }
 
@@ -4474,11 +3467,15 @@ namespace Njulf.Rendering
             _cmd.ResetGraphicsCommandBuffer(_currentFrame);
             _currentCommandBuffer =
                 _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
+            _stagingRing.BeginFrame(_currentFrame);
+            InsertInterFrameSharedResourceDependency(_currentCommandBuffer);
+            NativeGraphicsDevice.RecordResourceUploads(_currentCommandBuffer);
             _swapchainImageTransitionedThisFrame = false;
             lock (_startupGate)
                 _progressiveFramePhase = _startupPhase;
             _progressiveFrame = true;
             _lifetime.MarkFrameStarted();
+            SpriteFrameSerial++;
 
             // Guarantee that even a host which has not issued Draw yet owns a
             // valid, visibly responsive present.
@@ -4514,6 +3511,7 @@ namespace Njulf.Rendering
                     _context.WaitIdle));
             if (recreated)
             {
+                _terminalOverlayPass?.OnSwapchainRecreated();
                 _submissionOwnership.ResetAfterDeviceIdle(
                     checked((int)_swapchain.ImageCount));
                 _sync.EnsureRenderFinishedSemaphoreCapacity(
@@ -4572,11 +3570,9 @@ namespace Njulf.Rendering
                 _scenePreparationTask = preparationTask;
             return preparationTask;
         }
-
         private void PrepareSceneCore(Scene scene, ICamera camera)
         {
-            bool exhaustive = RendererBuildConfiguration.PipelineStartupMode ==
-                              RendererPipelineStartupMode.Exhaustive;
+            bool exhaustive = RendererBuildConfiguration.PipelineStartupMode == RendererPipelineStartupMode.Exhaustive;
             ScenePipelineManifest pipelineManifest = exhaustive
                 ? new ScenePipelineManifest(
                     SceneMaterialPipelineKinds.Masked |
@@ -4591,47 +3587,6 @@ namespace Njulf.Rendering
                     ForwardOpaqueKinds:
                         SceneForwardOpaquePipelineKinds.All)
                 : BuildScenePipelineManifest(scene);
-            bool receiverFeedbackRequired =
-                _simpleDdgiReceiverFeedback?.GraphicsPipelinesRequested == true;
-            bool receiverCacheRequired =
-                _forwardPlusPass is not null &&
-                SimpleDdgiReceiverCachePolicy.ResolveRequestedMode(
-                        Settings.GlobalIllumination
-                            .SimpleDdgiReceiverCacheMode,
-                        Settings.Diagnostics
-                            .ForceForwardGiReceiverCacheForBenchmark,
-                        Settings.Diagnostics
-                            .ForceExactForwardGiGatherForBenchmark)
-                    .UsesCache();
-            bool transparentRayVariantsRequired =
-                pipelineManifest.HasRealTransparentSurface &&
-                Settings.Transparency.Enabled &&
-                (Settings.Transparency.ReceiveShadows &&
-                 pipelineManifest.HasRealTransparentShadowReceiver ||
-                 pipelineManifest.Requires(
-                     SceneMaterialPipelineKinds.ThickTransmission) &&
-                 Settings.Transparency.ThickTransmissionMode ==
-                     ThickTransmissionMode.RayQuery ||
-                 Settings.Transparency.SampleReflections &&
-                 pipelineManifest.HasTransparentReflectionReceiver &&
-                 Settings.Reflections.Enabled &&
-                 Settings.Reflections.Mode == ReflectionMode.HybridRayQuery);
-            bool decalRayVariantsRequired =
-                pipelineManifest.HasGeometryDecalShadowReceiver &&
-                Settings.Transparency.Enabled &&
-                Settings.Decals.ReceiveShadows;
-            TransparencyMode transparencyMode =
-                Settings.Transparency.Mode;
-            bool partitioningEnabled =
-                Settings.Transparency.Enabled &&
-                Settings.Transparency.PipelinePartitioningEnabled;
-            bool rayVariantsRequired =
-                _context.RayQuerySupported &&
-                (transparentRayVariantsRequired ||
-                 decalRayVariantsRequired);
-            bool decalReceiverCacheRequired =
-                receiverFeedbackRequired &&
-                Settings.Decals.ReceiveGlobalIllumination;
             bool deferPostFirstPresentSpecializations =
                 RendererBuildConfiguration.ProgressivePipelineStartup &&
                 !exhaustive;
@@ -4655,330 +3610,17 @@ namespace Njulf.Rendering
                 Volatile.Read(
                     ref _postFirstPresentPipelineSpecializationsReady) == 0;
 
-            if (receiverFeedbackRequired &&
-                !deferPostFirstPresentSpecializations)
+
+            CollectRequiredParticleBlendModes(scene, _particleBlendModeScratch);
+            Action? deferredPreparation = _productionPipelines.PrepareScenePipelines(
+                pipelineManifest, scene.FoliagePatches.Count > 0 && scene.FoliagePrototypes.Count > 0,
+                _particleBlendModeScratch, initialScenePreparation, firstPresentCriticalOnly,
+                deferPostFirstPresentSpecializations, _publishPipelineSpecializations);
+            if (deferredPreparation != null)
             {
-                _lifetime.RunStartupStep(
-                    "Pipeline.Prepare.DdgiReceiverFeedback",
-                    _simpleDdgiReceiverFeedback!.PreparePipelines);
+                lock (_startupGate) _postFirstPresentPipelinePreparation = deferredPreparation;
             }
-
-            bool directionalGuidingRequired =
-                Settings.GlobalIllumination
-                    .SimpleDdgiDirectionalGuidingMode !=
-                    SimpleDdgiDirectionalGuidingMode.Off &&
-                _advancedGiAdmission.GraphModes.UsesDirectionalGuiding;
-            if (directionalGuidingRequired)
-            {
-                SimpleDdgiStoragePackingMode storagePackingMode =
-                    Settings.GlobalIllumination.SimpleDdgiStoragePackingMode
-                        .Sanitize();
-                _lifetime.RunStartupStep(
-                    "Pipeline.Prepare.DdgiDirectionalGuiding",
-                    () => _simpleDdgiGuidingRuntime!.PreparePipelines(
-                        storagePackingMode));
-            }
-
-            _lifetime.RunStartupStep(
-                "Pipeline.Prepare.FirstPresentForwardOpaque",
-                _meshPipeline.PrepareFirstPresentForwardOpaquePipeline);
-
-            ScenePipelinePreparationScope preparationScope =
-                firstPresentCriticalOnly
-                    ? ScenePipelinePreparationScope.FirstPresentCritical
-                    : ScenePipelinePreparationScope.Complete;
-            _lifetime.RunStartupStep(
-                "Pipeline.Prepare.SceneManifest",
-                () => _meshPipeline.PrepareScenePipelineManifest(
-                    pipelineManifest,
-                    transparencyMode,
-                    partitioningEnabled,
-                    receiverFeedbackRequired,
-                    rayVariantsRequired,
-                    decalReceiverCacheRequired,
-                    preparationScope));
-
-            bool foliageRequired = exhaustive ||
-                                   Settings.Foliage.Enabled &&
-                                   scene.FoliagePatches.Count > 0 &&
-                                   scene.FoliagePrototypes.Count > 0;
-            if (foliageRequired && !_foliagePipeline.IsPrepared)
-            {
-                _lifetime.RunStartupStep(
-                    "Pipeline.Prepare.Foliage",
-                    _foliagePipeline.Prepare);
-            }
-
-            if (Settings.Reflections.MaxProbes > 0)
-                _meshPipeline.PrepareAutomaticPlanarCapturePipelines(
-                    preparationScope == ScenePipelinePreparationScope.Complete);
-            if (foliageRequired && (Settings.Reflections.MaxProbes > 0 || pipelineManifest.Requires(
-                    SceneMaterialPipelineKinds.AutomaticPlanarReceiver)))
-                _foliagePipeline.PrepareAutomaticPlanarCapturePipelines();
-
-            CollectRequiredParticleBlendModes(
-                scene,
-                _particleBlendModeScratch);
-            bool particlePreparationRequired = exhaustive
-                ? !_particlePipeline.IsPrepared
-                : Settings.Particles.Enabled &&
-                  _particleBlendModeScratch.Count > 0 &&
-                  _particlePipeline.RequiresPreparation(
-                      _particleBlendModeScratch);
-            if (particlePreparationRequired)
-            {
-                _lifetime.RunStartupStep(
-                    "Pipeline.Prepare.Particle",
-                    () =>
-                    {
-                        if (exhaustive)
-                            _particlePipeline.PrepareAll();
-                        else
-                            _particlePipeline.Prepare(
-                                _particleBlendModeScratch);
-                    });
-            }
-
-            bool fogRequired = exhaustive ||
-                               Settings.Fog.Enabled &&
-                               Settings.Fog.Mode != FogMode.Disabled;
-            if (fogRequired && !_fogPass.IsPrepared)
-            {
-                _lifetime.RunStartupStep(
-                    "Pipeline.Prepare.Fog",
-                    _fogPass.PreparePipelines);
-            }
-
-            bool hybridReflectionsRequested =
-                Settings.Reflections.Enabled &&
-                Settings.Reflections.Mode is
-                    (ReflectionMode.StaticProbesAndSsr or
-                     ReflectionMode.StaticProbesAndPlanar or
-                     ReflectionMode.HybridRayQuery);
-            bool hybridReflectionsRequired = exhaustive ||
-                hybridReflectionsRequested;
-            if (hybridReflectionsRequested &&
-                !_meshPipeline.HybridReflectionAttachmentEnabled)
-            {
-                throw new InvalidOperationException(
-                    "Hybrid reflections were requested without a valid " +
-                    "forward receiver attachment: " +
-                    _meshPipeline.HybridReflectionFailureReason);
-            }
-            if (hybridReflectionsRequired &&
-                _meshPipeline.HybridReflectionAttachmentEnabled)
-            {
-                _lifetime.RunStartupStep(
-                    "Pipeline.Prepare.HybridReflections.FullQuality",
-                    PrepareHybridReflectionsForFullQuality);
-            }
-
-            if (initialScenePreparation && firstPresentCriticalOnly)
-            {
-                Action preparation = () =>
-                    PreparePostFirstPresentPipelineBank(
-                        pipelineManifest,
-                        transparencyMode,
-                        partitioningEnabled,
-                        receiverFeedbackRequired,
-                        receiverCacheRequired,
-                        rayVariantsRequired,
-                        decalReceiverCacheRequired,
-                        foliageRequired,
-                        particlePreparationRequired,
-                        fogRequired,
-                        hybridReflectionsRequired);
-                lock (_startupGate)
-                    _postFirstPresentPipelinePreparation = preparation;
-            }
-            else if (receiverFeedbackRequired || receiverCacheRequired)
-            {
-                bool forwardReady = _forwardPlusPass?
-                    .PrepareSimpleDdgiReceiverPipelineBank(
-                        receiverFeedbackRequired) == true;
-                bool complete = receiverFeedbackRequired &&
-                    forwardReady &&
-                    AreSceneReceiverFeedbackPipelinesReady(
-                        pipelineManifest,
-                        transparencyMode,
-                        rayVariantsRequired,
-                        foliageRequired,
-                        particlePreparationRequired,
-                        fogRequired);
-                if (receiverFeedbackRequired)
-                {
-                    _simpleDdgiReceiverFeedback!.PublishPipelineBank(
-                        complete,
-                        complete
-                            ? "receiver-feedback-pipeline-bank-ready"
-                            : "receiver-feedback-pipeline-bank-incomplete");
-                }
-            }
-
-            if (!_initialScenePipelinesPrepared)
-            {
-                _initialScenePipelinesPrepared = true;
-            }
-        }
-
-        private void PreparePostFirstPresentPipelineBank(
-            ScenePipelineManifest pipelineManifest,
-            TransparencyMode transparencyMode,
-            bool partitioningEnabled,
-            bool receiverFeedbackRequired,
-            bool receiverCacheRequired,
-            bool rayVariantsRequired,
-            bool decalReceiverCacheRequired,
-            bool foliageRequired,
-            bool particlePreparationRequired,
-            bool fogRequired,
-            bool hybridReflectionsRequired)
-        {
-            bool hybridReceiverPerformanceRequired =
-                hybridReflectionsRequired &&
-                _meshPipeline.HybridReflectionAttachmentEnabled &&
-                AreReceiverCachePerformancePipelinesRequested();
-            bool meshReady = TryPreparePostFirstPresentFamily(
-                "Pipeline.Prepare.PostFirstPresentSpecializations",
-                () =>
-                {
-                    _meshPipeline.PrepareScenePipelineManifest(
-                        pipelineManifest,
-                        transparencyMode,
-                        partitioningEnabled,
-                        receiverFeedbackRequired,
-                        rayVariantsRequired,
-                        decalReceiverCacheRequired,
-                        ScenePipelinePreparationScope.Complete);
-                    return true;
-                });
-            // Cache consumers are siblings of the active opaque families.
-            // Prepare them only after that family set is known and publish
-            // readiness only after every required lane has a live handle.
-            bool hybridReady = !hybridReceiverPerformanceRequired ||
-                meshReady && TryPreparePostFirstPresentFamily(
-                    "Pipeline.Prepare.PostFirstPresentHybridReflectionSpecializations",
-                    PrepareHybridReflectionReceiverPerformancePipelines);
-            if (meshReady)
-            {
-                // Scene-specialized variants are independent of receiver-cache
-                // publication. Make them available immediately so a slow B1
-                // native compile cannot hold transparent partitioning and the
-                // other post-present paths behind it.
-                Volatile.Write(
-                    ref _postFirstPresentPipelineSpecializationsReady,
-                    1);
-            }
-            bool foliageReady = !receiverFeedbackRequired ||
-                !foliageRequired ||
-                TryPreparePostFirstPresentFamily(
-                    "Pipeline.Prepare.PostFirstPresentFoliageFeedback",
-                    _foliagePipeline.PrepareReceiverFeedbackPipelines);
-            bool particleReady = !receiverFeedbackRequired ||
-                !particlePreparationRequired ||
-                TryPreparePostFirstPresentFamily(
-                    "Pipeline.Prepare.PostFirstPresentParticleFeedback",
-                    _particlePipeline.PrepareReceiverFeedbackPipelines);
-            bool fogReady = !receiverFeedbackRequired ||
-                !fogRequired ||
-                TryPreparePostFirstPresentFamily(
-                    "Pipeline.Prepare.PostFirstPresentFogFeedback",
-                    _fogPass.PrepareReceiverFeedbackPipeline);
-            bool runtimeReady = !receiverFeedbackRequired ||
-                TryPreparePostFirstPresentFamily(
-                    "Pipeline.Prepare.PostFirstPresentReceiverRuntime",
-                    () =>
-                    {
-                        _simpleDdgiReceiverFeedback!.PreparePipelines();
-                        return true;
-                    });
-
-            // Build the requirement-complete receiver bank last. A cache-only
-            // isolation workload publishes its canonical gather without
-            // entering unrelated B1/adaptive native compilation.
-            bool forwardReady =
-                !receiverFeedbackRequired && !receiverCacheRequired ||
-                TryPreparePostFirstPresentFamily(
-                    "Pipeline.Prepare.PostFirstPresentReceiverComputeBank",
-                    () => _forwardPlusPass?
-                        .PrepareSimpleDdgiReceiverPipelineBank(
-                            receiverFeedbackRequired) == true);
-
-            bool complete = receiverFeedbackRequired &&
-                hybridReady && meshReady && foliageReady && particleReady && fogReady &&
-                runtimeReady && forwardReady &&
-                AreSceneReceiverFeedbackPipelinesReady(
-                    pipelineManifest,
-                    transparencyMode,
-                    rayVariantsRequired,
-                    foliageRequired,
-                    particlePreparationRequired,
-                    fogRequired);
-            if (receiverFeedbackRequired)
-            {
-                _simpleDdgiReceiverFeedback!.PublishPipelineBank(
-                    complete,
-                    complete
-                        ? "receiver-feedback-pipeline-bank-ready"
-                        : "receiver-feedback-pipeline-bank-incomplete");
-            }
-        }
-
-        private bool TryPreparePostFirstPresentFamily(
-            string stepName,
-            Func<bool> prepare)
-        {
-            try
-            {
-                bool prepared = false;
-                _lifetime.RunStartupStep(
-                    stepName,
-                    () => prepared = prepare());
-                return prepared;
-            }
-            catch (Exception exception) when (
-                exception is VulkanException or IOException or
-                    InvalidOperationException or ArgumentException or
-                    OverflowException)
-            {
-                System.Diagnostics.Debug.WriteLine(
-                    $"{stepName} failed; exact canonical rendering retained: " +
-                    $"{exception.GetType().Name}: {exception.Message}");
-                return false;
-            }
-        }
-
-        private bool AreSceneReceiverFeedbackPipelinesReady(
-            ScenePipelineManifest manifest,
-            TransparencyMode transparencyMode,
-            bool rayVariantsRequired,
-            bool foliageRequired,
-            bool particlePreparationRequired,
-            bool fogRequired)
-        {
-            bool maskedReady =
-                !manifest.Requires(SceneMaterialPipelineKinds.Masked) ||
-                _meshPipeline.AlphaMaskReceiverFeedbackPipelinesAvailable;
-            bool transparentReady = !manifest.HasTransparentSurface ||
-                (transparencyMode == TransparencyMode.WeightedBlendedOit
-                    ? _meshPipeline.WeightedOitReceiverFeedbackPipeline.Handle != 0
-                    : _meshPipeline.TransparentReceiverFeedbackPipeline.Handle != 0 &&
-                      (!manifest.Requires(SceneMaterialPipelineKinds.ThinGlass) ||
-                       _meshPipeline.ThinGlassReceiverFeedbackPipeline.Handle != 0));
-            bool rayFeedbackRequired = rayVariantsRequired &&
-                !manifest.Requires(
-                    SceneMaterialPipelineKinds.ThickTransmission);
-            bool rayReady = !rayFeedbackRequired ||
-                (transparencyMode == TransparencyMode.WeightedBlendedOit
-                    ? _meshPipeline.RayWeightedOitReceiverFeedbackPipeline.Handle != 0
-                    : _meshPipeline.RayTransparentReceiverFeedbackPipeline.Handle != 0);
-            return maskedReady && transparentReady && rayReady &&
-                (!foliageRequired ||
-                 _foliagePipeline.ReceiverFeedbackPipelinesAvailable) &&
-                (!particlePreparationRequired ||
-                 _particlePipeline.ReceiverFeedbackPipelinesAvailable) &&
-                (!fogRequired ||
-                 _fogPass.ReceiverFeedbackPipelineAvailable);
+            _initialScenePipelinesPrepared = true;
         }
 
         private void MarkPipelineCacheRenderCriticalFramesStarted()
@@ -5354,6 +3996,9 @@ namespace Njulf.Rendering
                 return;
             }
 
+            _animationTime = _animationClock.Read(GetParticleDeltaSeconds(), Settings.Particles.FixedSimulationDeltaSeconds);
+            if (_environmentManager != null)
+                _environmentManager.HostElapsedSeconds = _animationTime.IsHosted ? _animationTime.ElapsedSeconds : null;
             long drawSceneStart = Stopwatch.GetTimestamp();
             long drawStageStart = drawSceneStart;
 
@@ -5674,8 +4319,9 @@ namespace Njulf.Rendering
             sceneData.SkinnedVertexBufferSize = skinningStats.SkinnedVertexBufferSize;
             sceneData.UploadedBytes += skinningStats.SkinningUploadBytes;
             sceneData.SkinningDispatches.AddRange(skinningStats.Dispatches);
-            float particleDeltaSeconds = GetParticleDeltaSeconds();
-            _particleTimeSeconds += particleDeltaSeconds;
+            float particleDeltaSeconds = _animationTime.ParticleDeltaSeconds;
+            _particleTimeSeconds = _animationTime.ParticleTime;
+            if (_animationTime.IsHosted) sceneData.Time = _animationTime.SceneTime;
             sceneData.GpuParticleDeltaSeconds = particleDeltaSeconds;
             sceneData.GpuParticleTimeSeconds = _particleTimeSeconds;
             bool gpuParticleMode = particlesAllowed &&
@@ -5977,7 +4623,7 @@ namespace Njulf.Rendering
                 _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "FoliageCullPass");
                 try
                 {
-                    _foliageCullPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                    _productionPipelines.FoliageCullPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
                 }
                 finally
                 {
@@ -5985,7 +4631,7 @@ namespace Njulf.Rendering
                 }
             }
 
-            if (_ddgiFoliageProxyGenerationPass != null &&
+            if (_productionPipelines.DdgiFoliageProxyGenerationPass != null &&
                 _ddgiFoliageProxyFrame.RequiresGpuGeneration)
             {
                 _gpuTimestamps.BeginPass(
@@ -5994,7 +4640,7 @@ namespace Njulf.Rendering
                     "DdgiFoliageProxyGenerationPass");
                 try
                 {
-                    _ddgiFoliageProxyGenerationPass.Execute(
+                    _productionPipelines.DdgiFoliageProxyGenerationPass.Execute(
                         _currentCommandBuffer,
                         _ddgiFoliageProxyFrame,
                         sceneData);
@@ -6012,7 +4658,7 @@ namespace Njulf.Rendering
                 _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "SkinningPass");
                 try
                 {
-                    _skinningPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                    _productionPipelines.SkinningPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
                 }
                 finally
                 {
@@ -6925,18 +5571,7 @@ namespace Njulf.Rendering
         private void EnsureMeshPipelineDiagnosticVariant()
         {
             bool diagnosticCountersEnabled = Settings.Diagnostics.GpuMeshletCountersEnabled;
-            bool meshNeedsRecreate = _meshPipeline != null &&
-                                     _meshPipeline.GpuMeshletCountersEnabled != diagnosticCountersEnabled;
-            // Foliage has a dedicated mesh-shader shadow path. Keep it in
-            // lockstep with the opaque diagnostic variant so a runtime toggle
-            // never produces a partial caster-attribution capture.
-            bool foliageNeedsRecreate = _foliagePipeline != null &&
-                                        _foliagePipeline.IsPrepared &&
-                                        _foliagePipeline.GpuMeshletCountersEnabled != diagnosticCountersEnabled;
-            if (!meshNeedsRecreate && !foliageNeedsRecreate)
-            {
-                return;
-            }
+            if (!_productionPipelines.RequiresDiagnosticRecreation) return;
 
             RecordDeviceWaitIdle(
                 RuntimeStallReason.DeviceWaitIdle,
@@ -6949,15 +5584,7 @@ namespace Njulf.Rendering
                             "Failed to wait for device before recreating mesh diagnostic pipelines", result);
                 });
 
-            if (meshNeedsRecreate)
-                _meshPipeline!.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
-            if (foliageNeedsRecreate)
-            {
-                _foliagePipeline!.Recreate(
-                    RenderTargetManager.SceneColorFormat,
-                    RenderTargetManager.MotionVectorFormat,
-                    _swapchain.DepthFormat);
-            }
+            _productionPipelines.RecreateDiagnosticVariants();
 
             System.Diagnostics.Debug.WriteLine(
                 diagnosticCountersEnabled
@@ -7264,7 +5891,7 @@ namespace Njulf.Rendering
                     DirectionalShadowMode.RayQueryHard or
                     DirectionalShadowMode.RayQuerySoft))
             {
-                rayMaskAvailable = _directionalRayShadowPass?.EnsureResources(
+                rayMaskAvailable = _productionPipelines.DirectionalRayShadowPass?.EnsureResources(
                     maskWidth,
                     maskHeight,
                     sceneData.DdgiFrameSerial,
@@ -7280,7 +5907,7 @@ namespace Njulf.Rendering
                 sceneData.TransparentShadowReceiverMeshletCount > 0;
             bool transparentRayVariantsAdmitted =
                 _raySceneDescriptorBank?.IsAvailable == true &&
-                _meshPipeline.RayTransparentPipelinesAdmitted;
+                _productionPipelines.MeshPipeline.RayTransparentPipelinesAdmitted;
 
             ShadowFrameCandidate ResolveCandidate(
                 bool transparentRayVariantsAvailable) =>
@@ -7297,8 +5924,8 @@ namespace Njulf.Rendering
                         transparentRayVariantsAvailable,
                         softCollapsesToHard,
                         cascadedShadowsAvailable,
-                        _directionalRayShadowPass != null,
-                        _directionalRayShadowPass?.FailureDetail ??
+                        _productionPipelines.DirectionalRayShadowPass != null,
+                        _productionPipelines.DirectionalRayShadowPass?.FailureDetail ??
                         string.Empty));
 
             bool transparentRayVariantsAvailable =
@@ -7309,7 +5936,7 @@ namespace Njulf.Rendering
                 lightSnapshot.HasShadowCastingDirectionalLight &&
                 transparentRayReceiverRequired &&
                 transparentRayVariantsAdmitted &&
-                !_meshPipeline.TryEnsureRayTransparentPipelines())
+                !_productionPipelines.MeshPipeline.TryEnsureRayTransparentPipelines())
             {
                 transparentRayVariantsAvailable = false;
                 candidate = ResolveCandidate(transparentRayVariantsAvailable);
@@ -7426,7 +6053,7 @@ namespace Njulf.Rendering
                                  RaySceneConsumer.AreaLightShadows,
                                  RaySceneGeometryCategory.DirectionalShadowDefault);
             bool resources = readiness &&
-                             _areaRayShadowPass?.EnsureResources(
+                             _productionPipelines.AreaRayShadowPass?.EnsureResources(
                                  _lastSceneRenderExtent.Width,
                                  _lastSceneRenderExtent.Height,
                                  sceneData.DdgiFrameSerial) == true;
@@ -7439,23 +6066,23 @@ namespace Njulf.Rendering
                 ? selection.AreaLights
                 : [];
             sceneData.AreaRayShadowMaskWidth = enabled
-                ? _areaRayShadowPass?.Width ?? 0u
+                ? _productionPipelines.AreaRayShadowPass?.Width ?? 0u
                 : 0u;
             sceneData.AreaRayShadowMaskHeight = enabled
-                ? _areaRayShadowPass?.Height ?? 0u
+                ? _productionPipelines.AreaRayShadowPass?.Height ?? 0u
                 : 0u;
             sceneData.AreaRayShadowMaskBytes = enabled
-                ? checked((_areaRayShadowPass?.BufferBytes ?? 0UL) *
+                ? checked((_productionPipelines.AreaRayShadowPass?.BufferBytes ?? 0UL) *
                           (ulong)FramesInFlight)
                 : 0UL;
             sceneData.AreaRayShadowResourceGeneration = enabled
-                ? _areaRayShadowPass?.ResourceGeneration ?? 0u
+                ? _productionPipelines.AreaRayShadowPass?.ResourceGeneration ?? 0u
                 : 0u;
             sceneData.AreaRayShadowFailureDetail = enabled || !requested
                 ? string.Empty
                 : !readiness
                     ? sceneData.RaySceneReadiness.FailureDetail
-                    : _areaRayShadowPass?.FailureDetail ??
+                    : _productionPipelines.AreaRayShadowPass?.FailureDetail ??
                       "area ray-shadow pass is unavailable";
         }
 
@@ -8125,8 +6752,8 @@ namespace Njulf.Rendering
                     _environmentManager,
                     _iesPhotometricProfileManager,
                     _reflectionProbeManager,
-                    _forwardPlusPass,
-                    _meshPipeline,
+                    _productionPipelines.ForwardPlusPass,
+                    _productionPipelines.MeshPipeline,
                     _meshletPhysicalResidencyResources,
                     _dynamicResolutionScaleController),
                 new RendererDiagnosticsExecutionInput(
@@ -8561,6 +7188,7 @@ namespace Njulf.Rendering
         private void MarkFrameSubmissionFault(string reason, Result result)
         {
             NativeGraphicsDevice.Settings.Fail(new InvalidOperationException(reason));
+            NativeGraphicsDevice.FailResourceTransfers(new InvalidOperationException(reason));
             RendererSubmissionFault fault =
                 _lifetime.LatchSubmissionFault(
                     reason,
@@ -8581,6 +7209,7 @@ namespace Njulf.Rendering
             _asyncComputeCoordinator.AbortFrame(_currentFrame);
             _deferredAsyncSubmissions.Clear();
             _lifetime.AbandonFrame();
+            ClearOverlaySubmissions();
         }
 
         /// <summary>
@@ -8756,9 +7385,9 @@ namespace Njulf.Rendering
                 farFieldBuffers,
                 simpleDdgiBuffers,
                 new DirectionalRayShadowAsyncBufferIdentity(
-                    _directionalRayShadowPass?.GetMaskBuffer(0) ??
+                    _productionPipelines.DirectionalRayShadowPass?.GetMaskBuffer(0) ??
                     BufferHandle.Invalid,
-                    _directionalRayShadowPass?.GetMaskBuffer(1) ??
+                    _productionPipelines.DirectionalRayShadowPass?.GetMaskBuffer(1) ??
                     BufferHandle.Invalid,
                     _directionalShadowHistoryResources?.GetRaw(0) ?? BufferHandle.Invalid,
                     _directionalShadowHistoryResources?.GetRaw(1) ?? BufferHandle.Invalid,
@@ -8772,12 +7401,12 @@ namespace Njulf.Rendering
                     _directionalShadowHistoryResources?.GetCounters(1) ?? BufferHandle.Invalid,
                     _temporalSurfaceValidityResources?.GetBuffer(0) ?? BufferHandle.Invalid,
                     _temporalSurfaceValidityResources?.GetBuffer(1) ?? BufferHandle.Invalid,
-                    _areaRayShadowPass?.GetMaskBuffer(0) ?? BufferHandle.Invalid,
-                    _areaRayShadowPass?.GetMaskBuffer(1) ?? BufferHandle.Invalid,
-                    _directionalRayShadowPass?.ResourceGeneration ?? 0u,
+                    _productionPipelines.AreaRayShadowPass?.GetMaskBuffer(0) ?? BufferHandle.Invalid,
+                    _productionPipelines.AreaRayShadowPass?.GetMaskBuffer(1) ?? BufferHandle.Invalid,
+                    _productionPipelines.DirectionalRayShadowPass?.ResourceGeneration ?? 0u,
                     _directionalShadowHistoryResources?.ResourceGeneration ?? 0u,
                     _temporalSurfaceValidityResources?.ResourceGeneration ?? 0u,
-                    _areaRayShadowPass?.ResourceGeneration ?? 0u),
+                    _productionPipelines.AreaRayShadowPass?.ResourceGeneration ?? 0u),
                 new CausticAsyncBufferIdentity(
                     causticBuffers.Tasks,
                     causticBuffers.Photons,
@@ -8949,7 +7578,7 @@ namespace Njulf.Rendering
                     bindings,
                     RenderGraphResourceId.DirectionalRayShadowMask,
                     $"Directional ray-shadow mask frame {frameIndex}",
-                    _directionalRayShadowPass?.GetMaskBuffer(frameIndex) ??
+                    _productionPipelines.DirectionalRayShadowPass?.GetMaskBuffer(frameIndex) ??
                     BufferHandle.Invalid,
                     queueFamilies,
                     graphicsFamily,
@@ -9012,7 +7641,7 @@ namespace Njulf.Rendering
                     bindings,
                     RenderGraphResourceId.AreaRayShadowMask,
                     $"Area ray-shadow mask frame {frameIndex}",
-                    _areaRayShadowPass?.GetMaskBuffer(frameIndex) ??
+                    _productionPipelines.AreaRayShadowPass?.GetMaskBuffer(frameIndex) ??
                     BufferHandle.Invalid,
                     queueFamilies,
                     graphicsFamily,
@@ -10232,7 +8861,7 @@ namespace Njulf.Rendering
                                      RaySceneConsumer.ThickTransmission,
                                      requirement.RequiredCategories);
             bool rayPipelineAvailable =
-                _meshPipeline?.RayTransparentPipelinesAdmitted == true;
+                _productionPipelines.MeshPipeline?.RayTransparentPipelinesAdmitted == true;
             bool rayPipelineRequiredNow =
                 Settings.Transparency.Enabled &&
                 Settings.Transparency.ThickTransmissionMode ==
@@ -10241,7 +8870,7 @@ namespace Njulf.Rendering
             if (rayPipelineAvailable && rayPipelineRequiredNow)
             {
                 rayPipelineAvailable =
-                    _meshPipeline!.TryEnsureRayTransparentPipelines();
+                    _productionPipelines.MeshPipeline!.TryEnsureRayTransparentPipelines();
             }
             ThickTransmissionModeResolution resolution =
                 ThickTransmissionModeResolver.Resolve(
@@ -10281,7 +8910,7 @@ namespace Njulf.Rendering
             if (_reflectionProbeManager == null)
                 return;
 
-            _reflectionProbeCompletionValues.SetFrameSerial(_ddgiFrameSerial);
+            _productionPipelines.ReflectionProbeCompletionValues.SetFrameSerial(_ddgiFrameSerial);
             _reflectionProbeManager.BeginFrameResourceRetirement(
                 _ddgiFrameSerial,
                 _completedGraphicsFrameFenceValue);
@@ -10306,12 +8935,12 @@ namespace Njulf.Rendering
                     PerformanceOptimizationFeature.SparseHybridLobePayload);
             bool sparseLobePayloadAvailable =
                 !sparseLobePayloadRequested ||
-                _forwardPlusPass?.SparseHybridLobePayloadAvailable == true;
+                _productionPipelines.ForwardPlusPass?.SparseHybridLobePayloadAvailable == true;
             bool receiverPayloadAvailable =
                 _renderTargets?.HybridReflectionReceiverPayload is { } receiver &&
                 receiver.Extent.Width == sceneData.ScreenWidth &&
                 receiver.Extent.Height == sceneData.ScreenHeight &&
-                _meshPipeline?.HybridReflectionAttachmentEnabled == true &&
+                _productionPipelines.MeshPipeline?.HybridReflectionAttachmentEnabled == true &&
                 _hybridReflectionRuntime?.ScreenPipelinesAvailable == true &&
                 sparseLobePayloadAvailable;
             bool raySceneReady = !reflectionRequirement.Enabled ||
@@ -10398,7 +9027,7 @@ namespace Njulf.Rendering
             sceneData.HybridReflectionEstimatedBytes =
                 (_renderTargets?.HybridReflectionRenderTargetBytes ?? 0UL) +
                 (_hybridReflectionRuntime?.BufferBytes ?? 0UL) +
-                (_forwardPlusPass?.SparseHybridLobePayloadTotalBytes ?? 0UL);
+                (_productionPipelines.ForwardPlusPass?.SparseHybridLobePayloadTotalBytes ?? 0UL);
             UpdateReflectionProbeTelemetry(sceneData);
             sceneData.CpuReflectionProbeUploadMicroseconds = _reflectionProbeManager.LastUploadMicroseconds;
         }
@@ -10472,13 +9101,13 @@ namespace Njulf.Rendering
             if (_reflectionProbeManager == null)
                 return;
 
-            if (_reflectionProbeCapturePass?.ShouldExecute(_currentFrame, sceneData) == true)
+            if (_productionPipelines.ReflectionProbeCapturePass?.ShouldExecute(_currentFrame, sceneData) == true)
             {
                 long start = Stopwatch.GetTimestamp();
                 _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "ReflectionProbeCapturePass");
                 try
                 {
-                    _reflectionProbeCapturePass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                    _productionPipelines.ReflectionProbeCapturePass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
                 }
                 finally
                 {
@@ -10487,13 +9116,13 @@ namespace Njulf.Rendering
                 }
             }
 
-            if (_reflectionProbePrefilterPass?.ShouldExecute(_currentFrame, sceneData) == true)
+            if (_productionPipelines.ReflectionProbePrefilterPass?.ShouldExecute(_currentFrame, sceneData) == true)
             {
                 long start = Stopwatch.GetTimestamp();
                 _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "ReflectionProbePrefilterPass");
                 try
                 {
-                    _reflectionProbePrefilterPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                    _productionPipelines.ReflectionProbePrefilterPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
                 }
                 finally
                 {
@@ -10502,12 +9131,12 @@ namespace Njulf.Rendering
                 }
             }
 
-            if (_reflectionProbePublishPass?.ShouldExecute(_currentFrame, sceneData) == true)
+            if (_productionPipelines.ReflectionProbePublishPass?.ShouldExecute(_currentFrame, sceneData) == true)
             {
                 _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "ReflectionProbePublishPass");
                 try
                 {
-                    _reflectionProbePublishPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                    _productionPipelines.ReflectionProbePublishPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
                 }
                 finally
                 {
@@ -10567,7 +9196,7 @@ namespace Njulf.Rendering
                                 scene,
                                 lightSnapshot,
                                 _ddgiFoliageProxyFrame,
-                                sceneData.GpuParticleDeltaSeconds,
+                                _animationTime.UnscaledElapsedSeconds,
                                 new ReadOnlyMemory<bool>(
                                     atmosphereOwnedBuffer,
                                     0,
@@ -10608,11 +9237,11 @@ namespace Njulf.Rendering
                         Settings.GlobalIllumination,
                         result.Emissive.RefinementDiagnostics,
                         _completedDdgiInvestigationCounters.NearVisibility,
-                        _forwardPlusPass?
+                        _productionPipelines.ForwardPlusPass?
                             .SimpleDdgiReceiverCacheBufferBytes ?? 0UL,
-                        _forwardPlusPass?
+                        _productionPipelines.ForwardPlusPass?
                             .SimpleDdgiReceiverGatherBufferTotalBytes ?? 0UL,
-                        _forwardPlusPass?
+                        _productionPipelines.ForwardPlusPass?
                             .SimpleDdgiReceiverSurfaceSidecarTotalBytes ?? 0UL,
                         _simpleDdgiFrameEvidence));
                 ApplyReflectionRecaptureIntent(
@@ -11910,10 +10539,10 @@ namespace Njulf.Rendering
                     gi.DdgiFoliageProxyTriangleBudget,
                     gi.DdgiFoliageProxyUpdateCadenceFrames,
                     _ddgiFrameSerial,
-                    _particleTimeSeconds,
+                    _animationTime.IsHosted ? _animationTime.SceneTime : _particleTimeSeconds,
                     Settings.Foliage.DensityScale,
-                    _ddgiFoliageProxyGenerationPass?.IsAvailable == true,
-                    _ddgiFoliageProxyGenerationPass?
+                    _productionPipelines.DdgiFoliageProxyGenerationPass?.IsAvailable == true,
+                    _productionPipelines.DdgiFoliageProxyGenerationPass?
                         .InitializationFailureReason,
                     _currentCommandBuffer,
                     _currentFrame);
@@ -11947,7 +10576,7 @@ namespace Njulf.Rendering
                 frame.RequestedRepresentedInstanceCount;
             sceneData.DdgiFoliageProxyDensityError = frame.DensityError;
             sceneData.DdgiFoliageProxyWindAgeSeconds = frame.CardCount > 0
-                ? MathF.Max(0f, _particleTimeSeconds - frame.WindTimeSeconds)
+                ? MathF.Max(0f, (_animationTime.IsHosted ? _animationTime.SceneTime : _particleTimeSeconds) - frame.WindTimeSeconds)
                 : 0f;
             sceneData.DdgiFoliageProxyNearCardCount = frame.NearCardCount;
             sceneData.DdgiFoliageProxyMidCardCount = frame.MidCardCount;
@@ -12999,7 +11628,8 @@ namespace Njulf.Rendering
                 return;
 
             _lifetime.ObserveSwapchainRecreationAttempt(
-                RecreateSwapchain());
+                RendererBuildConfiguration.ProgressivePipelineStartup && StartupSnapshot.Phase != RendererStartupPhase.FullQuality
+                    ? RecreateProgressiveSwapchain() : RecreateSwapchain());
 
             // Update camera aspect ratio if camera is provided
             // (Camera aspect ratio should be updated by the caller)
@@ -13015,7 +11645,7 @@ namespace Njulf.Rendering
                 return;
 
             _renderTargets?.ReleaseGiCausticTargetsAfterDeviceIdle();
-            _meshPipeline?.DisableGiCausticReceiverAfterDeviceIdle(
+            _productionPipelines.MeshPipeline?.DisableGiCausticReceiverAfterDeviceIdle(
                 transition.Reason);
             _advancedGiAdmission.PublishGraphModes(
                 _advancedGiAdmission.GraphModes with
@@ -13098,9 +11728,9 @@ namespace Njulf.Rendering
                 (_renderTargets ?? throw new InvalidOperationException(
                         "C5 publication requires render targets."))
                     .PublishNearFieldResidualGeneration(targets);
-                _meshPipeline?.PublishNearFieldDirectSourceGeneration(
+                _productionPipelines.MeshPipeline?.PublishNearFieldDirectSourceGeneration(
                     publication.PipelineConfiguration);
-                _forwardPlusPass?.PublishNearFieldDirectSourceGeneration(
+                _productionPipelines.ForwardPlusPass?.PublishNearFieldDirectSourceGeneration(
                     new ForwardNearFieldDirectSourceAttachmentBinding(
                         targets.DirectSource,
                         targets.ReceiverPayload,
@@ -13109,7 +11739,7 @@ namespace Njulf.Rendering
                 return;
             }
 
-            _forwardPlusPass?.PublishNearFieldDirectSourceGeneration(null);
+            _productionPipelines.ForwardPlusPass?.PublishNearFieldDirectSourceGeneration(null);
             // Suppression must also remove the generation from the render
             // graph before another frame records. Otherwise graph-planned
             // barriers can acquire a newer GPU reference after the generation
@@ -13125,7 +11755,7 @@ namespace Njulf.Rendering
                     .ReleaseNearFieldResidualTargetsAfterDeviceIdle();
             }
 
-            _meshPipeline?.DisableNearFieldDirectSourceAfterDeviceIdle(
+            _productionPipelines.MeshPipeline?.DisableNearFieldDirectSourceAfterDeviceIdle(
                 publication.Reason);
             _advancedGiAdmission.PublishGraphModes(
                 _advancedGiAdmission.GraphModes with
@@ -13137,7 +11767,7 @@ namespace Njulf.Rendering
 
             // At startup no pass inventory exists yet; the graph-mode update
             // above is sufficient for fail-closed construction.
-            if (_forwardPlusPass is null)
+            if (_productionPipelines.ForwardPlusPass is null)
                 return;
 
             // Rewrite shared pass usage before removing the optional C5
@@ -13218,7 +11848,11 @@ namespace Njulf.Rendering
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, effectiveResolutionScale);
             sceneRenderExtent = PreserveExtentBoundCausticSceneExtent(
                 sceneRenderExtent);
+            bool customPostProcessing = NativeGraphicsDevice.CustomPasses.RequiresPostProcessColor;
+            bool postTargetChanged = _renderTargets.CustomPostProcessingEnabled != customPostProcessing;
+            _renderTargets.CustomPostProcessingEnabled = customPostProcessing;
             bool featureTargetsChanged =
+                (postTargetChanged && aaMode == AntiAliasingMode.None) ||
                 _lastAmbientOcclusionTargetEnabled != aoEnabled ||
                 MathF.Abs(_lastAmbientOcclusionResolutionScale - ambientOcclusionResolutionScale) > 0.0001f ||
                 _lastAmbientOcclusionMode != effectiveAmbientOcclusionMode ||
@@ -13251,6 +11885,8 @@ namespace Njulf.Rendering
                     : scaleDecision.CommitReason;
 
             var changedProfileFields = new List<string>(12);
+            if (postTargetChanged)
+                AddRenderTargetProfileChange(changedProfileFields, "postEffects", !customPostProcessing, customPostProcessing);
             AddRenderTargetProfileChange(
                 changedProfileFields,
                 "aoEnabled",
@@ -13363,13 +11999,7 @@ namespace Njulf.Rendering
             stageStart = Stopwatch.GetTimestamp();
             if (forwardAttachmentProfileChanged)
             {
-                _meshPipeline?.Recreate(
-                    RenderTargetManager.SceneColorFormat,
-                    _swapchain.DepthFormat);
-                _foliagePipeline?.Recreate(
-                    RenderTargetManager.SceneColorFormat,
-                    RenderTargetManager.MotionVectorFormat,
-                    _swapchain.DepthFormat);
+                _productionPipelines.RecreateForAttachmentProfile();
             }
             long pipelinesMicroseconds = ElapsedMicroseconds(stageStart);
 
@@ -13391,6 +12021,7 @@ namespace Njulf.Rendering
             long registrationMicroseconds = ElapsedMicroseconds(stageStart);
             stageStart = Stopwatch.GetTimestamp();
             _renderGraph.OnSwapchainRecreated();
+            _terminalOverlayPass?.OnSwapchainRecreated();
             _asyncComputeCoordinator.ResetTimingHistory(
                 AsyncComputeTimingResetKind.RenderTargetsOrSwapchain);
             long graphMicroseconds = ElapsedMicroseconds(stageStart);
@@ -13660,13 +12291,7 @@ namespace Njulf.Rendering
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
             _lastRenderTargetRecreateReason = "Swapchain resize";
-            _meshPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
-            _foliagePipeline?.Recreate(RenderTargetManager.SceneColorFormat, RenderTargetManager.MotionVectorFormat,
-                _swapchain.DepthFormat);
-            _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
-            _ldrCompositePipeline?.Recreate(RenderTargetManager.LdrSceneColorFormat);
-            _weightedOitCompositePipeline?.Recreate(RenderTargetManager.SceneColorFormat);
-            _skyboxPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
+            _productionPipelines.RecreateForSwapchain();
             _directionalShadowResources?.Register(_bindlessHeap, _swapchain.DepthImageView);
             _spotShadowAtlas?.Register(_bindlessHeap, _swapchain.DepthImageView);
             _pointShadowCubemapArray?.Register(_bindlessHeap, _swapchain.DepthImageView);
@@ -13675,6 +12300,7 @@ namespace Njulf.Rendering
             _reflectionProbeManager?.Register(_bindlessHeap);
             _simpleDdgiVolumeManager?.Register(_bindlessHeap);
             _renderGraph.OnSwapchainRecreated();
+            _terminalOverlayPass?.OnSwapchainRecreated();
             _asyncComputeCoordinator.ResetTimingHistory(
                 AsyncComputeTimingResetKind.RenderTargetsOrSwapchain);
             return true;
@@ -14082,22 +12708,6 @@ namespace Njulf.Rendering
             GC.SuppressFinalize(this);
         }
 
-        private sealed class ReflectionProbeCompletionValueProvider :
-            IReflectionProbeCompletionValueProvider
-        {
-            private ulong _completionValue;
-
-            public void SetFrameSerial(ulong frameSerial)
-            {
-                _completionValue = frameSerial > ulong.MaxValue -
-                    (ulong)FramesInFlight - 1UL
-                        ? ulong.MaxValue
-                        : frameSerial + (ulong)FramesInFlight + 1UL;
-            }
-
-            public ulong GetCompletionValue(int frameIndex) => _completionValue;
-        }
-
         protected virtual void Dispose(bool disposing)
         {
             if (!disposing)
@@ -14158,8 +12768,12 @@ namespace Njulf.Rendering
                             _context.Device));
                     },
                     "progressive-startup-drain"));
-            AddResourceStage("graphics-reference-retirement", () => NativeGraphicsDevice.Releases.Complete(ulong.MaxValue, deviceIdle: true));
-            AddResourceStage("custom-passes", () => NativeGraphicsDevice.CustomPasses.ShutdownAfterDeviceIdle(), "graphics-reference-retirement");
+            AddResourceStage("graphics-reference-retirement", () => { NativeGraphicsDevice.ShutdownResourceTransfers(); NativeGraphicsDevice.Releases.Complete(ulong.MaxValue, deviceIdle: true); });
+            AddResourceStage("custom-passes", () =>
+            {
+                NativeGraphicsDevice.CustomPasses.ShutdownAfterDeviceIdle();
+                NativeGraphicsDevice.ReleaseEffectsAfterDeviceIdle();
+            }, "graphics-reference-retirement");
             AddResourceStage(
                 "screenshot-capture-resolution",
                 ResolveScreenshotCapturesForDisposal);
@@ -14175,17 +12789,7 @@ namespace Njulf.Rendering
                 _linearHdrReadbackManager.Dispose,
                 "linear-hdr-capture-resolution");
 
-            AddResourceStage(
-                "reflection-probe-passes",
-                () =>
-                {
-                    _reflectionProbePublishPass?.Dispose();
-                    _reflectionProbePrefilterPass?.Dispose();
-                    _reflectionProbeCapturePass?.Dispose();
-                    _reflectionProbePublishPass = null;
-                    _reflectionProbePrefilterPass = null;
-                    _reflectionProbeCapturePass = null;
-                });
+            AddResourceStage("reflection-probe-passes", _productionPipelines.GetDisposalAction("reflection-probe-passes"));
 
             // The generation owner releases C5 descriptor/buffer state and
             // every graph-owned image bank while the graph still owns those
@@ -14204,7 +12808,7 @@ namespace Njulf.Rendering
                 });
             AddResourceStage(
                 "render-graph",
-                _renderGraph.Cleanup,
+                () => { _terminalOverlayPass?.Cleanup(); ClearOverlaySubmissions(); _productionPipelines.CleanupGraph(_renderGraph); },
                 "custom-passes",
                 "simple-ddgi-near-field-residual-coordinator",
                 "hybrid-reflection-runtime");
@@ -14347,9 +12951,7 @@ namespace Njulf.Rendering
                 () => _renderTargets?.Dispose(),
                 "render-graph");
 
-            AddResourceStage(
-                "mesh-pipeline",
-                () => _meshPipeline?.Dispose(),
+            AddResourceStage("mesh-pipeline", _productionPipelines.GetDisposalAction("mesh-pipeline"),
                 "gi-pipeline-cache");
             AddResourceStage(
                 "ray-scene-descriptor-bank",
@@ -14372,33 +12974,13 @@ namespace Njulf.Rendering
                     _ddgiFoliageProxyManager
                         ?.Dispose(),
                 "acceleration-structure-manager");
-            AddResourceStage(
-                "compute-pipeline",
-                () => _computePipeline?.Dispose());
-            AddResourceStage(
-                "skinning-pass",
-                () => _skinningPass?.Dispose());
-            AddResourceStage(
-                "ddgi-foliage-proxy-generation-pass",
-                () =>
-                    _ddgiFoliageProxyGenerationPass
-                        ?.Dispose());
-            AddResourceStage(
-                "gpu-particle-reset-pass",
-                () =>
-                    _gpuParticleResetPass?.Dispose());
-            AddResourceStage(
-                "gpu-particle-simulate-pass",
-                () =>
-                    _gpuParticleSimulatePass
-                        ?.Dispose());
-            AddResourceStage(
-                "gpu-particle-sort-pass",
-                () =>
-                    _gpuParticleSortPass?.Dispose());
-            AddResourceStage(
-                "foliage-cull-pass",
-                () => _foliageCullPass?.Dispose());
+            AddResourceStage("compute-pipeline", _productionPipelines.GetDisposalAction("compute-pipeline"));
+            AddResourceStage("skinning-pass", _productionPipelines.GetDisposalAction("skinning-pass"));
+            AddResourceStage("ddgi-foliage-proxy-generation-pass", _productionPipelines.GetDisposalAction("ddgi-foliage-proxy-generation-pass"));
+            AddResourceStage("gpu-particle-reset-pass", _productionPipelines.GetDisposalAction("gpu-particle-reset-pass"));
+            AddResourceStage("gpu-particle-simulate-pass", _productionPipelines.GetDisposalAction("gpu-particle-simulate-pass"));
+            AddResourceStage("gpu-particle-sort-pass", _productionPipelines.GetDisposalAction("gpu-particle-sort-pass"));
+            AddResourceStage("foliage-cull-pass", _productionPipelines.GetDisposalAction("foliage-cull-pass"));
             AddResourceStage(
                 "skinning-manager",
                 () => _skinningManager?.Dispose());
@@ -14414,27 +12996,12 @@ namespace Njulf.Rendering
             AddResourceStage(
                 "foliage-manager",
                 () => _foliageManager?.Dispose());
-            AddResourceStage(
-                "foliage-pipeline",
-                () => _foliagePipeline?.Dispose());
-            AddResourceStage(
-                "composite-pipeline",
-                () => _compositePipeline?.Dispose());
-            AddResourceStage(
-                "ldr-composite-pipeline",
-                () =>
-                    _ldrCompositePipeline?.Dispose());
-            AddResourceStage(
-                "weighted-oit-composite-pipeline",
-                () =>
-                    _weightedOitCompositePipeline
-                        ?.Dispose());
-            AddResourceStage(
-                "skybox-pipeline",
-                () => _skyboxPipeline?.Dispose());
-            AddResourceStage(
-                "particle-pipeline",
-                () => _particlePipeline?.Dispose());
+            AddResourceStage("foliage-pipeline", _productionPipelines.GetDisposalAction("foliage-pipeline"));
+            AddResourceStage("composite-pipeline", _productionPipelines.GetDisposalAction("composite-pipeline"));
+            AddResourceStage("ldr-composite-pipeline", _productionPipelines.GetDisposalAction("ldr-composite-pipeline"));
+            AddResourceStage("weighted-oit-composite-pipeline", _productionPipelines.GetDisposalAction("weighted-oit-composite-pipeline"));
+            AddResourceStage("skybox-pipeline", _productionPipelines.GetDisposalAction("skybox-pipeline"));
+            AddResourceStage("particle-pipeline", _productionPipelines.GetDisposalAction("particle-pipeline"));
 
             if (_ownsDependencies)
             {

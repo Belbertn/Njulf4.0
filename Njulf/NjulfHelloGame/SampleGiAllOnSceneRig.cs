@@ -24,6 +24,7 @@ internal static class SampleGiAllOnSceneRig
     internal const string C1AssetPath =
         "Assets/ribbon_grass_tbdpec3r_ue_low/standard/" +
         "tbdpec3r_tier_3_nonUE.gltf";
+
     internal const int ExpectedMaskedMaterialCount = 2;
 
     private static readonly SampleAssetReference C1Asset = new(
@@ -48,55 +49,63 @@ internal static class SampleGiAllOnSceneRig
         (CoreVector3 anchor, float targetHeight, float heroScale) =
             ResolvePlacement(sceneKind);
         Model asset = content.Load<Model>(
-                C1AssetPath,
-                C1Asset.CreateLoadOptions()) ??
-            throw new InvalidOperationException(
-                $"All-on GI C1 fixture '{C1AssetPath}' did not load.");
-        Model instance = asset.CreateInstance() ??
-            throw new InvalidOperationException(
-                $"All-on GI C1 fixture '{C1AssetPath}' did not create an instance.");
-        if (instance.RenderObjects.Count == 0)
+                          C1AssetPath,
+                          C1Asset.CreateLoadOptions()) ??
+                      throw new InvalidOperationException(
+                          $"All-on GI C1 fixture '{C1AssetPath}' did not load.");
+        ModelInstance instance = asset.CreateInstance() ??
+                                 throw new InvalidOperationException(
+                                     $"All-on GI C1 fixture '{C1AssetPath}' did not create an instance.");
+        try
         {
-            throw new InvalidDataException(
-                $"All-on GI C1 fixture '{C1AssetPath}' has no render objects.");
-        }
-
-        CoreMatrix4x4 world = CreateGroundedWorld(
-            instance,
-            anchor,
-            targetHeight,
-            out float fixtureScale);
-        for (int index = 0; index < instance.RenderObjects.Count; index++)
-        {
-            RenderObject renderObject = instance.RenderObjects[index];
-            renderObject.Name =
-                $"GiAllOn.C1.MaskedFixture.{index}.{renderObject.Name}";
-            renderObject.AssetReference = new SceneAssetReference
+            if (instance.RenderObjects.Count == 0)
             {
-                Path = C1AssetPath,
-                SubObject = index.ToString(
-                    System.Globalization.CultureInfo.InvariantCulture)
-            };
-            renderObject.WorldMatrix = world;
-            renderObject.Visible = true;
-            renderObject.IsStatic = true;
-            scene.Add(renderObject);
-        }
+                throw new InvalidDataException(
+                    $"All-on GI C1 fixture '{C1AssetPath}' has no render objects.");
+            }
 
-        int c4HeroCount = sceneKind == SampleSceneKind.MaterialShowcase
-            ? 0
-            : SampleMaterialShowcaseScene.ConfigurePortableGiAllOnHero(
-                scene,
-                meshManager,
-                materialManager,
-                anchor + ResolveHeroOffset(sceneKind),
-                heroScale);
-        return new SampleGiAllOnSceneRigSummary(
-            C1AssetPath,
-            instance.RenderObjects.Count,
-            c4HeroCount,
-            anchor,
-            fixtureScale);
+            CoreMatrix4x4 world = CreateGroundedWorld(
+                instance,
+                anchor,
+                targetHeight,
+                out float fixtureScale);
+            for (int index = 0; index < instance.RenderObjects.Count; index++)
+            {
+                RenderObject renderObject = instance.RenderObjects[index];
+                renderObject.Name =
+                    $"GiAllOn.C1.MaskedFixture.{index}.{renderObject.Name}";
+                renderObject.AssetReference = new SceneAssetReference
+                {
+                    Path = C1AssetPath,
+                    SubObject = index.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture)
+                };
+                renderObject.WorldMatrix = world;
+                renderObject.Visible = true;
+                renderObject.IsStatic = true;
+            }
+
+            scene.Add(instance);
+
+            int c4HeroCount = sceneKind == SampleSceneKind.MaterialShowcase
+                ? 0
+                : SampleMaterialShowcaseScene.ConfigurePortableGiAllOnHero(
+                    scene,
+                    meshManager,
+                    materialManager,
+                    anchor + ResolveHeroOffset(sceneKind),
+                    heroScale);
+            return new SampleGiAllOnSceneRigSummary(
+                C1AssetPath,
+                instance.RenderObjects.Count,
+                c4HeroCount,
+                anchor,
+                fixtureScale);
+        }
+        finally
+        {
+            if (!scene.ModelInstances.Contains(instance)) instance.Dispose();
+        }
     }
 
     private static CoreMatrix4x4 CreateGroundedWorld(
@@ -125,15 +134,15 @@ internal static class SampleGiAllOnSceneRig
 
     private static (CoreVector3 Anchor, float TargetHeight, float HeroScale)
         ResolvePlacement(SampleSceneKind scene) => scene switch
-        {
-            SampleSceneKind.MaterialShowcase =>
-                (new CoreVector3(3.25f, 0f, 4.05f), 1.35f, 1f),
-            SampleSceneKind.SponzaPlaza =>
-                (new CoreVector3(10.0f, 0f, 5.5f), 1.75f, 0.9f),
-            SampleSceneKind.Bistro =>
-                (new CoreVector3(-20.0f, 0f, 1.25f), 1.65f, 0.85f),
-            _ => throw new ArgumentOutOfRangeException(nameof(scene))
-        };
+    {
+        SampleSceneKind.MaterialShowcase =>
+            (new CoreVector3(3.25f, 0f, 4.05f), 1.35f, 1f),
+        SampleSceneKind.SponzaPlaza =>
+            (new CoreVector3(10.0f, 0f, 5.5f), 1.75f, 0.9f),
+        SampleSceneKind.Bistro =>
+            (new CoreVector3(-20.0f, 0f, 1.25f), 1.65f, 0.85f),
+        _ => throw new ArgumentOutOfRangeException(nameof(scene))
+    };
 
     private static CoreVector3 ResolveHeroOffset(SampleSceneKind scene) =>
         scene switch

@@ -37,7 +37,9 @@ public partial class RenderObject
                 BoundingBox? candidateBounds = value?.Bounds;
                 IMesh? next = ReplaceResource(old, value);
                 if (ReferenceEquals(next, old)) return;
+                if (old is Njulf.Graphics.Mesh oldMesh) oldMesh.ContentChanged -= OnMeshContentChanged;
                 _mesh = next;
+                if (next is Njulf.Graphics.Mesh nextMesh) nextMesh.ContentChanged += OnMeshContentChanged;
                 _localMeshBounds = candidateBounds;
                 _dirty = true;
                 newBounds = GetWorldBounds();
@@ -76,6 +78,33 @@ public partial class RenderObject
         if (_resourceOwner != null && !ReferenceEquals(_resourceOwner, reference.OwnerIdentity))
             throw new ArgumentException("Resource belongs to another graphics device.", nameof(resource));
         return reference;
+    }
+
+    private void OnMeshContentChanged()
+    {
+        BoundingBox? before, after;
+        lock (_resourceLock)
+        {
+            if (_disposed) return;
+            before = GetWorldBounds();
+            _localMeshBounds = _mesh?.Bounds;
+            _dirty = true;
+            after = GetWorldBounds();
+        }
+        PublishChange(SceneMutationKind.Geometry, before, after, _mesh, _mesh);
+    }
+
+    /// <summary>Atomically edits only this object's material, copying shared storage when necessary.</summary>
+    /// <remarks>Read Material.Definition and use a with expression to preserve other values.
+    /// Typed assignments replace textures; null clears a slot and omitted slots retain their textures.
+    /// Requires the device thread. Re-read Material after an edit; a replaced borrowed view expires.</remarks>
+    public void UpdateMaterial(MaterialDefinition definition, ReadOnlySpan<MaterialTextureAssignment> textures = default)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (Material is not Njulf.Graphics.Material material)
+            throw new InvalidOperationException("Object has no editable framework material.");
+        material.UpdateForObject(this, definition, textures);
     }
 
     private T? ReplaceResource<T>(T? old, T? candidate) where T : class, IGraphicsResource
@@ -119,6 +148,7 @@ public partial class RenderObject
                 throw new ArgumentException("Resources belong to different devices.");
             _resourceOwner = meshReference?.OwnerIdentity ?? materialReference?.OwnerIdentity;
             _mesh = mesh;
+            if (mesh is Njulf.Graphics.Mesh ownedMesh) ownedMesh.ContentChanged += OnMeshContentChanged;
             _material = material;
             _localMeshBounds = mesh?.Bounds;
         }
@@ -158,7 +188,7 @@ public partial class RenderObject
             if (_materialTransferInProgress) throw new InvalidOperationException("Material transfer is in progress.");
             _disposed = true;
             List<Exception>? failures = null;
-            try { (_mesh as IResourceReference)?.Release(); _mesh = null; }
+            try { if (_mesh is Njulf.Graphics.Mesh ownedMesh) ownedMesh.ContentChanged -= OnMeshContentChanged; (_mesh as IResourceReference)?.Release(); _mesh = null; }
             catch (Exception e) { (failures ??= new()).Add(e); }
             try { (_material as IResourceReference)?.Release(); _material = null; }
             catch (Exception e) { (failures ??= new()).Add(e); }

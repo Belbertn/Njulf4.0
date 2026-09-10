@@ -8,7 +8,7 @@ namespace Njulf.Graphics;
 /// initialization and before shutdown. Resource creation consumes supplied spans synchronously.
 /// Scene objects and materials retain independent references; releasing a wrapper never destroys
 /// storage still referenced by another owner or outstanding GPU work.</remarks>
-public abstract class GraphicsDevice
+public abstract partial class GraphicsDevice
 {
     internal GraphicsDevice() { }
     /// <summary>Common settings and frame-boundary change receipts.</summary>
@@ -41,6 +41,9 @@ public abstract class GraphicsDevice
 /// <summary>An owned geometry reference. Scene objects retain independent references.</summary>
 public abstract class Mesh : IMesh, IDisposable
 {
+    internal virtual event Action? ContentChanged { add { } remove { } }
+    /// <summary>Whether fixed-topology vertex updates are supported.</summary>
+    public virtual MeshUsage Usage => MeshUsage.Static;
     internal Mesh() { }
     /// <summary>Local-space bounds in scene units.</summary>
     public abstract BoundingBox Bounds { get; }
@@ -54,6 +57,14 @@ public abstract class Mesh : IMesh, IDisposable
 public abstract class Material : IMaterial, IDisposable
 {
     internal Material() { }
+    /// <inheritdoc />
+    public abstract MaterialDefinition Definition { get; }
+    /// <inheritdoc />
+    public abstract Texture? RetainTexture(MaterialTextureSlot slot);
+    /// <inheritdoc />
+    public abstract void UpdateShared(MaterialDefinition definition, ReadOnlySpan<MaterialTextureAssignment> textures = default);
+    internal abstract void UpdateForObject(RenderObject target, MaterialDefinition definition,
+        ReadOnlySpan<MaterialTextureAssignment> textures);
     /// <summary>The current authored material name.</summary>
     public abstract string Name { get; }
     /// <summary>Whether this wrapper has released its reference.</summary>
@@ -65,6 +76,8 @@ public abstract class Material : IMaterial, IDisposable
 /// <summary>An owned sampled texture reference. Materials retain independent dependencies.</summary>
 public abstract class Texture : ITexture, IDisposable
 {
+    public virtual TextureFormat Format => TextureFormat.Unknown;
+    public virtual int MipLevels => 1;
     internal Texture() { }
     /// <summary>Width in pixels.</summary>
     public abstract int Width { get; }
@@ -81,6 +94,8 @@ public abstract class Texture : ITexture, IDisposable
 /// <summary>An owned linear RGBA16F target. Materials and native passes retain independent references.</summary>
 public abstract class RenderTarget2D : ITexture, IDisposable
 {
+    public virtual TextureFormat Format => TextureFormat.Rgba16Float;
+    public virtual int MipLevels => 1;
     internal RenderTarget2D() { }
     /// <summary>Width in pixels, fixed at creation.</summary>
     public abstract int Width { get; }

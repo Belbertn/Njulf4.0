@@ -85,6 +85,11 @@ internal static class SceneDocumentCompatibility
         SceneMaterialOverrideDocument source) =>
         new()
         {
+            BaseColorTexturePath = source.BaseColorTexturePath,
+            NormalTexturePath = source.NormalTexturePath,
+            MetallicRoughnessTexturePath = source.MetallicRoughnessTexturePath,
+            OcclusionTexturePath = source.OcclusionTexturePath,
+            EmissiveTexturePath = source.EmissiveTexturePath,
             Name = source.Name,
             Albedo = source.Albedo ?? LegacyAlbedo,
             Emissive = source.Emissive ?? LegacyEmissive,

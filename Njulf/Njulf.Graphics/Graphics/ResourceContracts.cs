@@ -19,10 +19,23 @@ public interface IMaterial : IGraphicsResource
 {
     /// <summary>Authored name of the compiled material.</summary>
     string Name { get; }
+    /// <summary>Immutable snapshot of the current authored values and binding settings.</summary>
+    MaterialDefinition Definition { get; }
+    /// <summary>Retains an independently owned texture snapshot, or null for an unbound slot. Dispose the result.</summary>
+    Texture? RetainTexture(MaterialTextureSlot slot);
+    /// <summary>Atomically updates every user of this shared material, including deduplicated aliases.</summary>
+    /// <remarks>Use RenderObject.UpdateMaterial for an isolated edit. Typed assignments replace or clear
+    /// textures; omitted slots retain their texture. Raw handles must remain unchanged in omitted slots.
+    /// Requires the device thread. The permanent default cannot be edited in place.</remarks>
+    void UpdateShared(MaterialDefinition definition, ReadOnlySpan<MaterialTextureAssignment> textures = default);
 }
 /// <summary>A typed view of a sampled 2D texture.</summary>
 public interface ITexture : IGraphicsResource
 {
+    /// <summary>Storage format, or Unknown for a content format outside the portable subset.</summary>
+    TextureFormat Format => TextureFormat.Unknown;
+    /// <summary>Number of allocated mip levels.</summary>
+    int MipLevels => 1;
     /// <summary>Width in pixels.</summary>
     int Width { get; }
     /// <summary>Height in pixels.</summary>

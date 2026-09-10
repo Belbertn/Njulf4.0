@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "kind": "Fullscreen",
+  "shader": "color_grade.frag.spv",
+  "parameters": [
+    { "name": "Saturation", "type": "Float", "default": 1, "minimum": 0, "maximum": 2 },
+    { "name": "Contrast", "type": "Float", "default": 1, "minimum": 0, "maximum": 2 },
+    { "name": "Tint", "type": "Vector3", "default": [1, 1, 1] }
+  ],
+  "resources": [ { "name": "SourceColor", "binding": 0, "kind": "SampledTexture2D", "access": "Read" } ]
+}

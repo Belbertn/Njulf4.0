@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- Keep the RID local to the game; command-line -r also changes engine restore graphs. -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RuntimeIdentifier Condition="'$(Configuration)' == 'Release'">win-x64</RuntimeIdentifier>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- The engine's VMA package includes an unused legacy macOS RID. -->
+    <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
+    <NjulfEngineRoot>NJULF_ENGINE_ROOT</NjulfEngineRoot>
+    <Configurations>Debug;Development;Release</Configurations>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(RestoreLockedMode)' == '' and ('$(Configuration)' == 'Release' or '$(ContinuousIntegrationBuild)' == 'true')">true</RestoreLockedMode>
+    <Optimize Condition="'$(Configuration)' == 'Development'">true</Optimize>
+    <DefineConstants Condition="'$(Configuration)' == 'Development'">$(DefineConstants);TRACE;RELEASE;NJULF_DEVELOPMENT</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(NjulfEngineRoot)/Njulf.Framework/Njulf.Framework.csproj" />
+  </ItemGroup>
+  <Import Project="$(NjulfEngineRoot)/build/Njulf.Game.targets" Condition="Exists('$(NjulfEngineRoot)/build/Njulf.Game.targets')" />
+  <Target Name="ValidateNjulfEngineRoot" BeforeTargets="CollectPackageReferences;PrepareForBuild">
+    <Error Condition="!Exists('$(NjulfEngineRoot)/build/Njulf.Game.targets')"
+           Text="NjulfEngineRoot must point to a Njulf checkout containing build/Njulf.Game.targets. Edit NjulfEngineRoot in this project or pass -p:NjulfEngineRoot=path." />
+  </Target>
+</Project>

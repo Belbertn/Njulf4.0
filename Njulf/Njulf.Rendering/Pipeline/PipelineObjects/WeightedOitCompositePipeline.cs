@@ -47,12 +47,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _colorFormat = colorFormat;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
-            GraphicsPipelineFactory.ValidatePushConstantRange(
-                _context,
-                (uint)Marshal.SizeOf<GPUWeightedOitCompositePushConstants>(),
-                "Weighted OIT composite pass");
-            if (createPipeline)
-                Prepare();
+            try
+            {
+                GraphicsPipelineFactory.ValidatePushConstantRange(
+                    _context,
+                    (uint)Marshal.SizeOf<GPUWeightedOitCompositePushConstants>(),
+                    "Weighted OIT composite pass");
+                if (createPipeline)
+                    Prepare();
+            }
+            catch (Exception initializationFailure)
+            {
+                // A failed constructor has not transferred ownership to the production assembly.
+                try { Dispose(); }
+                catch (Exception cleanupFailure) { initializationFailure.Data["Njulf.PipelineCleanupFailure"] = cleanupFailure; }
+                throw;
+            }
         }
 
         public VkPipeline Pipeline

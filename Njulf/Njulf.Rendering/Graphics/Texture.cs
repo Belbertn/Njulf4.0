@@ -7,6 +7,8 @@ internal sealed class VulkanTexture : Texture, ITexture, IDisposable
 {
     internal VulkanGraphicsDevice Owner { get; }
     internal TextureHandle Handle { get; }
+    public override TextureFormat Format => Owner.TextureResources.GetGraphicsDescription(Handle).Format;
+    public override int MipLevels => Owner.TextureResources.GetGraphicsDescription(Handle).MipLevels;
     public override int Width { get; }
     public override int Height { get; }
     public override TextureColorSpace ColorSpace { get; }

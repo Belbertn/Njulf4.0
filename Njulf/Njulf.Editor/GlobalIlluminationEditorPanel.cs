@@ -74,7 +74,11 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
 
     public void Render(EditorController editor)
     {
-        ImGui.Begin("Global Illumination");
+        if (!ImGui.Begin(EditorDockLayout.GlobalIlluminationWindow))
+        {
+            ImGui.End();
+            return;
+        }
         RenderRuntimeSummary(editor);
 
         RenderSettings? renderSettings = editor.RendererSettings;

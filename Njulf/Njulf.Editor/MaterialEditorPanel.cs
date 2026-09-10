@@ -18,7 +18,11 @@ internal sealed class MaterialEditorPanel
 
     public void Render(EditorController editor)
     {
-        ImGui.Begin("Materials");
+        if (!ImGui.Begin(EditorDockLayout.MaterialsWindow))
+        {
+            ImGui.End();
+            return;
+        }
 
         RenderSettings? renderSettings = editor.RendererSettings;
         if (renderSettings == null)

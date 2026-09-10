@@ -718,7 +718,7 @@ internal sealed class HelloGame : Game
         SampleLighting.ConfigureRenderSettings(
             vulkanRenderer.Settings,
             ResolveSceneLightingMode());
-        ConfigureSceneEnvironment(vulkanRenderer);
+        ConfigureSceneEnvironment(vulkanRenderer, Scene);
         ConfigureSceneRenderSettings(vulkanRenderer);
         ApplySmokeRenderSettings(vulkanRenderer);
 
@@ -749,6 +749,7 @@ internal sealed class HelloGame : Game
             }
             ApplySmokeRenderSettings(vulkanRenderer);
         }
+        Scene.Environment = SceneEnvironmentSettings.Capture(vulkanRenderer.Settings.Environment);
     }
 
     protected override void Load()
@@ -842,11 +843,12 @@ internal sealed class HelloGame : Game
                 $"scene={_sceneKind}, maxFrames={_smokeOptions.FrameCount}, " +
                 $"report='{Path.GetFullPath(allOnReportPath)}'.");
         }
-        ConfigureSceneLighting(lightManager);
+        ConfigureSceneLighting(Scene);
         SamplePerformanceScenario startupScenario = ResolveStartupScenario();
         if (startupScenario != SamplePerformanceScenario.Normal)
         {
             SamplePerformanceScenarioSummary summary = _performanceScenarioRunner.Apply(startupScenario);
+            Scene.Environment = SceneEnvironmentSettings.Capture(renderer.Settings.Environment);
             _sponzaAtmosphereFrozen = false;
             ApplyPerformanceScenarioCamera(camera, startupScenario);
             Console.WriteLine(
@@ -854,8 +856,7 @@ internal sealed class HelloGame : Game
                 $"objects={summary.ObjectCount}, lights={summary.LightCount}, materials={summary.MaterialCount}, notes={summary.Notes}");
         }
 
-        _inputController = new SampleInputController(
-            camera,
+        _inputController = new SampleInputController(() => Scene, camera,
             input,
             HandleExitRequest,
             renderer,
@@ -891,8 +892,7 @@ internal sealed class HelloGame : Game
             _bistroQualityRuntimeController =
                 new SampleBistroQualityRuntimeController(
                     renderer,
-                    camera,
-                    lightManager,
+                    camera, Scene,
                     contract);
             if (!string.IsNullOrWhiteSpace(
                     _smokeOptions.BistroQualityCaptureDirectory))
@@ -960,8 +960,7 @@ internal sealed class HelloGame : Game
                 new SampleKhronosMaterialGiRenderedGateRunner(
                     scene,
                     renderer,
-                    camera,
-                    lightManager,
+                    camera, Scene,
                     () => (WindowWidth, WindowHeight),
                     Exit);
         }
@@ -969,8 +968,7 @@ internal sealed class HelloGame : Game
         {
             _materialGiCaptureRunner = new SampleMaterialGiCaptureRunner(
                 renderer,
-                camera,
-                lightManager,
+                camera, Scene,
                 _smokeOptions.MaterialGiCaptureDirectory,
                 () => (WindowWidth, WindowHeight),
                 Exit,
@@ -995,8 +993,7 @@ internal sealed class HelloGame : Game
             _sponzaTemporalCaptureRunner =
                 new SampleSponzaTemporalCaptureRunner(
                     renderer,
-                    camera,
-                    lightManager,
+                    camera, Scene,
                     _smokeOptions.SponzaTemporalCaptureDirectory,
                     () => (WindowWidth, WindowHeight),
                     Exit);
@@ -1698,6 +1695,9 @@ internal sealed class HelloGame : Game
         if (_drawnFrames < 1)
             return;
         renderer.Settings.Environment.AnimateTimeOfDay = false;
+        if (Scene.Environment is { AnimateTimeOfDay: true } authoredEnvironment)
+            Scene.Environment = authoredEnvironment with { AnimateTimeOfDay = false,
+                TimeOfDayHours = renderer.Settings.Environment.TimeOfDayHours };
         _sponzaAtmosphereFrozen = true;
     }
 
@@ -2403,8 +2403,8 @@ internal sealed class HelloGame : Game
             return;
 
         _editorHost.BeginFrame(
-            new System.Numerics.Vector2(Math.Max(1, WindowWidth), Math.Max(1, WindowHeight)),
-            System.Numerics.Vector2.One,
+            new System.Numerics.Vector2(Math.Max(1, Window.Size.X), Math.Max(1, Window.Size.Y)),
+            new System.Numerics.Vector2((float)Window.FramebufferSize.X / Math.Max(1, Window.Size.X), (float)Window.FramebufferSize.Y / Math.Max(1, Window.Size.Y)),
             Math.Max(deltaTime, 1f / 1000f));
         _editorPanels.Render(_editorController);
 
@@ -2414,8 +2414,12 @@ internal sealed class HelloGame : Game
         _editorSavePressed = saveDown;
 
         bool pickDown = input.IsMouseButtonDown(Njulf.Input.MouseButton.Left);
+        var gizmoViewport = new Njulf.Core.Math.Vector2(Math.Max(1, Window.Size.X), Math.Max(1, Window.Size.Y));
+        _editorController.Gizmos.Update(_editorController, (FirstPersonCamera)Camera!, gizmoViewport, input.MousePosition,
+            pickDown, !_editorHost.WantCaptureMouse, IsWindowFocused, input.IsPhysicalKeyDown(Key.Escape));
+        _editorController.Gizmos.Render();
         if (pickDown && !_editorPickPressed)
-            _editorController.TryPick((FirstPersonCamera)Camera!, input.MousePosition, new Njulf.Core.Math.Vector2(WindowWidth, WindowHeight));
+            _editorController.TryPick((FirstPersonCamera)Camera!, input.MousePosition, gizmoViewport);
         _editorPickPressed = pickDown;
         _editorController.UpdateSelectionHighlight();
     }
@@ -2652,7 +2656,6 @@ internal sealed class HelloGame : Game
                 targetScene,
                 meshManager,
                 materialManager,
-                lightManager,
                 SampleLightingMode.DirectionalKey,
                 _sampleStressSceneResources);
             builder.Apply(SamplePerformanceScenario.ForestFoliage);
@@ -2666,7 +2669,6 @@ internal sealed class HelloGame : Game
                 targetScene,
                 meshManager,
                 materialManager,
-                lightManager,
                 LightingMode,
                 _sampleStressSceneResources);
             builder.Apply(SamplePerformanceScenario.GiCornellRoom);
@@ -2689,7 +2691,6 @@ internal sealed class HelloGame : Game
             Content!,
             materialManager,
             meshManager,
-            lightManager,
             assetManifest,
             loadSceneDocument: sceneKind == SampleSceneKind.SponzaPlaza,
             sponzaFixtureMode: _smokeOptions.SponzaFixtureMode,
@@ -2963,7 +2964,6 @@ internal sealed class HelloGame : Game
             Scene,
             meshManager,
             materialManager,
-            lightManager,
             LightingMode,
             _sampleStressSceneResources));
     }
@@ -3269,7 +3269,7 @@ internal sealed class HelloGame : Game
             MeshManager meshes = services.GetRequiredService<MeshManager>();
             MaterialManager materials = services.GetRequiredService<MaterialManager>();
             LightManager lights = services.GetRequiredService<LightManager>();
-            var loader = new SampleSceneLoader(Content!, materials, meshes, lights, manifest)
+            var loader = new SampleSceneLoader(Content!, materials, meshes, manifest)
             {
                 PreparedModels = models
             };
@@ -3474,8 +3474,6 @@ internal sealed class HelloGame : Game
             _sampleVfxEffects;
         SamplePerformanceScenarioRunner? previousScenario =
             _performanceScenarioRunner;
-        LightRecord[] previousLights = lightManager.GetLightRecords()
-            .ToArray();
         CoreVector3 previousCameraPosition = camera.Position;
         float previousCameraYaw = camera.Yaw;
         float previousCameraPitch = camera.Pitch;
@@ -3497,7 +3495,6 @@ internal sealed class HelloGame : Game
         {
             commitPhaseStarted =
                 System.Diagnostics.Stopwatch.GetTimestamp();
-            lightManager.ClearLights();
             SampleSceneBuild build = prepared?.Build ??
                 BuildSampleScene(
                     targetScene,
@@ -3580,10 +3577,10 @@ internal sealed class HelloGame : Game
             SampleLighting.ConfigureRenderSettings(
                 renderer.Settings,
                 ResolveSceneLightingMode());
-            ConfigureSceneEnvironment(renderer);
+            if (activeScene.Environment is { } previousEnvironment)
+                SceneEnvironmentSettings.Apply(previousEnvironment, renderer.Settings.Environment);
             ConfigureSceneRenderSettings(renderer);
             ApplySmokeRenderSettings(renderer);
-            RestoreLights(lightManager, previousLights);
             camera.Position = previousCameraPosition;
             camera.Yaw = previousCameraYaw;
             camera.Pitch = previousCameraPitch;
@@ -4590,7 +4587,6 @@ internal sealed class HelloGame : Game
             _performanceScenarioRunner = null;
             _inputController?.SetPerformanceScenarioRunner(null);
             previous.Dispose();
-            Services?.GetRequiredService<LightManager>().ClearLights();
             _loadingSceneInstancesReleased = true;
             coordinator.ObserveHostActivity(
                 _loadingTransitionGeneration);
@@ -4800,20 +4796,6 @@ internal sealed class HelloGame : Game
         }
     }
 
-    private static void RestoreLights(
-        LightManager lightManager,
-        IReadOnlyList<LightRecord> lights)
-    {
-        lightManager.ClearLights();
-        foreach (LightRecord record in lights)
-        {
-            lightManager.AddLightHandle(
-                record.Light,
-                record.Name,
-                record.Id);
-        }
-    }
-
     private void UpdateSceneTransitionTitle(
         SampleSceneTransitionSnapshot snapshot)
     {
@@ -4843,10 +4825,11 @@ internal sealed class HelloGame : Game
         _performanceScenarioRunner = CreatePerformanceScenarioRunner(meshManager, materialManager, lightManager);
         SampleLighting.ConfigureRenderSettings(renderer.Settings, ResolveSceneLightingMode());
         ApplySmokeRenderSettings(renderer);
-        ConfigureSceneLighting(lightManager);
-        ConfigureSceneEnvironment(renderer);
+        ConfigureSceneLighting(targetScene);
+        ConfigureSceneEnvironment(renderer, targetScene);
         ConfigureSceneRenderSettings(renderer);
         ApplySmokeRenderSettings(renderer);
+        targetScene.Environment = SceneEnvironmentSettings.Capture(renderer.Settings.Environment);
         _inputController?.SetParticleEffects(_sampleVfxEffects);
         _inputController?.SetLightingMode(ResolveSceneLightingMode());
         _inputController?.SetPerformanceScenarioRunner(_performanceScenarioRunner);
@@ -4868,11 +4851,11 @@ internal sealed class HelloGame : Game
                 $"Content manager returned null for scene model '{modelPath}'.");
     }
 
-    private void ConfigureSceneLighting(LightManager lightManager)
+    private void ConfigureSceneLighting(Scene targetScene)
     {
         if (_smokeOptions.KhronosMaterialGiRenderedGate is not null)
         {
-            SampleKhronosMaterialGiRenderedGateRunner.ConfigureLockedLighting(lightManager);
+            SampleKhronosMaterialGiRenderedGateRunner.ConfigureLockedLighting(targetScene);
             return;
         }
         if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
@@ -4884,25 +4867,26 @@ internal sealed class HelloGame : Game
             // orientation, but imported model lights do not opt into shadows.
             // Use one canonical shadow-casting copy instead of combining the
             // unshadowed source with Sponza's unrelated directional key.
-            lightManager.ClearLights();
-            lightManager.AddLight(SampleBistroLightingProfile.CreateDirectionalKey());
+            new Njulf.Assets.Scenes.SceneLightStore(targetScene).Clear();
+            SampleLighting.Add(targetScene, SampleBistroLightingProfile.CreateDirectionalKey());
             return;
         }
 
         if (_sceneKind == SampleSceneKind.SponzaPlaza && _sceneLoader?.LoadedFromDocument == true)
             return;
 
-        SampleLighting.Configure(lightManager, ResolveSceneLightingMode());
+        SampleLighting.Configure(targetScene, ResolveSceneLightingMode());
     }
 
-    private void ConfigureSceneEnvironment(VulkanRenderer renderer)
+    private void ConfigureSceneEnvironment(VulkanRenderer renderer, Scene targetScene)
     {
         if (_smokeOptions.KhronosMaterialGiRenderedGate is not null)
         {
-            SampleEnvironment.Configure(renderer, SampleEnvironmentMode.StudioNeutral);
+            SampleEnvironment.Configure(targetScene, SampleEnvironmentMode.StudioNeutral);
+            SceneEnvironmentSettings.Apply(targetScene.Environment!, renderer.Settings.Environment);
             return;
         }
-        SampleEnvironment.Configure(renderer, _sceneKind switch
+        SampleEnvironment.Configure(targetScene, _sceneKind switch
         {
             SampleSceneKind.MaterialShowcase => SampleEnvironmentMode.StudioNeutral,
             SampleSceneKind.GlobalIlluminationTest => SampleEnvironmentMode.Disabled,
@@ -4910,6 +4894,7 @@ internal sealed class HelloGame : Game
             SampleSceneKind.VfxShowcase => SampleEnvironmentMode.StudioNeutral,
             _ => EnvironmentMode
         });
+        SceneEnvironmentSettings.Apply(targetScene.Environment!, renderer.Settings.Environment);
     }
 
     private SampleLightingMode ResolveSceneLightingMode()

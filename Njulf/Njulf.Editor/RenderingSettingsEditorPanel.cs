@@ -14,14 +14,14 @@ namespace Njulf.Editor;
 /// </summary>
 internal sealed unsafe class RenderingSettingsEditorPanel
 {
-    private static readonly SettingEditor[] ExposureEditors = BuildEditors<RenderSettings>(
-        static property => property.Name is
+    private static readonly SettingEditor[] ExposureEditors = BuildEditors<RenderSettings>(static property =>
+        property.Name is
             nameof(RenderSettings.Exposure) or
             nameof(RenderSettings.ToneMapper) or
             nameof(RenderSettings.ShowRawHdrSceneColor));
 
-    private static readonly SettingEditor[] ResolutionEditors = BuildEditors<RenderSettings>(
-        static property => property.Name == nameof(RenderSettings.ResolutionScale));
+    private static readonly SettingEditor[] ResolutionEditors =
+        BuildEditors<RenderSettings>(static property => property.Name == nameof(RenderSettings.ResolutionScale));
 
     private static readonly SettingEditor[] DynamicResolutionEditors = BuildEditors<DynamicResolutionSettings>();
     private static readonly SettingEditor[] AutoExposureEditors = BuildEditors<AutoExposureSettings>();
@@ -31,6 +31,7 @@ internal sealed unsafe class RenderingSettingsEditorPanel
     private static readonly SettingEditor[] AmbientOcclusionEditors = BuildEditors<AmbientOcclusionSettings>();
     private static readonly SettingEditor[] AntiAliasingEditors = BuildEditors<AntiAliasingSettings>();
     private static readonly SettingEditor[] FogEditors = BuildEditors<FogSettings>();
+
     private static readonly SettingEditor[] TransparencyEditors =
         BuildEditors<TransparencySettings>();
 
@@ -51,6 +52,11 @@ internal sealed unsafe class RenderingSettingsEditorPanel
 
     private string _filter = string.Empty;
     private GraphicsSettingsController? _controller;
+    private EditorController? _editor;
+
+    private static readonly HashSet<string> AuthoredEnvironmentProperties =
+        typeof(Njulf.Core.Scene.SceneEnvironment).GetProperties().Select(static property => property.Name).ToHashSet();
+
     private Task<GraphicsSettingsResult>? _pending;
     private GraphicsSettingsResult? _lastResult;
 
@@ -68,31 +74,44 @@ internal sealed unsafe class RenderingSettingsEditorPanel
 
     public void Render(EditorController editor)
     {
-        ImGui.Begin("Rendering Settings");
+        if (!ImGui.Begin(EditorDockLayout.RenderingSettingsWindow))
+        {
+            ImGui.End();
+            return;
+        }
 
         RenderSettings? settings = editor.RendererSettings;
         _controller = editor.GraphicsSettings;
+        _editor = editor;
         if (settings == null)
         {
-            ImGui.TextWrapped("Live rendering settings are unavailable because this editor is not attached to a Vulkan renderer.");
+            ImGui.TextWrapped(
+                "Live rendering settings are unavailable because this editor is not attached to a Vulkan renderer.");
             ImGui.End();
             return;
         }
 
         RenderRuntimeSummary(editor.RendererDiagnostics);
         if (_pending?.IsCompletedSuccessfully == true)
-        { _lastResult = _pending.Result; _pending = null; }
+        {
+            _lastResult = _pending.Result;
+            _pending = null;
+        }
+
         if (_pending != null) ImGui.TextWrapped("Settings change pending; resources are being prepared.");
         if (_lastResult != null)
         {
             ImGui.TextWrapped($"Settings: {_lastResult.Outcome}. {_lastResult.Reason}");
             if (_lastResult.Outcome is GraphicsSettingsOutcome.RestartRequired or GraphicsSettingsOutcome.Rejected)
-                foreach (var field in _lastResult.Fields) ImGui.TextWrapped($"{field.Field}: {field.Reason}");
+                foreach (var field in _lastResult.Fields)
+                    ImGui.TextWrapped($"{field.Field}: {field.Reason}");
         }
+
         if (ImGui.Button("Reset visualization overrides"))
             settings.ResetRenderViewOverrides();
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Clears raw HDR and all renderer debug views without changing physical rendering settings.");
+            ImGui.SetTooltip(
+                "Clears raw HDR and all renderer debug views without changing physical rendering settings.");
 
         ImGui.SeparatorText("Live renderer settings");
         ImGui.InputText("Filter settings", ref _filter, (nuint)256);
@@ -192,6 +211,9 @@ internal sealed unsafe class RenderingSettingsEditorPanel
     private void RenderProperty(object target, SettingEditor editor)
     {
         PropertyInfo property = editor.Property;
+        bool authoredEnvironment = target is EnvironmentSettings &&
+                                   AuthoredEnvironmentProperties.Contains(property.Name) && _editor != null;
+        if (authoredEnvironment) target = _editor!.EditableEnvironment;
         string controlLabel = $"{editor.Label}##{property.DeclaringType?.Name}.{property.Name}";
         object? current = property.GetValue(target);
         object? next = current;
@@ -253,36 +275,49 @@ internal sealed unsafe class RenderingSettingsEditorPanel
                     changed = true;
                 }
             }
+
             ImGui.EndCombo();
         }
 
         if (changed)
         {
-            GraphicsSettingsChange? change = CreateCommonChange(target, property.Name, next);
-            if (change != null && _controller != null)
+            if (authoredEnvironment)
             {
-                var task = _controller.ApplyAsync(change);
-                if (task.IsCompletedSuccessfully) _lastResult = task.Result;
-                else _pending = task;
+                property.SetValue(target, next);
+                _editor!.CommitEnvironmentEdits();
             }
-            else property.SetValue(target, next);
+            else
+            {
+                GraphicsSettingsChange? change = CreateCommonChange(target, property.Name, next);
+                if (change != null && _controller != null)
+                {
+                    var task = _controller.ApplyAsync(change);
+                    if (task.IsCompletedSuccessfully) _lastResult = task.Result;
+                    else _pending = task;
+                }
+                else property.SetValue(target, next);
+            }
         }
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip($"{property.DeclaringType?.Name}.{property.Name} = {property.GetValue(target)}");
     }
 
-    internal static GraphicsSettingsChange? CreateCommonChange(object target, string property, object? value) => (target, property) switch
-    {
-        (RenderSettings, nameof(RenderSettings.Exposure)) => new() { Exposure = (float)value! },
-        (RenderSettings, nameof(RenderSettings.ToneMapper)) => new() { ToneMapper = (ToneMapper)value! },
-        (RenderSettings, nameof(RenderSettings.ResolutionScale)) => new() { ResolutionScale = (float)value! },
-        (AutoExposureSettings, nameof(AutoExposureSettings.Enabled)) => new() { AutoExposureEnabled = (bool)value! },
-        (AntiAliasingSettings, nameof(AntiAliasingSettings.Mode)) => new() { AntiAliasingMode = (AntiAliasingMode)value! },
-        (AmbientOcclusionSettings, nameof(AmbientOcclusionSettings.Mode)) => new() { AmbientOcclusionMode = (AmbientOcclusionMode)value! },
-        (ReflectionSettings, nameof(ReflectionSettings.Mode)) => new() { ReflectionMode = (ReflectionMode)value! },
-        _ => null
-    };
+    internal static GraphicsSettingsChange? CreateCommonChange(object target, string property, object? value) =>
+        (target, property) switch
+        {
+            (RenderSettings, nameof(RenderSettings.Exposure)) => new() { Exposure = (float)value! },
+            (RenderSettings, nameof(RenderSettings.ToneMapper)) => new() { ToneMapper = (ToneMapper)value! },
+            (RenderSettings, nameof(RenderSettings.ResolutionScale)) => new() { ResolutionScale = (float)value! },
+            (AutoExposureSettings, nameof(AutoExposureSettings.Enabled)) =>
+                new() { AutoExposureEnabled = (bool)value! },
+            (AntiAliasingSettings, nameof(AntiAliasingSettings.Mode)) => new()
+                { AntiAliasingMode = (AntiAliasingMode)value! },
+            (AmbientOcclusionSettings, nameof(AmbientOcclusionSettings.Mode)) => new()
+                { AmbientOcclusionMode = (AmbientOcclusionMode)value! },
+            (ReflectionSettings, nameof(ReflectionSettings.Mode)) => new() { ReflectionMode = (ReflectionMode)value! },
+            _ => null
+        };
 
     private bool MatchesFilter(SettingEditor editor, string sectionName) =>
         !IsFiltering ||
@@ -329,12 +364,14 @@ internal sealed unsafe class RenderingSettingsEditorPanel
         {
             return 0.1f;
         }
+
         if (propertyName.Contains("LogLuminance", StringComparison.Ordinal) ||
             propertyName.Contains("TimeOfDay", StringComparison.Ordinal) ||
             propertyName.Contains("Degrees", StringComparison.Ordinal))
         {
             return 0.05f;
         }
+
         return 0.01f;
     }
 
@@ -350,8 +387,10 @@ internal sealed unsafe class RenderingSettingsEditorPanel
             {
                 result.Append(' ');
             }
+
             result.Append(value);
         }
+
         return result.ToString();
     }
 

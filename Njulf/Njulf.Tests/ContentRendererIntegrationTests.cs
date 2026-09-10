@@ -423,8 +423,8 @@ namespace Njulf.Tests
                 Assert.That(secondInstance, Is.Not.SameAs(asset));
                 Assert.That(firstInstance.RenderObjects[0], Is.Not.SameAs(asset.RenderObjects[0]));
                 Assert.That(firstInstance.RenderObjects[0], Is.Not.SameAs(secondInstance.RenderObjects[0]));
-                Assert.That(firstInstance.RenderObjects[0].Mesh, Is.EqualTo(asset.RenderObjects[0].Mesh));
-                Assert.That(firstInstance.RenderObjects[0].Material, Is.EqualTo(asset.RenderObjects[0].Material));
+                Assert.That(firstInstance.RenderObjects[0].Mesh!.GetMeshHandle(), Is.EqualTo(asset.RenderObjects[0].Mesh!.GetMeshHandle()));
+                Assert.That(firstInstance.RenderObjects[0].Material!.GetMaterialHandle(), Is.EqualTo(asset.RenderObjects[0].Material!.GetMaterialHandle()));
                 Assert.That(firstInstance.RenderObjects[0].LocalMeshBounds, Is.EqualTo(localMeshBounds));
                 Assert.That(secondInstance.RenderObjects[0].LocalMeshBounds, Is.EqualTo(localMeshBounds));
                 Assert.That(secondInstance.RenderObjects[0].Visible, Is.True);
@@ -845,7 +845,7 @@ namespace Njulf.Tests
         {
             string directory = CreateTestDirectory();
 
-            string path = Path.Combine(directory, $"{TestContext.CurrentContext.Test.ID}.obj");
+            string path = Path.Combine(directory, $"{TestContext.CurrentContext.Test.ID}-{Guid.NewGuid():N}.obj");
             File.WriteAllText(
                 path,
                 """

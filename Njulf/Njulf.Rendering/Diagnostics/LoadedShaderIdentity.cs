@@ -67,7 +67,7 @@ public sealed record LoadedShaderIdentity(
                 module.FileName.Length > 512 || !IsSha256(module.Sha256) ||
                 module.ByteLength <= 0 || module.ByteLength > ShaderArtifactResolver.MaximumShaderModuleBytes ||
                 module.ByteLength % sizeof(uint) != 0 ||
-                module.SourceKind is not ("embedded" or "override" or "deployment") ||
+                module.SourceKind is not ("embedded" or "override" or "deployment" or "effect") ||
                 string.IsNullOrWhiteSpace(module.SourceIdentity))
                 return "Loaded shader inventory contains an invalid module.";
             try

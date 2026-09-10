@@ -71,11 +71,13 @@ Bindings combine with OR. IsDown is held state; WasPressed/WasReleased describe 
 update, independently of draw cadence. All action states are published before transition
 events. Names are case-sensitive registration identifiers; repeated names are rejected.
 The manager owns actions, invalidates them on disposal, and requires the game thread.
-Bindings use InputKey, MouseButton, JoystickButton or a thresholded JoystickAxis; missing
-devices are inactive. Axes are button thresholds at strictly greater than +0.5 or less than
--0.5, not an analog action system. Scroll is published once per update; mouse motion remains
-accumulated until ConsumeMouseDelta. Raw native events remain available for UI adapters.
-The procedural example uses Space to toggle visibility.
+Bindings use InputKey, MouseButton, JoystickButton, GamepadButton, or a thresholded joystick/gamepad
+axis; missing devices are inactive. Button axis thresholds remain strictly greater than +0.5 or
+less than -0.5. Scroll is published once per update; mouse motion remains accumulated until
+ConsumeMouseDelta. Raw native events remain available for UI adapters.
+The procedural example uses Space to toggle visibility. The [gameplay input guide](GameplayInput.md)
+covers float/Vector2 actions, mouse deltas, dead zones, contexts, interactive rebinding, persistence,
+cursor capture and text through Game.Input. Run `--example input` for a complete small example.
 
 Breaking migration: replace `Njulf.Input.Action` and string polling with cached InputAction
 references. Replace raw binding constructors with typed enums. Use `Njulf.Graphics.TextureColorSpace`
@@ -135,10 +137,11 @@ Scene is owned by Game rather than registered as a second DI singleton.
    Progressive startup may present bootstrap frames before Load.
    Awaiting in LoadAsync resumes on the device thread through the host synchronization
    context. Input, bootstrap frames, and content uploads continue while loading.
-4. Update and Draw receive GameTime. TotalGameTime is monotonic wall time since LoadAsync
-   completed. Each stream has its own elapsed interval; its first interval is zero.
-   Draw can have a different cadence from Update. This is variable-step timing, with no
-   hidden fixed-step catch-up. Startup before Load is excluded.
+4. Update and Draw receive GameTime with independent scaled elapsed intervals and unscaled
+   wall-time fields. Timing begins after LoadAsync completes; first frame intervals are zero.
+   Variable simulation remains the default. Optional FixedUpdate provides bounded catch-up
+   and interpolation; pause/time scaling also controls renderer animation.
+   See [simulation timing and pause](GameTiming.md) for the complete contracts and example.
 5. Exit or Dispose during a callback requests exit. After callbacks return, shutdown
    stops content admission and pumps cancellation/continuations until outstanding loads and
    GPU uploads settle, drains preparation, calls Unload once if Initialize started, releases Scene,
@@ -159,6 +162,82 @@ Progress observers do not affect cache identity. A loaded `Model` is a cache-own
 `CreateInstance()` returns an independently owned `ModelInstance`. Unload rejects foreign
 assets and instances. Unloading a template preserves resources retained by its instances.
 
+`CreateScope()` returns an independent `IContentScope` sharing the same cache and device.
+Equivalent loads acquire one claim per scope, including repeated loads and preloads. Direct
+`Game.Content` loads belong to the root lifetime. `Unload` and `UnloadAll` release only that
+owner's claims; root unloading preserves other scopes. `UnloadAll` cancels pending loads and
+leaves its owner reusable. Scope disposal cancels pending loads and permanently closes that
+scope; creating a scope through another scope still creates an independent lifetime.
+Dispose/unload on the device thread. Failed releases retain ownership for retry.
+
+`Load<Texture>` / `LoadAsync<Texture>` support PNG/JPEG as one-mip RGBA8 textures.
+`ContentLoadOptions.TextureColorSpace` defaults to sRGB; use `Linear` for data maps. Color
+space participates in texture identity. Decoding runs on a worker for async loads, while
+creation runs through the host upload dispatcher. Standalone image decoding remains available
+in Release builds; model cooked-package policy is unchanged. Limits are 256 MiB encoded and
+64 megapixels decoded. Without an upload dispatcher, async calls retain synchronous behavior.
+Texture creation and scene population each use an indivisible device callback; the frame
+budget cannot preempt these operations.
+
+`Load<Material>` / `LoadAsync<Material>` read version-1 `.njmaterial.json` assets:
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "Paint",
+  "baseColor": { "r": 0.2, "g": 0.4, "b": 1, "a": 1 },
+  "metallic": 0,
+  "roughness": 0.65,
+  "baseColorTexturePath": "paint.png"
+}
+```
+
+Optional fields also include `emissive` (`x`, `y`, `z`), `emissiveStrength`, `alphaMode`
+(`Opaque`, `Mask`, `Blend`), `alphaCutoff`, `doubleSided`, `normalTexturePath`,
+`metallicRoughnessTexturePath`, `occlusionTexturePath`, and `emissiveTexturePath`.
+Omitted values use `MaterialDefinition` defaults. Unknown fields/versions are rejected;
+documents are limited to 1 MiB. Texture paths are relative to the material file; base-color
+and emissive textures use sRGB, other slots use linear. Dependencies are retained by the
+material's content entry. Graphics registration still validates authored values.
+
+`LoadScene` / `LoadSceneAsync` create a fresh, scope-owned scene on every call using the
+existing scene document format. Model paths retain their Content-root-relative meaning.
+Async loading reads the document and prepares its actual model references before population
+on the device thread. `SceneLoadOptions` supplies model `ContentOptions` and optional
+`Materials` / `ParticleEffects` stores; those stores keep their synchronous device-thread
+contracts. Missing stores produce the existing loader errors when a document needs them.
+
+For level transitions, prepare a new scope before releasing the old one:
+
+```csharp
+IContentScope nextContent = Content.CreateScope();
+Scene next;
+try
+{
+    next = await nextContent.LoadSceneAsync("Scenes/next.njscene.json",
+        cancellationToken: cancellationToken);
+}
+catch
+{
+    nextContent.Dispose(); // Preparation failed; the old level remains active.
+    throw;
+}
+IContentScope oldContent = levelContent;
+ExchangeScene(next);
+levelContent = nextContent;
+oldContent.Dispose(); // Keep this owner for retry if release fails.
+```
+
+The complete runnable example is `dotnet run --project Njulf.ApiExamples -c Development --
+--example content --frames 180 --validation`. It demonstrates standalone textures/materials,
+two scene files, shared asset reuse, and final root release. Content results are borrowed:
+do not directly dispose cached textures/materials or scope-owned scenes. Render objects retain
+their own graphics references when assigned a material. Removing the last Content claim does
+not destroy resources still retained by an object or in-flight GPU work. The manager owns final
+cleanup during shutdown; hosts keep pumping until `IContentLifetime.ActiveOperationCount` settles.
+Custom hosts can supply `ContentManager.GraphicsDeviceProvider`; `AddRendering` + `AddAssets`
+wire this provider automatically without introducing an Assets-to-Rendering dependency.
+
 The host pumps uploads before gameplay callbacks, including during startup. Defaults are
 2 ms, one callback, and 8 MiB per submission. Customize `ContentUploadCpuBudget`,
 `ContentUploadMaximumCallbacks`, and `ContentUploadMaximumSubmissionBytes`; override
@@ -175,7 +254,7 @@ failed releases retain ownership for retry. `Dispose` permanently closes the sce
 detach the group together. Its child list and disposal are guarded while attached;
 individual transforms and graphics bindings remain editable. Scene lights use `SceneLight`
 with typed kinds/attenuation and stable IDs. `Scene.Environment` is an immutable authored
-description; absent descriptions use renderer defaults. Scene schema 12 persists environments
+description; absent descriptions use renderer defaults. Scene schema 13 persists environments and texture overrides
 and continues to accept older scenes. Renderer quality/allocation settings remain separate.
 
 ## Typed resources and ownership
@@ -191,8 +270,8 @@ and continues to accept older scenes. Renderer quality/allocation settings remai
   Mesh replacement updates local bounds. Failed acquisition leaves the old binding intact.
 - Model upload adopts initial registrations once. Cloning retains each resource once.
   Scene removal and disposal release owned objects; material copy-on-write preserves siblings.
-- CreateTexture2D accepts exact RGBA8 bytes, explicit Linear/Srgb interpretation and one
-  mip. Data is consumed synchronously. Typed material assignments select existing binding
+- The original CreateTexture2D overload accepts exact RGBA8 bytes, explicit Linear/Srgb interpretation and one
+  mip. The description overload supports native formats and authored/generated mip chains. Data is consumed synchronously. Typed material assignments select existing binding
   slots; UV and sampler settings come from MaterialDefinition. Each bound occurrence owns
   a texture reference. Callers retain their texture ownership, including after failure.
   Deduplication and the existing material compiler remain in use.
@@ -204,10 +283,60 @@ and continues to accept older scenes. Renderer quality/allocation settings remai
   stale and foreign resources fail clearly. Disposal after completed renderer shutdown is
   harmless. Failed release can be retried.
 
+See [resource updates and readback](GraphicsResourceUpdates.md) for standard vertices, dynamic
+meshes, formats, mipmaps, buffer uploads and asynchronous transfers.
+
 Advanced manager APIs still accept generation-checked raw handles. GetResourceView exposes
 an existing caller-owned handle for typed assignment; RetainResource acquires an owned
 wrapper. Raw manager registrations retain their original transfer/accounting contracts.
 Static batches and other advanced renderer-specific APIs are outside this RenderObject migration.
+
+## Inspecting and editing materials
+
+`IMaterial.Definition` returns an immutable authored snapshot. Use `with` expressions and
+an explicit editing operation on the device thread:
+
+```csharp
+IMaterial shared = renderObject.Material!;
+shared.UpdateShared(shared.Definition with { RoughnessFactor = 0.25f, EmissiveStrength = 2f });
+
+// Only this object changes. Re-read Material afterwards: copy-on-write may replace its borrowed view.
+renderObject.UpdateMaterial(renderObject.Material!.Definition with
+{
+    BaseColorFactor = new Vector4(0.3f, 0.6f, 1f, 1f)
+}, [new(MaterialTextureSlot.BaseColor, replacementTexture)]);
+
+using Texture? snapshot = renderObject.Material!.RetainTexture(MaterialTextureSlot.BaseColor);
+// snapshot has independent ownership and survives a later binding change.
+renderObject.UpdateMaterial(renderObject.Material.Definition,
+    [new(MaterialTextureSlot.BaseColor, null)]); // clear
+```
+
+`UpdateShared` changes every alias of the same material, including identical materials
+deduplicated during creation/import. `RenderObject.UpdateMaterial` isolates one object or model
+mesh part; no-op edits do not create a copy. The permanent default rejects shared editing but
+can be edited through an object. Both operations validate and compile before publication.
+
+Typed assignments support all existing slots. Omitted slots retain their textures; a null
+assignment clears a slot during updates (creation still rejects null). Preserve raw texture
+handles in the definition for omitted slots; use typed assignments to replace them. Sampler
+and UV settings remain authored in `MaterialDefinition`. Retained textures must be disposed;
+input texture wrappers remain caller-owned, and materials retain their own dependencies.
+
+The editor uses these same operations, defaults to **This object**, and resets that scope on
+selection changes. **Shared material** is explicit. The five common PBR texture slots have
+file-path Assign/Clear controls. The rendering adapter `MaterialManager.LoadMaterialTexture`
+returns an owned texture using existing file loading, caching and mip generation. Base color
+and emission use sRGB; normal, metallic/roughness and occlusion use linear data.
+
+Scene schema 13 adds nullable texture paths: absent/null inherits the model binding, an empty
+string clears it, and a file path assigns it. Saved file paths are absolute and included in
+scene dependencies; relative input paths resolve from the current directory. Embedded model
+textures remain inherited, and generated textures are not serialized. Older scenes still load.
+Shared edits are saved as per-object values; shared identity is not restored across reload.
+
+The procedural API example uses **M** for shared roughness/emission edits and **N** to isolate
+the left object and replace its color texture.
 
 ## Native inspection
 
@@ -227,6 +356,12 @@ Custom recording is available through `GraphicsDevice.AddVulkanPass`, described 
 
 ## Custom rendering
 
+For ordinary fullscreen/compute shaders, use `ShaderEffectAsset` and
+`GraphicsDevice.AddFullscreenEffect`, `AddComputeEffect`, or `AddPostProcessEffect`.
+They provide discoverable typed parameters, named bindings, automatic Vulkan setup and the existing
+graph lifetime. See [custom effects](CustomEffects.md) and the `--example effects` color-grading example.
+The native API below remains available for advanced recording.
+
 Create targets with `GraphicsDevice.CreateRenderTarget2D(width, height)` and storage/transfer
 buffers with `GraphicsDevice.CreateBuffer(sizeInBytes)`. Targets are linear RGBA16F, one mip,
 one sample, with sampled, storage, color-attachment and transfer usage. Contents start undefined;
@@ -244,6 +379,7 @@ within each stage; built-in pass order stays unchanged.
 | --- | --- | --- |
 | BeforeScene | Before the first production pass | None; use custom resources or loaded textures |
 | AfterScene | Immediately before FogPass | HDR SceneColor, read-only SceneDepth |
+| AfterToneMapping | Immediately before AntiAliasingPass | Linear RGBA16F PostProcessColor |
 | AfterPostProcessing | After AA, before ImGuiRenderPass | Backbuffer as a color attachment |
 
 These stages apply to the current single view. A target is not a second render view.

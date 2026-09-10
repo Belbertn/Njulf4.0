@@ -162,7 +162,7 @@ namespace Njulf.Rendering.Resources
                     EmitterState emitter = state.EmitterStates[emitterIndex];
                     emitterCount++;
 
-                    bool canSimulate = !SimulationPaused && !instance.Paused;
+                    bool canSimulate = clampedDelta > 0 && !SimulationPaused && !instance.Paused;
                     if (canSimulate)
                     {
                         SimulateEmitter(
@@ -623,7 +623,7 @@ namespace Njulf.Rendering.Resources
             ref int beamSegmentCount,
             ref int budgetExceeded)
         {
-            bool canSimulate = !SimulationPaused && !instance.Paused && instance.Playing && !instance.Stopped;
+            bool canSimulate = deltaSeconds > 0 && !SimulationPaused && !instance.Paused && instance.Playing && !instance.Stopped;
             if (canSimulate)
                 state.EffectTimeSeconds += deltaSeconds;
 

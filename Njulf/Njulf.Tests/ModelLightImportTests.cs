@@ -626,6 +626,68 @@ public sealed class ModelLightImportTests
         Assert.That(controller.ImportedDirectionalLightEnabled, Is.False);
     }
 
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public void RuntimeController_SceneTeardownReleasesSceneBackedLights(
+        bool clearScene,
+        bool enableImportedSun)
+    {
+        using Model model = CreateRuntimeModel(lightCount: 2);
+        model.AddLights([new ModelLightDefinition
+        {
+            Name = "Imported sun", Type = ModelLightType.Directional
+        }]);
+        using var scene = new Scene();
+        var store = new SceneLightStore(scene);
+        var sun = new SceneLight { Name = "Authored sun", Type = SceneLightType.Directional };
+        scene.Add(sun);
+        AddPlacement(scene, Guid.NewGuid(), "0", Vector3.Zero);
+        var controller = ModelLightRuntimeController.Attach(scene, new ModelContentManager(model), store);
+        controller.SetImportedModelLightsEnabled(true);
+        controller.SetImportedDirectionalLightEnabled(enableImportedSun);
+        Assert.That(controller.ActiveLightCount, Is.EqualTo(enableImportedSun ? 3 : 2));
+        SceneLight[] activeLights = scene.Lights.ToArray();
+
+        if (clearScene)
+            Assert.DoesNotThrow(scene.Clear);
+        else
+            Assert.DoesNotThrow(scene.Dispose);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scene.Lights, Is.Empty);
+            Assert.That(scene.RenderObjects, Is.Empty);
+            Assert.That(scene.Updateables, Is.Empty);
+            Assert.That(controller.ActiveLightCount, Is.Zero);
+            Assert.That(controller.ImportedModelLightsEnabled, Is.False);
+            Assert.That(controller.ImportedDirectionalLightEnabled, Is.False);
+        });
+        ulong revision = scene.LightRevision;
+        using var nextScene = new Scene();
+        foreach (SceneLight light in activeLights)
+        {
+            light.Intensity += 1f;
+            nextScene.Add(light);
+        }
+        Assert.That(scene.LightRevision, Is.EqualTo(revision), "Released lights must no longer notify the old scene.");
+
+        if (clearScene)
+        {
+            scene.Add(new SceneLight());
+            Assert.DoesNotThrow(scene.Clear);
+            Assert.That(scene.Lights, Is.Empty);
+        }
+        else
+        {
+            Assert.Throws<ObjectDisposedException>(() => scene.Add(new SceneLight()));
+            Assert.Throws<ObjectDisposedException>(() => scene.Remove(activeLights[0]));
+        }
+        Assert.DoesNotThrow(controller.Dispose);
+        Assert.DoesNotThrow(scene.Dispose);
+    }
+
     [Test]
     public void RuntimeController_DirectionalSwitchFailureRestoresPreviousLight()
     {

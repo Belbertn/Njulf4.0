@@ -28,6 +28,8 @@ namespace Njulf.Rendering.Pipeline
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _fxaaPipeline;
+        private VkPipeline _effectPresentPipeline;
+        private ulong _taaPreviousPostEffectRevision = ulong.MaxValue;
         private VkPipeline _smaaEdgePipeline;
         private VkPipeline _smaaBlendWeightPipeline;
         private VkPipeline _smaaNeighborhoodPipeline;
@@ -101,6 +103,12 @@ namespace Njulf.Rendering.Pipeline
 
             if (mode == AntiAliasingMode.None)
             {
+                if (_renderTargets.CustomPostProcessingEnabled)
+                {
+                    if (_effectPresentPipeline.Handle == 0)
+                        _effectPresentPipeline = CreatePipeline("effect_present.frag.spv", _swapchain.SurfaceFormat, "Effect presentation");
+                    RenderFullscreen(cmd, _effectPresentPipeline, GetSwapchainView(sceneData, frameIndex), _swapchain.Extent, "Effect presentation");
+                }
                 return;
             }
 
@@ -163,6 +171,8 @@ namespace Njulf.Rendering.Pipeline
 
         public override void OnSwapchainRecreated()
         {
+            DestroyPipeline(_effectPresentPipeline);
+            _effectPresentPipeline = default;
             DestroyPipeline(_fxaaPipeline);
             DestroyPipeline(_smaaNeighborhoodPipeline);
             DestroyPipeline(_taaPipeline);
@@ -174,6 +184,8 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Cleanup()
         {
+            DestroyPipeline(_effectPresentPipeline);
+            _effectPresentPipeline = default;
             DestroyPipeline(_fxaaPipeline);
             DestroyPipeline(_smaaEdgePipeline);
             DestroyPipeline(_smaaBlendWeightPipeline);
@@ -296,6 +308,7 @@ namespace Njulf.Rendering.Pipeline
                 sceneData.HiZPolicyCameraCut == 0 &&
                 sceneData.HiZPolicySceneChanged == 0 &&
                 _taaPreviousSceneContentRevision == sceneData.SceneContentRevision &&
+                _taaPreviousPostEffectRevision == _renderTargets.PostEffectRevision &&
                 _taaPreviousCameraCutSerial == sceneData.CaptureCameraCutSerial;
             Vector2 previousJitterUv = historyInputValid
                 ? _taaPreviousJitterUv
@@ -401,6 +414,7 @@ namespace Njulf.Rendering.Pipeline
             _taaPreviousJitterValid = true;
             _taaPreviousJitterUv = currentJitterUv;
             _taaPreviousSceneContentRevision = sceneData.SceneContentRevision;
+            _taaPreviousPostEffectRevision = _renderTargets.PostEffectRevision;
             _taaPreviousCameraCutSerial = sceneData.CaptureCameraCutSerial;
             _taaWriteHistoryA = !_taaWriteHistoryA;
         }

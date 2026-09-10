@@ -36,6 +36,8 @@ namespace Njulf.Tests
             ModelInstance instance = template.CreateInstance();
             RenderObject child = instance.RenderObjects[0];
             first.Add(instance);
+            Assert.That(first.FindOwningInstance(child), Is.SameAs(instance));
+            Assert.That(second.FindOwningInstance(child), Is.Null);
             Assert.That(first.RenderObjects.Single(), Is.SameAs(child));
             Assert.Throws<InvalidOperationException>(() => second.Add(instance));
             Assert.Throws<InvalidOperationException>(() => instance.Detach(child));
@@ -43,8 +45,11 @@ namespace Njulf.Tests
             Assert.Throws<InvalidOperationException>(instance.Dispose);
             child.Position = new Vector3(1, 2, 3);
             first.Detach(instance);
+            Assert.That(first.FindOwningInstance(child), Is.Null);
             second.Add(instance);
+            Assert.That(second.FindOwningInstance(child), Is.SameAs(instance));
             second.Remove(instance);
+            Assert.That(second.FindOwningInstance(child), Is.Null);
             Assert.That(second.RenderObjects, Is.Empty);
             Assert.That(second.ModelInstances, Is.Empty);
             Assert.Throws<ObjectDisposedException>(() => instance.CreateInstance());
@@ -153,6 +158,44 @@ namespace Njulf.Tests
                 Assert.Throws<ObjectDisposedException>(scene.Clear);
                 Assert.Throws<ObjectDisposedException>(() => scene.Update(0.016f));
             });
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void SceneTeardown_KeepsResourceMutationBlockedAndRetainsLightValidation(bool clearScene)
+        {
+            using var scene = new Scene();
+            using var otherScene = new Scene();
+            var light = new SceneLight();
+            var foreignLight = new SceneLight();
+            scene.Add(light);
+            otherScene.Add(foreignLight);
+            var failing = new DisposableUpdateable
+            {
+                DisposeFailure = new InvalidOperationException("expected"),
+                OnDispose = () =>
+                {
+                    Assert.Throws<ObjectDisposedException>(() => scene.Add(new RenderObject()));
+                    Assert.Throws<ObjectDisposedException>(() => scene.Add(new DisposableUpdateable()));
+                    Assert.Throws<ObjectDisposedException>(() => scene.Update(0f));
+                    Assert.Throws<ObjectDisposedException>(scene.Clear);
+                    Assert.Throws<InvalidOperationException>(() => scene.Add(new SceneLight { Id = light.Id }));
+                    Assert.Throws<InvalidOperationException>(() => scene.Add(foreignLight));
+                    Assert.Throws<ArgumentException>(() => scene.Add(new SceneLight { Id = Guid.Empty }));
+                }
+            };
+            scene.Add(failing);
+
+            AggregateException failure = clearScene
+                ? Assert.Throws<AggregateException>(scene.Clear)!
+                : Assert.Throws<AggregateException>(scene.Dispose)!;
+            Assert.That(failure.InnerExceptions.Single().Message, Is.EqualTo("expected"));
+            Assert.Throws<ObjectDisposedException>(() => scene.Add(new SceneLight()));
+            Assert.Throws<ObjectDisposedException>(() => scene.Remove(light));
+
+            failing.OnDispose = null;
+            failing.DisposeFailure = null;
+            Assert.DoesNotThrow(scene.Dispose);
         }
 
         [Test]
@@ -368,6 +411,7 @@ namespace Njulf.Tests
             public int DisposeCount { get; private set; }
             public int UpdateSequence { get; private set; }
             public Exception? DisposeFailure { get; set; }
+            public Action? OnDispose { get; set; }
 
             public void Update(float deltaTime)
             {
@@ -377,6 +421,7 @@ namespace Njulf.Tests
             public void Dispose()
             {
                 DisposeCount++;
+                OnDispose?.Invoke();
                 if (DisposeFailure != null)
                     throw DisposeFailure;
             }

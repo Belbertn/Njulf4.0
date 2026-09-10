@@ -17,6 +17,8 @@ internal sealed class VulkanPassRegistry
     private readonly Queue<Action> _changes = new();
     private int _nextId = 0x10000;
     private bool _stopped;
+    internal bool RequiresPostProcessColor => _passes.Any(p => p.Enabled && !p.RemovalRequested &&
+        (p.RequestedBindings ?? p.Bindings).Any(b => b.Use is VulkanImageUse { ViewImage: VulkanViewImage.PostProcessColor }));
     internal VulkanPassRegistry(VulkanGraphicsDevice graphics, RenderGraph graph, SwapchainManager swapchain, BindlessHeap heap)
     { Graphics = graphics; Graph = graph; Swapchain = swapchain; _heap = heap; }
     internal VulkanPassRegistration Add(VulkanPassDescription description, IVulkanRenderPass pass)
@@ -41,8 +43,8 @@ internal sealed class VulkanPassRegistry
             ValidateViewResources(bindings);
             adapter.Initialize();
             Publish(bindings);
-            Graph.InsertCustomPass(adapter, Anchor(description.Stage), bindings.Select(b => b.Usage).ToArray());
             adapter.Attached = true;
+            RefreshStage(description.Stage);
         });
         return registration;
     }
@@ -51,14 +53,38 @@ internal sealed class VulkanPassRegistry
         VulkanPassStage.BeforeScene => "SceneOpaqueCompactionPass",
         VulkanPassStage.AfterScene => "FogPass",
         VulkanPassStage.AfterPostProcessing => "ImGuiRenderPass",
+        VulkanPassStage.AfterToneMapping => "AntiAliasingPass",
         _ => throw new ArgumentOutOfRangeException(nameof(stage))
     };
+    internal void SetEnabled(VulkanPassRegistration registration, bool enabled)
+    {
+        Graphics.EnsureUsable();
+        ObjectDisposedException.ThrowIf(registration.IsDisposed, registration);
+        registration.Adapter.Enabled = enabled;
+        _changes.Enqueue(() => RefreshStage(registration.Adapter.Description.Stage));
+    }
+    private void RefreshStage(VulkanPassStage stage)
+    {
+        foreach (var pass in _passes.Where(p => p.Description.Stage == stage && p.GraphAttached))
+        {
+            Graph.DetachCustomPass(pass);
+            pass.GraphAttached = false;
+        }
+        foreach (var pass in _passes.Where(p => p.Description.Stage == stage && p.Attached && p.Enabled && !p.RemovalRequested))
+        {
+            Graph.InsertCustomPass(pass, Anchor(stage), pass.Bindings.Select(b => b.Usage).ToArray());
+            pass.GraphAttached = true;
+        }
+    }
     internal void Rebind(VulkanPassRegistration registration, IReadOnlyList<VulkanResourceUse> resources)
+        => Rebind(registration, resources, null);
+    internal void Rebind(VulkanPassRegistration registration, IReadOnlyList<VulkanResourceUse> resources, VulkanPassBinding[]? retained)
     {
         Graphics.EnsureUsable();
         ObjectDisposedException.ThrowIf(_stopped, this);
         var adapter = registration.Adapter;
-        var replacement = Acquire(adapter.Description, resources);
+        var replacement = Acquire(adapter.Description, resources, retained);
+        adapter.RequestedBindings = replacement;
         _changes.Enqueue(() =>
         {
             if (_stopped) { Release(replacement); return; }
@@ -67,7 +93,7 @@ internal sealed class VulkanPassRegistry
             catch { Release(replacement); throw; }
             var previous = adapter.Bindings;
             Publish(replacement);
-            Graph.ReplaceCustomPassUsages(adapter, replacement.Select(b => b.Usage).ToArray());
+            if (adapter.GraphAttached) Graph.ReplaceCustomPassUsages(adapter, replacement.Select(b => b.Usage).ToArray());
             adapter.Bindings = replacement;
             adapter.ResourcesDirty = true;
             Unpublish(previous);
@@ -85,6 +111,7 @@ internal sealed class VulkanPassRegistry
             if (_stopped) { adapter.Cleanup(); return; }
             Graph.DetachCustomPass(adapter);
             adapter.Attached = false;
+            adapter.GraphAttached = false;
             Unpublish(adapter.Bindings);
             _passes.Remove(adapter);
             Graphics.QueueRelease(adapter.Cleanup);
@@ -107,7 +134,7 @@ internal sealed class VulkanPassRegistry
         if (_passes.Count == 0) return;
         foreach (var pass in _passes)
         {
-            if (!pass.Attached) continue;
+            if (!pass.GraphAttached) continue;
             foreach (var binding in pass.Bindings)
             {
                 if (binding.Texture.IsValid)
@@ -129,7 +156,7 @@ internal sealed class VulkanPassRegistry
         }
         // Partition overlapping byte ranges once per plan generation. Exact segments then share
         // an allocation identity in the existing inter-frame and queue-handoff planners.
-        foreach (var group in _passes.Where(p => p.Attached).SelectMany(p => p.Bindings)
+        foreach (var group in _passes.Where(p => p.GraphAttached).SelectMany(p => p.Bindings)
             .Where(b => b.Use is VulkanBufferUse).GroupBy(b => b.Buffer!.Handle))
         {
             var boundaries = group.SelectMany(b => new[] { ((VulkanBufferUse)b.Use).Offset,
@@ -150,6 +177,8 @@ internal sealed class VulkanPassRegistry
         }
     }
     private VulkanPassBinding[] Acquire(VulkanPassDescription description, IReadOnlyList<VulkanResourceUse> resources)
+        => Acquire(description, resources, null);
+    private VulkanPassBinding[] Acquire(VulkanPassDescription description, IReadOnlyList<VulkanResourceUse> resources, VulkanPassBinding[]? retained)
     {
         ArgumentNullException.ThrowIfNull(resources);
         if (resources.Count == 0) throw new ArgumentException("At least one resource must be declared.", nameof(resources));
@@ -167,12 +196,13 @@ internal sealed class VulkanPassRegistry
                     throw new ArgumentException("Every resource needs access, stage and access masks.");
                 ValidateAccess(use, description.Kind);
                 var binding = new VulkanPassBinding(use);
+                var retainedBinding = retained?.FirstOrDefault(b => b.Use == use);
                 if (use is VulkanImageUse image)
                 {
                     ValidateImage(description.Stage, image);
                     if (image.Texture is { } texture)
                     {
-                        var handle = Graphics.ValidateTexture(texture);
+                        var handle = retainedBinding?.Texture.IsValid == true ? retainedBinding.Texture : Graphics.ValidateTexture(texture);
                         var state = Graphics.TextureResources.GetGraphImage(handle);
                         if (!images.Add(state.Image.Image.Handle)) throw new ArgumentException("Declare each physical image once; use explicit storage ReadWrite instead of feedback aliases.");
                         if (!state.Writable && (image.Access != RenderGraphResourceAccess.Read || image.Layout != ImageLayout.ShaderReadOnlyOptimal ||
@@ -190,6 +220,7 @@ internal sealed class VulkanPassRegistry
                         {
                             VulkanViewImage.SceneColor => RenderGraphResourceId.SceneColor,
                             VulkanViewImage.SceneDepth => RenderGraphResourceId.SceneDepth,
+                            VulkanViewImage.PostProcessColor => RenderGraphResourceId.LdrSceneColor,
                             _ => RenderGraphResourceId.SwapchainColor
                         };
                     }
@@ -197,7 +228,7 @@ internal sealed class VulkanPassRegistry
                 else if (use is VulkanBufferUse buffer)
                 {
                     ArgumentNullException.ThrowIfNull(buffer.Buffer);
-                    ObjectDisposedException.ThrowIf(buffer.Buffer.IsDisposed, buffer.Buffer);
+                    if (retainedBinding is null) ObjectDisposedException.ThrowIf(buffer.Buffer.IsDisposed, buffer.Buffer);
                     if (buffer.Buffer is not VulkanGraphicsBuffer nativeBuffer || !ReferenceEquals(nativeBuffer.Owner, Graphics)) throw new ArgumentException("Buffer belongs to another device.");
                     ulong size = buffer.Size == 0 && buffer.Offset < buffer.Buffer.SizeInBytes ? buffer.Buffer.SizeInBytes - buffer.Offset : buffer.Size;
                     if (size == 0 || buffer.Offset >= buffer.Buffer.SizeInBytes || size > buffer.Buffer.SizeInBytes - buffer.Offset)
@@ -233,6 +264,10 @@ internal sealed class VulkanPassRegistry
                     image.FinalLayout is not (ImageLayout.Undefined or ImageLayout.ColorAttachmentOptimal))
                     throw new ArgumentException("Backbuffer is a color attachment available only after post processing.");
             }
+            else if (view == VulkanViewImage.PostProcessColor)
+            {
+                if (stage != VulkanPassStage.AfterToneMapping) throw new ArgumentException("Post-process color is available only after tone mapping.");
+            }
             else if (stage != VulkanPassStage.AfterScene) throw new ArgumentException("Scene color/depth are available only after scene rendering.");
             if (view == VulkanViewImage.SceneDepth && (image.Access != RenderGraphResourceAccess.Read || image.Layout != ImageLayout.DepthStencilReadOnlyOptimal ||
                 image.FinalLayout is not (ImageLayout.Undefined or ImageLayout.DepthStencilReadOnlyOptimal)))
@@ -246,7 +281,7 @@ internal sealed class VulkanPassRegistry
     {
         foreach (var binding in bindings)
         {
-            if (binding.Use is not VulkanImageUse { ViewImage: VulkanViewImage.SceneColor or VulkanViewImage.SceneDepth } use) continue;
+            if (binding.Use is not VulkanImageUse { ViewImage: VulkanViewImage.SceneColor or VulkanViewImage.SceneDepth or VulkanViewImage.PostProcessColor } use) continue;
             var targets = Graph.GetLayoutTrackedRenderTargets(binding.Id);
             if (targets.Count != 1) throw new InvalidOperationException($"View resource '{use.Name}' is unavailable.");
             ImageUsageFlags required = use.Layout switch
@@ -355,7 +390,10 @@ internal sealed class VulkanPassAdapter : RenderPassBase
     private bool _nativeDisposed;
     internal readonly VulkanPassDescription Description;
     internal VulkanPassBinding[] Bindings;
+    internal VulkanPassBinding[]? RequestedBindings;
     internal bool Attached;
+    internal bool GraphAttached;
+    internal bool Enabled = true;
     internal bool RemovalRequested;
     internal bool ResourcesDirty = true;
     internal VulkanDeviceInfo DeviceInfo => new(_context.Api, _context.Instance, _context.PhysicalDevice, _context.Device);

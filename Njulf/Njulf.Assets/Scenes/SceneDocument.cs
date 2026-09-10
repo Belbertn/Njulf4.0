@@ -6,7 +6,7 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 12;
+    public const int CurrentSchemaVersion = 13;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -50,6 +50,16 @@ public sealed class SceneObjectDocument
 /// </summary>
 public sealed class SceneMaterialOverrideDocument
 {
+    /// <summary>Null inherits the imported binding, empty clears it, otherwise a texture file path.</summary>
+    public string? BaseColorTexturePath { get; init; }
+    /// <inheritdoc cref="BaseColorTexturePath" />
+    public string? NormalTexturePath { get; init; }
+    /// <inheritdoc cref="BaseColorTexturePath" />
+    public string? MetallicRoughnessTexturePath { get; init; }
+    /// <inheritdoc cref="BaseColorTexturePath" />
+    public string? OcclusionTexturePath { get; init; }
+    /// <inheritdoc cref="BaseColorTexturePath" />
+    public string? EmissiveTexturePath { get; init; }
     /// <summary>
     /// Stable token used to persist an explicitly cleared renderer blend-mode
     /// override. A missing <see cref="RenderBlendModeOverride"/> retains the

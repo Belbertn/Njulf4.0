@@ -132,7 +132,15 @@ public class InputDeviceProxy : DispatchProxy
     internal static (T, InputDeviceProxy) Create<T>() where T : class
     {
         T device = Create<T, InputDeviceProxy>();
-        return (device, (InputDeviceProxy)(object)device);
+        var proxy = (InputDeviceProxy)(object)device;
+        if (typeof(IInputDevice).IsAssignableFrom(typeof(T)))
+        {
+            Deadzone deadzone = new(.2f, DeadzoneMethod.Traditional);
+            proxy.Methods["get_Deadzone"] = _ => deadzone;
+            proxy.Methods["set_Deadzone"] = args => { deadzone = (Deadzone)args[0]!; return null; };
+            proxy.Methods["get_Index"] = _ => 0;
+        }
+        return (device, proxy);
     }
     internal void Raise(string name, params object?[] arguments) => _events.GetValueOrDefault(name)?.DynamicInvoke(arguments);
     protected override object? Invoke(MethodInfo? method, object?[]? args)
@@ -151,14 +159,16 @@ public class InputDeviceProxy : DispatchProxy
 }
 
 internal sealed class TestInputContext(IReadOnlyList<IKeyboard>? keyboards = null,
-    IReadOnlyList<IMouse>? mice = null, IReadOnlyList<IJoystick>? joysticks = null) : IInputContext
+    IReadOnlyList<IMouse>? mice = null, IReadOnlyList<IJoystick>? joysticks = null, IReadOnlyList<IGamepad>? gamepads = null) : IInputContext
 {
     public IntPtr Handle => IntPtr.Zero;
     public IReadOnlyList<IKeyboard> Keyboards => keyboards ?? [];
     public IReadOnlyList<IMouse> Mice => mice ?? [];
     public IReadOnlyList<IJoystick> Joysticks => joysticks ?? [];
-    public IReadOnlyList<IGamepad> Gamepads => [];
+    public IReadOnlyList<IGamepad> Gamepads => gamepads ?? [];
     public IReadOnlyList<IInputDevice> OtherDevices => [];
-    public event Action<IInputDevice, bool>? ConnectionChanged { add { } remove { } }
+    public event Action<IInputDevice, bool>? ConnectionChanged;
+    internal void Connect(IInputDevice device, bool connected) => ConnectionChanged?.Invoke(device, connected);
+    internal int SubscriptionCount => ConnectionChanged?.GetInvocationList().Length ?? 0;
     public void Dispose() { }
 }

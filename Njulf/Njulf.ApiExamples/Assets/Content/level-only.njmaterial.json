@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "name": "Level A orange",
+  "baseColor": { "r": 1, "g": 0.3, "b": 0.08, "a": 1 },
+  "roughness": 0.65,
+  "baseColorTexturePath": "level-only.png"
+}

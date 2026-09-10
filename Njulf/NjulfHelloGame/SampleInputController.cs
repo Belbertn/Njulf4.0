@@ -9,6 +9,7 @@ using Njulf.Core.Scene;
 using Njulf.Graphics;
 using Njulf.Rendering.Debug;
 using Njulf.Input;
+using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
@@ -293,6 +294,7 @@ internal sealed class SampleInputController
     private readonly System.Action _exit;
     private readonly Njulf.Rendering.VulkanRenderer? _renderer;
     private readonly LightManager? _lightManager;
+    private readonly Func<Scene> _sceneProvider;
     private IReadOnlyList<ParticleEffectInstance> _particleEffects;
     private SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private readonly System.Action? _cycleScene;
@@ -437,26 +439,26 @@ internal sealed class SampleInputController
     private bool _sponzaGiTransportCaptureArmedThisFrame;
     private bool _sponzaGiRenderDocCaptureAttempted;
 
-    public SampleInputController(
-        FirstPersonCamera camera,
+    public SampleInputController(Func<Scene> sceneProvider, FirstPersonCamera camera,
         IInputManager input,
-        System.Action exit,
-        Njulf.Rendering.VulkanRenderer? renderer = null,
+        Action exit,
+        VulkanRenderer? renderer = null,
         LightManager? lightManager = null,
         SampleLightingMode lightingMode = SampleLightingMode.DirectionalKey,
         IReadOnlyList<ParticleEffectInstance>? particleEffects = null,
         SamplePerformanceScenarioRunner? performanceScenarioRunner = null,
-        System.Action? cycleScene = null,
-        System.Action? cycleSponzaAndBistro = null,
+        Action? cycleScene = null,
+        Action? cycleSponzaAndBistro = null,
         Func<SampleSceneKind, bool>? loadSceneKind = null,
-        System.Action? toggleDdgiDiagnosticsFilter = null,
+        Action? toggleDdgiDiagnosticsFilter = null,
         Func<SampleDiagnosticsFilter>? getDiagnosticsFilter = null,
-        System.Action? restoreSceneRenderSettings = null,
+        Action? restoreSceneRenderSettings = null,
         Action<RenderSettings>? applyScenePostQualityPreset = null,
         Func<string, bool>? requestDiagnosticScreenshotCapture = null,
         Func<bool>? suppressGameInput = null)
     {
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
+        _sceneProvider = sceneProvider ?? throw new ArgumentNullException(nameof(sceneProvider));
         _input = input ?? throw new ArgumentNullException(nameof(input));
         _rawInput = input as InputManager;
         _actionAmbientOcclusionIntensityDown = input.GetAction(AmbientOcclusionIntensityDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
@@ -1534,9 +1536,10 @@ internal sealed class SampleInputController
         // profile and only its deterministic capture overlay. This intentionally
         // avoids a broad preset after the Sponza profile has established its
         // physical GI configuration.
-        SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
+        SampleLighting.Configure(_sceneProvider(), SampleLightingMode.DirectionalKey);
         SampleLighting.ConfigureRenderSettings(_renderer.Settings, SampleLightingMode.DirectionalKey);
-        SampleEnvironment.Configure(_renderer, SampleEnvironmentMode.ProceduralOutdoor);
+        SampleEnvironment.Configure(_sceneProvider(), SampleEnvironmentMode.ProceduralOutdoor);
+        SceneEnvironmentSettings.Apply(_sceneProvider().Environment!, _renderer.Settings.Environment);
         ApplyPerformanceScenario(contract.Scenario);
         SampleGlobalIlluminationValidation.ConfigureSponzaCaptureSettings(
             _renderer.Settings);
@@ -1587,7 +1590,9 @@ internal sealed class SampleInputController
         }
 
         IReadOnlyList<string> lightingViolations =
-            contract.ValidateLockedLighting(_lightManager.GetLightSnapshot());
+            contract.ValidateLockedLighting(_sceneProvider().Lights.Select(light =>
+                new LightManagerSceneLightStore(_lightManager).Resolve(
+                    Njulf.Assets.Scenes.SceneLightStore.ToDocument(light))).ToArray());
         if (lightingViolations.Count != 0)
         {
             RestoreSponzaGiCaptureState();
@@ -1839,6 +1844,15 @@ internal sealed class SampleInputController
             disableEnvironmentLighting || disableIndirectSpecularLighting
             ? 0.0f
             : _sponzaGiCaptureRestoreState?.EnvironmentSpecularIntensity ?? 1.0f;
+        Scene captureScene = _sceneProvider();
+        if (captureScene.Environment is { } captureEnvironment &&
+            (captureEnvironment.DiffuseIntensity != _renderer.Settings.Environment.DiffuseIntensity ||
+             captureEnvironment.SpecularIntensity != _renderer.Settings.Environment.SpecularIntensity))
+            captureScene.Environment = captureEnvironment with
+            {
+                DiffuseIntensity = _renderer.Settings.Environment.DiffuseIntensity,
+                SpecularIntensity = _renderer.Settings.Environment.SpecularIntensity
+            };
         _renderer.Settings.Debug.Enabled = true;
         _renderer.Settings.Debug.AllowScreenshots = true;
         _renderer.Settings.Debug.CpuSnapshotsEnabled = false;
@@ -2693,6 +2707,7 @@ internal sealed class SampleInputController
                 state.DdgiForwardEstimateCountersEnabled;
             _renderer.Settings.Environment.DiffuseIntensity = state.EnvironmentDiffuseIntensity;
             _renderer.Settings.Environment.SpecularIntensity = state.EnvironmentSpecularIntensity;
+            _sceneProvider().Environment = SceneEnvironmentSettings.Capture(_renderer.Settings.Environment);
             _renderer.CaptureScenario = state.CaptureScenario;
         }
 
@@ -2834,6 +2849,7 @@ internal sealed class SampleInputController
             return;
 
         SampleGlobalIlluminationValidation.ConfigureRenderSettings(_renderer.Settings, scenario);
+        _sceneProvider().Environment = SceneEnvironmentSettings.Capture(_renderer.Settings.Environment);
         PrintGlobalIlluminationSettings("GI validation");
     }
 
@@ -3725,7 +3741,7 @@ internal sealed class SampleInputController
         };
         if (_renderer != null)
             SampleLighting.ConfigureRenderSettings(_renderer.Settings, _lightingMode);
-        SampleLighting.Configure(_lightManager, _lightingMode);
+        SampleLighting.Configure(_sceneProvider(), _lightingMode);
         Console.WriteLine($"Lighting mode: {_lightingMode}");
     }
 

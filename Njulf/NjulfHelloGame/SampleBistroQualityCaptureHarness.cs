@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Core.Camera;
 using Njulf.Core.Math;
+using Njulf.Core.Scene;
 using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
@@ -559,8 +560,7 @@ internal sealed class SampleBistroQualityRuntimeController
 {
     private readonly VulkanRenderer _renderer;
     private readonly FirstPersonCamera _camera;
-    private readonly LightManager _lightManager;
-    private readonly LightHandle _directionalLightHandle;
+    private readonly SceneLight _directionalLight;
     private readonly Light _baseDirectionalLight;
     private readonly ReflectionMode _baseReflectionMode;
     private readonly float _baseRayQueryPixelBudgetFraction;
@@ -572,29 +572,30 @@ internal sealed class SampleBistroQualityRuntimeController
     private readonly float _baseExposure;
     private SampleBistroQualityFrameState? _lastAppliedState;
 
-    public SampleBistroQualityRuntimeController(
-        VulkanRenderer renderer,
+    public SampleBistroQualityRuntimeController(VulkanRenderer renderer,
         FirstPersonCamera camera,
-        LightManager lightManager,
+        Scene scene,
         SampleBistroQualityCaptureContract contract)
     {
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
-        _lightManager = lightManager ??
-            throw new ArgumentNullException(nameof(lightManager));
+        ArgumentNullException.ThrowIfNull(scene);
         Contract = contract ?? throw new ArgumentNullException(nameof(contract));
 
-        LightRecord directional = lightManager.GetLightRecords()
-            .FirstOrDefault(static record =>
-                record.Light.Type == LightType.Directional);
-        if (!directional.Handle.IsValid)
+        SceneLight? directional = scene.Lights.FirstOrDefault(static light =>
+            light.Type == SceneLightType.Directional);
+        if (directional is null)
         {
             throw new InvalidOperationException(
                 "The Bistro quality contract requires one directional light.");
         }
 
-        _directionalLightHandle = directional.Handle;
-        _baseDirectionalLight = directional.Light;
+        _directionalLight = directional;
+        _baseDirectionalLight = new Light
+        {
+            Intensity = directional.Intensity,
+            Direction = new NumericsVector3(directional.Direction.X, directional.Direction.Y, directional.Direction.Z)
+        };
         _baseReflectionMode = renderer.Settings.Reflections.Mode;
         _baseRayQueryPixelBudgetFraction =
             renderer.Settings.Reflections.RayQueryPixelBudgetFraction;
@@ -624,9 +625,9 @@ internal sealed class SampleBistroQualityRuntimeController
 
     public void Restore()
     {
-        _lightManager.UpdateLight(
-            _directionalLightHandle,
-            _baseDirectionalLight);
+        _directionalLight.Intensity = _baseDirectionalLight.Intensity;
+        _directionalLight.Direction = new(_baseDirectionalLight.Direction.X,
+            _baseDirectionalLight.Direction.Y, _baseDirectionalLight.Direction.Z);
         _renderer.Settings.Reflections.Mode = _baseReflectionMode;
         _renderer.Settings.Reflections.RayQueryPixelBudgetFraction =
             _baseRayQueryPixelBudgetFraction;
@@ -675,13 +676,8 @@ internal sealed class SampleBistroQualityRuntimeController
             _baseDirectionalLight.Direction,
             state.DirectionalLightYawOffsetRadians);
 
-        if (!_lightManager.TryGetLight(
-                _directionalLightHandle,
-                out Light current) ||
-            !current.Equals(light))
-        {
-            _lightManager.UpdateLight(_directionalLightHandle, light);
-        }
+        _directionalLight.Intensity = light.Intensity;
+        _directionalLight.Direction = new(light.Direction.X, light.Direction.Y, light.Direction.Z);
 
         if (Contract.Variant ==
             SampleBistroQualityCaptureVariant.HybridRayQueryAb)

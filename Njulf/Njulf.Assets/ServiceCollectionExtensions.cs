@@ -21,7 +21,10 @@ namespace Njulf.Assets
             services.TryAddSingleton(provider => new ContentManager(
                 contentRoot,
                 provider.GetService<IModelRenderUploadService>(),
-                provider.GetService<IContentUploadDispatcher>()));
+                provider.GetService<IContentUploadDispatcher>())
+            {
+                GraphicsDeviceProvider = provider.GetService<Func<Njulf.Graphics.GraphicsDevice>>()
+            });
             services.TryAddSingleton<IContentManager>(provider => provider.GetRequiredService<ContentManager>());
             services.TryAddSingleton<ModelImporter>();
             services.TryAddSingleton<MeshletBuilder>();

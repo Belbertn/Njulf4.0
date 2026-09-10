@@ -1,0 +1,145 @@
+<Project>
+  <PropertyGroup>
+    <NjulfAssetsRoot Condition="'$(NjulfAssetsRoot)' == ''">$(MSBuildProjectDirectory)/Assets</NjulfAssetsRoot>
+    <NjulfCookedRoot Condition="'$(NjulfCookedRoot)' == ''">$(MSBuildProjectDirectory)/Cooked</NjulfCookedRoot>
+    <_NjulfGameRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_NjulfGameRid>
+    <_NjulfGameRid Condition="'$(_NjulfGameRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_NjulfGameRid>
+    <_NjulfAssetToolProject>$(MSBuildThisFileDirectory)../Njulf.AssetTool/Njulf.AssetTool.csproj</_NjulfAssetToolProject>
+    <_NjulfAssetTool>$(MSBuildThisFileDirectory)../Njulf.AssetTool/bin/Development/net10.0/Njulf.AssetTool.dll</_NjulfAssetTool>
+    <!-- Ask the cooker every time; IDE timestamp checks do not understand its dependency database. -->
+    <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
+    <!-- Engine shaders are embedded. Copy only this game's declared content, not engine source sidecars. -->
+    <_GetChildProjectCopyToOutputDirectoryItems>false</_GetChildProjectCopyToOutputDirectoryItems>
+    <_GetChildProjectCopyToPublishDirectoryItems>false</_GetChildProjectCopyToPublishDirectoryItems>
+    <CookedAssetsOnly Condition="'$(Configuration)' == 'Release'">true</CookedAssetsOnly>
+  </PropertyGroup>
+  <Import Project="$(MSBuildThisFileDirectory)../Njulf.ShaderBuild/Njulf.Effects.targets" />
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../NjulfHelloGame/THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)../Njulf.AssetTool/Imazen.WebP.provenance.json" Link="Imazen.WebP.provenance.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CookNjulfGameAssets" Condition="'$(DesignTimeBuild)' != 'true' and '$(NoBuild)' != 'true'">
+    <Error Condition="!Exists('$(NjulfAssetsRoot)')" Text="NjulfAssetsRoot '$(NjulfAssetsRoot)' does not exist. Create the Assets directory or set NjulfAssetsRoot." />
+    <ValidateNjulfGameCookRoot SourceRoot="$(NjulfAssetsRoot)" CookRoot="$(NjulfCookedRoot)" />
+    <MSBuild Projects="$(_NjulfAssetToolProject)" Targets="Restore;Build" BuildInParallel="false"
+             Properties="Configuration=Development;CookedAssetsOnly=false;SelfContained=false"
+             RemoveProperties="RuntimeIdentifier;RuntimeIdentifiers;ArtifactsPath;BaseIntermediateOutputPath;IntermediateOutputPath;MSBuildProjectExtensionsPath;OutputPath;OutDir;PublishDir;PublishSingleFile;PublishTrimmed;PublishAot;ContinuousIntegrationBuild" />
+    <Exec Command="dotnet &quot;$(_NjulfAssetTool)&quot; cook changed &quot;$(NjulfAssetsRoot)&quot; --out &quot;$(NjulfCookedRoot)&quot; --platform &quot;$(_NjulfGameRid)&quot; --progress-detail stages" />
+    <Exec Condition="Exists('$(NjulfCookedRoot)/$(_NjulfGameRid)')" Command="dotnet &quot;$(_NjulfAssetTool)&quot; clean-stale --out &quot;$(NjulfCookedRoot)&quot; --platform &quot;$(_NjulfGameRid)&quot;" />
+  </Target>
+  <Target Name="CollectNjulfCookedAssets" BeforeTargets="AssignTargetPaths" DependsOnTargets="CookNjulfGameAssets" Condition="'$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_NjulfCookedFile Include="$(NjulfCookedRoot)/$(_NjulfGameRid)/**/*"
+                        Exclude="$(NjulfCookedRoot)/$(_NjulfGameRid)/reports/**/*;$(NjulfCookedRoot)/$(_NjulfGameRid)/assetdb.njassetdb" />
+      <Content Include="@(_NjulfCookedFile)">
+        <Link>Cooked/$(_NjulfGameRid)/%(RecursiveDir)%(Filename)%(Extension)</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <NjulfGameContent>true</NjulfGameContent>
+      </Content>
+      <Content Include="@(NjulfRuntimeContent)">
+        <Link Condition="'%(NjulfRuntimeContent.Link)' == ''">%(Identity)</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <NjulfGameContent>true</NjulfGameContent>
+      </Content>
+    </ItemGroup>
+  </Target>
+
+  <UsingTask TaskName="ValidateNjulfGameCookRoot" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <SourceRoot ParameterType="System.String" Required="true" />
+      <CookRoot ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        string source = Path.GetFullPath(SourceRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        string cooked = Path.GetFullPath(CookRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (source.StartsWith(cooked, StringComparison.OrdinalIgnoreCase) || cooked.StartsWith(source, StringComparison.OrdinalIgnoreCase))
+        {
+            Log.LogError("NjulfCookedRoot and NjulfAssetsRoot must be separate directories, not parents of one another.");
+            return false;
+        }
+        for (string parent = cooked.TrimEnd(Path.DirectorySeparatorChar); !string.IsNullOrEmpty(parent); parent = Path.GetDirectoryName(parent))
+            if (Directory.Exists(parent) && (File.GetAttributes(parent) & FileAttributes.ReparsePoint) != 0)
+            {
+                Log.LogError("NjulfCookedRoot cannot traverse a reparse point: " + parent);
+                return false;
+            }
+        var pending = new System.Collections.Generic.Stack<string>();
+        if (Directory.Exists(cooked)) pending.Push(cooked);
+        while (pending.Count != 0)
+            foreach (string entry in Directory.EnumerateFileSystemEntries(pending.Pop()))
+            {
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    Log.LogError("Generated cooked content cannot contain a reparse point: " + entry);
+                    return false;
+                }
+                if ((attributes & FileAttributes.Directory) != 0) pending.Push(entry);
+            }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <!-- Reconcile only files previously copied by these targets; never recursively delete directories. -->
+  <UsingTask TaskName="PruneNjulfGameContent" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Destination ParameterType="System.String" Required="true" />
+      <Files ParameterType="Microsoft.Build.Framework.ITaskItem[]" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Collections.Generic" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        string root = Path.GetFullPath(Destination).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        string manifest = Path.Combine(root, ".njulf-content.files");
+        var current = new HashSet<string>((Files ?? new Microsoft.Build.Framework.ITaskItem[0]).Select(f => f.ItemSpec.Replace('/', Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase);
+        Func<string, string> resolve = relative => {
+            string path = Path.GetFullPath(Path.Combine(root, relative));
+            if (Path.IsPathRooted(relative) || !path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Game content must have a relative destination inside the output directory: " + relative);
+            for (string parent = path; parent != null; parent = Path.GetDirectoryName(parent))
+                if ((File.Exists(parent) || Directory.Exists(parent)) && (File.GetAttributes(parent) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException("Game content output cannot traverse a reparse point: " + parent);
+            return path;
+        };
+        resolve(".njulf-content.files");
+        foreach (string relative in current) resolve(relative);
+        if (File.Exists(manifest))
+            foreach (string previous in File.ReadAllLines(manifest))
+                if (!current.Contains(previous)) File.Delete(resolve(previous));
+        Directory.CreateDirectory(root);
+        File.WriteAllLines(manifest, current.OrderBy(p => p, StringComparer.Ordinal));
+      ]]></Code>
+    </Task>
+  </UsingTask>
+  <Target Name="CollectNjulfGameContent" DependsOnTargets="AssignTargetPaths">
+    <ItemGroup>
+      <_NjulfGameDestination Include="@(ContentWithTargetPath -> '%(TargetPath)')" Condition="'%(ContentWithTargetPath.NjulfGameContent)' == 'true' or '%(ContentWithTargetPath.Extension)' == '.spv'" />
+    </ItemGroup>
+  </Target>
+  <Target Name="PruneNjulfGameBuildContent" BeforeTargets="_CopyOutOfDateSourceItemsToOutputDirectory;_CopyOutOfDateSourceItemsToOutputDirectoryAlways;_CopyDifferingSourceItemsToOutputDirectory;CopyFilesToOutputDirectory" DependsOnTargets="CollectNjulfGameContent" Condition="'$(DesignTimeBuild)' != 'true'">
+    <PruneNjulfGameContent Destination="$(TargetDir)" Files="@(_NjulfGameDestination)" />
+  </Target>
+  <Target Name="PruneNjulfGamePublishContent" BeforeTargets="_CopyResolvedFilesToPublishPreserveNewest;_CopyResolvedFilesToPublishAlways;_CopyResolvedFilesToPublishIfDifferent;CopyFilesToPublishDirectory" DependsOnTargets="CollectNjulfGameContent" Condition="'$(DesignTimeBuild)' != 'true'">
+    <PruneNjulfGameContent Destination="$(PublishDir)" Files="@(_NjulfGameDestination)" />
+  </Target>
+
+  <Target Name="ExcludeNjulfGameImporters" AfterTargets="ResolveReferences" Condition="'$(CookedAssetsOnly)' == 'true'">
+    <ItemGroup>
+      <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)" Condition="$([System.String]::Copy('%(Filename)').StartsWith('SharpGLTF')) or $([System.String]::Copy('%(Filename)').StartsWith('Silk.NET.Assimp')) or $([System.String]::Copy('%(Filename)').StartsWith('Assimp')) or $([System.String]::Copy('%(Filename)').StartsWith('BCnEncoder'))" />
+    </ItemGroup>
+  </Target>
+  <Target Name="ExcludeNjulfGamePublishedImporters" AfterTargets="ComputeFilesToPublish" Condition="'$(CookedAssetsOnly)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(Filename)').StartsWith('SharpGLTF')) or $([System.String]::Copy('%(Filename)').StartsWith('Silk.NET.Assimp')) or $([System.String]::Copy('%(Filename)').StartsWith('Assimp')) or $([System.String]::Copy('%(Filename)').StartsWith('BCnEncoder'))" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -52,7 +52,7 @@ internal sealed partial class VulkanGraphicsDevice
             foreach (var assignment in textures)
             {
                 MaterialTextureBinding binding = GetBinding(definition, assignment.Slot);
-                TextureHandle handle = Textures.RetainGraphicsBinding(ValidateTexture(assignment.Texture), binding.Sampler);
+                TextureHandle handle = Textures.RetainGraphicsBinding(ValidateTexture(assignment.Texture!), binding.Sampler);
                 acquired[count++] = handle;
                 definition = SetBinding(definition, assignment.Slot, binding with { Texture = handle });
             }
@@ -77,7 +77,7 @@ internal sealed partial class VulkanGraphicsDevice
         }
     }
 
-    private static MaterialTextureBinding GetBinding(MaterialDefinition d, MaterialTextureSlot slot) => slot switch
+    internal static MaterialTextureBinding GetBinding(MaterialDefinition d, MaterialTextureSlot slot) => slot switch
     {
         MaterialTextureSlot.BaseColor => d.BaseColor,
         MaterialTextureSlot.Normal => d.Normal,
@@ -99,7 +99,7 @@ internal sealed partial class VulkanGraphicsDevice
         MaterialTextureSlot.Subsurface => d.Extensions.Subsurface,
         _ => throw new ArgumentOutOfRangeException(nameof(slot))
     };
-    private static MaterialDefinition SetBinding(MaterialDefinition d, MaterialTextureSlot slot, MaterialTextureBinding binding) => slot switch
+    internal static MaterialDefinition SetBinding(MaterialDefinition d, MaterialTextureSlot slot, MaterialTextureBinding binding) => slot switch
     {
         MaterialTextureSlot.BaseColor => d with { BaseColor = binding },
         MaterialTextureSlot.Normal => d with { Normal = binding },

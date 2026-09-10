@@ -76,14 +76,25 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _receiverFeedbackEnabled = receiverFeedbackEnabled;
             _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
-            _colorFormat = colorFormat;
-            _depthFormat = depthFormat;
 
-            ValidatePushConstantRange((uint)Marshal.SizeOf<GPUParticlePushConstants>());
-            CreatePipelineCache();
-            CreatePipelineLayout();
-            if (createPipelines)
-                PrepareAll();
+            try
+            {
+                _colorFormat = colorFormat;
+                _depthFormat = depthFormat;
+
+                ValidatePushConstantRange((uint)Marshal.SizeOf<GPUParticlePushConstants>());
+                CreatePipelineCache();
+                CreatePipelineLayout();
+                if (createPipelines)
+                    PrepareAll();
+            }
+            catch (Exception initializationFailure)
+            {
+                // A failed constructor has not transferred ownership to the production assembly.
+                try { Dispose(); }
+                catch (Exception cleanupFailure) { initializationFailure.Data["Njulf.PipelineCleanupFailure"] = cleanupFailure; }
+                throw;
+            }
         }
 
         public PipelineLayout Layout => _layout;

@@ -1,0 +1,16 @@
+#version 460
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+layout(set=0, binding=0) uniform sampler2D SourceColor;
+layout(set=0, binding=1, rgba16f) uniform writeonly image2D Destination;
+layout(set=0, binding=2, std430) buffer DataBuffer { uint marker; } Data;
+layout(push_constant) uniform Parameters {
+    layout(offset=0) vec3 Tint;
+    layout(offset=16) uint Marker;
+} p;
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(Destination)))) return;
+    vec4 source = texelFetch(SourceColor, pixel, 0);
+    imageStore(Destination, pixel, vec4(source.rgb * p.Tint, source.a));
+    if (all(equal(pixel, ivec2(0)))) Data.marker = p.Marker;
+}

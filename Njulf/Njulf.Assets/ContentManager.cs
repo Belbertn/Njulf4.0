@@ -19,7 +19,7 @@ namespace Njulf.Assets
         CookedModelAsset CookedAsset,
         Model RuntimeModel);
 
-    public class ContentManager : IContentManager, IContentLifetime, IDisposable
+    public partial class ContentManager : IContentManager, IContentLifetime, IDisposable
     {
         private readonly Dictionary<string, object> _cache =
             new(StringComparer.Ordinal);
@@ -63,7 +63,10 @@ namespace Njulf.Assets
             lock (_stateLock)
             {
                 ThrowIfDisposed();
-                var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCancellation.Token);
+                ContentOwner owner = _loadingOwner.Value ?? _rootOwner;
+                ObjectDisposedException.ThrowIf(owner.Closed, typeof(IContentScope));
+                var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCancellation.Token,
+                    _currentAcquisition.Value?.Cancellation.Token ?? owner.Cancellation.Token);
                 _activeOperations++;
                 return new OperationLease(this, source);
             }
@@ -323,7 +326,7 @@ namespace Njulf.Assets
             _modelImporter = new Lazy<ModelImporter>(() => new ModelImporter(), LazyThreadSafetyMode.ExecutionAndPublication);
             _processedMeshAssetBuilder = new Lazy<ProcessedMeshAssetBuilder>(() => new ProcessedMeshAssetBuilder(), LazyThreadSafetyMode.ExecutionAndPublication);
             _modelRenderUploadService = modelRenderUploadService;
-            _contentUploadDispatcher = contentUploadDispatcher;
+            _contentUploadDispatcher = contentUploadDispatcher is null ? null : new OwnershipUploadDispatcher(this, contentUploadDispatcher);
             _modelSnapshotFactory = modelSnapshotFactory;
             _useResolverSnapshots = useResolverSnapshots;
             _cookedResolver = new CookedContentResolver(_rootDirectory);
@@ -369,6 +372,12 @@ namespace Njulf.Assets
 
         public T Load<T>(string path, ContentLoadOptions? options)
         {
+            if (_currentAcquisition.Value is null)
+                return LoadOwned(() => Load<T>(path, options));
+            if (typeof(T) == typeof(Njulf.Graphics.ShaderEffectAsset))
+                return (T)(object)LoadEffectAsset(path);
+            if (typeof(T) == typeof(Njulf.Graphics.Texture) || typeof(T) == typeof(Njulf.Graphics.Material) || typeof(T) == typeof(Njulf.Graphics.SpriteFont))
+                return LoadGraphicsAsset<T>(path, options ?? ContentLoadOptions.Default);
             if (string.IsNullOrEmpty(path))
             {
                 throw new ArgumentException(
@@ -388,26 +397,7 @@ namespace Njulf.Assets
                 return LoadModelPipeline<T>(path, fullPath, options);
             }
 
-            lock (_stateLock)
-            {
-                ThrowIfDisposed();
-                if (!File.Exists(fullPath))
-                {
-                    throw new FileNotFoundException(
-                        "Source asset file was not found and no usable cooked package was resolved.",
-                        fullPath);
-                }
-
-                string cacheKey = CreateCacheKey<T>(fullPath, options);
-
-                if (_cache.TryGetValue(cacheKey, out object? cached))
-                    return (T)cached;
-
-                object result = LoadInternal<T>(fullPath, options);
-                PublishOwnedAsset(cacheKey, result);
-
-                return (T)result;
-            }
+            return LoadSourceFallbackModel<T>(fullPath, options);
         }
 
         /// <summary>
@@ -423,6 +413,8 @@ namespace Njulf.Assets
             ContentLoadOptions? options = null,
             CancellationToken cancellationToken = default)
         {
+            if (_currentAcquisition.Value is null)
+                return await LoadOwnedAsync(() => LoadAsync<T>(path, options, cancellationToken), cancellationToken).ConfigureAwait(false);
             using var operation = BeginOperation(cancellationToken);
             cancellationToken = operation.Token;
             if (string.IsNullOrEmpty(path))
@@ -446,7 +438,15 @@ namespace Njulf.Assets
                 cancellationToken.ThrowIfCancellationRequested();
                 ReportContentProgress(options.Progress, request, ContentLoadStage.Started, null);
                 T result;
-                if (typeof(T) == typeof(Model) && _contentUploadDispatcher is not null)
+                if (typeof(T) == typeof(Njulf.Graphics.ShaderEffectAsset))
+                {
+                    result = (T)(object)await Task.Run(() => LoadEffectAsset(path), cancellationToken).ConfigureAwait(false);
+                }
+                else if ((typeof(T) == typeof(Njulf.Graphics.Texture) || typeof(T) == typeof(Njulf.Graphics.Material) || typeof(T) == typeof(Njulf.Graphics.SpriteFont)) && _contentUploadDispatcher is not null)
+                {
+                    result = await LoadGraphicsAssetAsync<T>(path, options, cancellationToken).ConfigureAwait(false);
+                }
+                else if (typeof(T) == typeof(Model) && _contentUploadDispatcher is not null)
                 {
                     result = await LoadModelPipelineAsync<T>(
                         path, fullPath, options, _contentUploadDispatcher, cancellationToken,
@@ -562,10 +562,10 @@ namespace Njulf.Assets
                     await concurrency.WaitAsync(cancellationToken).ConfigureAwait(false);
                     entered = true;
                     ReportContentProgress(options.Progress, request, ContentLoadStage.Started, null);
-                    T asset = await LoadPreloadItemAsync<T>(
+                    T asset = await LoadOwnedAsync(() => LoadPreloadItemAsync<T>(
                         request,
                         options,
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken), cancellationToken).ConfigureAwait(false);
                     results[resultIndex] = new ContentPreloadItemResult<T>(
                         request,
                         asset,
@@ -715,24 +715,7 @@ namespace Njulf.Assets
                         0,
                         0));
 
-                lock (_stateLock)
-                {
-                    ThrowIfDisposed();
-                    if (!File.Exists(sourcePath))
-                    {
-                        throw new FileNotFoundException(
-                            "Source asset file was not found and no usable cooked package was resolved.",
-                            sourcePath);
-                    }
-
-                    string cacheKey = CreateCacheKey<T>(sourcePath, options);
-                    if (_cache.TryGetValue(cacheKey, out object? cached))
-                        return (T)cached;
-
-                    object result = LoadInternal<T>(sourcePath, options);
-                    PublishOwnedAsset(cacheKey, result);
-                    return (T)result;
-                }
+                return LoadSourceFallbackModel<T>(sourcePath, options);
             }
             finally
             {
@@ -985,7 +968,7 @@ namespace Njulf.Assets
             lock (_stateLock)
             {
                 ThrowIfDisposed();
-                if (_cache.TryGetValue(cookedKey, out object? cached))
+                if (TryGetCachedAsset(cookedKey, out object? cached))
                 {
                     return new CookedModelAsyncPreparation(
                         requestedPath,
@@ -1046,7 +1029,7 @@ namespace Njulf.Assets
                         "Source asset file was not found and no usable cooked package was resolved.",
                         sourcePath);
                 }
-                if (_cache.TryGetValue(cacheKey, out object? cached))
+                if (TryGetCachedAsset(cacheKey, out object? cached))
                 {
                     return new SourceModelAsyncPreparation(
                         requestedPath,
@@ -1086,7 +1069,7 @@ namespace Njulf.Assets
                     throw new OperationCanceledException(
                         "The content cache was cleared while this source model was importing.");
                 }
-                if (_cache.TryGetValue(cacheKey, out object? cached))
+                if (TryGetCachedAsset(cacheKey, out object? cached))
                 {
                     return new SourceModelAsyncPreparation(
                         requestedPath,
@@ -1128,7 +1111,7 @@ namespace Njulf.Assets
                 lock (_stateLock)
                 {
                     ThrowIfDisposed();
-                    if (_cache.TryGetValue(
+                    if (TryGetCachedAsset(
                             preparation.CacheKey,
                             out object? cached))
                     {
@@ -1162,7 +1145,7 @@ namespace Njulf.Assets
             lock (_stateLock)
             {
                 ThrowIfDisposed();
-                if (_cache.TryGetValue(preparation.CacheKey, out object? cached))
+                if (TryGetCachedAsset(preparation.CacheKey, out object? cached))
                     return (T)cached;
             }
 
@@ -1173,7 +1156,7 @@ namespace Njulf.Assets
                 lock (_stateLock)
                 {
                     ThrowIfDisposed();
-                    if (_cache.TryGetValue(preparation.CacheKey, out object? cached))
+                    if (TryGetCachedAsset(preparation.CacheKey, out object? cached))
                         return (T)cached;
                 }
 
@@ -1235,7 +1218,7 @@ namespace Njulf.Assets
                 lock (_stateLock)
                 {
                     ThrowIfDisposed();
-                    if (_cache.TryGetValue(
+                    if (TryGetCachedAsset(
                             preparation.CacheKey,
                             out object? cached))
                     {
@@ -1298,7 +1281,7 @@ namespace Njulf.Assets
                 lock (_stateLock)
                 {
                     ThrowIfDisposed();
-                    if (_cache.TryGetValue(
+                    if (TryGetCachedAsset(
                             preparation.CacheKey,
                             out object? cached))
                     {
@@ -1355,9 +1338,16 @@ namespace Njulf.Assets
             string sourcePath,
             ContentLoadOptions options)
         {
-            lock (_stateLock)
+            // Serialize the shared importer and device mutations without blocking scope
+            // cancellation or ownership changes behind disk I/O and source decoding.
+            lock (_uploadLock)
             {
-                ThrowIfDisposed();
+                string cacheKey = CreateCacheKey<T>(sourcePath, options);
+                lock (_stateLock)
+                {
+                    ThrowIfDisposed();
+                    if (TryGetCachedAsset(cacheKey, out object? cached)) return (T)cached;
+                }
                 if (!File.Exists(sourcePath))
                 {
                     throw new FileNotFoundException(
@@ -1365,12 +1355,8 @@ namespace Njulf.Assets
                         sourcePath);
                 }
 
-                string cacheKey = CreateCacheKey<T>(sourcePath, options);
-                if (_cache.TryGetValue(cacheKey, out object? cached))
-                    return (T)cached;
-
                 object result = LoadInternal<T>(sourcePath, options);
-                PublishOwnedAsset(cacheKey, result);
+                lock (_stateLock) PublishOwnedAsset(cacheKey, result);
                 return (T)result;
             }
         }
@@ -1408,7 +1394,7 @@ namespace Njulf.Assets
             lock (_stateLock)
             {
                 ThrowIfDisposed();
-                if (_cache.TryGetValue(cookedKey, out object? cookedCached))
+                if (TryGetCachedAsset(cookedKey, out object? cookedCached))
                     return (T)cookedCached;
             }
 
@@ -1425,7 +1411,7 @@ namespace Njulf.Assets
                 lock (_stateLock)
                 {
                     ThrowIfDisposed();
-                    if (_cache.TryGetValue(cookedKey, out object? cached))
+                    if (TryGetCachedAsset(cookedKey, out object? cached))
                         return (T)cached;
                 }
 
@@ -1803,12 +1789,16 @@ namespace Njulf.Assets
             ArgumentException.ThrowIfNullOrWhiteSpace(cacheKey);
             ArgumentNullException.ThrowIfNull(asset);
 
+            bool added = false;
             try
             {
                 _cache.Add(cacheKey, asset);
+                added = true;
+                ClaimCurrentAsset(asset);
             }
             catch (Exception publicationFailure)
             {
+                if (added) _cache.Remove(cacheKey);
                 if (asset is not IDisposable disposable)
                     throw;
 
@@ -1818,6 +1808,7 @@ namespace Njulf.Assets
                 }
                 catch (Exception rollbackFailure)
                 {
+                    RetainFailedPublication(asset);
                     throw new AggregateException(
                         "Content publication failed and the unpublished asset could not be disposed.",
                         publicationFailure,
@@ -1830,92 +1821,26 @@ namespace Njulf.Assets
 
         public void Unload<T>(T asset)
         {
-            lock (_stateLock)
-            {
-                ObjectDisposedException.ThrowIf(_disposed, this);
-                if (asset is null)
-                    return;
-
-                if (!_cache.Values.Any(cached => ReferenceEquals(cached, asset)))
-                    throw new ArgumentException("Only assets owned by this content cache can be unloaded.", nameof(asset));
-
-                // Keep every authoritative cache entry until disposal
-                // succeeds. A retryable release failure must not orphan the
-                // manager's only ownership record.
-                if (asset is IDisposable disposable)
-                    disposable.Dispose();
-
-                RemoveCacheEntries(asset);
-            }
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (asset != null) ReleaseAsset(_rootOwner, asset);
         }
 
-        public void UnloadAll()
-        {
-            lock (_stateLock)
-            {
-                ObjectDisposedException.ThrowIf(_disposed, this);
-                _cacheGeneration++;
-                ClearOwnedAssets();
-            }
-        }
+        public void UnloadAll() => UnloadOwner(_rootOwner, false);
 
         private void ClearOwnedAssets()
         {
-            var ownershipGroups =
-                new Dictionary<object, List<string>>(
-                    ReferenceEqualityComparer.Instance);
-            foreach ((string key, object asset) in _cache)
-            {
-                if (!ownershipGroups.TryGetValue(
-                        asset,
-                        out List<string>? keys))
-                {
-                    keys = new List<string>();
-                    ownershipGroups.Add(asset, keys);
-                }
-
-                keys.Add(key);
-            }
-
-            KeyValuePair<object, List<string>>[] groups =
-                ownershipGroups.ToArray();
             List<Exception>? failures = null;
-            for (int index = groups.Length - 1; index >= 0; index--)
+            foreach (object asset in _assetOwners.Keys.OrderBy(a => a is Njulf.Core.Scene.Scene ? 0 : a is Njulf.Graphics.Material ? 1 : 2).ToArray())
             {
-                object asset = groups[index].Key;
-                try
+                if (!_assetOwners.TryGetValue(asset, out var owners)) continue;
+                foreach (ContentOwner owner in owners.ToArray())
                 {
-                    if (asset is IDisposable disposable)
-                        disposable.Dispose();
-                }
-                catch (Exception disposeFailure)
-                {
-                    (failures ??= new List<Exception>())
-                        .Add(disposeFailure);
-                    continue;
-                }
-
-                foreach (string cacheKey in groups[index].Value)
-                {
-                    if (_cache.TryGetValue(
-                            cacheKey,
-                            out object? current) &&
-                        ReferenceEquals(current, asset))
-                    {
-                        _cache.Remove(cacheKey);
-                    }
+                    try { ReleaseAsset(owner, asset); }
+                    catch (Exception failure) { (failures ??= []).Add(failure); }
                 }
             }
-
-            if (failures != null)
-            {
-                throw new AggregateException(
-                    "One or more content assets could not be disposed. " +
-                    "Their cache ownership entries were retained for retry.",
-                    failures);
-            }
+            if (failures != null) throw new AggregateException("Content release failed; ownership was retained for retry.", failures);
         }
-
         private void RemoveCacheEntries(object asset)
         {
             List<string>? keys = null;
@@ -2012,6 +1937,7 @@ namespace Njulf.Assets
 
         public void Dispose()
         {
+            BeginShutdown();
             lock (_stateLock)
             {
                 if (_disposed)
@@ -2021,6 +1947,9 @@ namespace Njulf.Assets
                 }
 
                 ClearOwnedAssets();
+                foreach (ContentOwner owner in _contentOwners) owner.Cancellation.Dispose();
+                _rootOwner.Cancellation.Dispose();
+                _contentOwners.Clear();
                 _cacheGeneration++;
                 if (_modelImporter.IsValueCreated)
                     _modelImporter.Value.Dispose();

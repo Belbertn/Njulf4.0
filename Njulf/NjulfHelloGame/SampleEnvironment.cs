@@ -1,6 +1,8 @@
 using System;
+using Njulf.Core.Scene;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
 
@@ -14,12 +16,12 @@ internal enum SampleEnvironmentMode
 
 internal static class SampleEnvironment
 {
-    public static void Configure(VulkanRenderer renderer, SampleEnvironmentMode mode)
+    public static void Configure(Scene scene, SampleEnvironmentMode mode)
     {
-        if (renderer == null)
-            throw new ArgumentNullException(nameof(renderer));
-
-        EnvironmentSettings environment = renderer.Settings.Environment;
+        ArgumentNullException.ThrowIfNull(scene);
+        EnvironmentSettings environment = new();
+        if (scene.Environment is { } source)
+            SceneEnvironmentSettings.Apply(source, environment);
         environment.Enabled = true;
         environment.SourcePath = null;
         environment.DebugView = EnvironmentDebugView.None;
@@ -56,5 +58,7 @@ internal static class SampleEnvironment
             default:
                 throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown sample environment mode.");
         }
+
+        scene.Environment = SceneEnvironmentSettings.Capture(environment);
     }
 }

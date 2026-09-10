@@ -344,7 +344,7 @@ public sealed class SceneDocumentTests
             SceneDocument captured = new SceneDocumentWriter().CreateDocument(scene, lights);
             Assert.Multiple(() =>
             {
-                Assert.That(SceneDocument.CurrentSchemaVersion, Is.EqualTo(12));
+                Assert.That(SceneDocument.CurrentSchemaVersion, Is.EqualTo(13));
                 Assert.That(SceneDocumentJson.Serialize(captured),
                     Is.EqualTo(SceneDocumentJson.Serialize(source)));
                 Assert.That(captured.Dependencies.Single().Path,

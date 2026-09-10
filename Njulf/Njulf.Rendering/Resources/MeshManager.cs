@@ -64,6 +64,8 @@ namespace Njulf.Rendering.Resources
         public uint SkinningDataOffset;
         public uint SkinningDataCount;
         public bool IsSkinned;
+        internal bool IsDynamic;
+        internal uint ContentRevision;
         public bool HasVertexColor;
         public bool HasUv1;
         public bool HasTangents;
@@ -86,7 +88,7 @@ namespace Njulf.Rendering.Resources
             !IsSkinned && CoarseRayProxyIndexCount >= 3;
     }
 
-    public sealed unsafe class MeshManager : IDisposable
+    public sealed unsafe partial class MeshManager : IDisposable
     {
         public const long MaximumRuntimeEmissiveTriangleBytes = 16L * 1024L * 1024L;
         public const ulong MaximumRetainedDeadMeshBytes =
@@ -449,6 +451,7 @@ namespace Njulf.Rendering.Resources
             internal Vector3[] Positions { get; }
             internal uint[] Indices { get; }
             internal bool GenerateMeshlets { get; }
+            internal bool Dynamic { get; init; }
             internal GPUVertexSkinningData[] SkinningData { get; }
             internal bool IsSkinned => SkinningData.Length > 0;
             internal Meshlet[] Meshlets { get; }
@@ -1377,7 +1380,22 @@ namespace Njulf.Rendering.Resources
                         var generatedMeshlets = new List<Meshlet>();
                         var generatedLocalVertexIndices = new List<uint>();
                         var generatedLocalTriangleIndices = new List<uint>();
-                        BuildMeshletLods(
+                        if (mesh.Dynamic)
+                        {
+                            GenerateMeshlets(mesh.Positions, mesh.Indices, MaxVerticesPerMeshlet, Lod0MaxTrianglesPerMeshlet,
+                                generatedMeshlets, generatedLocalVertexIndices, generatedLocalTriangleIndices);
+                            meshInfo.IsDynamic = true;
+                            meshInfo.ContentRevision = 1;
+                            meshInfo.MeshletCount = (uint)generatedMeshlets.Count;
+                            meshInfo.MeshletLod1Offset = meshInfo.MeshletLod2Offset = meshInfo.MeshletOffset;
+                            meshInfo.MeshletLod1Count = meshInfo.MeshletLod2Count = meshInfo.MeshletCount;
+                            meshInfo.MeshletLodGeneratedCount = meshInfo.MeshletCount;
+                            hierarchyNodes = Array.Empty<MeshletHierarchyNode>();
+                            hierarchyRootNode = -1;
+                            for (int m = 0; m < generatedMeshlets.Count; m++)
+                            { var value = generatedMeshlets[m]; value.NormalConeAxis = default; value.NormalConeCutoff = -1; generatedMeshlets[m] = value; }
+                        }
+                        else BuildMeshletLods(
                             ref meshInfo,
                             mesh.Positions,
                             mesh.Indices,
@@ -5569,6 +5587,7 @@ namespace Njulf.Rendering.Resources
                 _managedCpuMeshlets.Release(meshIndex);
 
             _meshes[meshIndex] = default;
+            _dynamicChanges.Remove(meshIndex);
             _transportGeometry[meshIndex] = default;
             _meshletQualityDiagnosticsDirty = true;
         }

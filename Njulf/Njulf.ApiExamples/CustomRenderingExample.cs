@@ -16,11 +16,13 @@ internal sealed class CustomRenderingExample(ExampleOptions options) : ExampleGa
     private VulkanPassRegistration _compute = null!, _composite = null!, _overlay = null!;
     private int _updates;
     private Task<GraphicsSettingsResult>? _scaleChange;
+    private Task<byte[]>? _bufferReadback;
+    private Task<TextureReadback>? _targetReadback;
     protected override void Load()
     {
         base.Load();
         _target = Graphics.CreateRenderTarget2D(128, 128);
-        _buffer = Graphics.CreateBuffer(16);
+        _buffer = Graphics.CreateBuffer(16, new byte[16]);
         _compute = Graphics.AddVulkanPass(new("Custom.Gradient", VulkanPassKind.Compute, VulkanPassStage.BeforeScene, ComputeResources()), new ExampleNativePass(true));
         _composite = Graphics.AddVulkanPass(new("Custom.Composite", VulkanPassKind.Graphics, VulkanPassStage.AfterScene, CompositeResources()), new ExampleNativePass(false));
         _overlay = Graphics.AddVulkanPass(new("Custom.Overlay", VulkanPassKind.Graphics, VulkanPassStage.AfterPostProcessing,
@@ -51,6 +53,24 @@ internal sealed class CustomRenderingExample(ExampleOptions options) : ExampleGa
     protected override void Update(GameTime gameTime)
     {
         base.Update(gameTime);
+        if (QualityFrames >= 30 && _bufferReadback == null)
+        {
+            Graphics.UpdateBuffer(_buffer, 4, new byte[] { 11, 22, 33, 44 });
+            _bufferReadback = Graphics.ReadBufferAsync(_buffer, 0, 8);
+            _targetReadback = Graphics.ReadTexture2DAsync(_target);
+        }
+        if (_bufferReadback?.IsCompleted == true)
+        {
+            byte[] result = _bufferReadback.GetAwaiter().GetResult();
+            if (BitConverter.ToUInt32(result, 0) != 1 || !result.AsSpan(4).SequenceEqual(new byte[] { 11, 22, 33, 44 }))
+                throw new InvalidOperationException("Compute buffer readback mismatch.");
+        }
+        if (_targetReadback?.IsCompleted == true)
+        {
+            TextureReadback result = _targetReadback.GetAwaiter().GetResult();
+            if (result.Format != TextureFormat.Rgba16Float || result.Data.Length != result.Width * result.Height * 8)
+                throw new InvalidOperationException("Render-target readback mismatch.");
+        }
         if (QualityFrames >= 240 && _scaleChange == null)
             _scaleChange = Graphics.Settings.ApplyAsync(new() { ResolutionScale = .75f });
         if (_scaleChange?.IsCompletedSuccessfully == true && _scaleChange.Result.Outcome != GraphicsSettingsOutcome.Rebuilt)

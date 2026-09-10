@@ -4,9 +4,9 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Graphics.Vulkan;
 
-public enum VulkanPassStage { BeforeScene, AfterScene, AfterPostProcessing }
+public enum VulkanPassStage { BeforeScene, AfterScene, AfterPostProcessing, AfterToneMapping }
 public enum VulkanPassKind { Graphics, Compute }
-public enum VulkanViewImage { SceneColor, SceneDepth, Backbuffer }
+public enum VulkanViewImage { SceneColor, SceneDepth, Backbuffer, PostProcessColor }
 
 /// <summary>A named, declared use. Access masks and stages describe all commands in the callback.</summary>
 public abstract record VulkanResourceUse(string Name, RenderGraphResourceAccess Access,
@@ -73,6 +73,11 @@ public sealed class VulkanPassRegistration : IDisposable
 {
     private readonly VulkanPassRegistry _owner;
     internal VulkanPassAdapter Adapter { get; }
+    internal void SetEnabled(bool enabled) => _owner.SetEnabled(this, enabled);
+    internal void RebindRetained(IReadOnlyList<VulkanResourceUse> resources) =>
+        _owner.Rebind(this, resources, Adapter.RequestedBindings ?? Adapter.Bindings);
+    internal void RebindKeepingOutput(IReadOnlyList<VulkanResourceUse> resources) =>
+        _owner.Rebind(this, resources, (Adapter.RequestedBindings ?? Adapter.Bindings).Where(b => b.Use.Name == "$destination").ToArray());
     public bool IsDisposed { get; private set; }
     internal VulkanPassRegistration(VulkanPassRegistry owner, VulkanPassAdapter adapter)
     { _owner = owner; Adapter = adapter; }

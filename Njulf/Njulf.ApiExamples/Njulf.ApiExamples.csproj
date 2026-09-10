@@ -13,8 +13,12 @@
     <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
     <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />
     <None Update="Assets\tetrahedron.gltf" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Assets\Content\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Assets\Effects\*.njeffect.json" CopyToOutputDirectory="PreserveNewest" />
+    <NjulfEffectShader Include="Assets\Effects\*.frag;Assets\Effects\*.comp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Njulf.Framework\Njulf.Framework.csproj" />
   </ItemGroup>
+  <Import Project="..\Njulf.ShaderBuild\Njulf.Effects.targets" />
 </Project>

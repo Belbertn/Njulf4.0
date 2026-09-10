@@ -4,6 +4,10 @@ Njulf resolves versioned, hashed cooked packages before source models. Cooked st
 
 ## Cook assets
 
+New games can use the [project template](GettingStarted.md) to run incremental
+cooking automatically during build, run, and publish. The manual commands below
+remain available for existing projects and specialized sample workflows.
+
 ```powershell
 dotnet run --project Njulf.AssetTool -- cook model NjulfHelloGame/Strut.glb --out NjulfHelloGame/Cooked
 ./tools/cook-sponza.ps1 -Configuration Development
