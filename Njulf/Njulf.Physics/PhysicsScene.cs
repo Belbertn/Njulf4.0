@@ -231,11 +231,12 @@ public sealed partial class PhysicsScene : IDisposable
         pose = Validate(pose); _dirty.Remove(e); e.Target = pose; ApplyPose(e, pose); Publish(e);
     }
     public Vector3 GetVelocity(ColliderHandle handle) => FromJ(GetBody(handle).Velocity);
-    public Vector3 GetAngularVelocity(ColliderHandle handle) => FromJ(GetBody(handle).AngularVelocity);
+    public Vector3 GetAngularVelocity(ColliderHandle handle) => -FromJ(GetBody(handle).AngularVelocity);
     public void SetVelocity(ColliderHandle handle, Vector3 velocity, Vector3 angularVelocity = default)
     {
         var e = Get(handle); RequireDynamic(e); Finite(velocity); Finite(angularVelocity);
-        e.Body!.Velocity = ToJ(velocity); e.Body.AngularVelocity = ToJ(angularVelocity); e.Body.SetActivationState(true);
+        // Angular rates follow Njulf's positive quaternion angles, whose world rotations are conjugated in Jitter.
+        e.Body!.Velocity = ToJ(velocity); e.Body.AngularVelocity = -ToJ(angularVelocity); e.Body.SetActivationState(true);
     }
     public void AddForce(ColliderHandle handle, Vector3 force)
     {

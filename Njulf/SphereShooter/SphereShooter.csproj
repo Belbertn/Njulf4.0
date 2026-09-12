@@ -7,5 +7,10 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Njulf.Framework\Njulf.Framework.csproj" />
+    <ProjectReference Include="..\Njulf.Physics\Njulf.Physics.csproj" />
+    <ProjectReference Include="..\Njulf.Audio\Njulf.Audio.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="Assets\hit-sound.pcm16.wav" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

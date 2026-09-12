@@ -1,5 +1,13 @@
 # Third-party notices
 
+## Optional OpenAL audio
+
+`Njulf.Audio` uses Silk.NET 2.23.0 (MIT) and the dynamically loaded
+`Silk.NET.OpenAL.Soft.Native` 1.23.1 package (LGPL-2.0-or-later).
+Notices, upstream source references, and license texts are in
+[`Njulf.Audio/ThirdParty`](Njulf.Audio/ThirdParty/NOTICES.txt) and copied to
+`ThirdParty/Audio` in ordinary build/publish outputs that reference audio.
+
 ## Linearly Transformed Cosines reference implementation
 
 The analytical area-light LTC equations and lookup-table payloads are adapted

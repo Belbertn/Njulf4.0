@@ -309,4 +309,23 @@ public sealed class PhysicsTests
         Assert.That((child.WorldMatrix.Translation - new Vector3(3, 0, 0)).Length(), Is.LessThan(.001));
         physics.Synchronize(); Assert.That(physics.TransformSynchronizations, Is.Zero);
     }
+
+    [TestCase(1, 0, 0)]
+    [TestCase(0, 1, 0)]
+    [TestCase(0, 0, 1)]
+    public void AngularVelocityFollowsNjulfPositiveQuaternionAngles(float x, float y, float z)
+    {
+        using var physics = new PhysicsScene(PhysicsMode.Simulation); physics.Gravity = Vector3.Zero;
+        var axis = new Vector3(x, y, z);
+        var node = new SceneNode();
+        var body = physics.Register(Guid.NewGuid(), [ColliderShape.Sphere(1)],
+            body: new BodySettings { Kind = BodyKind.Dynamic }, node: node);
+        physics.SetVelocity(body, Vector3.Zero, axis);
+        Assert.That(physics.GetAngularVelocity(body), Is.EqualTo(axis));
+        physics.Step(.01f);
+        var expected = new Quaternion(axis, .01f).ToMatrix4x4();
+        Vector3 probe = x == 1 ? Vector3.UnitY : Vector3.UnitX;
+        Assert.That((probe * node.WorldMatrix - probe * expected).Length(), Is.LessThan(.0001f));
+        Assert.That(Vector3.Dot(physics.GetAngularVelocity(body), axis), Is.GreaterThan(.99f));
+    }
 }

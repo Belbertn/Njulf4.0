@@ -4,6 +4,8 @@ using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Graphics;
 using Njulf.Input;
+using Njulf.Physics;
+using Njulf.Audio;
 
 using var game = new SphereShooterGame();
 game.Run();
@@ -14,10 +16,35 @@ sealed class SphereShooterGame : Game
     private InputAction fire = null!, quit = null!;
     private Mesh sphere = null!;
     private Material bulletMaterial = null!;
-    private readonly List<(RenderObject Body, Vector3 Velocity, float Life)> shots = [];
+    private readonly List<(RenderObject Body, float Life)> shots = [];
+    private readonly HashSet<Guid> ballIds = [], cubeIds = [];
+    private PhysicsScene physics = null!;
+    private AudioSystem? audio;
+    private readonly List<AudioSource> hitSounds = [];
+    private int nextHitSound;
+
+    public SphereShooterGame()
+    {
+        IsFixedTimeStep = true;
+        TargetElapsedTime = TimeSpan.FromSeconds(1.0 / 120);
+    }
 
     protected override void Load()
     {
+        physics = new PhysicsScene(PhysicsMode.Simulation, Scene);
+        physics.Contact += OnContact;
+        try { audio = new AudioSystem(); }
+        catch (InvalidOperationException exception)
+        {
+            Console.Error.WriteLine($"Audio unavailable: {exception.Message}");
+        }
+        if (audio != null)
+        {
+            // PCM16 copy of the supplied float WAV, which the audio loader cannot decode.
+            var clip = audio.LoadWav(Path.Combine(AppContext.BaseDirectory, "Assets", "hit-sound.pcm16.wav"));
+            for (int i = 0; i < 16; i++)
+                hitSounds.Add(audio.CreateSource(clip, spatial: clip.Channels == 1));
+        }
         Camera.Position = new Vector3(0, 1.7f, 6);
         move = Input.CreateVector2Action("Move");
         move.AddBinding(new(new InputBinding(InputKey.A), new InputBinding(InputKey.D),
@@ -50,7 +77,10 @@ sealed class SphereShooterGame : Game
             BaseColorFactor = new Vector4(0.25f, 0.3f, 0.35f, 1),
             MetallicFactor = 0, RoughnessFactor = 0.9f
         });
-        Scene.Add(new RenderObject(floorMesh, floorMaterial));
+        var floor = new RenderObject(floorMesh, floorMaterial);
+        Scene.Add(floor);
+        physics.Register(floor.Id, [ColliderShape.Box(new Vector3(40, 1, 40))],
+            pose: new PhysicsPose(new Vector3(0, -.5f, 0)));
 
         sphere = CreateSphere();
         bulletMaterial = GraphicsDevice.CreateMaterial(MaterialDefinition.Default with
@@ -59,12 +89,21 @@ sealed class SphereShooterGame : Game
             MetallicFactor = 0, RoughnessFactor = 0.5f,
             EmissiveFactor = new Vector3(1, 0.2f, 0), EmissiveStrength = 2
         });
-        // A few stationary spheres give movement and aiming a visual reference.
+        using var cube = CreateCube();
+        // Small stacks can topple and scatter when struck by a ball.
         for (int x = -3; x <= 3; x += 3)
-            Scene.Add(new RenderObject(sphere, floorMaterial)
+        for (int y = 0; y < 3; y++)
+        {
+            var target = new RenderObject(cube, floorMaterial)
             {
-                Position = new Vector3(x, 0.6f, -4), Scale = new Vector3(0.6f)
-            });
+                Position = new Vector3(x, .5f + y * 1.01f, -4)
+            };
+            Scene.Add(target);
+            cubeIds.Add(target.Id);
+            physics.Register(target.Id, [ColliderShape.Box(Vector3.One)],
+                node: target.Node, entity: target,
+                body: new BodySettings { Kind = BodyKind.Dynamic, Mass = 1, Friction = .7f });
+        }
     }
 
     protected override void Update(GameTime time)
@@ -80,20 +119,6 @@ sealed class SphereShooterGame : Game
         if (movement.LengthSquared() > 1) movement = movement.Normalized();
         camera.Position += movement * (5 * dt); // Five scene units per second.
 
-        for (int i = shots.Count - 1; i >= 0; i--)
-        {
-            var shot = shots[i];
-            shot.Life -= dt;
-            if (shot.Life <= 0)
-            {
-                Scene.Remove(shot.Body); // Also disposes the scene-owned object.
-                shots.RemoveAt(i);
-                continue;
-            }
-            shot.Body.Position += shot.Velocity * dt;
-            shots[i] = shot;
-        }
-
         if (fire.WasPressed)
         {
             var body = new RenderObject(sphere, bulletMaterial)
@@ -104,12 +129,73 @@ sealed class SphereShooterGame : Game
                 Scale = new Vector3(0.12f)
             };
             Scene.Add(body);
-            shots.Add((body, camera.Forward * 12, 3));
+            var collider = physics.Register(body.Id, [ColliderShape.Sphere(1)],
+                node: body.Node, entity: body,
+                body: new BodySettings { Kind = BodyKind.Dynamic, Mass = .5f,
+                    Friction = .5f, Restitution = .35f });
+            physics.SetVelocity(collider, camera.Forward * 18);
+            ballIds.Add(body.Id);
+            shots.Add((body, 8));
         }
+        audio?.SetListener(camera.Position, camera.Forward, camera.Up);
+        audio?.Update((float)time.UnscaledElapsedGameTime.TotalSeconds);
         base.Update(time);
     }
 
-    // Unit-radius UV sphere, shared by every projectile and landmark.
+    protected override void FixedUpdate(GameTime time)
+    {
+        base.FixedUpdate(time);
+        float dt = (float)time.ElapsedGameTime.TotalSeconds;
+        for (int i = shots.Count - 1; i >= 0; i--)
+        {
+            var shot = shots[i];
+            shot.Life -= dt;
+            if (shot.Life <= 0)
+            {
+                ballIds.Remove(shot.Body.Id);
+                Scene.Remove(shot.Body); // Removes its physics registration as well.
+                shots.RemoveAt(i);
+            }
+            else shots[i] = shot;
+        }
+        physics.Step(dt);
+    }
+
+    private void OnContact(PhysicsContact contact)
+    {
+        if (!contact.Began || hitSounds.Count == 0) return;
+        bool ballIsA = ballIds.Contains(contact.OwnerA) && cubeIds.Contains(contact.OwnerB);
+        bool ballIsB = ballIds.Contains(contact.OwnerB) && cubeIds.Contains(contact.OwnerA);
+        if (!ballIsA && !ballIsB) return;
+        var sound = hitSounds.FirstOrDefault(source => source.State != AudioPlaybackState.Playing)
+            ?? hitSounds[nextHitSound++ % hitSounds.Count];
+        sound.Position = physics.GetPose(ballIsA ? contact.A : contact.B).Position;
+        sound.Play();
+    }
+
+    private Mesh CreateCube()
+    {
+        Vector3[] corners = [new(-.5f,-.5f,-.5f), new(.5f,-.5f,-.5f),
+            new(.5f,.5f,-.5f), new(-.5f,.5f,-.5f), new(-.5f,-.5f,.5f),
+            new(.5f,-.5f,.5f), new(.5f,.5f,.5f), new(-.5f,.5f,.5f)];
+        var vertices = new List<VertexPositionNormalTexture>();
+        var indices = new List<uint>();
+        void Face(int a, int b, int c, int d, Vector3 normal)
+        {
+            uint start = (uint)vertices.Count;
+            vertices.Add(new(corners[a], normal, new(0, 0)));
+            vertices.Add(new(corners[b], normal, new(1, 0)));
+            vertices.Add(new(corners[c], normal, new(1, 1)));
+            vertices.Add(new(corners[d], normal, new(0, 1)));
+            indices.AddRange([start, start + 1, start + 2, start, start + 2, start + 3]);
+        }
+        Face(0, 3, 2, 1, -Vector3.UnitZ); Face(4, 5, 6, 7, Vector3.UnitZ);
+        Face(0, 1, 5, 4, -Vector3.UnitY); Face(3, 7, 6, 2, Vector3.UnitY);
+        Face(0, 4, 7, 3, -Vector3.UnitX); Face(1, 2, 6, 5, Vector3.UnitX);
+        return GraphicsDevice.CreateMesh(vertices.ToArray(), indices.ToArray());
+    }
+
+    // Unit-radius UV sphere, shared by every projectile.
     private Mesh CreateSphere()
     {
         const int rings = 10, slices = 16;
@@ -137,6 +223,8 @@ sealed class SphereShooterGame : Game
     protected override void Unload()
     {
         Input.SetCursorMode(InputCursorMode.Normal);
+        physics?.Dispose();
+        audio?.Dispose();
         sphere?.Dispose();
         bulletMaterial?.Dispose();
         // Game disposes Scene; each object retains its own mesh/material references.

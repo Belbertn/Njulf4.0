@@ -208,6 +208,28 @@
         "resolved": "2.23.0",
         "contentHash": "r8PdIVzME8EH0qAgbmRPO87I4GfgR2j8TofT7EMuRJDf1QluoQwnVypDoFJjQ2ZBSRsGYk5unYxxogI05Ogsmw=="
       },
+      "Silk.NET.OpenAL": {
+        "type": "Transitive",
+        "resolved": "2.23.0",
+        "contentHash": "O8EaDRWGOcKniZ2VxKD/xOmugzUJz747KpqGRw3cezDsz8nD66OZW217o1rT06cG76f8eYigy/yY6eRdhRqHHQ==",
+        "dependencies": {
+          "Silk.NET.Core": "2.23.0"
+        }
+      },
+      "Silk.NET.OpenAL.Extensions.Creative": {
+        "type": "Transitive",
+        "resolved": "2.23.0",
+        "contentHash": "++3+P3G2CuV4ZbD9EG81XAxsu2enofp6jFhz6GmqEf96ZrC+3COMJPgzFtjDnPswuNOFK8FWzTCucdbw1jGXBQ==",
+        "dependencies": {
+          "Silk.NET.Core": "2.23.0",
+          "Silk.NET.OpenAL": "2.23.0"
+        }
+      },
+      "Silk.NET.OpenAL.Soft.Native": {
+        "type": "Transitive",
+        "resolved": "1.23.1",
+        "contentHash": "gZIbksInoiXbJZmepYnTs5O6Edg5O5k86c1+Uus0zSaVnQx5WRbInGz2VTlvudbs0qAqXs/asL1YvJzco/nfAQ=="
+      },
       "Silk.NET.Vulkan": {
         "type": "Transitive",
         "resolved": "2.23.0",
@@ -305,6 +327,15 @@
           "StbImageSharp": "[2.30.16, )",
           "System.IO.Hashing": "[11.0.0-rc.1.26425.128, )",
           "ZstdSharp.Port": "[0.8.8, )"
+        }
+      },
+      "njulf.audio": {
+        "type": "Project",
+        "dependencies": {
+          "Njulf.Core": "[1.0.0, )",
+          "Silk.NET.OpenAL": "[2.23.0, )",
+          "Silk.NET.OpenAL.Extensions.Creative": "[2.23.0, )",
+          "Silk.NET.OpenAL.Soft.Native": "[1.23.1, )"
         }
       },
       "njulf.core": {

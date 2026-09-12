@@ -60,6 +60,8 @@ ColliderShape collision = ColliderShape.TriangleMesh(data.Positions, data.Indice
 
 ## Fixed-step simulation
 
+The XYZ axes are shared with Jitter; positions, linear velocity, forces, gravity, and hit vectors need no axis swap. Njulf applies quaternion matrices to row vectors, so the adapter conjugates rotations and transposes local shape matrices for Jitter. Public angular velocity is in radians/second with signs matching `new Quaternion(axis, positiveAngle)` in Njulf; its components are negated when crossing the Jitter boundary. Kinematic angular velocity is derived directly from the converted target rotations.
+
 ```csharp
 // During setup:
 IsFixedTimeStep = true;

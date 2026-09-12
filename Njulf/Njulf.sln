@@ -32,6 +32,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Njulf.Assets.Tooling", "Nju
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Njulf.Physics", "Njulf.Physics\Njulf.Physics.csproj", "{CF059FEE-45E8-4CB1-9C86-1AB8F5CED605}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Njulf.Audio", "Njulf.Audio\Njulf.Audio.csproj", "{98712BBD-1615-4289-899E-D68A51AB0574}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -630,6 +632,42 @@ Global
 		{CF059FEE-45E8-4CB1-9C86-1AB8F5CED605}.ShippingPerformance|x64.Build.0 = ShippingPerformance|Any CPU
 		{CF059FEE-45E8-4CB1-9C86-1AB8F5CED605}.ShippingPerformance|x86.ActiveCfg = ShippingPerformance|Any CPU
 		{CF059FEE-45E8-4CB1-9C86-1AB8F5CED605}.ShippingPerformance|x86.Build.0 = ShippingPerformance|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Debug|x64.Build.0 = Debug|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Debug|x86.Build.0 = Debug|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Development|Any CPU.Build.0 = Development|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Development|x64.ActiveCfg = Development|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Development|x64.Build.0 = Development|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Development|x86.ActiveCfg = Development|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Development|x86.Build.0 = Development|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.DetailedInvestigation|x64.ActiveCfg = DetailedInvestigation|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.DetailedInvestigation|x64.Build.0 = DetailedInvestigation|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.DetailedInvestigation|x86.ActiveCfg = DetailedInvestigation|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.DetailedInvestigation|x86.Build.0 = DetailedInvestigation|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ProfileSymbols|Any CPU.Build.0 = ProfileSymbols|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ProfileSymbols|x64.ActiveCfg = ProfileSymbols|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ProfileSymbols|x64.Build.0 = ProfileSymbols|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ProfileSymbols|x86.ActiveCfg = ProfileSymbols|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ProfileSymbols|x86.Build.0 = ProfileSymbols|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Release|Any CPU.Build.0 = Release|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Release|x64.ActiveCfg = Release|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Release|x64.Build.0 = Release|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Release|x86.ActiveCfg = Release|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.Release|x86.Build.0 = Release|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ShippingPerformance|Any CPU.ActiveCfg = ShippingPerformance|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ShippingPerformance|x64.ActiveCfg = ShippingPerformance|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ShippingPerformance|x64.Build.0 = ShippingPerformance|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ShippingPerformance|x86.ActiveCfg = ShippingPerformance|Any CPU
+		{98712BBD-1615-4289-899E-D68A51AB0574}.ShippingPerformance|x86.Build.0 = ShippingPerformance|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

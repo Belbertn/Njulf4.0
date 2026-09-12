@@ -7,7 +7,7 @@ internal static class Program
         if (args.FirstOrDefault() == "--physics-workload") return PhysicsWorkload.Run(args);
         if (args.Contains("--help"))
         {
-            Console.WriteLine("--example model|procedural|custom|content|effects|input|timing|sprites|physics-query|physics-simulation [--frames N] [--validation] [--no-aa] [--async-validation] [--native-inspect] [--capture path.png] [--bindings path.json]");
+            Console.WriteLine("--example model|procedural|custom|content|effects|input|timing|sprites|physics-query|physics-simulation|audio [--frames N] [--validation] [--no-aa] [--async-validation] [--native-inspect] [--capture path.png] [--bindings path.json]");
             return 0;
         }
         string? previousSourceLoading = Environment.GetEnvironmentVariable("NJULF_ALLOW_SOURCE_ASSET_RUNTIME_LOAD");
@@ -16,7 +16,7 @@ internal static class Program
             ExampleOptions options = ExampleOptions.Parse(args);
             // This executable is a development example with one authored source fixture.
             Environment.SetEnvironmentVariable("NJULF_ALLOW_SOURCE_ASSET_RUNTIME_LOAD", "true");
-            using ExampleGame game = options.Example.StartsWith("physics-") ? new PhysicsExample(options) : options.Example == "sprites" ? new SpritesExample(options) : options.Example == "timing" ? new TimingExample(options) : options.Example == "input" ? new InputExample(options) : options.Example == "effects" ? new EffectsExample(options) : options.Example == "content" ? new ContentExample(options) : options.Example == "custom" ? new CustomRenderingExample(options) : options.Example == "model"
+            using ExampleGame game = options.Example == "audio" ? new AudioExample(options) : options.Example.StartsWith("physics-") ? new PhysicsExample(options) : options.Example == "sprites" ? new SpritesExample(options) : options.Example == "timing" ? new TimingExample(options) : options.Example == "input" ? new InputExample(options) : options.Example == "effects" ? new EffectsExample(options) : options.Example == "content" ? new ContentExample(options) : options.Example == "custom" ? new CustomRenderingExample(options) : options.Example == "model"
                 ? new ModelExample(options)
                 : new ProceduralExample(options);
             game.Run();
@@ -68,7 +68,7 @@ internal sealed record ExampleOptions(string Example, int Frames, bool Validatio
                 default: throw new ArgumentException($"Unknown option: {args[i]}");
             }
         }
-        if (example is not ("model" or "procedural" or "custom" or "content" or "effects" or "input" or "timing" or "sprites" or "physics-query" or "physics-simulation"))
+        if (example is not ("model" or "procedural" or "custom" or "content" or "effects" or "input" or "timing" or "sprites" or "physics-query" or "physics-simulation" or "audio"))
             throw new ArgumentException("Unknown example; use --help to list examples.");
         if (bindings != null && example != "input") throw new ArgumentException("--bindings applies to the input example.");
         if (nativeInspect && example != "procedural")

@@ -1,0 +1,11 @@
+Njulf.Audio uses Silk.NET.OpenAL and Silk.NET.OpenAL.Extensions.Creative 2.23.0.
+Copyright (c) .NET Foundation and Contributors.
+License: MIT. See Silk.NET-LICENSE.txt.
+Source: https://github.com/dotnet/Silk.NET/tree/v2.23.0
+
+OpenAL Soft is distributed dynamically through Silk.NET.OpenAL.Soft.Native 1.23.1.
+Copyright OpenAL Soft contributors.
+License: LGPL-2.0-or-later. See OpenAL-Soft-LICENSE.txt.
+Upstream source: https://github.com/kcat/openal-soft/tree/1.23.1
+Native packaging/build scripts: https://github.com/dotnet/Silk.NET/tree/v2.23.0/build
+No native library modifications were made by Njulf.
