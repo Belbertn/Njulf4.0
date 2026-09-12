@@ -1699,6 +1699,7 @@ namespace Njulf.Assets
             string sourcePath,
             ContentLoadOptions options)
         {
+            (string cookSource, string cookRoot) = ResolveCookCommandPaths(sourcePath, _rootDirectory);
             ImporterOptions importer =
                 options.ImporterOptions ?? ImporterOptions.Default;
             string maximumSamplerAnisotropy =
@@ -1707,14 +1708,36 @@ namespace Njulf.Assets
                     System.Globalization.CultureInfo.InvariantCulture);
             return
                 "dotnet run --project Njulf.AssetTool -- cook model " +
-                $"{QuotePowerShellArgument(Path.GetFullPath(sourcePath))} " +
-                $"--out {QuotePowerShellArgument(Path.Combine(_rootDirectory, "Cooked"))} " +
+                $"{QuotePowerShellArgument(cookSource)} " +
+                $"--out {QuotePowerShellArgument(Path.Combine(cookRoot, "Cooked"))} " +
                 $"--platform {CookedPlatform.Current} " +
                 $"--backend {importer.Backend} " +
                 "--assimp-material-texture-convention " +
                 $"{importer.AssimpMaterialTextureConvention} " +
                 $"--max-sampler-anisotropy {maximumSamplerAnisotropy} " +
                 "--texture-format AutoBc --force";
+        }
+
+        internal static (string Source, string Root) ResolveCookCommandPaths(string sourcePath, string contentRoot)
+        {
+            string source = Path.GetFullPath(sourcePath);
+            string root = Path.GetFullPath(contentRoot);
+            string relative = Path.GetRelativePath(root, source);
+            if (Path.IsPathRooted(relative) || relative == ".." ||
+                relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                return (source, root);
+
+            // Build output contains copies of assets and packages. Recooking those copies
+            // conflicts with the original source identity recorded in the package manifest.
+            for (DirectoryInfo? directory = new(root); directory?.Parent != null; directory = directory.Parent)
+            {
+                if (!directory.Name.Equals("bin", StringComparison.OrdinalIgnoreCase)) continue;
+                string projectRoot = directory.Parent.FullName;
+                if (!Directory.EnumerateFiles(projectRoot, "*.csproj").Any()) continue;
+                string original = Path.GetFullPath(Path.Combine(projectRoot, relative));
+                if (File.Exists(original)) return (original, projectRoot);
+            }
+            return (source, root);
         }
 
         private void WarnSourceImportFallback(

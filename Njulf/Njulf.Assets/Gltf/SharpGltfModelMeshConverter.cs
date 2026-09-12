@@ -102,6 +102,18 @@ internal static class SharpGltfModelMeshConverter
         Scene scene = root.DefaultScene ?? root.LogicalScenes.FirstOrDefault()
             ?? throw new InvalidDataException($"glTF asset '{fullPath}' does not contain a scene.");
 
+        foreach (SchemaNode node in EnumerateSceneNodes(scene))
+        {
+            model.Nodes.Add(new ModelNodeDefinition
+            {
+                Index = node.LogicalIndex,
+                ParentIndex = node.VisualParent?.LogicalIndex ?? -1,
+                Name = node.Name ?? $"Node_{node.LogicalIndex}",
+                LocalMatrix = ToCoreMatrixWithScaledTranslation(node.LocalMatrix, options.GlobalScale),
+                WorldMatrix = ToCoreMatrixWithScaledTranslation(node.WorldMatrix, options.GlobalScale)
+            });
+        }
+
         if (options.ImportLights)
             ImportLights(root, scene, model, options, diagnostics, fullPath);
 

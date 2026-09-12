@@ -941,6 +941,98 @@ public sealed class ModelLightImportTests
     }
 
     [Test]
+    public void RuntimeController_ChildEditsKeepOneOwnedModelLightPlacement()
+    {
+        using Model model = CreateRuntimeModel(lightCount: 1, renderObjectCount: 3);
+        for (int index = 0; index < model.RenderObjects.Count; index++)
+        {
+            model.RenderObjects[index].AssetReference = new SceneAssetReference
+            {
+                Path = "fixture.glb",
+                SubObject = index.ToString()
+            };
+        }
+
+        ModelInstance instance = model.CreateInstance();
+        using var scene = new Scene();
+        scene.Add(instance);
+        var store = new MutableMemoryLightStore();
+        ModelLightRuntimeController controller = ModelLightRuntimeController.Attach(
+            scene,
+            new ModelContentManager(model),
+            store);
+        controller.SetImportedModelLightsEnabled(true);
+
+        foreach (RenderObject child in instance.RenderObjects)
+            child.Position = new Vector3(20f, 0f, 0f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.ModelPlacementCount, Is.EqualTo(1));
+            Assert.That(controller.ActiveLightCount, Is.EqualTo(1));
+            Assert.That(store.Items, Has.Count.EqualTo(1));
+            Assert.That(store.Items.Single().Position,
+                Is.EqualTo(new SceneVector3(1f, 0f, 0f)));
+        });
+        instance.PlacementRoot.Position = new Vector3(5f, 0f, 0f);
+        Assert.That(store.Items.Single().Position, Is.EqualTo(new SceneVector3(6f, 0f, 0f)));
+        ModelInstance overlapping = model.CreateInstance();
+        overlapping.PlacementRoot.Position = instance.PlacementRoot.Position;
+        scene.Add(overlapping);
+        controller.Refresh();
+        Assert.That(store.Items, Has.Count.EqualTo(2), "Coincident instances remain distinct placements.");
+    }
+
+    [Test]
+    public void IncrementalPlacementKeepsHierarchyAndStableLightsThroughReload()
+    {
+        using Model model = CreateRuntimeModel(lightCount: 1, renderObjectCount: 2);
+        var parent = new SceneNode { Name = "Imported parent" };
+        model.Add(parent);
+        for (int i = 0; i < 2; i++)
+        {
+            RenderObject source = model.RenderObjects[i];
+            source.Node.Position = new Vector3(10 + i * 10, 0, 0);
+            source.Node.SetParent(parent, false);
+            source.AttachNode(source.Node, Matrix4x4.CreateTranslation(-source.Position));
+            model.Add(source.Node);
+            source.AssetReference = new SceneAssetReference { Path = "fixture.glb", SubObject = i.ToString() };
+        }
+        var attachment = new NjulfHelloGame.SampleSceneLoader.PreparedAssetAttachment(
+            new NjulfHelloGame.SampleAssetReference("fixture.glb", ModelImportBackend.SharpGltf),
+            model, false, Matrix4x4.CreateTranslation(new Vector3(5, 0, 0)));
+        ModelPlacement placement = attachment.Placement;
+        using var scene = new Scene();
+        foreach (RenderObject group in placement.CreateTransformGroups()) scene.Add(group);
+        var content = new ModelContentManager(model);
+        var store = new MutableMemoryLightStore();
+        var controller = ModelLightRuntimeController.Attach(scene, content, store);
+        RenderObject first = attachment.CreateRenderObjectInstance(0);
+        scene.Add(first);
+        controller.SetImportedModelLightsEnabled(true);
+        Guid lightId = store.Items.Single().Id;
+        RenderObject second = attachment.CreateRenderObjectInstance(1);
+        scene.Add(second);
+        controller.Refresh();
+        Assert.That(first.Node.Parent, Is.SameAs(second.Node.Parent));
+        Assert.That(first.Node.WorldMatrix.Translation, Is.EqualTo(new Vector3(15, 0, 0)));
+        Assert.That(second.Node.WorldMatrix.Translation, Is.EqualTo(new Vector3(25, 0, 0)));
+        first.Position = new Vector3(30, 0, 0);
+        second.Position = new Vector3(40, 0, 0);
+        Assert.That(store.Items.Single().Id, Is.EqualTo(lightId));
+        Assert.That(store.Items.Single().Position, Is.EqualTo(new SceneVector3(6, 0, 0)));
+        first.Node.Parent!.Position = new Vector3(3, 0, 0);
+        Assert.That(second.Node.WorldMatrix.Translation, Is.EqualTo(new Vector3(48, 0, 0)));
+        placement.Root.Position = new Vector3(8, 0, 0);
+        Assert.That(store.Items.Single().Position, Is.EqualTo(new SceneVector3(9, 0, 0)));
+        SceneDocument document = new SceneDocumentWriter().CreateDocument(scene, store);
+        var restoredStore = new MutableMemoryLightStore();
+        using Scene restored = new SceneDocumentLoader(content).Load(document, restoredStore);
+        Assert.That(restoredStore.Items.Single().Id, Is.EqualTo(lightId));
+        Assert.That(restoredStore.Items.Single().Position, Is.EqualTo(new SceneVector3(9, 0, 0)));
+    }
+
+    [Test]
     public void RuntimeController_ActivationFailureRollsBackEveryPlacement()
     {
         using Model model = CreateRuntimeModel(lightCount: 1);

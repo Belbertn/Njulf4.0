@@ -8,6 +8,29 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SponzaCookedIntegrationTests
 {
+    [TestCase("NewSponza_Main_glTF_003")]
+    [TestCase("NewSponza_Curtains_glTF")]
+    [TestCase("BistroExterior")]
+    [TestCase("BistroInterior")]
+    [Explicit("Requires local sample cooked packages.")]
+    public void SampleCookContainsEditableHierarchy(string name)
+    {
+        string path = Path.Combine(FindRepositoryRoot(), "NjulfHelloGame", "Cooked", "win-x64", "models", name + ".njmodel");
+        using var reader = new CookedAssetReader(path, CookedAssetKind.Model);
+        var manifest = CookedJson.Deserialize<CookedModelManifest>(
+            reader.GetRequiredSection(CookedSectionIds.Manifest).Span, path, "manifest");
+        Assert.That(manifest.Nodes, Is.Not.Empty, "Rebuild the cooker and recook: this package lacks object origins.");
+        var indices = manifest.Nodes.Select(node => node.Index).ToHashSet();
+        Assert.That(manifest.SubObjects.Where(item => item.SkinIndex < 0)
+            .All(item => indices.Contains(item.NodeIndex)), Is.True);
+        TestContext.WriteLine($"{name}: {manifest.Nodes.Count} nodes, {manifest.SubObjects.Count} primitives");
+        var meshNodes = manifest.SubObjects.Select(item => item.NodeIndex).Distinct()
+            .Select(index => manifest.Nodes.Single(node => node.Index == index)).ToArray();
+        TestContext.WriteLine($"Mesh-node origins: {meshNodes.Select(node => node.WorldMatrix.Translation).Distinct().Count()} distinct across {meshNodes.Length} nodes");
+        foreach (var node in meshNodes.Take(3))
+            TestContext.WriteLine($"{node.Name}: {node.WorldMatrix.Translation}");
+    }
+
     [Test]
     [Explicit("Requires both local New Sponza source assets and their win-x64 cooks.")]
     public void BothSponzaCooks_ResolveUnderExactRuntimeImportContracts()

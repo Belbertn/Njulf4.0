@@ -11,10 +11,16 @@ namespace Njulf.Editor;
 
 public enum GizmoMode { Move, Rotate, Scale }
 public enum GizmoSpace { World, Local }
+public enum GizmoPivotMode { Origin, Center }
 
 internal readonly record struct GizmoTransform(Vector3 Position, Quaternion Rotation, Vector3 Scale)
 {
-    internal static GizmoTransform Read(RenderObject target) => new(target.Position, target.Rotation, target.Scale);
+    internal static GizmoTransform Read(RenderObject target)
+    {
+        if (!target.TryGetNodeWorldTransform(out var position, out var rotation, out var scale))
+            throw new InvalidOperationException("The object world transform cannot be edited as TRS.");
+        return new(position, rotation, scale);
+    }
 }
 
 /// <summary>Single-object, CPU-picked transform handles. Input and transform calculation do not require an ImGui context.</summary>
@@ -22,6 +28,7 @@ public sealed class EditorGizmoController
 {
     public GizmoMode Mode { get; set; }
     public GizmoSpace Space { get; set; }
+    public GizmoPivotMode PivotMode { get; set; } = GizmoPivotMode.Center;
     public bool IsDragging => _target != null;
     public bool ConsumesPointer => IsDragging || _hover >= 0;
     private readonly List<(N2 A, N2 B, int Axis)> _segments = new();
@@ -29,7 +36,7 @@ public sealed class EditorGizmoController
     private RenderObject? _target;
     private GizmoTransform _original, _current;
     private GizmoMode _dragMode;
-    private N3 _axis, _startDirection;
+    private N3 _axis, _startDirection, _pivot, _handlePivot;
     private float _startAxis, _worldSize, _dragSize;
     private N2 _startMouse;
     private int _hover = -1, _handle;
@@ -42,9 +49,10 @@ public sealed class EditorGizmoController
         {
             Cancel(editor); _segments.Clear(); _hover = -1; _wasDown = mouseDown; return;
         }
-        if (!editor.TryGetSelectedObject(out RenderObject? target) || target == null || target.HasNonTrsMatrix)
+        if (!editor.TryGetSelectedObject(out RenderObject? target) || target == null ||
+            !target.TryGetNodeWorldTransform(out _, out _, out _))
         { _segments.Clear(); _hover = -1; _wasDown = mouseDown; return; }
-        BuildHandles(target, camera, viewportSize);
+        BuildHandles(editor.Scene, target, camera, viewportSize);
         N2 pointer = new(mouse.X, mouse.Y);
         _hover = pointerAvailable ? HitTest(pointer) : -1;
         if (!IsDragging && mouseDown && !_wasDown && _hover >= 0)
@@ -75,16 +83,18 @@ public sealed class EditorGizmoController
         _target = null; _hover = -1;
     }
 
-    private void BuildHandles(RenderObject target, FirstPersonCamera camera, Vector2 viewport)
+    private void BuildHandles(Scene scene, RenderObject target, FirstPersonCamera camera, Vector2 viewport)
     {
         _segments.Clear();
         var rect = new SpriteRectangle(0, 0, viewport.X, viewport.Y);
-        if (!ScreenProjection.TryProject(camera, target.Position, rect, out Vector2 screen)) return;
-        N3 center = ToN(target.Position);
+        Vector3 pivot = GetPivot(scene, target);
+        if (!ScreenProjection.TryProject(camera, pivot, rect, out Vector2 screen)) return;
+        N3 center = ToN(pivot);
+        _handlePivot = center;
         float distance = N3.Dot(center - ToN(camera.Position), ToN(camera.Forward));
         _worldSize = 160 * distance * MathF.Tan(camera.FieldOfView * .5f) / viewport.Y;
         if (!float.IsFinite(_worldSize) || _worldSize <= 1e-6f) return;
-        NQ rotation = ToN(target.Rotation);
+        NQ rotation = NQ.Conjugate(ToN(GizmoTransform.Read(target).Rotation));
         for (int axis = 0; axis < 3; axis++)
         {
             N3 unit = axis == 0 ? N3.UnitX : axis == 1 ? N3.UnitY : N3.UnitZ;
@@ -138,11 +148,12 @@ public sealed class EditorGizmoController
         _original = _current = GizmoTransform.Read(target);
         _handle = handle; _axis = handle < 3 ? _axes[handle] : N3.Zero; _dragMode = Mode;
         _dragSize = _worldSize; _startMouse = mouse;
+        _pivot = _handlePivot;
         if (Mode == GizmoMode.Rotate)
         {
-            if (!GizmoMath.TryRingDirection(ray, ToN(target.Position), _axis, out _startDirection)) return;
+            if (!GizmoMath.TryRingDirection(ray, _pivot, _axis, out _startDirection)) return;
         }
-        else if (handle < 3 && !GizmoMath.TryAxisDistance(ray, ToN(target.Position), _axis, out _startAxis)) return;
+        else if (handle < 3 && !GizmoMath.TryAxisDistance(ray, _pivot, _axis, out _startAxis)) return;
         _target = target;
     }
 
@@ -151,10 +162,10 @@ public sealed class EditorGizmoController
         value = _original;
         if (_dragMode == GizmoMode.Rotate)
         {
-            if (!GizmoMath.TryRingDirection(ray, ToN(_original.Position), _axis, out N3 direction)) return false;
+            if (!GizmoMath.TryRingDirection(ray, _pivot, _axis, out N3 direction)) return false;
             float angle = MathF.Atan2(N3.Dot(_axis, N3.Cross(_startDirection, direction)), N3.Dot(_startDirection, direction));
-            NQ rotation = NQ.Normalize(NQ.CreateFromAxisAngle(_axis, angle) * ToN(_original.Rotation));
-            value = value with { Rotation = new(rotation.X, rotation.Y, rotation.Z, rotation.W) };
+            NQ deltaRotation = NQ.CreateFromAxisAngle(_axis, angle);
+            value = GizmoMath.RotateAroundPivot(_original, _pivot, deltaRotation);
         }
         else
         {
@@ -162,13 +173,46 @@ public sealed class EditorGizmoController
             if (_handle == 3) delta = ((mouse.X - _startMouse.X) - (mouse.Y - _startMouse.Y)) / 100;
             else
             {
-                if (!GizmoMath.TryAxisDistance(ray, ToN(_original.Position), _axis, out float distance)) return false;
+                if (!GizmoMath.TryAxisDistance(ray, _pivot, _axis, out float distance)) return false;
                 delta = distance - _startAxis;
             }
             if (_dragMode == GizmoMode.Move) value = value with { Position = ToCore(ToN(_original.Position) + _axis * delta) };
-            else value = value with { Scale = GizmoMath.Scale(_original.Scale, _handle, _handle == 3 ? delta : delta / _dragSize) };
+            else
+            {
+                float scaleDelta = _handle == 3 ? delta : delta / _dragSize;
+                float factor = GizmoMath.ScaleFactor(scaleDelta);
+                N3 relative = ToN(_original.Position) - _pivot;
+                N3 position = _handle == 3
+                    ? _pivot + relative * factor
+                    : _pivot + relative + _axis * N3.Dot(relative, _axis) * (factor - 1f);
+                value = value with
+                {
+                    Position = ToCore(position),
+                    Scale = GizmoMath.Scale(_original.Scale, _handle, scaleDelta)
+                };
+            }
         }
         return true;
+    }
+
+    internal Vector3 GetPivot(Scene scene, RenderObject target)
+    {
+        if (PivotMode == GizmoPivotMode.Origin)
+            return target.Node.WorldMatrix.Translation;
+        BoundingBox? combined = null;
+        foreach (RenderObject renderObject in scene.RenderObjects)
+        {
+            if (renderObject.LocalMeshBounds is not { } local) continue;
+            SceneNode? node = renderObject.Node;
+            if (target.IsTransformGroup)
+                while (node != null && !ReferenceEquals(node, target.Node)) node = node.Parent;
+            if (!ReferenceEquals(node, target.Node)) continue;
+            BoundingBox world = BoundingBox.Transform(local, renderObject.WorldMatrix);
+            combined = combined is { } bounds
+                ? new BoundingBox(Vector3.Min(bounds.Min, world.Min), Vector3.Max(bounds.Max, world.Max))
+                : world;
+        }
+        return combined?.Center ?? target.Node.WorldMatrix.Translation;
     }
 
     public void Render()
@@ -197,6 +241,15 @@ public sealed class EditorGizmoController
 
 internal static class GizmoMath
 {
+    internal static GizmoTransform RotateAroundPivot(GizmoTransform original, N3 pivot, NQ delta)
+    {
+        // Njulf's quaternion matrix is the transpose of System.Numerics' matrix.
+        // A world-space Numerics delta therefore conjugates and multiplies on the right.
+        NQ rotation = NQ.Normalize(new NQ(original.Rotation.X, original.Rotation.Y, original.Rotation.Z, original.Rotation.W) * NQ.Conjugate(delta));
+        N3 position = pivot + N3.Transform(new N3(original.Position.X, original.Position.Y, original.Position.Z) - pivot, delta);
+        return original with { Position = new(position.X, position.Y, position.Z),
+            Rotation = new(rotation.X, rotation.Y, rotation.Z, rotation.W) };
+    }
     internal static bool TryAxisDistance(Ray ray, N3 center, N3 axis, out float distance)
     {
         N3 direction = new(ray.Direction.X, ray.Direction.Y, ray.Direction.Z);
@@ -220,10 +273,12 @@ internal static class GizmoMath
     }
     internal static Vector3 Scale(Vector3 original, int axis, float delta)
     {
-        float factor = MathF.Exp(Math.Clamp(delta, -8, 8));
+        float factor = ScaleFactor(delta);
         static float Apply(float value, float factor) => MathF.CopySign(Math.Clamp(MathF.Abs(value) * factor, 1e-4f, float.MaxValue), value);
         return new(axis is 0 or 3 ? Apply(original.X, factor) : original.X,
             axis is 1 or 3 ? Apply(original.Y, factor) : original.Y,
             axis is 2 or 3 ? Apply(original.Z, factor) : original.Z);
     }
+
+    internal static float ScaleFactor(float delta) => MathF.Exp(Math.Clamp(delta, -8, 8));
 }

@@ -56,6 +56,41 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ModelInstance_ExposesImportedEmptyAncestorsAsEditableGroups()
+        {
+            using var template = new Model();
+            var root = new SceneNode { Name = "Blender Root" };
+            var meshNode = new SceneNode
+            {
+                Name = "Mesh Node",
+                LocalMatrix = Matrix4x4.CreateTranslation(new Vector3(2f, 0f, 0f))
+            };
+            meshNode.SetParent(root, keepWorld: false);
+            var mesh = new RenderObject { Name = "Mesh" };
+            mesh.AttachNode(meshNode, Matrix4x4.Identity);
+            template.Add(root);
+            template.Add(meshNode);
+            template.Add(mesh);
+
+            using var scene = new Scene();
+            ModelInstance instance = template.CreateInstance();
+            scene.Add(instance);
+            RenderObject group = scene.RenderObjects.Single(item => item.Name == "Blender Root");
+            RenderObject child = instance.RenderObjects.Single();
+
+            group.Position = new Vector3(5f, 0f, 0f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(group.Name, Is.EqualTo("Blender Root"));
+                Assert.That(child.Node.Parent, Is.SameAs(group.Node));
+                Assert.That(child.Node.WorldMatrix.Translation,
+                    Is.EqualTo(new Vector3(7f, 0f, 0f)));
+                Assert.That(scene.FindOwningInstance(group), Is.SameAs(instance));
+            });
+        }
+
+        [Test]
         public void Detach_RemovesObjectsWithoutDisposingOwnedInstances()
         {
             var scene = new Scene();

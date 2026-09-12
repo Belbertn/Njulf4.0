@@ -49,6 +49,21 @@ public sealed class SceneDocumentWriter
                 .ToList() ?? [],
             Dependencies = []
         };
+        var representedNodes = document.Objects.Select(item => item.TransformNodeId).ToHashSet();
+        foreach (RenderObject item in scene.RenderObjects.Where(item => item.PersistInSceneDocument))
+        {
+            for (SceneNode? node = item.Node.Parent; node != null; node = node.Parent)
+                AddTransformNode(node);
+            if (item.PlacementRoot is { } root) AddTransformNode(root);
+        }
+        void AddTransformNode(SceneNode node)
+        {
+            if (!representedNodes.Add(node.Id)) return;
+            using var group = new RenderObject { Id = node.Id, Name = node.Name, IsTransformGroup = true };
+            group.AttachNode(node, Matrix4x4.Identity);
+            document.Objects.Add(ToObject(group, dependencies, null));
+            if (node.Parent is { } parent) AddTransformNode(parent);
+        }
         foreach (SceneLightDocument light in document.Lights)
         {
             if (light.IesProfile is { } profile)
@@ -81,11 +96,16 @@ public sealed class SceneDocumentWriter
         SceneDocumentJson.WriteAtomic(fullPath, CreateDocument(scene, lights, materials), createBackup);
     }
 
-    private static SceneObjectDocument ToObject(RenderObject source, Dictionary<string, string?> dependencies, ISceneMaterialOverrideStore? materials) => new()
+    private static SceneObjectDocument ToObject(RenderObject source,
+        Dictionary<string, string?> dependencies, ISceneMaterialOverrideStore? materials) => new()
     {
         Id = source.Id,
         Name = source.Name,
-        Model = ToAsset(source.AssetReference, source.Id, source.Name, dependencies),
+        Model = source.IsTransformGroup ? null : ToAsset(source.AssetReference, source.Id, source.Name, dependencies),
+        IsGroup = source.IsTransformGroup,
+        TransformNodeId = source.Node.Id,
+        ParentId = source.Node.Parent?.Id,
+        PlacementRootId = source.PlacementRoot?.Id,
         Position = ToSceneVector(source.Position),
         Rotation = ToSceneQuaternion(source.Rotation),
         Scale = ToSceneVector(source.Scale),

@@ -93,7 +93,48 @@ public sealed class SceneDocumentLoader
         try
         {
             foreach (SceneObjectDocument record in document.Objects)
-                LoadObject(scene, record, modelInstances, materials);
+                LoadObject(scene, record, modelInstances, materials, document.SchemaVersion);
+            var transformNodes = new Dictionary<Guid, SceneNode>();
+            foreach (SceneObjectDocument record in document.Objects)
+            {
+                if (record.TransformNodeId == Guid.Empty ||
+                    scene.FindById(record.Id) is not RenderObject renderObject)
+                    continue;
+                if (transformNodes.TryGetValue(record.TransformNodeId, out SceneNode? shared))
+                    renderObject.AttachNode(shared, renderObject.MeshToNode);
+                else
+                {
+                    renderObject.Node.Id = record.TransformNodeId;
+                    transformNodes.Add(record.TransformNodeId, renderObject.Node);
+                }
+            }
+            foreach (SceneObjectDocument record in document.Objects)
+            {
+                if (record.ParentId is not { } parentId) continue;
+                if (scene.FindById(record.Id) is not RenderObject child ||
+                    !transformNodes.TryGetValue(parentId, out SceneNode? parent))
+                    throw new InvalidDataException($"Scene object '{record.Name}' references missing parent '{parentId}'.");
+                child.Node.SetParent(parent, keepWorld: false);
+            }
+            foreach (SceneObjectDocument record in document.Objects)
+            {
+                if (record.PlacementRootId is not { } rootId) continue;
+                if (!transformNodes.TryGetValue(rootId, out SceneNode? root))
+                    throw new InvalidDataException($"Missing placement root '{rootId}'.");
+                ((RenderObject)scene.FindById(record.Id)!).PlacementRoot = root;
+            }
+            if (document.SchemaVersion < 14)
+            {
+                var represented = scene.RenderObjects.Select(item => item.Node).ToHashSet();
+                foreach (RenderObject item in scene.RenderObjects.ToArray())
+                    for (SceneNode? node = item.Node.Parent; node != null; node = node.Parent)
+                        if (represented.Add(node))
+                        {
+                            var group = new RenderObject { Name = node.Name, IsTransformGroup = true, PlacementRoot = item.PlacementRoot };
+                            group.AttachNode(node, Matrix4x4.Identity);
+                            scene.Add(group);
+                        }
+            }
             foreach (SceneReflectionProbeDocument record in document.ReflectionProbes)
                 scene.Add(ToReflectionProbe(record));
             foreach (SceneGlobalIlluminationProbeVolumeDocument record in document.GiProbeVolumes)
@@ -203,18 +244,31 @@ public sealed class SceneDocumentLoader
             ExceptionDispatchInfo.Capture(populateFailure).Throw();
     }
 
-    private void LoadObject(Scene scene, SceneObjectDocument record, Dictionary<string, ModelInstanceCursor> modelInstances, ISceneMaterialOverrideStore? materials)
+    private void LoadObject(Scene scene, SceneObjectDocument record, Dictionary<string, ModelInstanceCursor> modelInstances, ISceneMaterialOverrideStore? materials, int schemaVersion)
     {
-        RenderObject source = LoadSingleRenderObject(record.Model, record.Id, record.Name, modelInstances);
+        RenderObject source = record.IsGroup
+            ? new RenderObject()
+            : LoadSingleRenderObject(record.Model ?? throw new InvalidDataException(
+                $"Scene object '{record.Name}' ({record.Id}) has no model reference."), record.Id, record.Name, modelInstances,
+                schemaVersion < 14 ? $"{record.Position}|{record.Rotation}|{record.Scale}" : record.PlacementRootId?.ToString());
         bool sceneOwnsSource = false;
         try
         {
             source.Id = record.Id;
             source.Name = record.Name;
-            source.AssetReference = ToAssetReference(record.Model);
-            source.Position = ToVector3(record.Position);
-            source.Rotation = ToQuaternion(record.Rotation);
-            source.Scale = ToVector3(record.Scale);
+            source.IsTransformGroup = record.IsGroup;
+            source.AssetReference = record.Model == null ? null : ToAssetReference(record.Model);
+            Matrix4x4 transform = Matrix4x4.CreateScale(ToVector3(record.Scale)) *
+                ToQuaternion(record.Rotation).ToMatrix4x4() * Matrix4x4.CreateTranslation(ToVector3(record.Position));
+            if (schemaVersion < 14 && source.PlacementRoot is { } placement)
+                placement.LocalMatrix = transform;
+            else
+            {
+                // Serialized local transforms must not mutate the template clone's shared nodes
+                // before all records have been resolved and reconnected by their saved IDs.
+                source.AttachNode(new SceneNode { Name = record.Name, LocalMatrix = transform }, source.MeshToNode);
+                source.PlacementRoot = null;
+            }
             source.Visible = record.Visible;
             source.IsStatic = record.IsStatic;
             if (record.MaterialOverride != null)
@@ -347,17 +401,18 @@ public sealed class SceneDocumentLoader
         return instance;
     }
 
-    private RenderObject LoadSingleRenderObject(SceneAssetReferenceDocument asset, Guid recordId, string recordName, Dictionary<string, ModelInstanceCursor> modelInstances)
+    private RenderObject LoadSingleRenderObject(SceneAssetReferenceDocument asset, Guid recordId, string recordName, Dictionary<string, ModelInstanceCursor> modelInstances, string? placementKey = null)
     {
         try
         {
             if (string.IsNullOrWhiteSpace(asset.Path) || string.IsNullOrWhiteSpace(asset.SubObject))
                 throw new InvalidDataException("Model references require non-empty path and sub-object values.");
-            if (!modelInstances.TryGetValue(asset.Path, out ModelInstanceCursor? cursor))
+            string key = asset.Path + "\0" + placementKey;
+            if (!modelInstances.TryGetValue(key, out ModelInstanceCursor? cursor))
             {
                 Model model = _loadModel(asset.Path);
                 cursor = new ModelInstanceCursor(model.CreateInstance());
-                modelInstances.Add(asset.Path, cursor);
+                modelInstances.Add(key, cursor);
             }
             IReadOnlyList<RenderObject> candidates = cursor.Candidates;
             RenderObject? selected = SelectSubObject(candidates, asset.SubObject);

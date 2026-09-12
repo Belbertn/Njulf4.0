@@ -27,13 +27,20 @@ internal sealed class SampleSceneLoader
             ModelAsset = modelAsset;
             Foliage = foliage;
             ModelWorld = modelWorld;
+            Placement = new ModelPlacement(modelAsset);
+            Placement.Root.LocalMatrix = modelWorld;
         }
 
         internal SampleAssetReference Asset { get; }
         internal Model ModelAsset { get; }
+        internal ModelPlacement Placement { get; }
         internal bool Foliage { get; }
         internal CoreMatrix4x4 ModelWorld { get; }
         internal int NextObjectIndex { get; set; }
+        internal bool GroupsAttached { get; set; }
+        internal RenderObject CreateRenderObjectInstance(int index) => Foliage
+            ? ModelAsset.CreateRenderObjectInstance(index)
+            : Placement.CreateRenderObjectInstance(index);
         internal long LastCloneMicroseconds { get; set; }
         internal long LastSceneAttachmentMicroseconds { get; set; }
 
@@ -326,6 +333,15 @@ internal sealed class SampleSceneLoader
         long cloneMicroseconds = 0;
         long sceneAttachmentMicroseconds = 0;
         int attached = 0;
+        if (!attachment.Foliage && !attachment.GroupsAttached)
+        {
+            foreach (RenderObject group in attachment.Placement.CreateTransformGroups())
+            {
+                scene.Add(group);
+                _modelObjects.Add(group);
+            }
+            attachment.GroupsAttached = true;
+        }
         while (!attachment.Completed &&
                attached < maximumRenderObjects)
         {
@@ -333,8 +349,7 @@ internal sealed class SampleSceneLoader
             ValidateUploadedRenderObject(attachment.Asset.Path, attachment.ModelAsset.RenderObjects[objectIndex]);
             long cloneStarted =
                 System.Diagnostics.Stopwatch.GetTimestamp();
-            RenderObject renderObject = attachment.ModelAsset
-                .CreateRenderObjectInstance(objectIndex);
+            RenderObject renderObject = attachment.CreateRenderObjectInstance(objectIndex);
             cloneMicroseconds += checked((long)Math.Round(
                 System.Diagnostics.Stopwatch.GetElapsedTime(cloneStarted)
                     .TotalMicroseconds));
@@ -409,7 +424,7 @@ internal sealed class SampleSceneLoader
 
         document.Objects.RemoveAll(static item =>
             string.Equals(
-                item.Model.Path,
+                item.Model?.Path,
                 SampleBenchmarkSponzaSceneAnimationContract.AssetPath,
                 StringComparison.Ordinal));
         document.Dependencies.RemoveAll(static item =>
@@ -616,6 +631,7 @@ internal sealed class SampleSceneLoader
     {
         if (model is not ModelInstance instance)
             throw new ArgumentException("A complete placement must be a model instance.", nameof(model));
+        instance.PlacementRoot.LocalMatrix = modelWorld;
         for (int i = 0; i < model.RenderObjects.Count; i++)
         {
             RenderObject child = model.RenderObjects[i];
@@ -624,7 +640,6 @@ internal sealed class SampleSceneLoader
                 Path = modelPath,
                 SubObject = i.ToString(System.Globalization.CultureInfo.InvariantCulture)
             };
-            child.WorldMatrix = modelWorld;
             child.Visible = true;
             child.IsStatic = child is not SkinnedRenderObject;
         }
@@ -650,7 +665,8 @@ internal sealed class SampleSceneLoader
             SubObject = objectIndex.ToString(
                 System.Globalization.CultureInfo.InvariantCulture)
         };
-        renderObject.WorldMatrix = modelWorld;
+        if (renderObject.PlacementRoot == null)
+            renderObject.WorldMatrix = modelWorld;
         renderObject.Visible = true;
         renderObject.IsStatic = renderObject is not SkinnedRenderObject;
         scene.Add(renderObject);

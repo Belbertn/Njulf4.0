@@ -10,9 +10,10 @@ public partial class RenderObject
     private object? _resourceOwner;
     private List<IResourceReference>? _pendingReleases;
 
-    public RenderObject() { }
+    public RenderObject() => _node.WorldChanged += OnNodeWorldChanged;
     public RenderObject(IMesh? mesh, IMaterial? material)
     {
+        _node.WorldChanged += OnNodeWorldChanged;
         try { Mesh = mesh; Material = material; }
         catch (Exception acquisitionFailure)
         {
@@ -186,6 +187,8 @@ public partial class RenderObject
         lock (_resourceLock)
         {
             if (_materialTransferInProgress) throw new InvalidOperationException("Material transfer is in progress.");
+            if (!_disposed)
+                _node.WorldChanged -= OnNodeWorldChanged;
             _disposed = true;
             List<Exception>? failures = null;
             try { if (_mesh is Njulf.Graphics.Mesh ownedMesh) ownedMesh.ContentChanged -= OnMeshContentChanged; (_mesh as IResourceReference)?.Release(); _mesh = null; }

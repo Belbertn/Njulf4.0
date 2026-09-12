@@ -44,6 +44,8 @@ public partial class Scene
 
     private readonly Dictionary<RenderObject, ModelInstance>
         _instanceChildren = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<ModelInstance, List<RenderObject>>
+        _instanceTransformGroups = new(ReferenceEqualityComparer.Instance);
 
     private readonly List<ModelInstance> _modelInstances = new();
     private readonly System.Collections.ObjectModel.ReadOnlyCollection<ModelInstance> _readOnlyModelInstances;
@@ -83,6 +85,47 @@ public partial class Scene
             _instanceChildren.Add(child, instance);
             Add(child);
         }
+
+        AddMissingTransformGroups(instance);
+    }
+
+    private void AddMissingTransformGroups(ModelInstance instance)
+    {
+        var represented = new HashSet<SceneNode>(
+            instance.RenderObjects.Select(child => child.Node),
+            ReferenceEqualityComparer.Instance);
+        var missing = new HashSet<SceneNode>(
+            instance.Nodes.Where(node => !represented.Contains(node)),
+            ReferenceEqualityComparer.Instance);
+        if (instance.Nodes.Count > 0) missing.Add(instance.PlacementRoot);
+
+        if (missing.Count == 0)
+            return;
+
+        var groups = new List<RenderObject>(missing.Count);
+        foreach (SceneNode node in missing.OrderBy(GetNodeDepth).ThenBy(node => node.Name, StringComparer.Ordinal))
+        {
+            var group = new RenderObject
+            {
+                Name = node.Name,
+                IsTransformGroup = true,
+                PlacementRoot = instance.PlacementRoot,
+                IsStatic = false
+            };
+            group.AttachNode(node, Njulf.Core.Math.Matrix4x4.Identity);
+            Add(group);
+            _instanceChildren.Add(group, instance);
+            groups.Add(group);
+        }
+        _instanceTransformGroups.Add(instance, groups);
+    }
+
+    private static int GetNodeDepth(SceneNode node)
+    {
+        int depth = 0;
+        for (SceneNode? current = node.Parent; current != null; current = current.Parent)
+            depth++;
+        return depth;
     }
 
     public void Remove(ModelInstance instance)
@@ -97,8 +140,11 @@ public partial class Scene
         {
             _instanceChildren.Remove(child);
             Detach(child);
+            if (child.IsTransformGroup && !instance.RenderObjects.Contains(child))
+                child.Dispose();
         }
 
+        _instanceTransformGroups.Remove(instance);
         _modelInstances.Remove(instance);
         ReleaseAllMemberships(instance);
     }
@@ -108,12 +154,17 @@ public partial class Scene
         EnsureMutable();
         ArgumentNullException.ThrowIfNull(instance);
         if (!_modelInstances.Contains(instance)) return;
-        foreach (RenderObject child in instance.RenderObjects)
+        RenderObject[] children = _instanceChildren.Where(pair => ReferenceEquals(pair.Value, instance))
+            .Select(pair => pair.Key).ToArray();
+        foreach (RenderObject child in children)
         {
             _instanceChildren.Remove(child);
             Detach(child);
+            if (child.IsTransformGroup && !instance.RenderObjects.Contains(child))
+                child.Dispose();
         }
 
+        _instanceTransformGroups.Remove(instance);
         _ownedDisposableReferences.Remove(instance);
         _modelInstances.Remove(instance);
         instance.AttachedScene = null;
@@ -195,6 +246,9 @@ public partial class Scene
                      .Select(pair => pair.Key).ToArray())
             _instanceChildren.Remove(child);
         _modelInstances.RemoveAll(instance => !_ownedDisposableReferences.ContainsKey(instance));
+        foreach (ModelInstance instance in _instanceTransformGroups.Keys
+                     .Where(instance => !_ownedDisposableReferences.ContainsKey(instance)).ToArray())
+            _instanceTransformGroups.Remove(instance);
     }
 
     /// <summary>Removes rendering and updating roles without disposal, returning ownership to the caller.</summary>

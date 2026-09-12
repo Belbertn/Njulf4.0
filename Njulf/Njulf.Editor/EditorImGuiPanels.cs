@@ -64,6 +64,13 @@ public sealed class EditorImGuiPanels
         if (ImGui.RadioButton("World", editor.Gizmos.Space == GizmoSpace.World)) editor.Gizmos.Space = GizmoSpace.World;
         ImGui.SameLine();
         if (ImGui.RadioButton("Local", editor.Gizmos.Space == GizmoSpace.Local)) editor.Gizmos.Space = GizmoSpace.Local;
+        if (ImGui.RadioButton("Origin", editor.Gizmos.PivotMode == GizmoPivotMode.Origin))
+            editor.Gizmos.PivotMode = GizmoPivotMode.Origin;
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Use the imported object origin, for example a door hinge. Some assets share the scene origin.");
+        ImGui.SameLine();
+        if (ImGui.RadioButton("Center", editor.Gizmos.PivotMode == GizmoPivotMode.Center))
+            editor.Gizmos.PivotMode = GizmoPivotMode.Center;
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Use the selected object's geometry center. Groups use their descendants' bounds.");
         ImGui.EndDisabled();
         ImGui.TextDisabled("Drag a handle; Escape cancels. Scale uses local axes.");
         ImGui.SameLine();
@@ -214,7 +221,9 @@ public sealed class EditorImGuiPanels
             return;
         }
         ImGui.InputText("Filter", ref _filter, (nuint)256);
-        RenderEntities(editor, "Objects", EditorSelectionKind.Object, editor.Scene.RenderObjects);
+        if (ImGui.Button("Create Empty Group"))
+            Run(() => editor.AddGroup());
+        RenderObjectHierarchy(editor);
         RenderEntities(editor, "Reflection Probes", EditorSelectionKind.ReflectionProbe, editor.Scene.ReflectionProbes);
         if (ImGui.Button("Add scene DDGI volume"))
             Run(() => editor.AddGlobalIlluminationProbeVolumeAtCamera());
@@ -260,6 +269,36 @@ public sealed class EditorImGuiPanels
                 editor.SelectEntity(kind, entity.Id);
             ShowIdTooltip(entity.Id);
         }
+    }
+
+    private void RenderObjectHierarchy(EditorController editor)
+    {
+        IReadOnlyList<RenderObject> objects = editor.Scene.RenderObjects;
+        if (!ImGui.CollapsingHeader($"Objects ({objects.Count})")) return;
+        var representatives = objects.GroupBy(item => item.Node)
+            .ToDictionary(group => group.Key, group => group.First());
+        foreach (RenderObject root in representatives.Values)
+            if (root.Node.Parent == null || !representatives.ContainsKey(root.Node.Parent))
+                RenderObjectNode(editor, root, representatives);
+    }
+
+    private void RenderObjectNode(EditorController editor, RenderObject item,
+        IReadOnlyDictionary<SceneNode, RenderObject> representatives)
+    {
+        if (!MatchesFilter(item.Name, item.Id) && !string.IsNullOrWhiteSpace(_filter)) return;
+        bool hasChildren = item.Node.Children.Any(representatives.ContainsKey);
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth;
+        if (!hasChildren) flags |= ImGuiTreeNodeFlags.Leaf;
+        if (editor.Selection.Kind == EditorSelectionKind.Object && editor.Selection.Id == item.Id)
+            flags |= ImGuiTreeNodeFlags.Selected;
+        bool open = ImGui.TreeNodeEx($"{item.Name}##{item.Id}", flags);
+        if (ImGui.IsItemClicked()) editor.SelectEntity(EditorSelectionKind.Object, item.Id);
+        ShowIdTooltip(item.Id);
+        if (!open) return;
+        foreach (SceneNode child in item.Node.Children)
+            if (representatives.TryGetValue(child, out RenderObject? childObject))
+                RenderObjectNode(editor, childObject, representatives);
+        ImGui.TreePop();
     }
 
     private void RenderInspector(EditorController editor)
@@ -423,6 +462,7 @@ public sealed class EditorImGuiPanels
         changed |= ImGui.DragFloat3("Position", ref position, 0.05f);
         changed |= ImGui.DragFloat3("Rotation (degrees)", ref rotationDegrees, 0.25f);
         changed |= ImGui.DragFloat3("Scale", ref scale, 0.02f);
+        RenderParentPicker(editor, target);
         if (changed)
         {
             editor.UpdateSelectedObject(
@@ -440,6 +480,27 @@ public sealed class EditorImGuiPanels
             ImGui.SeparatorText("Material");
             RenderMaterialInspector(editor, inspection);
         }
+    }
+
+    private void RenderParentPicker(EditorController editor, RenderObject target)
+    {
+        RenderObject? current = editor.Scene.RenderObjects.FirstOrDefault(
+            item => ReferenceEquals(item.Node, target.Node.Parent));
+        string preview = current?.Name ?? "(Scene root)";
+        if (!ImGui.BeginCombo("Parent", preview)) return;
+        if (ImGui.Selectable("(Scene root)", current == null))
+            editor.SetSelectedObjectParent(null);
+        foreach (RenderObject candidate in editor.Scene.RenderObjects)
+        {
+            if (ReferenceEquals(candidate.Node, target.Node) ||
+                candidate.Node.Parent != null &&
+                ReferenceEquals(candidate.Node, current?.Node))
+                continue;
+            if (ImGui.Selectable($"{candidate.Name}##parent-{candidate.Id}",
+                    ReferenceEquals(candidate.Node, current?.Node)))
+                Run(() => editor.SetSelectedObjectParent(candidate.Id));
+        }
+        ImGui.EndCombo();
     }
 
     private void RenderImportedShadowToggle(EditorController editor)

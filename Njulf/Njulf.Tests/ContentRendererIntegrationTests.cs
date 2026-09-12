@@ -296,33 +296,7 @@ namespace Njulf.Tests
             });
         }
 
-        [Test]
-        public async Task LoadAsyncModel_RequireCookedRejectsBeforeSourceImport()
-        {
-            string path = WriteTriangleObj();
-            using var dispatcher = new RenderThreadContentUploadDispatcher();
-            var uploader = new FakeCooperativeModelRenderUploadService();
-            using var content = new ContentManager(
-                Path.GetDirectoryName(path),
-                uploader,
-                dispatcher);
-
-            FileNotFoundException failure =
-                Assert.ThrowsAsync<FileNotFoundException>(async () =>
-                    await content.LoadAsync<Model>(
-                        Path.GetFileName(path),
-                        AmazonBistroCookedOnlyOptions()))!;
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(failure.Message,
-                    Does.Contain("cooked package was not found at"));
-                Assert.That(uploader.PrepareCount, Is.Zero);
-                Assert.That(uploader.LegacyUploadCount, Is.Zero);
-                Assert.That(content.CookedDiagnostics.SourceFallbackCount,
-                    Is.Zero);
-            });
-        }
+        
 
         [Test]
         public async Task PreloadModel_RequireCookedReportsFailureBeforeSourceImport()

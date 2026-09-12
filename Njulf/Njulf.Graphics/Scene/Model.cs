@@ -9,6 +9,7 @@ namespace Njulf.Core.Scene
     public class Model : IDisposable
     {
         private readonly List<RenderObject> _renderObjects = new();
+        private readonly List<SceneNode> _nodes = new();
         private readonly List<Skeleton> _skeletons = new();
         private readonly List<Skin> _skins = new();
         private readonly List<AnimationClip> _animationClips = new();
@@ -17,6 +18,7 @@ namespace Njulf.Core.Scene
         private readonly List<SharedDisposeAction> _sharedDisposeActions =
             new();
         private readonly ReadOnlyCollection<RenderObject> _readOnlyRenderObjects;
+        private readonly ReadOnlyCollection<SceneNode> _readOnlyNodes;
         private readonly ReadOnlyCollection<Skeleton> _readOnlySkeletons;
         private readonly ReadOnlyCollection<Skin> _readOnlySkins;
         private readonly ReadOnlyCollection<AnimationClip> _readOnlyAnimationClips;
@@ -28,6 +30,7 @@ namespace Njulf.Core.Scene
         public Model()
         {
             _readOnlyRenderObjects = _renderObjects.AsReadOnly();
+            _readOnlyNodes = _nodes.AsReadOnly();
             _readOnlySkeletons = _skeletons.AsReadOnly();
             _readOnlySkins = _skins.AsReadOnly();
             _readOnlyAnimationClips = _animationClips.AsReadOnly();
@@ -44,6 +47,7 @@ namespace Njulf.Core.Scene
         public BoundingSphere BoundingSphere { get; set; }
 
         public IReadOnlyList<RenderObject> RenderObjects => _readOnlyRenderObjects;
+        public IReadOnlyList<SceneNode> Nodes => _readOnlyNodes;
         public IReadOnlyList<Skeleton> Skeletons => _readOnlySkeletons;
         public IReadOnlyList<Skin> Skins => _readOnlySkins;
         public IReadOnlyList<AnimationClip> AnimationClips => _readOnlyAnimationClips;
@@ -64,7 +68,9 @@ namespace Njulf.Core.Scene
             instance.AddLights(_lights);
             instance._renderObjects.EnsureCapacity(
                 _renderObjects.Count);
-
+            var placement = new ModelPlacement(this);
+            ((ModelInstance)instance).PlacementRoot = placement.Root;
+            instance._nodes.AddRange(placement.Nodes);
             try
             {
                 instance._sharedDisposeActions.EnsureCapacity(
@@ -76,7 +82,10 @@ namespace Njulf.Core.Scene
                     instance._sharedDisposeActions.Add(shared);
                 }
                 for (int i = 0; i < _renderObjects.Count; i++)
-                    instance.Add(CreateRenderObjectInstance(i));
+                {
+                    RenderObject child = placement.CreateRenderObjectInstance(i);
+                    instance.Add(child);
+                }
 
                 return (ModelInstance)instance;
             }
@@ -114,6 +123,13 @@ namespace Njulf.Core.Scene
 
             RenderObject source = _renderObjects[renderObjectIndex];
             RenderObject clone = CloneRenderObject(source);
+            clone.AttachNode(new SceneNode
+            {
+                Name = source.Node.Name,
+                LocalMatrix = source.Node.WorldMatrix
+            }, source.MeshToNode);
+            clone.PlacementRoot = new SceneNode { Name = Name };
+            clone.Node.SetParent(clone.PlacementRoot, keepWorld: false);
             try
             {
                 clone.Mesh = source.Mesh;
@@ -170,6 +186,7 @@ namespace Njulf.Core.Scene
                     AssetReference = skinned.AssetReference,
                     PersistInSceneDocument =
                         skinned.PersistInSceneDocument,
+                    IsTransformGroup = skinned.IsTransformGroup,
                     SkinnedVertexOffset =
                         skinned.SkinnedVertexOffset,
                     SkinningEnabled = skinned.SkinningEnabled,
@@ -187,6 +204,7 @@ namespace Njulf.Core.Scene
                 AssetReference = renderObject.AssetReference,
                 PersistInSceneDocument =
                     renderObject.PersistInSceneDocument,
+                IsTransformGroup = renderObject.IsTransformGroup,
                 Name = renderObject.Name,
                 WorldMatrix = renderObject.WorldMatrix,
                 Visible = renderObject.Visible,
@@ -203,6 +221,15 @@ namespace Njulf.Core.Scene
             ArgumentNullException.ThrowIfNull(renderObject);
             if (_renderObjects.Contains(renderObject)) throw new InvalidOperationException("The model already owns this render object.");
             _renderObjects.Add(renderObject);
+        }
+
+        public void Add(SceneNode node)
+        {
+            EnsureStructureMutable();
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ArgumentNullException.ThrowIfNull(node);
+            if (_nodes.Contains(node)) throw new InvalidOperationException("The model already owns this scene node.");
+            _nodes.Add(node);
         }
 
         public void AddSkeletons(IEnumerable<Skeleton> skeletons)
@@ -253,6 +280,16 @@ namespace Njulf.Core.Scene
             // outstanding lease.
             renderObject.Dispose();
             _renderObjects.RemoveAt(index);
+        }
+
+        public void Remove(SceneNode node)
+        {
+            EnsureStructureMutable();
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ArgumentNullException.ThrowIfNull(node);
+            if (!_nodes.Remove(node))
+                return;
+            node.SetParent(null, keepWorld: true);
         }
 
         /// <summary>

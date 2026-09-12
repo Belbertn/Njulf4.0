@@ -70,6 +70,10 @@ public sealed class SharpGltfModelMeshConverterTests
             Assert.That(mesh.SubMeshes, Has.Count.EqualTo(1));
             Assert.That(mesh.SubMeshes[0].MaterialIndex, Is.EqualTo(0));
             Assert.That(mesh.SubMeshes[0].NodeIndex, Is.GreaterThanOrEqualTo(0));
+            Assert.That(mesh.Nodes, Has.Count.EqualTo(1));
+            Assert.That(mesh.Nodes[0].Index, Is.EqualTo(mesh.SubMeshes[0].NodeIndex));
+            Assert.That(mesh.Nodes[0].WorldMatrix.Translation,
+                Is.EqualTo(new Njulf.Core.Math.Vector3(20f, 40f, 60f)));
             Assert.That(mesh.Vertices[0].X, Is.EqualTo(20f).Within(0.00001f));
             Assert.That(mesh.Vertices[0].Y, Is.EqualTo(40f).Within(0.00001f));
             Assert.That(mesh.Vertices[0].Z, Is.EqualTo(60f).Within(0.00001f));

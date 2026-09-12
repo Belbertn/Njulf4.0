@@ -6,7 +6,7 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 13;
+    public const int CurrentSchemaVersion = 14;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -33,7 +33,11 @@ public sealed class SceneObjectDocument
 {
     public Guid Id { get; init; } = Guid.NewGuid();
     public string Name { get; init; } = "RenderObject";
-    public required SceneAssetReferenceDocument Model { get; init; }
+    public SceneAssetReferenceDocument? Model { get; init; }
+    public bool IsGroup { get; init; }
+    public Guid TransformNodeId { get; init; }
+    public Guid? ParentId { get; init; }
+    public Guid? PlacementRootId { get; init; }
     public SceneVector3 Position { get; init; }
     public SceneQuaternion Rotation { get; init; } = SceneQuaternion.Identity;
     public SceneVector3 Scale { get; init; } = SceneVector3.One;

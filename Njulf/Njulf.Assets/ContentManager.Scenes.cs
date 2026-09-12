@@ -80,7 +80,7 @@ public partial class ContentManager
     }
 
     private static IEnumerable<string> SceneModelPaths(SceneDocument document) =>
-        document.Objects.Select(o => o.Model.Path)
+        document.Objects.Where(o => o.Model != null).Select(o => o.Model!.Path)
             .Concat(document.InstanceBatches.Select(o => o.Model.Path))
             .Concat(document.FoliagePrototypes.Select(o => o.Model.Path))
             .Distinct(StringComparer.Ordinal);

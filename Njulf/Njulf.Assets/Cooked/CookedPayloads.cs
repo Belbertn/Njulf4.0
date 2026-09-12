@@ -33,6 +33,8 @@ public sealed record CookedModelManifest(
     BoundingBox BoundingBox,
     BoundingSphere BoundingSphere)
 {
+    public IReadOnlyList<ModelNodeDefinition> Nodes { get; init; } =
+        Array.Empty<ModelNodeDefinition>();
     public IReadOnlyList<ModelLightDefinition> Lights { get; init; } =
         Array.Empty<ModelLightDefinition>();
 }

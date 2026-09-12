@@ -8,11 +8,8 @@ namespace Njulf.Core.Scene
 {
     public partial class RenderObject : IRenderable, IUpdateable, IDisposable, IIdentifiedSceneEntity
     {
-        private Matrix4x4 _worldMatrix = Matrix4x4.Identity;
-        private Vector3 _position;
-        private Quaternion _rotation = Quaternion.Identity;
-        private Vector3 _scale = Vector3.One;
-        private bool _hasNonTrsMatrix;
+        private SceneNode _node = new();
+        private Matrix4x4 _meshToNode = Matrix4x4.Identity;
         private readonly object _resourceLock = new();
         private bool _materialTransferInProgress;
         private bool _visible = true;
@@ -36,6 +33,39 @@ namespace Njulf.Core.Scene
         {
             get => GetWorldMatrix();
             set => SetWorldMatrix(value);
+        }
+
+        /// <summary>The editable transform shared by primitives from the same imported object.</summary>
+        public SceneNode Node => _node;
+        /// <summary>Reads the editable node's world TRS, excluding baked mesh compensation.</summary>
+        public bool TryGetNodeWorldTransform(out Vector3 position, out Quaternion rotation, out Vector3 scale) =>
+            TryDecompose(_node.WorldMatrix, out position, out rotation, out scale);
+        public SceneNode? PlacementRoot { get; set; }
+
+        /// <summary>Converts baked mesh coordinates into <see cref="Node"/> space.</summary>
+        public Matrix4x4 MeshToNode
+        {
+            get => _meshToNode;
+            internal set
+            {
+                if (_meshToNode.Equals(value)) return;
+                BoundingBox? oldBounds = GetWorldBounds();
+                _meshToNode = value;
+                _dirty = true;
+                PublishChange(SceneMutationKind.Transform, oldBounds, GetWorldBounds());
+            }
+        }
+
+        public void AttachNode(SceneNode node, Matrix4x4 meshToNode)
+        {
+            ArgumentNullException.ThrowIfNull(node);
+            BoundingBox? oldBounds = GetWorldBounds();
+            _node.WorldChanged -= OnNodeWorldChanged;
+            _node = node;
+            _meshToNode = meshToNode;
+            _node.WorldChanged += OnNodeWorldChanged;
+            _dirty = true;
+            PublishChange(SceneMutationKind.Transform, oldBounds, GetWorldBounds());
         }
 
         /// <summary>
@@ -130,9 +160,11 @@ namespace Njulf.Core.Scene
         /// material is generated in memory and therefore cannot be reloaded.
         /// </summary>
         public bool PersistInSceneDocument { get; set; } = true;
+        /// <summary>True for an editor-authored transform node with no renderable asset.</summary>
+        public bool IsTransformGroup { get; set; }
 
         /// <summary>True when the assigned world matrix contains shear or another non-TRS component.</summary>
-        public bool HasNonTrsMatrix => _hasNonTrsMatrix;
+        public bool HasNonTrsMatrix => !TryDecompose(_node.LocalMatrix, out _, out _, out _);
 
         /// <summary>
         /// True when renderer retain/release callbacks are attached. Callers
@@ -150,20 +182,20 @@ namespace Njulf.Core.Scene
 
         public Vector3 Position
         {
-            get => _position;
-            set => SetTransform(value, _rotation, _scale);
+            get => DecomposeLocal().Position;
+            set { var trs = DecomposeLocal(); SetTransform(value, trs.Rotation, trs.Scale); }
         }
 
         public Quaternion Rotation
         {
-            get => _rotation;
-            set => SetTransform(_position, NormalizeRotation(value), _scale);
+            get => DecomposeLocal().Rotation;
+            set { var trs = DecomposeLocal(); SetTransform(trs.Position, NormalizeRotation(value), trs.Scale); }
         }
 
         public Vector3 Scale
         {
-            get => _scale;
-            set => SetTransform(_position, _rotation, value);
+            get => DecomposeLocal().Scale;
+            set { var trs = DecomposeLocal(); SetTransform(trs.Position, trs.Rotation, value); }
         }
 
         private bool _dirty = true;
@@ -185,9 +217,7 @@ namespace Njulf.Core.Scene
         {
             if (_dirty)
             {
-                _cachedWorldMatrix = _hasNonTrsMatrix
-                    ? _worldMatrix
-                    : Matrix4x4.CreateScale(_scale) * _rotation.ToMatrix4x4() * Matrix4x4.CreateTranslation(_position);
+                _cachedWorldMatrix = _meshToNode * _node.WorldMatrix;
                 _dirty = false;
             }
             return _cachedWorldMatrix;
@@ -195,24 +225,7 @@ namespace Njulf.Core.Scene
 
         private void SetTransform(Vector3 position, Quaternion rotation, Vector3 scale)
         {
-            if (!_hasNonTrsMatrix &&
-                _position == position &&
-                _rotation.Equals(rotation) &&
-                _scale == scale)
-            {
-                return;
-            }
-
-            BoundingBox? oldBounds = GetWorldBounds();
-            _position = position;
-            _rotation = rotation;
-            _scale = scale;
-            _hasNonTrsMatrix = false;
-            _dirty = true;
-            PublishChange(
-                SceneMutationKind.Transform,
-                oldBounds,
-                GetWorldBounds());
+            _node.LocalMatrix = Matrix4x4.CreateScale(scale) * rotation.ToMatrix4x4() * Matrix4x4.CreateTranslation(position);
         }
 
         private void SetWorldMatrix(Matrix4x4 matrix)
@@ -220,29 +233,21 @@ namespace Njulf.Core.Scene
             Matrix4x4 current = GetWorldMatrix();
             if (current.Equals(matrix))
                 return;
-            BoundingBox? oldBounds = GetWorldBounds(current);
+            _node.SetWorldMatrix(_meshToNode.Invert() * matrix);
+        }
 
-            if (TryDecompose(matrix, out Vector3 position, out Quaternion rotation, out Vector3 scale))
-            {
-                _position = position;
-                _rotation = rotation;
-                _scale = scale;
-                _hasNonTrsMatrix = false;
-            }
-            else
-            {
-                _worldMatrix = matrix;
-                _position = matrix.Translation;
-                _rotation = Quaternion.Identity;
-                _scale = matrix.Scale;
-                _hasNonTrsMatrix = true;
-            }
+        private (Vector3 Position, Quaternion Rotation, Vector3 Scale) DecomposeLocal()
+        {
+            if (TryDecompose(_node.LocalMatrix, out Vector3 position, out Quaternion rotation, out Vector3 scale))
+                return (position, rotation, scale);
+            return (_node.LocalMatrix.Translation, Quaternion.Identity, _node.LocalMatrix.Scale);
+        }
 
+        private void OnNodeWorldChanged(SceneNode node, Matrix4x4 oldNodeWorld, Matrix4x4 newNodeWorld)
+        {
+            Matrix4x4 oldWorld = _meshToNode * oldNodeWorld;
             _dirty = true;
-            PublishChange(
-                SceneMutationKind.Transform,
-                oldBounds,
-                GetWorldBounds());
+            PublishChange(SceneMutationKind.Transform, GetWorldBounds(oldWorld), GetWorldBounds());
         }
 
         private BoundingBox? GetWorldBounds() =>

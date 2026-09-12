@@ -122,7 +122,7 @@ public sealed unsafe class ImGuiEditorOverlayHost : IEditorOverlayHost, IDisposa
         if (source.IsNull || !source.Valid || source.TotalVtxCount <= 0 || source.TotalIdxCount <= 0) return null;
         var vertices = new OverlayVertex[source.TotalVtxCount]; var indices = new ushort[source.TotalIdxCount]; var commands = new List<OverlayDrawCommand>();
         int vb = 0, ib = 0;
-        for (int l = 0; l < source.CmdListsCount; l++)
+        for (int l = 0; l < source.CmdLists.Size; l++)
         {
             ImDrawListPtr list = source.CmdLists[l];
             for (int i = 0; i < list.VtxBuffer.Size; i++) { ImDrawVert v = list.VtxBuffer[i]; vertices[vb + i] = new OverlayVertex(v.Pos, v.Uv, v.Col); }

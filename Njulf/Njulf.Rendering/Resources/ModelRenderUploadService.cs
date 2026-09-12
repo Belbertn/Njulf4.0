@@ -209,6 +209,8 @@ namespace Njulf.Rendering.Resources
             model.AddSkins(modelMesh.Skins);
             model.AddAnimationClips(modelMesh.AnimationClips);
             model.AddLights(modelMesh.Lights);
+            IReadOnlyDictionary<int, (SceneNode Node, CoreMatrix4x4 World)> runtimeNodes =
+                BuildRuntimeNodes(model, modelMesh.Nodes);
 
             IReadOnlyList<ModelMaterial> importedMaterials = modelMesh.Materials.Count > 0
                 ? modelMesh.Materials
@@ -372,6 +374,8 @@ namespace Njulf.Rendering.Resources
 
                     renderObject.Name = subMeshNames[i];
                     renderObject.LocalMeshBounds = subMeshes[i].BoundingBox;
+                    AttachRuntimeNode(renderObject,
+                        ResolveRuntimeNode(runtimeNodes, subMeshes[i].NodeIndex, subMeshes[i].SkinIndex));
                     model.Add(renderObject);
                     AdoptRenderObjectResources(renderObject, lifetimeMeshes[i], subMeshMaterials[i]);
                     rollback.MarkRenderObjectAttached();
@@ -475,6 +479,8 @@ namespace Njulf.Rendering.Resources
             model.AddSkins(cooked.Animation.Skins);
             model.AddAnimationClips(cooked.Animation.AnimationClips);
             model.AddLights(cooked.Manifest.Lights);
+            IReadOnlyDictionary<int, (SceneNode Node, CoreMatrix4x4 World)> runtimeNodes =
+                BuildRuntimeNodes(model, cooked.Manifest.Nodes);
 
             var rollback =
                 new ModelUploadRollbackLedger(
@@ -646,6 +652,9 @@ namespace Njulf.Rendering.Resources
                         : new RenderObject();
                     renderObject.Name = string.IsNullOrWhiteSpace(subMesh.Name) ? model.Name : subMesh.Name;
                     renderObject.LocalMeshBounds = subMesh.BoundingBox;
+                    AttachRuntimeNode(renderObject,
+                        ResolveRuntimeNode(runtimeNodes, subMesh.NodeIndex, subMesh.SkinIndex) ??
+                        CreateLegacyCookedNode(model, subMesh.Name, subMesh.BoundingBox, subMesh.SkinIndex));
                     model.Add(renderObject);
                     AdoptRenderObjectResources(renderObject, lifetimeMeshes[i], subMeshMaterials[i]);
                     rollback.MarkRenderObjectAttached();
@@ -1358,6 +1367,9 @@ namespace Njulf.Rendering.Resources
             model.AddAnimationClips(cooked.Animation.AnimationClips);
             model.AddLights(cooked.Manifest.Lights);
 
+            IReadOnlyDictionary<int, (SceneNode Node, CoreMatrix4x4 World)> runtimeNodes =
+                BuildRuntimeNodes(model, cooked.Manifest.Nodes);
+
             var meshes = new PreparedModelMeshData[
                 payload.SubMeshes.Count];
             var subMeshes = new PreparedModelSubMeshData[
@@ -1418,9 +1430,12 @@ namespace Njulf.Rendering.Resources
                 subMeshes[i] = new PreparedModelSubMeshData(
                     subMesh.Name,
                     subMesh.MaterialSlot,
+                    subMesh.NodeIndex,
                     subMesh.SkinIndex,
                     subMesh.SkinningBindTransform,
-                    subMesh.BoundingBox);
+                    subMesh.BoundingBox,
+                    ResolveRuntimeNode(runtimeNodes, subMesh.NodeIndex, subMesh.SkinIndex) ??
+                    CreateLegacyCookedNode(model, subMesh.Name, subMesh.BoundingBox, subMesh.SkinIndex));
 
                 if ((i & 63) == 63 ||
                     i + 1 == payload.SubMeshes.Count)
@@ -1472,6 +1487,8 @@ namespace Njulf.Rendering.Resources
             model.AddSkins(modelMesh.Skins);
             model.AddAnimationClips(modelMesh.AnimationClips);
             model.AddLights(modelMesh.Lights);
+            IReadOnlyDictionary<int, (SceneNode Node, CoreMatrix4x4 World)> runtimeNodes =
+                BuildRuntimeNodes(model, modelMesh.Nodes);
 
             IReadOnlyList<ModelMaterial> importedMaterials =
                 modelMesh.Materials.Count > 0
@@ -1575,9 +1592,11 @@ namespace Njulf.Rendering.Resources
                 subMeshes[i] = new PreparedModelSubMeshData(
                     subMesh.Name,
                     materialIndex,
+                    subMesh.NodeIndex,
                     subMesh.SkinIndex,
                     subMesh.SkinningBindTransform,
-                    subMesh.BoundingBox);
+                    subMesh.BoundingBox,
+                    ResolveRuntimeNode(runtimeNodes, subMesh.NodeIndex, subMesh.SkinIndex));
                 if ((i & 63) == 63 || i + 1 == sourceSubMeshes.Count)
                 {
                     long completed = checked((long)Math.Round(
@@ -4842,6 +4861,7 @@ namespace Njulf.Rendering.Resources
                         ? _cpu.Model.Name
                         : subMesh.Name;
                     renderObject.LocalMeshBounds = subMesh.BoundingBox;
+                    AttachRuntimeNode(renderObject, subMesh.RuntimeNode);
                     _cpu.Model.Add(renderObject);
                     _owner.AdoptRenderObjectResources(renderObject, meshes[_renderObjectIndex], _subMeshMaterials[_renderObjectIndex]);
                     (_rollback ?? throw new InvalidOperationException(
@@ -5457,6 +5477,66 @@ namespace Njulf.Rendering.Resources
             Cancelled
         }
 
+        private static IReadOnlyDictionary<int, (SceneNode Node, CoreMatrix4x4 World)> BuildRuntimeNodes(
+            Model model,
+            IReadOnlyList<ModelNodeDefinition> definitions)
+        {
+            if (definitions.Count == 0)
+                return new Dictionary<int, (SceneNode, CoreMatrix4x4)>();
+
+            var result = new Dictionary<int, (SceneNode Node, CoreMatrix4x4 World)>(definitions.Count);
+            foreach (ModelNodeDefinition definition in definitions)
+            {
+                if (result.ContainsKey(definition.Index))
+                    throw new InvalidDataException($"Model node index {definition.Index} is duplicated.");
+                var node = new SceneNode
+                {
+                    Name = string.IsNullOrWhiteSpace(definition.Name) ? $"Node_{definition.Index}" : definition.Name,
+                    LocalMatrix = definition.LocalMatrix
+                };
+                model.Add(node);
+                result.Add(definition.Index, (node, definition.WorldMatrix));
+            }
+
+            foreach (ModelNodeDefinition definition in definitions)
+            {
+                if (definition.ParentIndex < 0) continue;
+                if (!result.TryGetValue(definition.ParentIndex, out var parent))
+                    throw new InvalidDataException($"Model node {definition.Index} references missing parent {definition.ParentIndex}.");
+                result[definition.Index].Node.SetParent(parent.Node, keepWorld: false);
+            }
+
+            return result;
+        }
+
+        private static (SceneNode Node, CoreMatrix4x4 World)? ResolveRuntimeNode(
+            IReadOnlyDictionary<int, (SceneNode Node, CoreMatrix4x4 World)> nodes,
+            int nodeIndex,
+            int skinIndex) =>
+            skinIndex < 0 && nodes.TryGetValue(nodeIndex, out var node) ? node : null;
+
+        private static (SceneNode Node, CoreMatrix4x4 World)? CreateLegacyCookedNode(
+            Model model, string name, CoreBoundingBox bounds, int skinIndex)
+        {
+            if (skinIndex >= 0) return null;
+            CoreVector3 center = bounds.Center;
+            CoreMatrix4x4 world = CoreMatrix4x4.CreateTranslation(center);
+            var node = new SceneNode
+            {
+                Name = string.IsNullOrWhiteSpace(name) ? "Object" : name,
+                LocalMatrix = world
+            };
+            model.Add(node);
+            return (node, world);
+        }
+
+        private static void AttachRuntimeNode(RenderObject renderObject,
+            (SceneNode Node, CoreMatrix4x4 World)? runtimeNode)
+        {
+            if (runtimeNode is { } binding)
+                renderObject.AttachNode(binding.Node, binding.World.Invert());
+        }
+
         private sealed record PreparedModelCpuData(
             Model Model,
             PreparedModelMeshData[] Meshes,
@@ -5492,9 +5572,11 @@ namespace Njulf.Rendering.Resources
         private sealed record PreparedModelSubMeshData(
             string Name,
             int MaterialIndex,
+            int NodeIndex,
             int SkinIndex,
             CoreMatrix4x4 SkinningBindTransform,
-            CoreBoundingBox BoundingBox);
+            CoreBoundingBox BoundingBox,
+            (SceneNode Node, CoreMatrix4x4 World)? RuntimeNode);
 
         private readonly record struct PreparedTextureSourceCacheKey(
             string Identity,

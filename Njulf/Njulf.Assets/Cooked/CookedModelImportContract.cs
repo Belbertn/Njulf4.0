@@ -10,7 +10,7 @@ namespace Njulf.Assets.Cooked;
 public static class CookedModelImportContract
 {
     public const ushort MinimumFormatMinor = 5;
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     internal const int MaterialTransportMetadataRevision = 4;
     internal const int MaterialTexturePolicyRevision = 2;

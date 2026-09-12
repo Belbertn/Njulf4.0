@@ -8,8 +8,8 @@ namespace Njulf.Assets.Scenes;
 
 /// <summary>
 /// Owns the aggregate set of lights imported from ordinary model placements in
-/// a scene. Model sub-objects that share an asset and world transform are
-/// treated as one placement, so flattened models do not duplicate their lights.
+/// a scene. Imported sub-objects carry a shared placement root; editing a mesh
+/// does not change the placement's light identity or transform.
 /// </summary>
 public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
 {
@@ -396,19 +396,20 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
         foreach (RenderObject renderObject in _scene.RenderObjects)
         {
             SceneAssetReference? asset = renderObject.AssetReference;
-            if (asset == null || string.IsNullOrWhiteSpace(asset.Path))
-                continue;
-
+            if (asset == null || string.IsNullOrWhiteSpace(asset.Path)) continue;
             string assetKey = NormalizeAssetKey(asset.Path);
-            var key = new PlacementGroupKey(assetKey, renderObject.WorldMatrix);
+            SceneNode? root = renderObject.PlacementRoot ?? _scene.FindOwningInstance(renderObject)?.PlacementRoot;
+            Matrix4x4 world = root?.WorldMatrix ?? renderObject.WorldMatrix;
+            // Untagged, hand-authored objects retain the legacy placement convention.
+            // Imported objects always carry their explicit root, including incremental loads.
+            var key = new PlacementGroupKey(assetKey, (object?)root ?? world);
             if (!groups.TryGetValue(key, out PlacementGroup? group))
             {
-                group = new PlacementGroup(asset.Path, assetKey, renderObject.WorldMatrix);
+                group = new PlacementGroup(asset.Path, assetKey, world);
                 groups.Add(key, group);
             }
-            group.Include(renderObject.Id);
+            group.Include(root?.Id ?? renderObject.Id);
         }
-
         var models = new Dictionary<string, Model>(StringComparer.Ordinal);
         var desired = new Dictionary<Guid, DesiredPlacement>();
         int placementsWithLights = 0;
@@ -756,7 +757,7 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
 
     private readonly record struct PlacementGroupKey(
         string AssetKey,
-        Matrix4x4 WorldTransform);
+        object PlacementIdentity);
 
     private SceneLightDocument ApplyLightSettings(SceneLightDocument source, bool forceShadows)
     {
@@ -821,23 +822,17 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
             owner.ApplyLightSettings(light, owner.ImportedModelLightShadowsEnabled);
     }
 
-    private sealed class PlacementGroup(
-        string assetPath,
-        string assetKey,
-        Matrix4x4 worldTransform)
+    private sealed class PlacementGroup(string assetPath, string assetKey, Matrix4x4 worldTransform)
     {
         public string AssetPath { get; } = assetPath;
         public string AssetKey { get; } = assetKey;
         public Matrix4x4 WorldTransform { get; } = worldTransform;
         public Guid AnchorId { get; private set; }
-
-        public void Include(Guid objectId)
+        public void Include(Guid id)
         {
-            if (AnchorId == Guid.Empty || objectId.CompareTo(AnchorId) < 0)
-                AnchorId = objectId;
+            if (AnchorId == Guid.Empty || id.CompareTo(AnchorId) < 0) AnchorId = id;
         }
     }
-
     private sealed record DesiredPlacement(
         Guid PlacementId,
         Matrix4x4 WorldTransform,

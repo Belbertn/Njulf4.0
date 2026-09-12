@@ -55,7 +55,7 @@ public sealed class VolumetricFogTests
             float boundary = layout.SliceBoundary(slice);
             Assert.That(boundary, Is.GreaterThan(previous));
             Assert.That(layout.ContinuousSlice(boundary),
-                Is.EqualTo(slice).Within(1e-3f));
+                Is.EqualTo((float)slice).Within(1e-3f));
             previous = boundary;
         }
     }

@@ -136,6 +136,7 @@ public sealed record ProcessedMeshAsset(
     public IReadOnlyList<CoreSkeleton> Skeletons { get; init; } = Array.Empty<CoreSkeleton>();
     public IReadOnlyList<Skin> Skins { get; init; } = Array.Empty<Skin>();
     public IReadOnlyList<AnimationClip> AnimationClips { get; init; } = Array.Empty<AnimationClip>();
+    public IReadOnlyList<ModelNodeDefinition> Nodes { get; init; } = Array.Empty<ModelNodeDefinition>();
 }
 
 public sealed class ProcessedMeshAssetBuilder
@@ -218,7 +219,8 @@ public sealed class ProcessedMeshAssetBuilder
             Materials = modelMesh.Materials.ToArray(),
             Skeletons = modelMesh.Skeletons.ToArray(),
             Skins = modelMesh.Skins.ToArray(),
-            AnimationClips = modelMesh.AnimationClips.ToArray()
+            AnimationClips = modelMesh.AnimationClips.ToArray(),
+            Nodes = modelMesh.Nodes.ToArray()
         };
     }
 

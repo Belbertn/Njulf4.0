@@ -257,6 +257,38 @@ public sealed class EditorController
         return objectToAdd;
     }
 
+    public RenderObject AddGroup(string name = "Group")
+    {
+        var group = new RenderObject
+        {
+            Name = string.IsNullOrWhiteSpace(name) ? "Group" : name,
+            PersistInSceneDocument = true,
+            IsTransformGroup = true,
+            IsStatic = false
+        };
+        group.Node.Name = group.Name;
+        if (TryGetSelectedObject(out RenderObject? selected) && selected != null)
+            group.Node.SetParent(selected.Node, keepWorld: false);
+        _scene.Add(group);
+        MarkDirty(EditorSelection.ForEntity(EditorSelectionKind.Object, group.Id));
+        return group;
+    }
+
+    public bool SetSelectedObjectParent(Guid? parentId)
+    {
+        if (!TryGetSelectedObject(out RenderObject? child) || child == null) return false;
+        SceneNode? parent = null;
+        if (parentId is { } id)
+        {
+            if (_scene.FindById(id) is not RenderObject parentObject) return false;
+            parent = parentObject.Node;
+            if (ReferenceEquals(parent, child.Node)) return false;
+        }
+        child.Node.SetParent(parent, keepWorld: true);
+        IsDirty = true;
+        return true;
+    }
+
     public Guid AddLight(Light light, string? name = null)
     {
         Guid id = Guid.NewGuid();
@@ -809,7 +841,8 @@ public sealed class EditorController
 
     internal void ApplyGizmoTransform(RenderObject target, GizmoTransform value, bool markDirty)
     {
-        target.Position = value.Position; target.Rotation = value.Rotation; target.Scale = value.Scale;
+        target.Node.SetWorldMatrix(Matrix4x4.CreateScale(value.Scale) * value.Rotation.ToMatrix4x4() *
+                                   Matrix4x4.CreateTranslation(value.Position));
         if (markDirty) IsDirty = true;
     }
 
@@ -850,10 +883,43 @@ public sealed class EditorController
     {
         if (_scene.FindById(Selection.Id) is not RenderObject child) return false;
         if (_scene.FindOwningInstance(child) is { } instance)
-            _scene.Remove(instance);
+        {
+            RenderObject[] subtree = instance.RenderObjects
+                .Where(candidate => IsNodeInSubtree(candidate.Node, child.Node))
+                .ToArray();
+            SceneNode[] nodes = instance.Nodes
+                .Where(candidate => IsNodeInSubtree(candidate, child.Node))
+                .OrderByDescending(GetNodeDepth)
+                .ToArray();
+            _scene.Detach(instance);
+            foreach (RenderObject candidate in subtree)
+                instance.Remove(candidate);
+            foreach (SceneNode node in nodes)
+                instance.Remove(node);
+            if (instance.RenderObjects.Count == 0)
+                instance.Dispose();
+            else
+                _scene.Add(instance);
+        }
         else
             _scene.Remove(child);
         return true;
+    }
+
+    private static bool IsNodeInSubtree(SceneNode candidate, SceneNode root)
+    {
+        for (SceneNode? current = candidate; current != null; current = current.Parent)
+            if (ReferenceEquals(current, root))
+                return true;
+        return false;
+    }
+
+    private static int GetNodeDepth(SceneNode node)
+    {
+        int depth = 0;
+        for (SceneNode? current = node.Parent; current != null; current = current.Parent)
+            depth++;
+        return depth;
     }
 
     private static bool Remove<T>(IIdentifiedSceneEntity? value, Action<T> remove)

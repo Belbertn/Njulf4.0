@@ -472,6 +472,7 @@ namespace Njulf.Assets
                 scene,
                 scene->MRootNode,
                 NumericsMatrix4x4.Identity,
+                -1,
                 options,
                 mesh,
                 vertices,
@@ -1202,6 +1203,7 @@ namespace Njulf.Assets
             Scene* scene,
             Node* node,
             NumericsMatrix4x4 parentTransform,
+            int parentNodeIndex,
             ImporterOptions options,
             ModelMesh model,
             List<Vector3> vertices,
@@ -1217,6 +1219,15 @@ namespace Njulf.Assets
             AssimpAnimationManifest animationManifest)
         {
             NumericsMatrix4x4 nodeTransform = ToEngineTransform(node->MTransformation) * parentTransform;
+            int nodeIndex = model.Nodes.Count;
+            model.Nodes.Add(new ModelNodeDefinition
+            {
+                Index = nodeIndex,
+                ParentIndex = parentNodeIndex,
+                Name = node->MName.AsString,
+                LocalMatrix = ToCoreMatrixWithScaledTranslation(ToEngineTransform(node->MTransformation), options.GlobalScale),
+                WorldMatrix = ToCoreMatrixWithScaledTranslation(nodeTransform, options.GlobalScale)
+            });
 
             for (uint i = 0; i < node->MNumMeshes; i++)
             {
@@ -1226,6 +1237,7 @@ namespace Njulf.Assets
                     node,
                     meshIndex,
                     nodeTransform,
+                    nodeIndex,
                     options,
                     model,
                     vertices,
@@ -1247,6 +1259,7 @@ namespace Njulf.Assets
                     scene,
                     node->MChildren[i],
                     nodeTransform,
+                    nodeIndex,
                     options,
                     model,
                     vertices,
@@ -1268,6 +1281,7 @@ namespace Njulf.Assets
             Node* node,
             uint meshIndex,
             NumericsMatrix4x4 transform,
+            int nodeIndex,
             ImporterOptions options,
             ModelMesh model,
             List<Vector3> vertices,
@@ -1298,7 +1312,7 @@ namespace Njulf.Assets
                 MaterialIndex = aiMesh->MMaterialIndex < model.Materials.Count
                     ? (int)aiMesh->MMaterialIndex
                     : 0,
-                NodeIndex = -1,
+                NodeIndex = nodeIndex,
                 SkinIndex = isSkinned ? 0 : -1,
                 SkinningBindTransform = isSkinned
                     ? BuildSkinningBindTransform(node, transform, animationManifest, options.GlobalScale)
@@ -2981,6 +2995,7 @@ namespace Njulf.Assets
         public BoundingBox BoundingBox { get; set; }
         public BoundingSphere BoundingSphere { get; set; }
         public List<ModelSubMesh> SubMeshes { get; } = new();
+        public List<ModelNodeDefinition> Nodes { get; } = new();
         public List<ModelMaterial> Materials { get; } = new();
         public List<CoreSkeleton> Skeletons { get; } = new();
         public List<Skin> Skins { get; } = new();
@@ -3002,6 +3017,15 @@ namespace Njulf.Assets
             JointWeights0 = Array.Empty<VertexJointWeights>();
             Indices = Array.Empty<uint>();
         }
+    }
+
+    public sealed class ModelNodeDefinition
+    {
+        public int Index { get; set; } = -1;
+        public int ParentIndex { get; set; } = -1;
+        public string Name { get; set; } = "Node";
+        public Matrix4x4 LocalMatrix { get; set; } = Matrix4x4.Identity;
+        public Matrix4x4 WorldMatrix { get; set; } = Matrix4x4.Identity;
     }
 
     public sealed class ModelSubMesh

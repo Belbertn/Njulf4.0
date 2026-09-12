@@ -753,6 +753,7 @@ public sealed class ModelAssetCooker : IDisposable
             processed.BoundingBox,
             processed.BoundingSphere)
         {
+            Nodes = processed.Nodes,
             Lights = model.Lights.ToArray()
         };
         CookedOpacityMicromapModelChunk? opacityMicromapChunk =

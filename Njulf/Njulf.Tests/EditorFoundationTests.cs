@@ -47,6 +47,46 @@ public sealed class EditorFoundationTests
     }
 
     [Test]
+    public void ImportedPivotCompensation_PreservesPlacementAndRotatesAroundSourceOrigin()
+    {
+        var node = new SceneNode
+        {
+            LocalMatrix = Matrix4x4.CreateTranslation(new Vector3(10f, 0f, 0f))
+        };
+        var renderObject = new RenderObject();
+        renderObject.AttachNode(node,
+            Matrix4x4.CreateTranslation(new Vector3(-10f, 0f, 0f)));
+
+        AssertMatrix(renderObject.WorldMatrix, Matrix4x4.Identity);
+        node.Position = new Vector3(11f, 0f, 0f);
+        Assert.That(renderObject.WorldMatrix.Translation,
+            Is.EqualTo(new Vector3(1f, 0f, 0f)));
+    }
+
+    [Test]
+    public void SceneNode_ParentMovePropagatesWhileChildRemainsLocallyEditable()
+    {
+        var parent = new SceneNode
+        {
+            LocalMatrix = Matrix4x4.CreateTranslation(new Vector3(5f, 0f, 0f))
+        };
+        var child = new SceneNode
+        {
+            LocalMatrix = Matrix4x4.CreateTranslation(new Vector3(2f, 0f, 0f))
+        };
+        child.SetParent(parent, keepWorld: false);
+
+        Assert.That(child.WorldMatrix.Translation,
+            Is.EqualTo(new Vector3(7f, 0f, 0f)));
+        parent.Position = new Vector3(8f, 0f, 0f);
+        Assert.That(child.WorldMatrix.Translation,
+            Is.EqualTo(new Vector3(10f, 0f, 0f)));
+        child.Position = new Vector3(3f, 0f, 0f);
+        Assert.That(child.WorldMatrix.Translation,
+            Is.EqualTo(new Vector3(11f, 0f, 0f)));
+    }
+
+    [Test]
     public void Scene_FindById_FindsEverySupportedEntity()
     {
         var scene = new Scene();

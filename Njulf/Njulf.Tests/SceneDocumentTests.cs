@@ -11,6 +11,129 @@ namespace Njulf.Tests;
 public sealed class SceneDocumentTests
 {
     [Test]
+    [Explicit("Requires the local Sponza cooked manifest and bundled scene document; no GPU upload.")]
+    public void BundledSponzaSceneRetainsCookedOrigins()
+    {
+        var directory = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
+        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "Njulf.sln"))) directory = directory.Parent;
+        string contentRoot = Path.Combine(directory!.FullName, "NjulfHelloGame");
+        string path = Path.Combine(contentRoot, "Cooked", "win-x64", "models", "NewSponza_Main_glTF_003.njmodel");
+        using var reader = new Njulf.Assets.Cooked.CookedAssetReader(path, Njulf.Assets.Cooked.CookedAssetKind.Model);
+        var manifest = Njulf.Assets.Cooked.CookedJson.Deserialize<Njulf.Assets.Cooked.CookedModelManifest>(
+            reader.GetRequiredSection(Njulf.Assets.Cooked.CookedSectionIds.Manifest).Span, path, "manifest");
+        Assert.That(manifest.Nodes, Is.Not.Empty);
+        // Use the package's real node/primitive metadata without retaining GPU resources.
+        using var model = new Model();
+        var nodes = manifest.Nodes.ToDictionary(node => node.Index,
+            node => new SceneNode { Name = node.Name, LocalMatrix = node.LocalMatrix });
+        foreach (var definition in manifest.Nodes)
+        {
+            if (definition.ParentIndex >= 0) nodes[definition.Index].SetParent(nodes[definition.ParentIndex], false);
+            model.Add(nodes[definition.Index]);
+        }
+        var definitions = manifest.Nodes.ToDictionary(node => node.Index);
+        foreach (var primitive in manifest.SubObjects)
+        {
+            var renderObject = new RenderObject { Name = primitive.Name };
+            renderObject.AttachNode(nodes[primitive.NodeIndex], definitions[primitive.NodeIndex].WorldMatrix.Invert());
+            model.Add(renderObject);
+        }
+        SceneDocument document = SceneDocumentJson.Read(Path.Combine(contentRoot, "Scenes", "SampleScene.njscene.json"));
+        document.Objects.RemoveAll(item => item.Model?.Path != "NewSponza_Main_glTF_003.gltf");
+        Assert.That(document.Objects, Is.Not.Empty);
+        using Scene scene = new SceneDocumentLoader(new ModelContentManager(model)).Load(document);
+        foreach (SceneObjectDocument record in document.Objects)
+        {
+            var item = (RenderObject)scene.FindById(record.Id)!;
+            int index = int.Parse(record.Model!.SubObject);
+            Matrix4x4 placement = Matrix4x4.CreateScale(new Vector3(record.Scale.X, record.Scale.Y, record.Scale.Z)) *
+                new Quaternion(record.Rotation.X, record.Rotation.Y, record.Rotation.Z, record.Rotation.W).ToMatrix4x4() *
+                Matrix4x4.CreateTranslation(new Vector3(record.Position.X, record.Position.Y, record.Position.Z));
+            Matrix4x4 expectedOrigin = definitions[manifest.SubObjects[index].NodeIndex].WorldMatrix * placement;
+            for (int row = 0; row < 4; row++)
+            for (int column = 0; column < 4; column++)
+            {
+                Assert.That(item.Node.WorldMatrix[row, column], Is.EqualTo(expectedOrigin[row, column]).Within(0.001), record.Name);
+                Assert.That(item.WorldMatrix[row, column], Is.EqualTo(placement[row, column]).Within(0.001), record.Name);
+            }
+        }
+        Assert.That(scene.RenderObjects.Where(item => !item.IsTransformGroup)
+            .Select(item => item.Node.WorldMatrix.Translation).Distinct().Count(), Is.GreaterThan(1));
+    }
+
+    [TestCase(1)]
+    [TestCase(13)]
+    public void LegacyBakedPlacementPreservesImportedOriginsAndRoundTrips(int version)
+    {
+        using var model = new Model();
+        var parent = new SceneNode { Name = "Blender Empty" };
+        model.Add(parent);
+        foreach (float x in new[] { 10f, 20f })
+        {
+            var node = new SceneNode { LocalMatrix = Matrix4x4.CreateTranslation(new Vector3(x, 0, 0)) };
+            node.SetParent(parent, false);
+            model.Add(node);
+            var mesh = new RenderObject();
+            mesh.AttachNode(node, Matrix4x4.CreateTranslation(new Vector3(-x, 0, 0)));
+            model.Add(mesh);
+        }
+        var secondPrimitive = new RenderObject();
+        secondPrimitive.AttachNode(model.RenderObjects[0].Node, model.RenderObjects[0].MeshToNode);
+        model.Add(secondPrimitive);
+        var document = new SceneDocument { SchemaVersion = version };
+        for (int i = 0; i < 3; i++)
+            document.Objects.Add(new SceneObjectDocument { Name = $"Mesh {i}",
+                Model = new SceneAssetReferenceDocument("fixture.glb", i.ToString()),
+                Position = new SceneVector3(7, 0, 0) });
+        var content = new ModelContentManager(model);
+        using Scene scene = new SceneDocumentLoader(content).Load(document);
+        RenderObject first = scene.RenderObjects.Single(item => item.Name == "Mesh 0");
+        RenderObject second = scene.RenderObjects.Single(item => item.Name == "Mesh 1");
+        Assert.That(first.Node.WorldMatrix.Translation, Is.EqualTo(new Vector3(17, 0, 0)));
+        Assert.That(second.Node.WorldMatrix.Translation, Is.EqualTo(new Vector3(27, 0, 0)));
+        Assert.That(first.WorldMatrix.Translation, Is.EqualTo(new Vector3(7, 0, 0)));
+        Assert.That(first.Node.Parent, Is.SameAs(second.Node.Parent));
+        Assert.That(scene.RenderObjects.Single(item => item.Name == "Mesh 2").Node, Is.SameAs(first.Node));
+        first.Rotation = new Quaternion(new Vector3(0, 0, MathF.PI / 2));
+        Assert.That(first.Node.WorldMatrix.Translation, Is.EqualTo(new Vector3(17, 0, 0)));
+        Assert.That(10 * first.WorldMatrix.M11 + first.WorldMatrix.M41, Is.EqualTo(17).Within(0.0001));
+        Assert.That(10 * first.WorldMatrix.M13 + first.WorldMatrix.M43, Is.Zero.Within(0.0001));
+        SceneDocument saved = new SceneDocumentWriter().CreateDocument(scene);
+        using Scene reloaded = new SceneDocumentLoader(content).Load(saved);
+        RenderObject restored = reloaded.RenderObjects.Single(item => item.Name == "Mesh 0");
+        Assert.That(restored.Node.WorldMatrix.Translation, Is.EqualTo(first.Node.WorldMatrix.Translation));
+        for (int row = 0; row < 4; row++)
+        for (int column = 0; column < 4; column++)
+            Assert.That(restored.WorldMatrix[row, column], Is.EqualTo(first.WorldMatrix[row, column]).Within(0.0001));
+        Assert.That(restored.PlacementRoot!.Id, Is.EqualTo(first.PlacementRoot!.Id));
+        Assert.That(reloaded.RenderObjects.Single(item => item.Name == "Mesh 2").Node, Is.SameAs(restored.Node));
+    }
+
+    [Test]
+    public void EmptyGroupsAndParentingRoundTrip()
+    {
+        using var scene = new Scene();
+        var parent = new RenderObject { Name = "Parent", IsTransformGroup = true };
+        var child = new RenderObject { Name = "Child", IsTransformGroup = true };
+        child.Node.SetParent(parent.Node, keepWorld: false);
+        child.Position = new Vector3(2f, 0f, 0f);
+        scene.Add(parent);
+        scene.Add(child);
+
+        SceneDocument document = new SceneDocumentWriter().CreateDocument(scene);
+        using Scene loaded = new SceneDocumentLoader(new ThrowingContentManager()).Load(document);
+        RenderObject loadedParent = loaded.RenderObjects.Single(item => item.Name == "Parent");
+        RenderObject loadedChild = loaded.RenderObjects.Single(item => item.Name == "Child");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(document.SchemaVersion, Is.EqualTo(14));
+            Assert.That(loadedChild.Node.Parent, Is.SameAs(loadedParent.Node));
+            Assert.That(loadedChild.Position, Is.EqualTo(new Vector3(2f, 0f, 0f)));
+        });
+    }
+
+    [Test]
     public void SceneOwnedLightingRoundTripsWithoutRendererStore()
     {
         using var scene = new Scene
@@ -288,7 +411,7 @@ public sealed class SceneDocumentTests
 
             Assert.Multiple(() =>
             {
-                Assert.That(fresh.RenderObjects, Has.Count.EqualTo(2));
+                Assert.That(fresh.RenderObjects.Count(item => !item.IsTransformGroup), Is.EqualTo(2));
                 Assert.That(fresh.RenderObjects.Single(item => item.Name == "Original").Position, Is.EqualTo(new Vector3(3f, 4f, 5f)));
                 Assert.That(freshLights.Enumerate().Single().Intensity, Is.EqualTo(7f));
                 Assert.That(SceneDocumentJson.Serialize(recaptured), Is.EqualTo(SceneDocumentJson.Serialize(saved)));
@@ -344,7 +467,7 @@ public sealed class SceneDocumentTests
             SceneDocument captured = new SceneDocumentWriter().CreateDocument(scene, lights);
             Assert.Multiple(() =>
             {
-                Assert.That(SceneDocument.CurrentSchemaVersion, Is.EqualTo(13));
+                Assert.That(SceneDocument.CurrentSchemaVersion, Is.EqualTo(14));
                 Assert.That(SceneDocumentJson.Serialize(captured),
                     Is.EqualTo(SceneDocumentJson.Serialize(source)));
                 Assert.That(captured.Dependencies.Single().Path,

@@ -4,4 +4,5 @@ namespace Njulf.Core.Scene;
 public sealed class ModelInstance : Model
 {
     internal Scene? AttachedScene { get; set; }
+    public SceneNode PlacementRoot { get; internal set; } = new();
 }
