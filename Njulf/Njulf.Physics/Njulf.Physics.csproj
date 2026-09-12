@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
+    <ProjectReference Include="..\Njulf.Graphics\Njulf.Graphics.csproj" />
+    <PackageReference Include="Jitter2" Version="[2.8.11]" />
+  </ItemGroup>
+</Project>

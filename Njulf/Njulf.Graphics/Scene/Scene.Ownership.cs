@@ -15,6 +15,8 @@ public partial class Scene
     private static readonly ConditionalWeakTable<object, Membership> Memberships = new();
     private readonly HashSet<object> _members = new(ReferenceEqualityComparer.Instance);
     private bool _detaching;
+    /// <summary>Raised after an entity loses its final scene membership, for removal or transfer of external bindings.</summary>
+    public event Action<object>? EntityRemoved;
     public SceneEnvironment? Environment { get; set; }
     private readonly List<SceneLight> _lights = new();
     private readonly System.Collections.ObjectModel.ReadOnlyCollection<SceneLight> _readOnlyLights;
@@ -210,6 +212,7 @@ public partial class Scene
 
     private void ReleaseMembership(object entity)
     {
+        bool removed = false;
         lock (Memberships)
         {
             if (Memberships.TryGetValue(entity, out var membership) && ReferenceEquals(membership.Owner, this) &&
@@ -217,18 +220,22 @@ public partial class Scene
             {
                 Memberships.Remove(entity);
                 _members.Remove(entity);
+                removed = true;
             }
         }
+        if (removed) EntityRemoved?.Invoke(entity);
     }
 
     private void ReleaseAllMemberships(object entity)
     {
+        bool removed;
         lock (Memberships)
         {
             if (Memberships.TryGetValue(entity, out var membership) && ReferenceEquals(membership.Owner, this))
                 Memberships.Remove(entity);
-            _members.Remove(entity);
+            removed = _members.Remove(entity);
         }
+        if (removed) EntityRemoved?.Invoke(entity);
     }
 
     private void ReleaseClearedMemberships()

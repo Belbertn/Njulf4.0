@@ -1,0 +1,152 @@
+{
+  "DateUtc": "2026-09-12T18:48:38.5797070Z",
+  "Applied": true,
+  "KeepDays": 2,
+  "TotalBytes": 14614517018,
+  "TotalFiles": 5172.0,
+  "FreeBytesBefore": 263017414656,
+  "FreeBytesAfter": 277426704384,
+  "Groups": [
+    {
+      "Path": "artifacts/scene-views-20260910",
+      "Files": 1423,
+      "Bytes": 3504987737
+    },
+    {
+      "Path": "artifacts/game-template",
+      "Files": 2275,
+      "Bytes": 2772964275
+    },
+    {
+      "Path": ".perf-loop-runs/secondary-views-20260906",
+      "Files": 8,
+      "Bytes": 1876450537
+    },
+    {
+      "Path": "artifacts/c-drive-migration-20260907",
+      "Files": 217,
+      "Bytes": 1680485942
+    },
+    {
+      "Path": "artifacts/framework-contracts",
+      "Files": 143,
+      "Bytes": 1011663971
+    },
+    {
+      "Path": "artifacts/ray-shadow-specks-20260908",
+      "Files": 238,
+      "Bytes": 733225191
+    },
+    {
+      "Path": "artifacts/game-workflow",
+      "Files": 357,
+      "Bytes": 640631674
+    },
+    {
+      "Path": "artifacts/framework-api",
+      "Files": 103,
+      "Bytes": 411584135
+    },
+    {
+      "Path": ".perf-loop-runs/ddgi-bordered-atlas-20260906",
+      "Files": 17,
+      "Bytes": 374634472
+    },
+    {
+      "Path": ".codex-tmp/sphere-shooter-tutorial-check",
+      "Files": 53,
+      "Bytes": 304601604
+    },
+    {
+      "Path": ".codex-tmp/pfm-preview",
+      "Files": 21,
+      "Bytes": 296584138
+    },
+    {
+      "Path": ".tmp/surface-image-check",
+      "Files": 27,
+      "Bytes": 291561015
+    },
+    {
+      "Path": ".tmp",
+      "Files": 10,
+      "Bytes": 248833040
+    },
+    {
+      "Path": ".perf-loop-runs/reflection-lod-20260907",
+      "Files": 4,
+      "Bytes": 99533216
+    },
+    {
+      "Path": ".perf-loop-runs/tile-diagnostics-20260907",
+      "Files": 3,
+      "Bytes": 74649912
+    },
+    {
+      "Path": "artifacts/pipeline-extraction",
+      "Files": 86,
+      "Bytes": 68321642
+    },
+    {
+      "Path": ".tmp/hiz-visibility-20260908",
+      "Files": 8,
+      "Bytes": 63211949
+    },
+    {
+      "Path": "artifacts/gtao-loop-verification-20260907-075724",
+      "Files": 8,
+      "Bytes": 49914976
+    },
+    {
+      "Path": "artifacts/timing",
+      "Files": 115,
+      "Bytes": 45754316
+    },
+    {
+      "Path": ".codex-tmp/vertical-gi-refresh-20260908",
+      "Files": 1,
+      "Bytes": 24883304
+    },
+    {
+      "Path": ".codex-tmp/jitter-integration",
+      "Files": 39,
+      "Bytes": 22582582
+    },
+    {
+      "Path": "artifacts/material-glass",
+      "Files": 5,
+      "Bytes": 13201480
+    },
+    {
+      "Path": "artifacts/local-shadows",
+      "Files": 3,
+      "Bytes": 3225231
+    },
+    {
+      "Path": "artifacts/effects",
+      "Files": 2,
+      "Bytes": 357198
+    },
+    {
+      "Path": "artifacts/framework-api-typed",
+      "Files": 2,
+      "Bytes": 301910
+    },
+    {
+      "Path": "artifacts/content-validation",
+      "Files": 1,
+      "Bytes": 212160
+    },
+    {
+      "Path": "artifacts/sprites",
+      "Files": 1,
+      "Bytes": 156599
+    },
+    {
+      "Path": ".perf-loop-runs/shader-identity-20260906",
+      "Files": 2,
+      "Bytes": 2812
+    }
+  ],
+  "Failures": []
+}

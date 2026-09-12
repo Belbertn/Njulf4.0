@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Jitter2": {
+        "type": "Direct",
+        "requested": "[2.8.11, 2.8.11]",
+        "resolved": "2.8.11",
+        "contentHash": "7XU9oprz7B2oIU4ZCohoMxKQAhou4hufnZi7WTJ4MgHPd6lJiYSiVoMa/N9dhOFZW2Kcav+kGHHyaGu18BpaWg=="
+      },
+      "njulf.core": {
+        "type": "Project"
+      },
+      "njulf.graphics": {
+        "type": "Project",
+        "dependencies": {
+          "Njulf.Core": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

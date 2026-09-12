@@ -39,6 +39,8 @@ namespace Njulf.Core.Scene
         private Color _ambientLight = new(0.2f, 0.2f, 0.2f, 1f);
 
         public event Action<SceneMutation>? Mutated;
+        /// <summary>Raised when all registrations must be released, including Clear/Dispose on an empty scene.</summary>
+        public event Action? Cleared;
         public event Action<RenderObjectMutation>? RenderObjectMutated;
         public ulong MutationSerial => _mutationSerial;
         /// <summary>
@@ -700,6 +702,7 @@ namespace Njulf.Core.Scene
 
         private void PublishGlobalClearMutation()
         {
+            Cleared?.Invoke();
             if (_renderObjects.Count == 0 &&
                 _particleEffects.Count == 0 &&
                 _volumetricDensityVolumes.Count == 0 &&
