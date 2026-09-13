@@ -14,7 +14,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class BloomPass : RenderPassBase
+    internal sealed unsafe class BloomPass : RenderPassBase
     {
         private const string EntryPoint = "main";
 

@@ -57,7 +57,7 @@ public sealed class PhysicsGeometryTests
         Assert.That(physics.Raycast(new(5, 0, 0), Vector3.UnitZ, 10, out hit), Is.True);
         Assert.That(hit.Distance, Is.EqualTo(4.5).Within(.003));
         var mesh = ColliderShape.TriangleMesh([new(0,0,0), new(1,0,0), new(0,1,0)], [0,1,2]);
-        var transform = Matrix4x4.CreateScale(new(2,3,1)) * Matrix4x4.CreateTranslation(new(10,0,5));
+        var transform = Matrix4x4.CreateScale(2, 3, 1) * Matrix4x4.CreateTranslation(new(10,0,5));
         physics.Register(Guid.NewGuid(), [mesh.WithLocalTransform(transform)]);
         Assert.That(physics.Raycast(new(10.25f,.25f,0), Vector3.UnitZ, 10, out hit), Is.True);
         Assert.That(hit.Distance, Is.EqualTo(5).Within(.003));

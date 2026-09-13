@@ -19,7 +19,7 @@ namespace Njulf.Rendering.Pipeline;
 /// dispatch; it clears every command before the GPU-sized schedule chain is
 /// consumed, so an empty transaction cannot replay work from a prior frame.
 /// </summary>
-public sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
+internal sealed unsafe class SimpleDdgiSchedulePass : RenderPassBase
 {
     private static readonly string[] ShaderNames =
     [

@@ -15,7 +15,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class SkinningPass : IDisposable
+    internal sealed unsafe class SkinningPass : IDisposable
     {
         private const string EntryPoint = "main";
         private const uint WorkgroupSize = 64;

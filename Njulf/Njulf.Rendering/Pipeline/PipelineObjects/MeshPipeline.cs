@@ -72,7 +72,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         bool BindRayScene,
         bool BindReceiverCache);
 
-    public sealed unsafe partial class MeshPipeline : IDisposable
+    internal sealed unsafe partial class MeshPipeline : IDisposable
     {
         private const string EntryPoint = "main";
         private const string ForwardSimpleFullInputMeshShaderName =

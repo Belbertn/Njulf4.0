@@ -12,7 +12,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class SpotShadowPass : RenderPassBase
+    internal sealed unsafe class SpotShadowPass : RenderPassBase
     {
         // ShadowSettings clamps this to 32 and SpotShadowAtlas has the same record capacity.
         private const int CachedLightLabelCapacity = 32;

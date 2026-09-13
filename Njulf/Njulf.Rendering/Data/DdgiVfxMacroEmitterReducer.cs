@@ -45,7 +45,7 @@ public readonly record struct DdgiVfxMacroReductionResult(
 /// The stateful deadband controls hierarchy refits only; published source power
 /// is never temporally blurred in the lighting result.
 /// </summary>
-public sealed class DdgiVfxMacroEmitterReducer
+internal sealed class DdgiVfxMacroEmitterReducer
 {
     public const int DefaultMaximumSourceCount = 256;
     private const float MinimumAutomaticAdmissionSeconds = 0.1f;

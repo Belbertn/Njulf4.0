@@ -14,7 +14,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class GpuParticleResetPass : IDisposable
+    internal sealed unsafe class GpuParticleResetPass : IDisposable
     {
         private const string EntryPoint = "main";
         private const uint WorkgroupSize = 256;

@@ -15,7 +15,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class GpuParticleSimulatePass : IDisposable
+    internal sealed unsafe class GpuParticleSimulatePass : IDisposable
     {
         private const string EntryPoint = "main";
         private const uint BlendBucketCount = 5;

@@ -967,7 +967,7 @@ internal readonly record struct SimpleDdgiGuidingDistributionResourceSnapshot(
 /// owner for bindless slot 203; an exact source-cache handshake is mandatory
 /// before any C3 buffer or pipeline can be created.
 /// </summary>
-public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
+internal sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
 {
     private const ulong HeaderBytes = SimpleDdgiGuidingGpuAbi.HeaderByteCount;
 

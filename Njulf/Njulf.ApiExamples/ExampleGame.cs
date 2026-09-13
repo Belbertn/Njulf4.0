@@ -5,6 +5,7 @@ using Njulf.Core;
 using Njulf.Core.Camera;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Framework;
 using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Rendering.Diagnostics;

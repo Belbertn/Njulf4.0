@@ -8,7 +8,7 @@ using CoreVector4 = Njulf.Core.Math.Vector4;
 
 namespace Njulf.Rendering.Data
 {
-    public static class DirectionalShadowDataBuilder
+    internal static class DirectionalShadowDataBuilder
     {
         public static GPUShadowData Build(
             ICamera camera,

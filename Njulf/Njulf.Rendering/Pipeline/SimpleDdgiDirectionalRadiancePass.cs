@@ -12,7 +12,7 @@ namespace Njulf.Rendering.Pipeline;
 /// parallel across probes and reads every source exactly once; the bounded
 /// native programs retain one render-graph timing and rollback boundary.
 /// </summary>
-public sealed unsafe class SimpleDdgiDirectionalRadiancePass :
+internal sealed unsafe class SimpleDdgiDirectionalRadiancePass :
     SimpleDdgiComputePass
 {
     // This pass does not use the trace-private bit-9 ABI. Carry the manager's

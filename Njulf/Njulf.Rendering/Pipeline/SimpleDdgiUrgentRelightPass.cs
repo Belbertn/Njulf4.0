@@ -16,7 +16,7 @@ namespace Njulf.Rendering.Pipeline;
 /// consumes the normal frame budget, and leaves source-cache ownership pending
 /// for the ordinary post-forward transaction.
 /// </summary>
-public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
+internal sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
 {
     private const uint UrgentControlCounterWord = 95u;
 

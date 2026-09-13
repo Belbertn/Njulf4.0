@@ -11,7 +11,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class TransparentForwardPass : RenderPassBase
+    internal sealed unsafe class TransparentForwardPass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;

@@ -9,7 +9,7 @@ using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Data
 {
-    public class SceneRenderingData : IDisposable
+    internal class SceneRenderingData : IDisposable
     {
         public int FrameIndex { get; set; }
         public uint TemporalSampleIndex { get; set; }

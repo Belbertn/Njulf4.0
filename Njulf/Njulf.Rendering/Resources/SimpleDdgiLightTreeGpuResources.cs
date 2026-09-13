@@ -84,7 +84,7 @@ public readonly record struct SimpleDdgiLightTreeRuntimeDiagnostics(
 /// buffer. Old capacity generations are retained until renderer teardown,
 /// avoiding device-idle stalls and descriptor use-after-free.
 /// </summary>
-public sealed class SimpleDdgiLightTreeGpuResources : IDisposable
+internal sealed class SimpleDdgiLightTreeGpuResources : IDisposable
 {
     private const ulong StateReadbackBytes = 64UL;
     public const ulong ScratchHeaderWords = 16;

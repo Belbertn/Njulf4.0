@@ -45,7 +45,7 @@ internal readonly record struct SimpleDdgiProbePageTransactionPolicy(
 /// retirement for replaced generations. Page selection and mapping remain GPU
 /// authority; this class never builds or reads back a page list.
 /// </summary>
-public sealed unsafe class SimpleDdgiProbePageCache : IDisposable
+internal sealed unsafe class SimpleDdgiProbePageCache : IDisposable
 {
     private const int RetirementCapacity = 32;
 

@@ -15,7 +15,8 @@ public sealed partial class PhysicsScene
     private readonly HashSet<long> _overlapSeen = [];
 
     private bool Accept(IDynamicTreeProxy proxy) => _owners.TryGetValue(proxy, out var e) && e.Enabled &&
-        (e.Layer & _filter.LayerMask) != 0 && e.Owner != _filter.IgnoreOwner;
+        (e.Layer & _filter.LayerMask) != 0 && e.Owner != _filter.IgnoreOwner &&
+        (_filter.IncludeTriggers || !e.Settings.IsTrigger);
 
     private JVector Prepare(Vector3 origin, Vector3 direction, float maxDistance, QueryFilter? filter)
     {
@@ -30,6 +31,8 @@ public sealed partial class PhysicsScene
 
     /// <summary>Closest exact hit, with distance in world units. Initial overlap returns distance/normal zero.
     /// Invalid inputs throw; no hit returns false and a default hit.</summary>
+    /// <remarks>Direction is normalized internally and must be finite and nonzero. maxDistance is finite,
+    /// nonnegative and inclusive. Queries synchronize bound transforms and include triggers unless filtered out.</remarks>
     public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, out RaycastHit hit, QueryFilter? filter = null)
     {
         var d = Prepare(origin, direction, maxDistance, filter); var p = ToJ(origin);
@@ -41,6 +44,8 @@ public sealed partial class PhysicsScene
         hit = default; return false;
     }
 
+    /// <summary>Sweeps a positive-radius sphere to the closest hit. Distances use scene units; direction is normalized internally.</summary>
+    /// <remarks>Initial overlap returns zero distance/normal and the query origin as point. A miss returns false and a default hit.</remarks>
     public bool SweepSphere(Vector3 center, float radius, Vector3 direction, float maxDistance, out RaycastHit hit, QueryFilter? filter = null)
     {
         Positive(radius);

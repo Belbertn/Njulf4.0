@@ -15,7 +15,7 @@ namespace Njulf.Rendering.Data;
 /// stable primitive key only to break physically equivalent ties before
 /// publishing one payload.
 /// </summary>
-public static class FarFieldMaterialPayloadV2
+internal static class FarFieldMaterialPayloadV2
 {
     public const uint PayloadVersion = 4;
     public const uint MaterialOcclusionPayloadVersion = 4;

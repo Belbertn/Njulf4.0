@@ -5,6 +5,12 @@ namespace Njulf.Assets
     {
         /// <summary>Creates an independent lifetime sharing this manager's cache and device.</summary>
         IContentScope CreateScope() => throw new NotSupportedException("This content implementation does not support scopes.");
+        /// <summary>Loads a template owned by this content lifetime and returns a scene-owned independent instance.</summary>
+        /// <remarks>The host pumps creation/attachment on its device thread. Failed attachment releases the instance,
+        /// but a successfully loaded template remains content-owned. Remove the returned instance through Scene.Remove.</remarks>
+        Task<Njulf.Core.Scene.ModelInstance> LoadModelInstanceAsync(Njulf.Core.Scene.Scene scene, string path,
+            ContentLoadOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("This content implementation does not support model instantiation.");
         /// <summary>Creates a fresh scene owned by this content lifetime.</summary>
         Njulf.Core.Scene.Scene LoadScene(string path, Scenes.SceneLoadOptions? options = null) =>
             throw new NotSupportedException("This content implementation does not support scene loading.");

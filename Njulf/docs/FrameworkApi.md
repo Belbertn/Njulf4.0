@@ -8,7 +8,7 @@ The framework has three access levels on the same renderer and device:
 | Graphics | `Game.GraphicsDevice`, `Njulf.Graphics` | Create typed resources, apply settings, inspect capabilities. |
 | Vulkan | `Njulf.Graphics.Vulkan` | Inspect native allocations and register scoped rendering passes. |
 
-Reference **Njulf.Framework** for `Njulf.Core.Game`. The host composes Core, Rendering,
+Reference **Njulf.Framework** for `Njulf.Framework.Game`. The host composes Core, Rendering,
 Assets and Input; Core remains independent of those concrete implementations.
 `GameTime` and resource interfaces live in Core. Owned graphics wrappers live in
 Rendering. Framework and Rendering emit XML documentation for IntelliSense.
@@ -48,6 +48,9 @@ contracts have documentation regression checks; Input treats missing XML comment
 Legacy specialist APIs still have documentation gaps and are not covered by a blanket warning
 suppression removal. Run `tools/verify-framework-packages.ps1` after a Development build to
 check actual local packages and compile consumers without project references.
+
+For local/world placement, active-camera switching, follow/orbit controllers, and async
+model instantiation, see [Transforms and cameras](TransformsAndCameras.md).
 
 ## Typed button input
 
@@ -89,6 +92,7 @@ No compatibility wrappers are provided.
 
 ```csharp
 using Njulf.Core;
+using Njulf.Framework;
 using Njulf.Core.Math;
 using Njulf.Graphics;
 using Njulf.Rendering.Data;
@@ -126,6 +130,122 @@ registrations before the provider is built. Override `CreateDefaultCamera` for a
 camera, or register `ICamera`. Do not repeat AddRendering/AddAssets/AddInput in a game.
 Scene is owned by Game rather than registered as a second DI singleton.
 
+## Custom hosts with AddRendering
+
+Reference Njulf.Rendering (and Njulf.Assets for content). Import
+`Microsoft.Extensions.DependencyInjection` for the registration extensions.
+`AddRendering(window)` uses default options; `AddRendering(window, configure)`
+runs the startup callback immediately. Neither starts a window, initializes a renderer,
+registers input/content, or supplies a game loop. Register it once per provider/window.
+A `Game` subclass already has this setup and should use `ConfigureRendering` instead.
+
+This complete static example uses an emissive triangle and closes through the window's
+normal close control:
+
+```csharp
+using Microsoft.Extensions.DependencyInjection;
+using Njulf.Assets;
+using Njulf.Core.Camera;
+using Njulf.Core.Interfaces;
+using Njulf.Core.Math;
+using Njulf.Core.Scene;
+using Njulf.Graphics;
+using Silk.NET.Windowing;
+
+using var window = Window.Create(WindowOptions.DefaultVulkan);
+var scene = new Scene();
+var camera = new FirstPersonCamera(new Vector3(0, 0, 5));
+ServiceProvider? provider = null;
+IRenderer? renderer = null;
+IContentUploadPump? uploads = null;
+
+window.Load += () =>
+{
+    var services = new ServiceCollection();
+    services.AddRendering(window, options =>
+    {
+        options.InitialSettings.ApplyQualityPreset(RenderQualityPreset.Low);
+        options.InitialSettings.ResolutionScale = 1;
+    });
+    services.AddAssets(AppContext.BaseDirectory); // Optional; rendering alone does not register content.
+    provider = services.BuildServiceProvider();
+    renderer = provider.GetRequiredService<IRenderer>();
+    renderer.Initialize(); // Native window/surface now exists.
+    uploads = provider.GetService<IContentUploadPump>();
+    camera.AspectRatio = (float)window.FramebufferSize.X / window.FramebufferSize.Y;
+
+    var graphics = renderer.GetGraphicsDevice();
+    using var mesh = graphics.CreateMesh(
+        [new Vector3(-1, -1, 0), new Vector3(1, -1, 0), new Vector3(0, 1, 0)],
+        [0u, 1u, 2u]);
+    using var material = graphics.CreateMaterial(MaterialDefinition.Default with
+    {
+        EmissiveFactor = Vector3.One, EmissiveStrength = 1
+    });
+    scene.Add(graphics.CreateRenderObject(mesh, material));
+    // Synchronous preparation keeps this static example small; it may block startup.
+    if (renderer is IScenePipelinePreparer preparer) preparer.PrepareScene(scene, camera);
+};
+window.Update += seconds =>
+{
+    uploads?.ProcessFrame(TimeSpan.FromMilliseconds(2), maximumCallbacks: 1);
+    scene.Update((float)seconds);
+};
+window.FramebufferResize += size =>
+{
+    renderer?.Resize(size.X, size.Y);
+    if (size.X > 0 && size.Y > 0) camera.AspectRatio = (float)size.X / size.Y;
+};
+window.Render += _ =>
+{
+    if (renderer == null || !renderer.BeginFrame()) return;
+    try { renderer.DrawScene(scene, camera); }
+    catch (Exception failure)
+    {
+        if (renderer is not IRendererFrameState { IsFrameInProgress: false })
+        {
+            try { renderer.EndFrame(); }
+            catch (Exception cleanup) { failure.Data["FrameCleanupFailure"] = cleanup; }
+        }
+        throw;
+    }
+    renderer.EndFrame();
+};
+try { window.Run(); }
+finally
+{
+    try { scene.Dispose(); }
+    finally { provider?.Dispose(); } // DI releases content, renderer and registered dependencies.
+}
+// The host-owned window is disposed last by its using declaration.
+```
+
+The host owns the window and provider; objects resolved from the provider are borrowed.
+Dispose scene/independently owned resources before the provider, and the window last.
+Do not separately dispose dependencies resolved from DI. Resource operations, rendering,
+and shutdown belong on the window/device thread.
+
+For asynchronous content, keep pumping `IContentUploadPump.ProcessFrame` while waiting,
+including startup and shutdown. Never block the device thread with `.Wait()` or `.Result`.
+Cancel and drain outstanding loads before disposing their resources; marshal continuations
+that mutate scenes/resources onto the device thread. Input requires a native input context,
+`AddInput`, and polling before gameplay. These are additional host responsibilities;
+use `Game` when its lifecycle fits.
+
+An animated host also supplies `IRendererGameTime.SetGameTime` after a successful
+`BeginFrame` and before drawing, including scaled/unscaled time and pause.
+Call `EndFrame` only for a successfully begun, still-active frame; propagate callback
+failures after cleanup. The example uses synchronous scene pipeline preparation;
+hosts needing responsive loading can use the progressive preparation contracts.
+
+Use `RenderingOptions.InitialSettings` before construction. During the loop, use
+`renderer.GetGraphicsDevice().Settings.Preview/ApplyAsync` and inspect the result's
+outcome and per-field reasons. Apply requests complete at frame boundaries; continue
+rendering rather than blocking for the receipt. Requested values are distinct from
+the actual feature status reported by capabilities.
+Window creation is configured separately; see [startup modes](GettingStarted.md#configure-the-startup-window).
+
+
 ## Lifecycle and time
 
 1. Construction creates Scene. Other services throw a clear InvalidOperationException
@@ -144,7 +264,8 @@ Scene is owned by Game rather than registered as a second DI singleton.
    See [simulation timing and pause](GameTiming.md) for the complete contracts and example.
 5. Exit or Dispose during a callback requests exit. After callbacks return, shutdown
    stops content admission and pumps cancellation/continuations until outstanding loads and
-   GPU uploads settle, drains preparation, calls Unload once if Initialize started, releases Scene,
+   GPU uploads and pending level transitions settle, drains preparation, calls Unload once if Initialize started,
+   releases the managed level and optional modules, releases Scene,
    disposes the renderer/provider/input, and finally destroys the native window.
    Services remain available in Unload. Callback exceptions are rethrown from Run after
    cleanup; a cleanup failure is attached to the original exception.
@@ -152,6 +273,67 @@ Scene is owned by Game rather than registered as a second DI singleton.
 A Game instance runs once. Dispose is idempotent, including before Run. Service access
 following disposal throws ObjectDisposedException. Game owns the current scene;
 advanced ExchangeScene callers own and must dispose the returned previous scene.
+
+### Optional host modules
+
+`RegisterModule` transfers ownership of an `IGameModule` during initialization or initial
+loading. Re-registering the same instance is rejected. Framework depends only on the Core
+contract; Physics and Audio remain optional, and manual usage remains available.
+
+Host order is input → `Update` → zero or more (`FixedUpdate` → physics step and contact
+delivery) → query synchronization → spatial audio → audio maintenance. Registration order
+breaks ties within a phase; host modules precede level modules in the same phase. Modules
+run even when gameplay overrides omit `base`. Exit or callback failure stops subsequent work.
+
+`PhysicsHostModule` owns and drives a `PhysicsScene`. Simulation requires fixed mode;
+invalid registration/activation or disabling fixed mode throws. Query-only worlds work in
+either mode and synchronize while paused. `Step` still delivers contacts after publishing poses.
+
+One `AudioHostModule` owns the output device and publishes the camera listener before unscaled
+audio maintenance. `AudioScope` publishes emitter transforms and follows effective pause,
+including zero time scale and configured focus pause. Only host-paused playback resumes;
+explicit `Pause`/`Stop` is preserved. Direct `AudioSystem` sources, such as music, ignore host
+pause. Time scaling does not change pitch. See [audio](Audio.md).
+
+### Managed levels
+
+`LoadLevelAsync` creates a `GameLevel` owning an empty scene and independent content scope.
+Populate the scene directly, or await `level.LoadSceneAsync` before registering local modules.
+Register resources as they are created so a failed loader can clean them up. Await all loader
+work and use its token; ordinary awaits resume on the game/device thread.
+
+```csharp
+// Initialize: optional output device; directly created music sources survive level changes.
+audio = RegisterModule(new AudioHostModule(new AudioSystem())).Audio;
+IsFixedTimeStep = true;
+
+// LoadAsync or a later transition: the old level continues until this loader succeeds.
+await LoadLevelAsync(async (level, token) =>
+{
+    await level.LoadSceneAsync("Scenes/next.njscene.json", cancellationToken: token);
+    var world = level.RegisterModule(new PhysicsHostModule(
+        new PhysicsScene(PhysicsMode.Simulation, level.Scene))).World;
+    // Register this scene's colliders with world here.
+    var sounds = level.RegisterModule(audio.CreateScope());
+    var clip = sounds.LoadWav("Assets/Audio/ambience.wav");
+    var ambience = sounds.CreateSource(clip, spatial: false);
+    ambience.Looping = true;
+    ambience.Play(); // Waits for candidate activation.
+}, cancellationToken);
+
+await UnloadLevelAsync(); // Empty scene; root content and music survive.
+```
+
+Scene and module activation commit together between callbacks. Cancellation/loading failure
+preserves the old level. Only one transition may be pending; overlapping load requests throw.
+Unloading cancels/drains loading; the load's caller observes its failure, while unload still
+releases the active level. Shutdown drains transitions before disposing their dependencies.
+
+After detachment, local audio is released before physics, then the scene and content scope.
+Scope-loaded scenes are released through their content owner exactly once. Root resources
+survive. A cleanup failure after commit leaves the new level active and faults the load task.
+`CurrentLevel` is borrowed: do not dispose it directly or call `ExchangeScene` while it is active.
+The runnable `content` API example demonstrates loading, replacement, unloading and shared reuse.
 
 ## Content and scene ownership
 
@@ -445,13 +627,18 @@ describe requests; feature activation is reported separately by `GraphicsDevice.
 | Category | API |
 | --- | --- |
 | Startup device/window/validation configuration | `ConfigureRendering(RenderingOptions)` and host properties, before Run; restart to change |
-| Common quality and diagnostics | `GraphicsDevice.Settings`: preset, scale, exposure, tone mapper, auto exposure, AA/AO modes, shadow enable/size, reflection/GI modes, async mode, timing, CPU snapshots and debug overlay |
+| Common quality and diagnostics | `GraphicsDevice.Settings`: quality/shadow presets, scale, exposure, tone mapper, auto exposure, AA/AO modes, shadow enable/size, reflection/GI modes, async mode, timing, CPU snapshots and debug overlay |
 | Authored scene state | `Scene.Lights` and `Scene.Environment` |
 | Specialist controls | Existing advanced mutable `VulkanRenderer.Settings` |
 
 Legacy direct writes remain supported without receipts, and remain visible in current settings
 and subsequent execution diagnostics. JSON schema, defaults and migrations are unchanged.
 The editor’s corresponding common controls use the controller and display pending/result status.
+
+Shadow-only changes use `GraphicsSettingsChange.ShadowPreset` (`Low`, `Medium`, `High`, `Ultra`).
+Apply order is overall quality, shadow tier, then explicit overrides. At startup use
+`options.InitialSettings.Shadows.ApplyPreset(...)` inside `ConfigureRendering`.
+See [the settings reference](../RendererSettingsReference.md) for tier values and application timing.
 
 Capabilities distinguish hardware support, device enablement, requested and latest-frame active
 state with reasons. They cover custom resources/passes, mesh shaders, ray queries, async compute,

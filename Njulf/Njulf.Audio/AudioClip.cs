@@ -32,6 +32,7 @@ public sealed class AudioClip : IDisposable
     {
         if (Buffer == 0) return;
         Owner.Check();
+        Owner.ReclaimOneShots();
         if (Attachments != 0) throw new InvalidOperationException("Dispose all sources using this clip before disposing the clip.");
         Owner.Al.DeleteBuffer(Buffer); Buffer = 0;
         Owner.Remove(this);

@@ -5,7 +5,7 @@ using Silk.NET.Vulkan;
 namespace Njulf.Rendering.Pipeline;
 
 /// <summary>Frozen forward MRT contract for deferred reflection receivers.</summary>
-public static class ForwardHybridReflectionReceiverContract
+internal static class ForwardHybridReflectionReceiverContract
 {
     public const uint ShaderSemanticVersion = 2u;
     public const Format ReceiverPayloadFormat = Format.R32G32B32A32Uint;
@@ -136,7 +136,7 @@ public readonly record struct ForwardHybridReflectionReceiverPipelineConfigurati
         new(true, ForwardHybridReflectionReceiverContract.ShaderSemanticVersion);
 }
 
-public sealed class ForwardHybridReflectionReceiverAttachmentBinding
+internal sealed class ForwardHybridReflectionReceiverAttachmentBinding
 {
     public ForwardHybridReflectionReceiverAttachmentBinding(
         RenderTarget receiverPayload,

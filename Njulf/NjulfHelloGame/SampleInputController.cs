@@ -290,7 +290,7 @@ internal sealed class SampleInputController
     private readonly InputAction _actionToggleSoftParticles;
     private readonly InputAction _actionToggleSpotShadows;
     private readonly InputAction _actionToggleTransparent;
-    private readonly InputManager? _rawInput;
+    private readonly Njulf.Input.Advanced.INativeInputIntegration? _rawInput;
     private readonly System.Action _exit;
     private readonly Njulf.Rendering.VulkanRenderer? _renderer;
     private readonly LightManager? _lightManager;
@@ -460,7 +460,7 @@ internal sealed class SampleInputController
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
         _sceneProvider = sceneProvider ?? throw new ArgumentNullException(nameof(sceneProvider));
         _input = input ?? throw new ArgumentNullException(nameof(input));
-        _rawInput = input as InputManager;
+        _rawInput = input as Njulf.Input.Advanced.INativeInputIntegration;
         _actionAmbientOcclusionIntensityDown = input.GetAction(AmbientOcclusionIntensityDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
         _actionAmbientOcclusionIntensityUp = input.GetAction(AmbientOcclusionIntensityUp) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");
         _actionAmbientOcclusionRadiusDown = input.GetAction(AmbientOcclusionRadiusDown) ?? throw new InvalidOperationException("Configure sample input before constructing its controller.");

@@ -38,7 +38,7 @@ public readonly record struct DdgiEmissiveTableCacheDiagnostics(
 /// source budget and avoids scene-triangle enumeration, priority selection,
 /// and alias-table construction.
 /// </summary>
-public sealed class DdgiEmissiveTableCache
+internal sealed class DdgiEmissiveTableCache
 {
     private readonly GPUDdgiEmissiveSource[] _sources;
     private readonly GPUDdgiEmissiveSurface[] _surfaces;

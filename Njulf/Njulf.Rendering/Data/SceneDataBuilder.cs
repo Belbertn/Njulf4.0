@@ -26,7 +26,7 @@ namespace Njulf.Rendering.Data
     /// This type owns allocation, upload, bindless registration, growth, and synchronization
     /// for the scene buffer contract.
     /// </summary>
-    public sealed unsafe partial class SceneDataBuilder : IDisposable
+    internal sealed unsafe partial class SceneDataBuilder : IDisposable
     {
         private const int TileSize = RenderingConstants.ForwardClusterTileSize;
         private const int ClusterDepthSliceCount =

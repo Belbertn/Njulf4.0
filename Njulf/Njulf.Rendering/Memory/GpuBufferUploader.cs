@@ -66,7 +66,7 @@ namespace Njulf.Rendering.Memory
         public int ElementCount { get; }
     }
 
-    public static unsafe class GpuBufferUploader
+    internal static unsafe class GpuBufferUploader
     {
         /// <summary>
         /// Uploads packed, non-overlapping runs with one staging allocation and

@@ -146,6 +146,61 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void BindResetAndProceduralEditsPublishHierarchySkinAndRevision()
+        {
+            var skeleton = CreateTwoJointSkeleton();
+            var pose = new AnimationPose(2);
+            pose.ResetToBindPose(skeleton);
+            Assert.That(pose.LocalMatrices[1].Translation, Is.EqualTo(Vector3.UnitX));
+            Assert.That(pose.GlobalMatrices[1].Translation, Is.EqualTo(Vector3.UnitX));
+            pose.SetLocalTransform(0, new(new(0, 2, 0), Quaternion.Identity, Vector3.One));
+            pose.BuildGlobalMatrices(skeleton);
+            Assert.That(pose.GlobalMatrices[1].Translation, Is.EqualTo(new Vector3(1, 2, 0)));
+            pose.ResetToBindPose(skeleton);
+            Assert.That(pose.GlobalMatrices[1].Translation, Is.EqualTo(Vector3.UnitX));
+
+            var skin = new Skin { Skeleton = skeleton, JointIndices = new[] { 1 },
+                InverseBindMatrices = new[] { Matrix4x4.CreateTranslation(-1, 0, 0) } };
+            var animator = new Animator(skeleton, new[] { skin });
+            ulong revision = animator.PoseRevision;
+            animator.EditPose(p => p.SetLocalTransform(0, new(new(0, 2, 0), Quaternion.Identity, Vector3.One)));
+            Assert.That(animator.PoseRevision, Is.GreaterThan(revision));
+            Assert.That(animator.CurrentPose.GlobalMatrices[1].Translation, Is.EqualTo(new Vector3(1, 2, 0)));
+            Assert.That(animator.GetSkinMatrices(0)[0].Translation, Is.EqualTo(new Vector3(0, 2, 0)));
+            animator.Stop();
+            Assert.That(animator.GetSkinMatrices(0)[0], Is.EqualTo(Matrix4x4.Identity));
+        }
+
+        [Test]
+        public void BindHierarchySupportsParentsAfterChildrenAndRejectsCycles()
+        {
+            var root = new SkeletonJoint { ParentIndex = -1, LocalBindTransform = Matrix4x4.CreateTranslation(0, 2, 0) };
+            var child = new SkeletonJoint { ParentIndex = 1, LocalBindTransform = Matrix4x4.CreateTranslation(3, 0, 0) };
+            var pose = new AnimationPose(2);
+            pose.ResetToBindPose(new Skeleton { Joints = new[] { child, root } });
+            Assert.That(pose.GlobalMatrices[0].Translation, Is.EqualTo(new Vector3(3, 2, 0)));
+            Assert.Throws<ArgumentException>(() => pose.BuildGlobalMatrices(new Skeleton { Joints = new[] { child, child } }));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void CubicClipIsRejectedBeforePlaybackStateOrPoseChanges(bool fade)
+        {
+            var animator = new Animator(CreateTwoJointSkeleton());
+            var current = new AnimationClip { Name = "Current", DurationSeconds = 2 };
+            animator.Play(current); animator.Seek(.5f);
+            ulong revision = animator.PoseRevision;
+            var invalid = new AnimationClip { Name = "CubicWalk", Channels = new[] {
+                new AnimationChannel { TargetJointIndex = 1, Path = AnimationChannelPath.Translation,
+                    Sampler = new AnimationSampler { Interpolation = AnimationInterpolation.CubicSpline } } } };
+            var error = Assert.Throws<NotSupportedException>(() => { if (fade) animator.CrossFade(invalid, 1); else animator.Play(invalid); });
+            Assert.That(error!.Message, Does.Contain("CubicWalk").And.Contain("channel 0").And.Contain("Linear or Step"));
+            Assert.That(animator.CurrentClip, Is.SameAs(current));
+            Assert.That(animator.TimeSeconds, Is.EqualTo(.5f));
+            Assert.That(animator.PoseRevision, Is.EqualTo(revision));
+        }
+
         private static Skeleton CreateTwoJointSkeleton()
         {
             var root = new SkeletonJoint

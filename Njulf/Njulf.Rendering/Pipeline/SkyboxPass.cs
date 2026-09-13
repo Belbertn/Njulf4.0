@@ -11,7 +11,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class SkyboxPass : RenderPassBase
+    internal sealed unsafe class SkyboxPass : RenderPassBase
     {
         private readonly SkyboxPipeline _skyboxPipeline;
         private readonly RenderTargetManager _renderTargets;

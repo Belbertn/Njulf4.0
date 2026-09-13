@@ -48,6 +48,7 @@ namespace Njulf.Rendering;
                 Environment.GetEnvironmentVariable(
                     "NJULF_DIRECTIONAL_SHADOW_QUALIFICATION_MANIFEST"));
 
+        /// <summary>Selects Standard validation when true and Off when false. Defaults follow the validation environment policy.</summary>
         public bool EnableValidation
         {
             get => _validationSettings.EnableValidation;
@@ -57,6 +58,7 @@ namespace Njulf.Rendering;
             };
         }
 
+        /// <summary>Non-null startup validation policy; defaults are read from the environment.</summary>
         public RendererValidationSettings ValidationSettings
         {
             get => _validationSettings;

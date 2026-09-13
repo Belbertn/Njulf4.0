@@ -16,7 +16,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class SkinningManager : IDisposable
+    internal sealed unsafe class SkinningManager : IDisposable
     {
         private const uint InitialMatrixCapacity = 4096;
         private const uint InitialDispatchCapacity = 1024;

@@ -1,4 +1,4 @@
-namespace Njulf.Core;
+namespace Njulf.Framework;
 
 public abstract partial class Game
 {
@@ -9,7 +9,13 @@ public abstract partial class Game
     public bool IsFixedTimeStep
     {
         get => _gameClock.IsFixedTimeStep;
-        set { EnsureTimingThread(); ConfigureClock(fixedStep: value); }
+        set
+        {
+            EnsureTimingThread();
+            _modules?.Validate(value);
+            _levels?.Active?.Modules.Validate(value);
+            ConfigureClock(fixedStep: value);
+        }
     }
     /// <summary>Positive fixed simulation interval; defaults to 1/60 second. Changing it clears catch-up backlog.</summary>
     public TimeSpan TargetElapsedTime

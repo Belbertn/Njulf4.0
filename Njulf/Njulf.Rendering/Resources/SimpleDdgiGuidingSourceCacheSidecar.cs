@@ -56,7 +56,7 @@ public readonly record struct SimpleDdgiGuidingSourceCacheSnapshot(
 /// range. Reconciliation is a safe-transition operation: descriptor readers
 /// are completed before an old allocation is rebound or destroyed.
 /// </summary>
-public sealed unsafe class SimpleDdgiGuidingSourceCacheSidecar : IDisposable
+internal sealed unsafe class SimpleDdgiGuidingSourceCacheSidecar : IDisposable
 {
     // A disabled descriptor must be addressable, but it must never look like
     // one complete 64-byte direction/PDF payload.  Binding the whole shared

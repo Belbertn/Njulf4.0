@@ -290,7 +290,7 @@ public readonly record struct SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics(
 /// pipelines.  A caller must pass both the global prerequisite gate and a
 /// verified 48-byte producer contract before allocation can begin.
 /// </summary>
-public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
+internal sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
 {
     /// <summary>
     /// Producer classes whose complete write protocol is currently owned by

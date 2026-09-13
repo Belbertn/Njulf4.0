@@ -1,5 +1,50 @@
 # Gameplay input
 
+`Game.Input` exposes the neutral `IInputManager`. Native editor/UI integrations explicitly
+cast it to `Njulf.Input.Advanced.INativeInputIntegration` for raw events, native key polling
+and Silk cursor modes. `EditorInputBridge` consumes that interface. The hooks are borrowed,
+run on the game thread and retain raw event behavior during focus loss and rebinding;
+unsubscribe before host shutdown. Ordinary games use `Input.SetCursorMode(InputCursorMode)`
+and the neutral `TextInput` event.
+
+## Short bindings and fixed-step commands
+
+```csharp
+// During Load:
+var jump = Input.CreateButton("Jump", InputKey.Space, bufferPresses: true).Bind(GamepadButton.A);
+var move = Input.CreateWasd("Move").BindGamepadStick(GamepadStick.Left);
+var look = Input.CreateMouseLook("Look", sensitivity: .002f, bufferDeltas: true);
+var stickLook = Input.CreateGamepadStick("StickLook", GamepadStick.Right);
+
+// During FixedUpdate:
+if (jump.ConsumePressed()) Jump();
+Vector2 mouseDisplacement = look.ConsumeDelta();
+Vector2 movement = move.Value; // Held state remains available to every step.
+```
+
+Helpers create normal actions and bindings, so contexts, alternative bindings, rebinding,
+and JSON persistence continue to work. WASD uses normalized diagonals, +X right and +Y forward.
+Mouse-look is displacement in scaled pixels (+Y down); gamepad sticks are held values (+Y up)
+with the existing .15 radial dead zone. Apply elapsed seconds to stick rotation rates, not mouse
+displacements. The input example demonstrates these helpers in a 60 Hz fixed loop.
+
+Buffering is opt-in through `BufferPresses`/`BufferDeltas` or helper arguments. Only subsequent
+input snapshots enter the buffer. A pending press survives updates without simulation steps;
+multiple observed presses coalesce into one. `ConsumePressed()` clears it immediately, so later
+catch-up steps cannot replay it. Held buttons do not enqueue repeats. Delta actions accumulate
+displacements until `ConsumeDelta()`, then return zero until more input arrives. Scalar delta
+actions support the same API. Calling a consume method without enabling buffering throws.
+
+Consumption does not change `WasPressed`, `IsDown`, or `Value`. Existing unbuffered polling is
+unchanged. Buffers clear on `Reset`, disabling buffering, focus changes, rebinding suppression,
+binding-profile replacement, and context deactivation at the next snapshot. Cursor changes also
+clear buffered deltas. Buffering settings
+are gameplay configuration and are not saved as bindings. There is no timeout: games that pause
+without deactivating their context should call `Reset` if pending commands should be discarded.
+This preserves presses observed by input updates, not a press/release entirely between snapshots.
+
+## Ordinary input
+
 `Game.Input` exposes the complete ordinary input API. Cache actions during `Load`; the host publishes
 their values before each `Update`, and publishes all action states before button callbacks. Operations
 require the game thread. The manager owns actions; state access and binding changes throw after disposal.

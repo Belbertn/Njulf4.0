@@ -10,7 +10,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class WeightedOitCompositePass : RenderPassBase
+    internal sealed unsafe class WeightedOitCompositePass : RenderPassBase
     {
         private readonly WeightedOitCompositePipeline _pipeline;
         private readonly RenderTargetManager _renderTargets;

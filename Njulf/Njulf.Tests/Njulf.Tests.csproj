@@ -15,6 +15,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\Njulf.Audio\Njulf.Audio.csproj" />
+      <ProjectReference Include="..\Njulf.Audio.Assets\Njulf.Audio.Assets.csproj" />
       <ProjectReference Include="..\Njulf.Physics\Njulf.Physics.csproj" />
       <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
     <ProjectReference Include="..\Njulf.Graphics\Njulf.Graphics.csproj" />

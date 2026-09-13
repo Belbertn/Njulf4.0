@@ -478,7 +478,7 @@ namespace Njulf.Rendering.Diagnostics
             Array.Empty<SimpleDdgiLayoutVolumeTelemetry>());
     }
 
-    public static class SimpleDdgiLayoutTelemetryFactory
+    internal static class SimpleDdgiLayoutTelemetryFactory
     {
         public static SimpleDdgiLayoutTelemetry Create(
             SimpleDdgiLayoutReport? report,
@@ -696,7 +696,7 @@ namespace Njulf.Rendering.Diagnostics
                 reason);
     }
 
-    public static class SimpleDdgiProbeResidencyTelemetryFactory
+    internal static class SimpleDdgiProbeResidencyTelemetryFactory
     {
         public static SimpleDdgiProbeResidencyTelemetry Create(
             SimpleDdgiVolumeManager? manager)
@@ -1039,7 +1039,7 @@ namespace Njulf.Rendering.Diagnostics
             reason);
     }
 
-    public static class SimpleDdgiSchedulerPolicyTelemetryFactory
+    internal static class SimpleDdgiSchedulerPolicyTelemetryFactory
     {
         public static SimpleDdgiSchedulerPolicyTelemetry Create(SimpleDdgiSchedulerTelemetry telemetry)
         {
@@ -1218,7 +1218,7 @@ namespace Njulf.Rendering.Diagnostics
     /// It intentionally treats a requested feature without a viable runtime allocation as a
     /// fallback rather than claiming it is active.
     /// </summary>
-    public static class GiFeatureStateFactory
+    internal static class GiFeatureStateFactory
     {
         public static IReadOnlyList<GiFeatureState> Create(RendererDiagnostics diagnostics)
         {
@@ -1608,7 +1608,7 @@ namespace Njulf.Rendering.Diagnostics
     /// separate from GPU counter ingestion so delayed readback, camera transitions, and noisy
     /// individual samples cannot become false release warnings.
     /// </summary>
-    public sealed class GiWarningEvaluator
+    internal sealed class GiWarningEvaluator
     {
         public const uint MinimumSampleCount = 64;
         public const double SupportHoleFractionThreshold = 0.05;
@@ -1810,7 +1810,7 @@ namespace Njulf.Rendering.Diagnostics
                 : "cut=" + diagnostics.CaptureCamera.CameraCutSerial.ToString(CultureInfo.InvariantCulture);
     }
 
-    public static class GiDiagnosticWarningFactory
+    internal static class GiDiagnosticWarningFactory
     {
         public static IReadOnlyList<GiDiagnosticWarning> Create(
             RendererDiagnostics diagnostics,
@@ -2157,7 +2157,7 @@ namespace Njulf.Rendering.Diagnostics
                 : "cut=" + diagnostics.CaptureCamera.CameraCutSerial.ToString(CultureInfo.InvariantCulture);
     }
 
-    public static class GiResidencyReporter
+    internal static class GiResidencyReporter
     {
         public static GiResidencySnapshot Create(
             RendererDiagnostics diagnostics,
@@ -2337,7 +2337,7 @@ namespace Njulf.Rendering.Diagnostics
         private static ulong SaturatingAdd(ulong left, ulong right) => ulong.MaxValue - left < right ? ulong.MaxValue : left + right;
     }
 
-    public static class ResolvedGiSettingsMetadataFactory
+    internal static class ResolvedGiSettingsMetadataFactory
     {
         public static ResolvedGiSettingsMetadata Create(RendererDiagnostics diagnostics)
         {

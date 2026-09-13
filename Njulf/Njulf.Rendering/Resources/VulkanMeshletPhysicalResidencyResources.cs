@@ -36,7 +36,7 @@ public sealed record VulkanMeshletPhysicalResidencySnapshot(
 /// publication, while the two page/range tables are rewritten only in the
 /// frame slot whose fence has completed.
 /// </summary>
-public sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
+internal sealed class VulkanMeshletPhysicalResidencyResources : IDisposable
 {
     private const ulong MinimumStorageBufferBytes = 16;
     private const ulong FeedbackCounterBytes = 48;

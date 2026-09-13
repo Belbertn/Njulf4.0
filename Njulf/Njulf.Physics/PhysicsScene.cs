@@ -21,6 +21,8 @@ public sealed partial class PhysicsScene : IDisposable
         internal QueryProxy[] Proxies = [];
         internal RigidBody? Body;
         internal PhysicsPose Pose, PreviousKinematic;
+        internal PhysicsPose PreviousCompleted, CurrentCompleted;
+        internal long TeleportVersion;
         internal PhysicsPose? Target;
         internal Vector3 Center;
         internal SceneNode? Node;
@@ -47,19 +49,24 @@ public sealed partial class PhysicsScene : IDisposable
     private bool _disposed, _stepping, _notifying;
     private SceneNode? _publishingNode;
 
+    /// <summary>Physics mode chosen at construction; cannot change during the world's lifetime.</summary>
     public PhysicsMode Mode { get; }
+    /// <summary>Borrowed scene used for visual registration lifetimes; null for a standalone world.</summary>
     public Scene? Scene { get; }
+    /// <summary>Number of live compound registrations, not individual shapes.</summary>
     public int ColliderCount { get { Check(); return _entries.Count; } }
     public bool HasDynamicsWorld => _world != null;
     public long UnmanagedBytes { get { Check(); return _world?.RawData.TotalBytesAllocated ?? 0; } }
     public long TransformSynchronizations { get; private set; }
     public long CompletedSteps { get; private set; }
+    /// <summary>Simulation contact transitions delivered on the game thread after poses are published.</summary>
     public event Action<PhysicsContact>? Contact;
 
     /// <summary>Disabled returns null without constructing a scene, tree, world or subscriptions.</summary>
     public static PhysicsScene? Create(PhysicsMode mode = PhysicsMode.Disabled, Scene? scene = null) =>
         mode == PhysicsMode.Disabled ? null : new PhysicsScene(mode, scene);
 
+    /// <summary>Creates a thread-affine query or simulation world, optionally borrowing a scene. Disabled is rejected; Create returns null for Disabled.</summary>
     public PhysicsScene(PhysicsMode mode, Scene? scene = null)
     {
         if (mode is not (PhysicsMode.QueryOnly or PhysicsMode.Simulation))
@@ -69,6 +76,7 @@ public sealed partial class PhysicsScene : IDisposable
         {
             _world = new World();
             _world.BroadPhaseFilter = new PairFilter(this);
+            _world.NarrowPhaseFilter = new ContactFilter(this);
             _tree = _world.DynamicTree;
         }
         else _tree = new DynamicTree(static (_, _) => false);
@@ -77,6 +85,7 @@ public sealed partial class PhysicsScene : IDisposable
         if (scene != null) { scene.EntityRemoved += OnEntityRemoved; scene.Cleared += OnSceneCleared; }
     }
 
+    /// <summary>World acceleration in scene units per second squared; applies to simulation bodies affected by gravity.</summary>
     public Vector3 Gravity
     {
         get { CheckSimulation(); return FromJ(_world!.Gravity); }
@@ -99,6 +108,7 @@ public sealed partial class PhysicsScene : IDisposable
             throw new ArgumentException("Friction must be nonnegative and restitution between zero and one.");
         if (_world == null && settings.Kind != BodyKind.Static) throw new InvalidOperationException("Moving bodies require Simulation mode.");
         if (node != null && _bindings.ContainsKey(node)) throw new ArgumentException("This node already has a body; use compound shapes.");
+        if (node != null) CheckPhysicsNodePresentation(node);
         if (entity != null && (Scene == null || node == null)) throw new ArgumentException("Entity lifetime binding requires a scene and node.");
         PhysicsPose initial = Validate(pose ?? PhysicsPose.Identity);
         float scale = 1;
@@ -115,7 +125,8 @@ public sealed partial class PhysicsScene : IDisposable
             built.AddRange(shape.Create(scale));
         }
         var entry = new Entry { Handle = new(_id, ++_nextId), Owner = ownerId, Shapes = built.ToArray(),
-            Settings = settings, Pose = initial, PreviousKinematic = initial, Node = node, Entity = entity,
+            Settings = settings, Pose = initial, PreviousKinematic = initial, PreviousCompleted = initial, CurrentCompleted = initial,
+            Node = node, Entity = entity,
             Scale = scale, Layer = layer, Mask = mask };
         // Keep the visual pivot independent from Jitter's center-of-mass origin.
         if (settings.Kind != BodyKind.Static)
@@ -171,6 +182,7 @@ public sealed partial class PhysicsScene : IDisposable
     }
     private void Detach(Entry e)
     {
+        EndTriggers(e);
         if (e.Body != null)
         {
             // Jitter's explicit removal does not raise EndCollide; close our pair state before it releases arbiters.
@@ -198,6 +210,7 @@ public sealed partial class PhysicsScene : IDisposable
     public void Remove(ColliderHandle handle)
     {
         var e = Get(handle);
+        _presentations.Remove(handle.Id);
         if (e.Node != null) { e.Node.WorldChanged -= OnNodeChanged; _bindings.Remove(e.Node); }
         _dirty.Remove(e);
         if (e.Enabled) Detach(e);
@@ -209,6 +222,12 @@ public sealed partial class PhysicsScene : IDisposable
         _entries.Remove(handle.Id);
     }
     public PhysicsPose GetPose(ColliderHandle handle) { var e = Get(handle); Synchronize(); return e.Pose; }
+    /// <summary>False for removed, foreign, default handles, or a disposed scene. Requires the creating thread.</summary>
+    public bool IsValid(ColliderHandle handle)
+    {
+        if (Environment.CurrentManagedThreadId != _thread) throw new InvalidOperationException("Physics calls require the creating game thread.");
+        return !_disposed && handle.SceneId == _id && _entries.ContainsKey(handle.Id);
+    }
     /// <summary>Game-owned static pose update. Dynamic bodies use Teleport; kinematics use SetKinematicTarget.</summary>
     public void SetPose(ColliderHandle handle, PhysicsPose pose)
     {
@@ -221,8 +240,10 @@ public sealed partial class PhysicsScene : IDisposable
         var e = Get(handle); pose = Validate(pose);
         _dirty.Remove(e); e.Target = null; e.PreviousKinematic = pose;
         ApplyPose(e, pose);
+        e.PreviousCompleted = e.CurrentCompleted = pose; e.TeleportVersion++;
         if (clearVelocity && e.Body != null && e.Settings.Kind != BodyKind.Static) { e.Body.Velocity = JVector.Zero; e.Body.AngularVelocity = JVector.Zero; }
         Publish(e);
+        if (_presentations.TryGetValue(handle.Id, out var presentation)) PublishPresentation(presentation, pose);
     }
     public void SetKinematicTarget(ColliderHandle handle, PhysicsPose pose)
     {
@@ -230,18 +251,23 @@ public sealed partial class PhysicsScene : IDisposable
         if (e.Settings.Kind != BodyKind.Kinematic) throw new InvalidOperationException("A kinematic body is required.");
         pose = Validate(pose); _dirty.Remove(e); e.Target = pose; ApplyPose(e, pose); Publish(e);
     }
+    /// <summary>Returns a simulated body's linear velocity in scene units per second.</summary>
     public Vector3 GetVelocity(ColliderHandle handle) => FromJ(GetBody(handle).Velocity);
+    /// <summary>Returns angular velocity in radians per second in the engine's rotation convention.</summary>
     public Vector3 GetAngularVelocity(ColliderHandle handle) => -FromJ(GetBody(handle).AngularVelocity);
+    /// <summary>Sets a simulated body's linear velocity in units/second and angular velocity in radians/second.</summary>
     public void SetVelocity(ColliderHandle handle, Vector3 velocity, Vector3 angularVelocity = default)
     {
         var e = Get(handle); RequireDynamic(e); Finite(velocity); Finite(angularVelocity);
         // Angular rates follow Njulf's positive quaternion angles, whose world rotations are conjugated in Jitter.
         e.Body!.Velocity = ToJ(velocity); e.Body.AngularVelocity = -ToJ(angularVelocity); e.Body.SetActivationState(true);
     }
+    /// <summary>Applies a world-space force to a dynamic body; use consistent mass and scene units.</summary>
     public void AddForce(ColliderHandle handle, Vector3 force)
     {
         var e = Get(handle); RequireDynamic(e); Finite(force); e.Body!.AddForce(ToJ(force));
     }
+    /// <summary>Instantly changes a dynamic body's momentum using a world-space impulse.</summary>
     public void ApplyImpulse(ColliderHandle handle, Vector3 impulse)
     {
         var e = Get(handle); RequireDynamic(e); Finite(impulse); e.Body!.ApplyImpulse(ToJ(impulse));
@@ -258,11 +284,13 @@ public sealed partial class PhysicsScene : IDisposable
         CheckSimulation(); Positive(seconds);
         if (_notifying) throw new InvalidOperationException("Cannot recursively step from a contact handler.");
         Synchronize();
+        _contactDetails.Clear();
         _stepping = true;
         try
         {
             foreach (var e in _entries.Values)
             {
+                e.PreviousCompleted = e.CurrentCompleted;
                 if (e.Settings.Kind == BodyKind.Dynamic)
                 {
                     // 2.8.11 prepares force/gravity deltas at the END of its step. Refresh the next
@@ -297,7 +325,9 @@ public sealed partial class PhysicsScene : IDisposable
                     e.PreviousKinematic = e.Target ?? e.PreviousKinematic; e.Target = null;
                     ApplyPose(e, e.PreviousKinematic); Publish(e);
                 }
+                e.CurrentCompleted = e.Pose;
             }
+            UpdateTriggers();
         }
         finally { _stepping = false; }
         DispatchContacts();
@@ -381,13 +411,15 @@ public sealed partial class PhysicsScene : IDisposable
         Check();
         while (_entries.Count > 0) Remove(_entries.First().Value.Handle);
         _notifications.Clear(); _contacts.Clear(); _arbiters.Clear(); _candidates.Clear(); _overlapSeen.Clear();
+        _triggerPairs.Clear(); _triggerNotifications.Clear(); _contactDetails.Clear(); _eventGeneration++;
+        _characterQuery = null; _characterCandidates.Clear();
     }
     public void Dispose()
     {
         if (_disposed) return;
         Check(); Clear();
         if (Scene != null) { Scene.EntityRemoved -= OnEntityRemoved; Scene.Cleared -= OnSceneCleared; }
-        _world?.Dispose(); Contact = null; _disposed = true;
+        _world?.Dispose(); Contact = null; Trigger = null; _disposed = true;
     }
     private void Check()
     {
@@ -406,7 +438,8 @@ public sealed partial class PhysicsScene : IDisposable
     {
         public bool Filter(IDynamicTreeProxy a, IDynamicTreeProxy b) =>
             scene._owners.TryGetValue(a, out var x) && scene._owners.TryGetValue(b, out var y) &&
-            x.Enabled && y.Enabled && (x.Layer & y.Mask) != 0 && (y.Layer & x.Mask) != 0;
+            x.Enabled && y.Enabled && !x.Settings.IsTrigger && !y.Settings.IsTrigger &&
+            (x.Layer & y.Mask) != 0 && (y.Layer & x.Mask) != 0;
     }
     private void OnBegin(Arbiter arbiter)
     {
@@ -430,8 +463,18 @@ public sealed partial class PhysicsScene : IDisposable
     }
     private void DispatchContacts()
     {
-        _dispatch.AddRange(_notifications); _notifications.Clear(); _notifying = true;
-        try { foreach (var contact in _dispatch) { if (_disposed) break; Contact?.Invoke(contact); } }
-        finally { _dispatch.Clear(); _notifying = false; }
+        foreach (var contact in _notifications)
+            _dispatch.Add(contact.Began && _contactDetails.TryGetValue((contact.A.Id, contact.B.Id), out var details)
+                ? contact with { Details = details } : contact);
+        _notifications.Clear();
+        _triggerDispatch.AddRange(_triggerNotifications); _triggerNotifications.Clear();
+        _notifying = true;
+        int generation = _eventGeneration;
+        try
+        {
+            foreach (var contact in _dispatch) { if (_disposed || generation != _eventGeneration) break; Contact?.Invoke(contact); }
+            foreach (var trigger in _triggerDispatch) { if (_disposed || generation != _eventGeneration) break; Trigger?.Invoke(trigger); }
+        }
+        finally { _dispatch.Clear(); _triggerDispatch.Clear(); _notifying = false; }
     }
 }

@@ -18,7 +18,18 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="$(NjulfEngineRoot)/Njulf.Framework/Njulf.Framework.csproj" />
+    <!--#if (physics) -->
+    <ProjectReference Include="$(NjulfEngineRoot)/Njulf.Physics/Njulf.Physics.csproj" />
+    <!--#endif -->
+    <!--#if (audio) -->
+    <ProjectReference Include="$(NjulfEngineRoot)/Njulf.Audio/Njulf.Audio.csproj" />
+    <!--#endif -->
   </ItemGroup>
+  <!--#if (audio) -->
+  <ItemGroup>
+    <NjulfRuntimeContent Include="Assets/impact.wav" />
+  </ItemGroup>
+  <!--#endif -->
   <Import Project="$(NjulfEngineRoot)/build/Njulf.Game.targets" Condition="Exists('$(NjulfEngineRoot)/build/Njulf.Game.targets')" />
   <Target Name="ValidateNjulfEngineRoot" BeforeTargets="CollectPackageReferences;PrepareForBuild">
     <Error Condition="!Exists('$(NjulfEngineRoot)/build/Njulf.Game.targets')"

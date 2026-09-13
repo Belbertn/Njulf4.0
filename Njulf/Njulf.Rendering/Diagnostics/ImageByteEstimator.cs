@@ -3,7 +3,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Diagnostics
 {
-    public static class ImageByteEstimator
+    internal static class ImageByteEstimator
     {
         public static ulong EstimateBytes(Format format, Extent3D extent, uint mipLevels = 1, uint arrayLayers = 1, SampleCountFlags samples = SampleCountFlags.Count1Bit)
         {

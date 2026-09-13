@@ -3,7 +3,7 @@ using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Pipeline;
 
-public sealed unsafe partial class ForwardPlusPass
+internal sealed unsafe partial class ForwardPlusPass
 {
     private SecondaryViewRenderer? _secondaryViews;
 

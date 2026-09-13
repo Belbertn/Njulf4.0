@@ -27,7 +27,7 @@ namespace Njulf.Rendering.Diagnostics
         int DeviceWaitIdleCount,
         IReadOnlyList<RuntimeStallEvent> RecentEvents);
 
-    public sealed class RuntimeStallTracker
+    internal sealed class RuntimeStallTracker
     {
         private readonly RuntimeStallEvent[] _recentEvents;
         private int _nextEventIndex;

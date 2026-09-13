@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Xml.Linq;
 using Njulf.Core;
+using Njulf.Framework;
 using Njulf.Graphics;
 using Njulf.Input;
 using NUnit.Framework;
@@ -29,6 +30,8 @@ public sealed class FrameworkArchitectureTests
         Assert.That(visited, Does.Not.Contain("Njulf.Assets.Tooling"));
         Assert.That(visited, Does.Not.Contain("Njulf.AssetTool"));
         Assert.That(visited, Does.Not.Contain("Njulf.ShaderBuild"));
+        Assert.That(visited, Does.Not.Contain("Njulf.Physics"));
+        Assert.That(visited, Does.Not.Contain("Njulf.Audio"));
         Assert.That(typeof(Njulf.Assets.Cooked.ModelAssetCooker).Assembly.GetName().Name,
             Is.EqualTo("Njulf.Assets.Tooling"));
         Assert.That(typeof(Njulf.Assets.Cooked.TextureSourceDecoder).Assembly.GetName().Name,
@@ -68,9 +71,18 @@ public sealed class FrameworkArchitectureTests
     [Test]
     public void CriticalIntelliSense_IsEmittedBesideAssemblies()
     {
-        CheckDocs(typeof(GameTime).Assembly, ["T:Njulf.Core.GameTime", "T:Njulf.Core.Math.Matrix4x4"]);
-        CheckDocs(typeof(Game).Assembly, ["T:Njulf.Core.Game", "P:Njulf.Core.Game.GraphicsDevice",
-            "P:Njulf.Core.Game.ContentUploadCpuBudget", "M:Njulf.Core.Game.Run", "M:Njulf.Core.Game.LoadAsync(System.Threading.CancellationToken)"]);
+        CheckDocs(typeof(GameTime).Assembly, ["T:Njulf.Core.GameTime", "T:Njulf.Core.Math.Matrix4x4",
+            "M:Njulf.Core.Interfaces.IUpdateable.Update(System.Single)", "T:Njulf.Core.IGameModule"]);
+        CheckDocs(typeof(Game).Assembly, ["T:Njulf.Framework.Game", "P:Njulf.Framework.Game.GraphicsDevice",
+            "P:Njulf.Framework.Game.ContentUploadCpuBudget", "M:Njulf.Framework.Game.Run", "M:Njulf.Framework.Game.LoadAsync(System.Threading.CancellationToken)",
+            "P:Njulf.Framework.Game.InitialWindowState"]);
+        CheckDocs(typeof(Njulf.Core.Animation.Animator).Assembly, ["M:Njulf.Core.Math.Vector3.Normalized",
+            "M:Njulf.Core.Animation.Animator.Play(Njulf.Core.Animation.AnimationClip,System.Boolean)"]);
+        CheckDocs(typeof(Njulf.Physics.PhysicsScene).Assembly, ["T:Njulf.Physics.PhysicsScene", "T:Njulf.Physics.BodySettings"]);
+        CheckDocs(typeof(Njulf.Audio.AudioSystem).Assembly, ["T:Njulf.Audio.AudioScope", "P:Njulf.Audio.AudioGroup.Volume"]);
+        CheckDocs(typeof(Njulf.Audio.Assets.AudioContentExtensions).Assembly, ["T:Njulf.Audio.Assets.AudioContentExtensions"]);
+        CheckDocs(typeof(Njulf.Rendering.RenderingOptions).Assembly,
+            ["M:Microsoft.Extensions.DependencyInjection.RenderingServiceCollectionExtensions.AddRendering(Microsoft.Extensions.DependencyInjection.IServiceCollection,Silk.NET.Windowing.IWindow)"]);
         CheckDocs(typeof(InputAction).Assembly, ["T:Njulf.Input.InputAction", "P:Njulf.Input.InputAction.WasPressed",
             "T:Njulf.Input.InputBinding", "M:Njulf.Input.IInputManager.CreateAction(System.String)"]);
         CheckDocs(typeof(GraphicsDevice).Assembly, ["T:Njulf.Graphics.GraphicsDevice", "T:Njulf.Graphics.Mesh",

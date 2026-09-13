@@ -13,7 +13,7 @@ public sealed class InputRebindingTests
         using var rig = new InputTestRig();
         var target = rig.Input.CreateAction("Jump"); target.AddBinding(new(InputKey.Space));
         var global = rig.Input.CreateAction("Global"); global.AddBinding(new(InputKey.B));
-        string text = "", raw = ""; rig.Input.TextInput += c => text += c; rig.Input.RawTextInput += c => raw += c;
+        string text = "", raw = ""; rig.Input.TextInput += c => text += c; ((Njulf.Input.Advanced.INativeInputIntegration)rig.Input).RawTextInput += c => raw += c;
         rig.Keys.Add(Key.A); rig.Input.Update();
         using var session = target.BeginRebind(0);
         Assert.That(() => global.BeginRebind(0), Throws.InvalidOperationException);

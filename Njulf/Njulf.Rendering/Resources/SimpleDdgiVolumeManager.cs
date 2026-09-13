@@ -272,7 +272,7 @@ namespace Njulf.Rendering.Resources
         float Spacing,
         int SourceOrdinal);
 
-    public sealed class SimpleDdgiVolumeManager : IDisposable
+    internal sealed class SimpleDdgiVolumeManager : IDisposable
     {
         public const int IrradianceTexelsPerProbe = 8;
         public const int VisibilityTexelsPerProbe = 16;

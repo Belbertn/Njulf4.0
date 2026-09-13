@@ -11,12 +11,23 @@ using Silk.NET.Windowing;
 using Njulf.Graphics;
 using Njulf.Rendering;
 using Njulf.Assets;
+using Njulf.Core;
 using Njulf.Input;
 
-namespace Njulf.Core
+namespace Njulf.Framework
 {
     /// <summary>Default application host. Owns the window, services and current scene; callbacks run on the game/device thread.</summary>
-        public abstract partial class Game : IDisposable
+    /// <remarks>
+    /// Run configures services and the renderer, then calls Initialize, Load, and LoadAsync.
+    /// After loading: input, Update, zero or more FixedUpdate/physics/contact phases, spatial audio, audio maintenance, then Draw.
+    /// Default scene updates use scaled seconds in Update (variable mode) or FixedUpdate (fixed mode).
+    /// Effective pause skips scene/fixed simulation; input, Update, Draw, uploads and spatial/audio maintenance continue.
+    /// Shutdown cancels and drains loading, calls Unload while services exist, then releases the level, modules, scene,
+    /// renderer/services, input and window. Callback failures are rethrown after cleanup.
+    /// See <see href="../docs/FrameworkApi.md#lifecycle-and-time">the lifecycle guide</see> and
+    /// <see href="../docs/GameTiming.md">time and pause contracts</see>.
+    /// </remarks>
+    public abstract partial class Game : IDisposable
     {
         private IServiceProvider? _services;
         private IWindow? _window;
@@ -25,7 +36,7 @@ namespace Njulf.Core
         private IContentManager? _content;
         private IInputManager? _input;
         private ICamera? _camera;
-        private Scene.Scene _scene = null!;
+        private Core.Scene.Scene _scene = null!;
         private bool _isRunning = false;
         private bool _windowFocused = true;
         private bool _isShuttingDown = false;
@@ -90,6 +101,8 @@ namespace Njulf.Core
         public string WindowTitle { get; set; } = "Njulf Game";
         /// <summary>Initial native window border; defaults to resizable. Configure before Run.</summary>
         public WindowBorder WindowBorderStyle { get; set; } = WindowBorder.Resizable;
+        /// <summary>Initial native window state, default Normal. Set before Run; use Window for later native changes.</summary>
+        public WindowState InitialWindowState { get; set; } = WindowState.Normal;
         /// <summary>Startup presentation synchronization; enabled by default. Configure before Run.</summary>
         public bool VSync { get; set; } = true;
         /// <summary>
@@ -127,7 +140,7 @@ namespace Njulf.Core
         /// <summary>Active camera, available from Initialize through Unload; defaults to a first-person camera.</summary>
         public ICamera Camera => Require(_camera, nameof(Camera));
         /// <summary>Host-owned current scene, available immediately after construction and until shutdown.</summary>
-        public Scene.Scene Scene => Require(_scene, nameof(Scene));
+        public Core.Scene.Scene Scene => Require(_scene, nameof(Scene));
         /// <summary>Borrowed graphics device on the existing renderer. Resource operations require the device thread.</summary>
         public GraphicsDevice GraphicsDevice => Renderer.GetGraphicsDevice();
         private SpriteBatch? _sprites;
@@ -144,7 +157,7 @@ namespace Njulf.Core
         /// <summary>Creates the owned scene; other services are initialized by Run.</summary>
         protected Game()
         {
-            _scene = new Scene.Scene();
+            _scene = new Core.Scene.Scene();
         }
 
         /// <summary>Wall time since Run began, in microseconds; includes startup and is zero before Run.</summary>
@@ -277,7 +290,9 @@ namespace Njulf.Core
         /// <summary>Runs after Load. Ordinary awaits resume on the game/device thread.</summary>
         protected virtual Task LoadAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        /// <summary>Updates the scene by default. Input is already published; call base to retain scene updates.</summary>
+        /// <summary>Runs once per host update, including pause and fixed mode. Call base to update the scene in variable mode.</summary>
+        /// <remarks>Base forwards scaled ElapsedGameTime seconds to IUpdateable only when unpaused and in variable mode.
+        /// Use GameTime's unscaled fields for pause-independent UI. Modules run after this override returns.</remarks>
         protected virtual void Update(GameTime gameTime)
         {
             if (!_isRunning || IsFixedTimeStep || IsSimulationPaused)
@@ -286,7 +301,9 @@ namespace Njulf.Core
             _scene.Update((float)gameTime.ElapsedGameTime.TotalSeconds);
         }
 
-        /// <summary>Runs fixed simulation when enabled. Call base to retain scene updates.</summary>
+        /// <summary>Runs zero or more full simulation steps after Update, only in unpaused fixed mode. Call base to retain scene updates.</summary>
+        /// <remarks>Base forwards the fixed interval in seconds to IUpdateable. TimeScale changes step frequency, not step size.
+        /// Registered physics steps and delivers contacts after this override returns.</remarks>
         protected virtual void FixedUpdate(GameTime gameTime)
         {
             if (_isRunning && IsFixedTimeStep && !IsSimulationPaused)
@@ -322,10 +339,12 @@ namespace Njulf.Core
         /// render callbacks. The caller retains ownership of the previous
         /// scene and decides when it is safe to dispose it.
         /// </summary>
-        protected Scene.Scene ExchangeScene(Scene.Scene nextScene)
+        protected Core.Scene.Scene ExchangeScene(Core.Scene.Scene nextScene)
         {
             ArgumentNullException.ThrowIfNull(nextScene);
-            Scene.Scene previous = _scene;
+            EnsureTimingThread();
+            if (CurrentLevel != null) throw new InvalidOperationException("Use level loading/unloading while a managed level is active.");
+            Core.Scene.Scene previous = _scene;
             _scene = nextScene;
             return previous;
         }
@@ -413,6 +432,7 @@ namespace Njulf.Core
             options.Size = new Vector2D<int>(WindowWidth, WindowHeight);
             options.Title = WindowTitle;
             options.WindowBorder = WindowBorderStyle;
+            options.WindowState = InitialWindowState;
             options.VSync = VSync;
 
             return Silk.NET.Windowing.Window.Create(options);
@@ -532,9 +552,14 @@ namespace Njulf.Core
                 if (_isRunning && _contentLoaded)
                 {
                     TimeSpan now = TimeSpan.FromMicroseconds(RunElapsedMicroseconds);
-                    Update(_gameClock.Update(now));
+                    GameTime time = _gameClock.Update(now);
+                    Update(time);
                     while (_isRunning && _gameClock.TryFixedUpdate(now, out GameTime fixedTime))
+                    {
                         FixedUpdate(fixedTime);
+                        StepModules(fixedTime);
+                    }
+                    if (_isRunning) UpdateModules(time);
                 }
             }
             finally
@@ -817,11 +842,13 @@ namespace Njulf.Core
             }
             try
             {
+                Task? levelTransition = _levels?.Pending;
                 Cleanup(() => (_content as IContentLifetime)?.BeginShutdown());
                 Cleanup(_contentCancellation.Cancel);
                 Cleanup(() => (_contentUploadPump as IContentUploadLifetime)?.BeginShutdown());
                 // Startup continuations and cooperative cancellation can require the device thread.
                 while (_initialContentTask is { IsCompleted: false } ||
+                       levelTransition is { IsCompleted: false } ||
                        (_content as IContentLifetime)?.ActiveOperationCount > 0 ||
                        _contentUploadPump?.PendingCount > 0)
                 {
@@ -829,6 +856,11 @@ namespace Njulf.Core
                     Cleanup(PumpContentUploads);
                     Thread.Yield();
                 }
+                Cleanup(() =>
+                {
+                    try { levelTransition?.GetAwaiter().GetResult(); }
+                    catch (OperationCanceledException) when (_contentCancellation.IsCancellationRequested) { }
+                });
                 Cleanup(() =>
                 {
                     try { _initialContentTask?.GetAwaiter().GetResult(); }
@@ -847,6 +879,8 @@ namespace Njulf.Core
                     _userInitializationStarted = false;
                     Cleanup(Unload);
                 }
+                Cleanup(() => _levels?.DisposeActive());
+                Cleanup(() => _modules?.Dispose());
                 Cleanup(_scene.Dispose);
                 Cleanup(() => _sprites?.Dispose());
                 Cleanup(() => _renderer?.Dispose());

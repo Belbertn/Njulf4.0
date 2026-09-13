@@ -18,7 +18,7 @@ namespace Njulf.Rendering.Pipeline;
 /// a ray query: every inner sweep reuses the source cache produced earlier in
 /// the transaction.
 /// </summary>
-public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
+internal sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
 {
     private const uint EnabledFlag = 1u << 0;
     private const uint FarFieldEnabledFlag = 1u << 1;

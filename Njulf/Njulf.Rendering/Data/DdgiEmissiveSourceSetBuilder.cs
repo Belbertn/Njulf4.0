@@ -10,7 +10,7 @@ namespace Njulf.Rendering.Data;
 /// hierarchy child bounds coherent; the alias table is rebuilt afterwards so
 /// source order cannot change the declared global probabilities.
 /// </summary>
-public sealed class DdgiEmissiveSourceSetBuilder
+internal sealed class DdgiEmissiveSourceSetBuilder
 {
     private readonly Entry[] _entries;
     private readonly double[] _scaled;

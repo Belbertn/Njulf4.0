@@ -31,7 +31,7 @@ public sealed record AsyncComputePathCertificationEvidence(
 /// Reports named here are generated artifacts; the evidence revision and report identities are
 /// checked in so a later source or shader change cannot be mistaken for the captured result.
 /// </summary>
-public static class AsyncComputeCertificationEvidence
+internal static class AsyncComputeCertificationEvidence
 {
     private static readonly AsyncComputePathCertificationEvidence[] Entries =
     [

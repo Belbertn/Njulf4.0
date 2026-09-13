@@ -7,6 +7,67 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class GraphicsSettingsControllerTests
 {
+    [TestCase(ShadowQualityPreset.Low, 1, false, 0, 1)]
+    [TestCase(ShadowQualityPreset.Medium, 2, true, 1, 1)]
+    [TestCase(ShadowQualityPreset.High, 2, true, 2, 1)]
+    [TestCase(ShadowQualityPreset.Ultra, 4, true, 4, 2)]
+    public async Task ShadowPresetChangesOnlyShadowsAndWaitsForPreparation(
+        ShadowQualityPreset preset, int cascades, bool localShadows, int areaLights, int areaSamples)
+    {
+        var settings = new RenderSettings();
+        settings.Shadows.MaxShadowedAreaLights = 0;
+        var before = System.Text.Json.JsonSerializer.SerializeToNode(settings)!.AsObject();
+        before.Remove(nameof(settings.Shadows));
+        var controller = new VulkanGraphicsSettingsController(settings, () => { });
+        var change = new GraphicsSettingsChange { ShadowPreset = preset };
+        string original = settings.ComputePersistenceSha256();
+        Assert.That(controller.Preview(change).Outcome, Is.EqualTo(GraphicsSettingsOutcome.Rebuilt));
+        Assert.That(settings.ComputePersistenceSha256(), Is.EqualTo(original));
+        var task = controller.ApplyAsync(change);
+        controller.BeginFrame();
+        Assert.That(task.IsCompleted, Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(cascades));
+            Assert.That(settings.Shadows.SpotShadowsEnabled, Is.EqualTo(localShadows));
+            Assert.That(settings.Shadows.PointShadowsEnabled, Is.EqualTo(localShadows));
+            Assert.That(settings.Shadows.MaxShadowedAreaLights, Is.EqualTo(areaLights));
+            Assert.That(settings.Shadows.AreaShadowSampleCount, Is.EqualTo(areaSamples));
+        });
+        controller.CompleteFrame();
+        Assert.That((await task).Outcome, Is.EqualTo(GraphicsSettingsOutcome.Rebuilt));
+        Assert.That(controller.Preview(change).Outcome, Is.EqualTo(GraphicsSettingsOutcome.NoChange));
+        var changed = System.Text.Json.JsonSerializer.SerializeToNode(settings)!.AsObject();
+        changed.Remove(nameof(settings.Shadows));
+        Assert.That(System.Text.Json.Nodes.JsonNode.DeepEquals(changed, before), Is.True);
+    }
+
+    [Test]
+    public async Task ShadowPresetPrecedesExplicitOverridesAndSameQualityPresetRestoresValues()
+    {
+        var settings = new RenderSettings();
+        settings.ApplyQualityPreset(RenderQualityPreset.Low);
+        var controller = new VulkanGraphicsSettingsController(settings, () => { });
+        var task = controller.ApplyAsync(new()
+        {
+            QualityPreset = RenderQualityPreset.Low, ShadowPreset = ShadowQualityPreset.Ultra,
+            ShadowsEnabled = false, DirectionalShadowMapSize = 1024
+        });
+        controller.BeginFrame(); controller.CompleteFrame();
+        Assert.That((await task).Outcome, Is.EqualTo(GraphicsSettingsOutcome.Rebuilt));
+        Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(4));
+        Assert.That(settings.Shadows.DirectionalShadowsEnabled, Is.False);
+        Assert.That(settings.Shadows.SpotShadowsEnabled, Is.False);
+        Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(1024));
+        // The quality name is unchanged, but the overridden shadow budget must be restored.
+        task = controller.ApplyAsync(new() { QualityPreset = RenderQualityPreset.Low });
+        controller.BeginFrame(); controller.CompleteFrame();
+        Assert.That((await task).Outcome, Is.EqualTo(GraphicsSettingsOutcome.Rebuilt));
+        Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(1));
+        Assert.That(controller.Preview(new() { ShadowPreset = (ShadowQualityPreset)999 }).Outcome,
+            Is.EqualTo(GraphicsSettingsOutcome.Rejected));
+    }
+
     [Test]
     public async Task PresetAdmissionRejectionPreventsEveryOverride()
     {

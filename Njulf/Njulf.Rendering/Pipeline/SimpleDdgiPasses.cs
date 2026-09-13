@@ -13,7 +13,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class SimpleDdgiTracePass : SimpleDdgiComputePass
+    internal sealed unsafe class SimpleDdgiTracePass : SimpleDdgiComputePass
     {
         private const uint PrivateUrgentRelightFlag = 1u << 9;
         private readonly RenderSettings _traceSettings;
@@ -266,7 +266,7 @@ namespace Njulf.Rendering.Pipeline
         }
     }
 
-    public sealed unsafe class SimpleDdgiBlendPass : SimpleDdgiComputePass
+    internal sealed unsafe class SimpleDdgiBlendPass : SimpleDdgiComputePass
     {
         private const string BaselineShader = "ddgi_simple_blend.comp.spv";
         private const string DirectionalGuidingShader =
@@ -379,7 +379,7 @@ namespace Njulf.Rendering.Pipeline
     /// no ray-query dependency: direct/sky/emissive source work remains in the
     /// trace producer and is reused until a source generation changes.
     /// </summary>
-    public sealed unsafe class SimpleDdgiTransportPass : SimpleDdgiComputePass
+    internal sealed unsafe class SimpleDdgiTransportPass : SimpleDdgiComputePass
     {
         private const string LegacyShader = "ddgi_simple_transport_legacy.comp.spv";
         private const string ValidateShader = "ddgi_simple_transport_validate.comp.spv";
@@ -533,7 +533,7 @@ namespace Njulf.Rendering.Pipeline
         }
     }
 
-    public sealed unsafe class SimpleDdgiRelocateClassifyPass : SimpleDdgiComputePass
+    internal sealed unsafe class SimpleDdgiRelocateClassifyPass : SimpleDdgiComputePass
     {
         private const string BaselineShader =
             "ddgi_simple_relocate_classify.comp.spv";
@@ -628,7 +628,7 @@ namespace Njulf.Rendering.Pipeline
     /// ABI, total work, or steady-state cost. The compact summary remains
     /// resident until the final chunk is copied to a delayed readback slot.
     /// </summary>
-    public sealed unsafe class SimpleDdgiTransportAuditPass : RenderPassBase
+    internal sealed unsafe class SimpleDdgiTransportAuditPass : RenderPassBase
     {
         internal const int MaximumChunksPerFrame =
             (int)SimpleDdgiAuditCardinalityContract
@@ -1124,7 +1124,7 @@ namespace Njulf.Rendering.Pipeline
     /// update queue. The optional filtered image mirror is dual-written by a
     /// second compute dispatch; neither path needs CPU sorting or copy regions.
     /// </summary>
-    public sealed unsafe class SimpleDdgiPublishPass : RenderPassBase
+    internal sealed unsafe class SimpleDdgiPublishPass : RenderPassBase
     {
         private const string EntryPoint = "main";
         private readonly RenderSettings _settings;
@@ -1616,7 +1616,7 @@ namespace Njulf.Rendering.Pipeline
         }
     }
 
-    public abstract unsafe class SimpleDdgiComputePass : RenderPassBase
+    internal abstract unsafe class SimpleDdgiComputePass : RenderPassBase
     {
         private const string EntryPoint = "main";
         private const uint EnabledFlag = 1u << 0;

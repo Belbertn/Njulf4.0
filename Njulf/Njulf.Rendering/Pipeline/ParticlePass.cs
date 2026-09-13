@@ -12,7 +12,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class ParticlePass : RenderPassBase
+    internal sealed unsafe class ParticlePass : RenderPassBase
     {
         private const uint GpuBlendBucketCount = 5;
 

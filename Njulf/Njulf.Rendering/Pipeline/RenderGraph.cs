@@ -12,7 +12,7 @@ using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed class RenderGraph : IDisposable
+    internal sealed class RenderGraph : IDisposable
     {
         private readonly List<RenderPassBase> _passes = new List<RenderPassBase>();
         private readonly Dictionary<RenderGraphResourceId, RenderGraphResourceDescriptor> _resources = new();

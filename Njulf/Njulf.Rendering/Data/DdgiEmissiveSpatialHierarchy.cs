@@ -14,7 +14,7 @@ namespace Njulf.Rendering.Data;
 /// importance bound is numerically tiny, while the exact mixed probability can
 /// be reconstructed at the receiver.
 /// </summary>
-public sealed class DdgiEmissiveSpatialHierarchy
+internal sealed class DdgiEmissiveSpatialHierarchy
 {
     public const float HierarchyTechniqueProbability = 0.875f;
     public const float ImportanceFloor = 1.0f / 1024.0f;

@@ -12,7 +12,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class PointShadowPass : RenderPassBase
+    internal sealed unsafe class PointShadowPass : RenderPassBase
     {
         // Labels are cached up to the engine-wide light capacity.
         private const int CachedPointLightLabelCapacity = LightManager.MaxLights;

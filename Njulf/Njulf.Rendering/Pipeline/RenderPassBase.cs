@@ -13,7 +13,7 @@ namespace Njulf.Rendering.Pipeline
     /// Abstract base class for render passes.
     /// Each render pass can execute commands and has dependencies.
     /// </summary>
-    public abstract class RenderPassBase : IDisposable
+    internal abstract class RenderPassBase : IDisposable
     {
         protected readonly VulkanContext _context;
         protected readonly SwapchainManager _swapchain;

@@ -23,6 +23,21 @@ The template renders a small original tetrahedron with a fixed camera and light.
 It uses the existing Low graphics preset at native resolution, avoiding advanced-GI
 startup work for this small scene. Change the preset in `ConfigureRendering` when needed.
 Escape exits. Edit `Program.cs` to add gameplay using the [framework API](FrameworkApi.md).
+Add either or both optional modules when creating a project:
+
+```powershell
+dotnet new njulf-game -n PhysicsGame --engine-root (Get-Location).Path --physics
+dotnet new njulf-game -n AudioGame --engine-root (Get-Location).Path --audio
+dotnet new njulf-game -n MyGameplay --engine-root (Get-Location).Path --physics --audio
+```
+
+Both options default to false. Physics enables fixed stepping and drops the model onto
+an invisible floor. Audio adds a mono PCM16 sound played with Space; a missing audio
+device is reported and the game continues silently. The generated host owns the modules;
+do not step physics, update audio, or dispose registered modules manually.
+The bundled sound is ready to play; converting other audio is an optional
+[content workflow](Audio.md#optional-content-integration).
+
 The engine path is stored in the generated project's `NjulfEngineRoot` property;
 update it when moving the checkout. No engine NuGet packages are required.
 
@@ -30,6 +45,39 @@ Commit the generated `packages.lock.json` with your project. Release and CI rest
 use locked mode. After an intentional dependency change, run
 `dotnet restore --force-evaluate -p:RestoreLockedMode=false` and review the lock diff.
 Engine projects retain their own checked-in lock files.
+
+## Choose a learning example
+
+| Entry point | What it demonstrates |
+| --- | --- |
+| [SphereShooter](BasicSphereShooter.md) | One compact game: movement, shooting, impact audio, pause, and level replacement. |
+| `Njulf.ApiExamples --example model\|camera\|procedural` | Model instances, camera controllers, and procedural graphics. |
+| `Njulf.ApiExamples --example content\|input\|timing\|sprites` | Scoped loading, input/rebinding, game clocks, sprites and text. |
+| `Njulf.ApiExamples --example physics-query\|physics-simulation\|audio` | Queries, character/rigid-body simulation, and audio controls/occlusion. |
+| `Njulf.ApiExamples --example custom\|effects` | Native rendering passes and portable effect assets. |
+| `NjulfHelloGame` | Large-scene rendering, diagnostics, and performance/quality qualification. |
+
+Run a focused example with `dotnet run --project Njulf.ApiExamples -c Development -- --example camera`.
+The focused examples exercise features beyond the starter; `NjulfHelloGame` is the
+renderer workload rather than the first-game tutorial.
+For a custom application loop see [AddRendering](FrameworkApi.md#custom-hosts-with-addrendering).
+
+## Configure the startup window
+
+Set these properties before `game.Run()` (types are in `Silk.NET.Windowing`):
+
+| Startup mode | `InitialWindowState` | `WindowBorderStyle` |
+| --- | --- | --- |
+| Ordinary window (default) | `WindowState.Normal` | `WindowBorder.Resizable` |
+| Borderless window at the configured size | `WindowState.Normal` | `WindowBorder.Hidden` |
+| Fullscreen | `WindowState.Fullscreen` | `WindowBorder.Resizable` |
+
+For example: `using var game = new MyGame { InitialWindowState = WindowState.Fullscreen };`.
+`WindowWidth`/`WindowHeight` configure initial client dimensions; fullscreen behavior is
+provided by the window backend and monitor. `VSync` configures startup synchronization.
+These startup properties are not a runtime mode-switching API. Advanced integrations can
+use the borrowed `Game.Window` after initialization. Window size/mode is separate from
+`ConfigureRendering` and the renderer's internal resolution scale.
 
 ## Iterate on content
 

@@ -11,7 +11,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class ToneMapCompositePass : RenderPassBase
+    internal sealed unsafe class ToneMapCompositePass : RenderPassBase
     {
         private readonly CompositePipeline _compositePipeline;
         private readonly CompositePipeline _ldrCompositePipeline;

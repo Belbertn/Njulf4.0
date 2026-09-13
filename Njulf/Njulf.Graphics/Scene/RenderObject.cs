@@ -37,6 +37,16 @@ namespace Njulf.Core.Scene
 
         /// <summary>The editable transform shared by primitives from the same imported object.</summary>
         public SceneNode Node => _node;
+        /// <summary>Explicit local/world conveniences edit Node, excluding MeshToNode compensation.</summary>
+        public Vector3 LocalPosition { get => _node.LocalPosition; set => _node.LocalPosition = value; }
+        public Quaternion LocalRotation { get => _node.LocalRotation; set => _node.LocalRotation = value; }
+        public Vector3 LocalScale { get => _node.LocalScale; set => _node.LocalScale = value; }
+        public Vector3 WorldPosition { get => _node.WorldPosition; set => _node.WorldPosition = value; }
+        public Quaternion WorldRotation { get => _node.WorldRotation; set => _node.WorldRotation = value; }
+        public Vector3 WorldScale { get => _node.WorldScale; set => _node.WorldScale = value; }
+        public void SetLocalTransform(Vector3 position, Quaternion rotation, Vector3 scale) => _node.SetLocalTransform(position, rotation, scale);
+        public void SetWorldTransform(Vector3 position, Quaternion rotation, Vector3 scale) => _node.SetWorldTransform(position, rotation, scale);
+        public void SetParent(SceneNode? parent, bool keepWorld = true) => _node.SetParent(parent, keepWorld);
         /// <summary>Reads the editable node's world TRS, excluding baked mesh compensation.</summary>
         public bool TryGetNodeWorldTransform(out Vector3 position, out Quaternion rotation, out Vector3 scale) =>
             TryDecompose(_node.WorldMatrix, out position, out rotation, out scale);
@@ -287,7 +297,7 @@ namespace Njulf.Core.Scene
                 _revision));
         }
 
-        private static Quaternion NormalizeRotation(Quaternion rotation)
+        internal static Quaternion NormalizeRotation(Quaternion rotation)
         {
             float lengthSquared = rotation.LengthSquared();
             return float.IsFinite(lengthSquared) && lengthSquared > 1e-12f
@@ -295,7 +305,7 @@ namespace Njulf.Core.Scene
                 : Quaternion.Identity;
         }
 
-        private static bool TryDecompose(Matrix4x4 matrix, out Vector3 position, out Quaternion rotation, out Vector3 scale)
+        internal static bool TryDecompose(Matrix4x4 matrix, out Vector3 position, out Quaternion rotation, out Vector3 scale)
         {
             const float epsilon = 1e-6f;
             if (!float.IsFinite(matrix.M11) || !float.IsFinite(matrix.M12) || !float.IsFinite(matrix.M13) ||

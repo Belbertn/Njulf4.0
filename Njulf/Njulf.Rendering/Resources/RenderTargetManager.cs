@@ -54,7 +54,7 @@ namespace Njulf.Rendering.Resources
             (FilterScratch1?.EstimatedByteSize ?? 0UL));
     }
 
-    public sealed class RenderTargetManager : IDisposable
+    internal sealed class RenderTargetManager : IDisposable
     {
         public const Format OpaqueVisibilityFormat = Format.R32G32Uint;
         internal RenderTarget? OpaqueVisibility { get; }

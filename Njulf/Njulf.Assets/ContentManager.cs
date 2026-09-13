@@ -374,6 +374,7 @@ namespace Njulf.Assets
         {
             if (_currentAcquisition.Value is null)
                 return LoadOwned(() => Load<T>(path, options));
+            if (TryLoadRegistered<T>(path, out var registered)) return registered;
             if (typeof(T) == typeof(Njulf.Graphics.ShaderEffectAsset))
                 return (T)(object)LoadEffectAsset(path);
             if (typeof(T) == typeof(Njulf.Graphics.Texture) || typeof(T) == typeof(Njulf.Graphics.Material) || typeof(T) == typeof(Njulf.Graphics.SpriteFont))
@@ -413,6 +414,9 @@ namespace Njulf.Assets
             ContentLoadOptions? options = null,
             CancellationToken cancellationToken = default)
         {
+            lock (_stateLock)
+                if (_loaders.ContainsKey(typeof(T)))
+                    throw new NotSupportedException("Registered content loaders support synchronous Load only.");
             if (_currentAcquisition.Value is null)
                 return await LoadOwnedAsync(() => LoadAsync<T>(path, options, cancellationToken), cancellationToken).ConfigureAwait(false);
             using var operation = BeginOperation(cancellationToken);

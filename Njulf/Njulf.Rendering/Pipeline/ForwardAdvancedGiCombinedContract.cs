@@ -5,7 +5,7 @@ namespace Njulf.Rendering.Pipeline;
 /// and C5 producers are both effective. The program writes both contracts in a
 /// single opaque submission and never merges or reinterprets their payloads.
 /// </summary>
-public static class ForwardAdvancedGiCombinedContract
+internal static class ForwardAdvancedGiCombinedContract
 {
     public const uint ColorAttachmentCount = 4u;
 

@@ -10,7 +10,7 @@ public sealed record RendererResourceLeakFinding(
     long Tolerance,
     bool Passed);
 
-public sealed class RendererResourceLeakAuditor
+internal sealed class RendererResourceLeakAuditor
 {
     public IReadOnlyList<RendererResourceLeakFinding> Compare(
         RendererResourceLeakSnapshot before,

@@ -290,6 +290,75 @@ public sealed class ContentScopeTests
         Assert.That(_uploader.Models.Last().IsDisposed, Is.True);
     }
 
+    [TestCase(false), TestCase(true)]
+    public void ModelHelperReturnsSceneOwnedPlacementsSurvivingContentUnload(bool asynchronous)
+    {
+        using var dispatcher = asynchronous ? new RenderThreadContentUploadDispatcher() : null;
+        using var content = Manager(dispatcher);
+        using var scope = content.CreateScope();
+        using var scene = new Scene();
+        int deviceThread = Environment.CurrentManagedThreadId;
+        scene.Mutated += _ => Assert.That(Environment.CurrentManagedThreadId, Is.EqualTo(deviceThread));
+        ModelInstance Load() => dispatcher == null
+            ? scope.LoadModelInstanceAsync(scene, "triangle.obj").GetAwaiter().GetResult()
+            : Pump(scope.LoadModelInstanceAsync(scene, "triangle.obj"), dispatcher);
+        ModelInstance first = Load(), second = Load();
+        Assert.That(scene.ModelInstances, Is.EqualTo(new[] { first, second }));
+        Assert.That(first.PlacementRoot, Is.Not.SameAs(second.PlacementRoot));
+        Assert.That(_uploader.Models, Has.Count.EqualTo(1));
+        Assert.That(_uploader.LiveReferences, Is.EqualTo(6));
+        scope.Dispose();
+        Assert.That(_uploader.LiveReferences, Is.EqualTo(4));
+        scene.Remove(first);
+        Assert.That(_uploader.LiveReferences, Is.EqualTo(2));
+        scene.Dispose();
+        Assert.That(_uploader.LiveReferences, Is.Zero);
+    }
+
+    [TestCase(false), TestCase(true)]
+    public void ModelHelperCancellationBeforeAttachmentDoesNotAddAnInstance(bool unloadScope)
+    {
+        using var dispatcher = new RenderThreadContentUploadDispatcher();
+        using var content = Manager(dispatcher);
+        using var scope = content.CreateScope();
+        using var scene = new Scene();
+        using var cancellation = new CancellationTokenSource();
+        scope.Load<Model>("triangle.obj"); // Only instance attachment needs a dispatched callback now.
+        var task = scope.LoadModelInstanceAsync(scene, "triangle.obj", cancellationToken: cancellation.Token);
+        Assert.That(SpinWait.SpinUntil(() => dispatcher.PendingCount > 0 || task.IsCompleted, TimeSpan.FromSeconds(10)), Is.True);
+        Assert.That(task.IsCompleted, Is.False);
+        if (unloadScope) scope.Dispose(); else cancellation.Cancel();
+        Assert.Catch<OperationCanceledException>(() => Pump(task, dispatcher));
+        Assert.That(scene.ModelInstances, Is.Empty);
+        Assert.That(_uploader.LiveReferences, Is.EqualTo(unloadScope ? 0 : 2));
+    }
+
+    [TestCase(0), TestCase(1), TestCase(2)]
+    public void ModelHelperFailedAttachmentReleasesInstanceButKeepsTemplate(int failureStage)
+    {
+        using var content = Manager();
+        using var scene = new Scene();
+        Model template = content.Load<Model>("triangle.obj");
+        if (failureStage > 0)
+        {
+            template.Add(template.RenderObjects[0].Node);
+            scene.Mutated += mutation =>
+            {
+                if ((mutation.Kind & SceneMutationKind.Added) != 0 &&
+                    (failureStage == 1 || mutation.Producer is RenderObject { IsTransformGroup: true }))
+                    throw new IOException("Injected attachment failure.");
+            };
+        }
+        else scene.Dispose();
+        Assert.Catch(() => content.LoadModelInstanceAsync(scene, "triangle.obj").GetAwaiter().GetResult());
+        Assert.That(scene.ModelInstances, Is.Empty);
+        Assert.That(scene.RenderObjects, Is.Empty);
+        Assert.That(content.Load<Model>("triangle.obj"), Is.SameAs(template));
+        Assert.That(_uploader.LiveReferences, Is.EqualTo(2));
+        content.Dispose();
+        Assert.That(_uploader.LiveReferences, Is.Zero);
+    }
+
     private void WriteScene(string path, string subObject = "*") => SceneDocumentJson.WriteAtomic(Path.Combine(_directory, path), new()
     {
         Objects = [new() { Name = "Triangle", Model = new("triangle.obj", subObject) }],
@@ -312,11 +381,15 @@ public sealed class ContentScopeTests
     private sealed class TestUploader : IModelRenderUploadService
     {
         public List<Model> Models { get; } = [];
+        public int LiveReferences;
         public ModelRenderUploadDiagnostics LastUploadDiagnostics { get; } = new("", 0, 0, 0, 0, 0, 0, 0, 0);
         public Model UploadModel(ModelMesh mesh)
         {
             var model = new Model { Name = mesh.Name };
-            model.Add(new RenderObject(TestGraphicsResources.Mesh("mesh"), TestGraphicsResources.Material("material")) { Name = "Triangle" });
+            var owner = new object();
+            model.Add(new RenderObject(
+                new TestGraphicsResources.Reference("mesh", owner, _ => LiveReferences++, _ => LiveReferences--),
+                new TestGraphicsResources.Reference("material", owner, _ => LiveReferences++, _ => LiveReferences--)) { Name = "Triangle" });
             Models.Add(model);
             return model;
         }

@@ -57,7 +57,7 @@ public readonly record struct MeshletQualificationResult(
 /// the same correctness suite but cannot produce a performance-qualified
 /// result from this contract.
 /// </summary>
-public static class MeshletSystemQualificationContract
+internal static class MeshletSystemQualificationContract
 {
     public const uint NvidiaVendorId = 0x10de;
     public const uint AmdVendorId = 0x1002;

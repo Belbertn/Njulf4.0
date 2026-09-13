@@ -24,7 +24,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe partial class AccelerationStructureManager : IDisposable
+    internal sealed unsafe partial class AccelerationStructureManager : IDisposable
     {
         /// <summary>
         /// Frozen identity of the static triangle BLAS input/layout contract.

@@ -115,9 +115,9 @@ public partial class Scene
                 IsStatic = false
             };
             group.AttachNode(node, Njulf.Core.Math.Matrix4x4.Identity);
-            Add(group);
             _instanceChildren.Add(group, instance);
             groups.Add(group);
+            Add(group);
         }
         _instanceTransformGroups.Add(instance, groups);
     }

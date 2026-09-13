@@ -28,7 +28,7 @@ public sealed record AsyncComputePassAuditEntry(
     string Consumers,
     string Rationale);
 
-public static class AsyncComputePassCatalog
+internal static class AsyncComputePassCatalog
 {
     private static readonly AsyncComputePassAuditEntry[] Entries =
     [

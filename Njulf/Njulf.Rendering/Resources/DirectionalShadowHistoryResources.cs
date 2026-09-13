@@ -15,7 +15,7 @@ namespace Njulf.Rendering.Resources;
 /// before ray dispatch so recovery sampling and temporal rejection observe the
 /// same reset decision in a frame.
 /// </summary>
-public readonly record struct DirectionalShadowHistoryRevision(
+internal readonly record struct DirectionalShadowHistoryRevision(
     ulong StableLightIdentity,
     DirectionalShadowMode EffectiveMode,
     Vector3 LightDirection,
@@ -52,7 +52,7 @@ public readonly record struct DirectionalShadowHistoryRevision(
 /// shadows. Hard and hybrid modes keep using their compact packed-R8 banks and
 /// never instantiate this allocation set.
 /// </summary>
-public sealed unsafe class DirectionalShadowHistoryResources : IDisposable
+internal sealed unsafe class DirectionalShadowHistoryResources : IDisposable
 {
     public const ulong RawBytesPerPixel = 4UL;
     public const ulong HistoryBytesPerPixel = 12UL;

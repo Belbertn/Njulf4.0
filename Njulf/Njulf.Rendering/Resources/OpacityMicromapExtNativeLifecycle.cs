@@ -814,7 +814,7 @@ public sealed class OpacityMicromapExtStaticBlasAttachment
 /// frame-oriented AS manager from claiming a safe asynchronous lifecycle it
 /// does not yet own.
 /// </summary>
-public static unsafe class VulkanExtOpacityMicromapNativeCommandRecorder
+internal static unsafe class VulkanExtOpacityMicromapNativeCommandRecorder
 {
     private const BufferUsageFlags MicromapBuildInputUsage =
         BufferUsageFlags.MicromapBuildInputReadOnlyBitExt |

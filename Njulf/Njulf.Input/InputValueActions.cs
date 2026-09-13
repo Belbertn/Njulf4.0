@@ -19,6 +19,16 @@ public sealed class InputFloatAction
     public InputValueMode Mode => State.Mode;
     /// <summary>Latest value. State is bounded to [-1,1]; delta retains scaled source units.</summary>
     public float Value { get { State.Owner.EnsureUsable(); return State.Value.X; } }
+    /// <summary>Accumulates delta values until consumed. Not supported on state actions.</summary>
+    public bool BufferDeltas
+    {
+        get { State.Owner.EnsureUsable(); return State.Buffered; }
+        set => State.SetBuffering(value);
+    }
+    /// <summary>Returns accumulated displacement once. Requires BufferDeltas.</summary>
+    public float ConsumeDelta() => State.Consume().X;
+    /// <summary>Clears current, previous and buffered values; retains bindings and buffering settings.</summary>
+    public void Reset() => State.Reset();
     /// <summary>Immutable bindings in evaluation and persistence order.</summary>
     public IReadOnlyList<InputFloatBinding> Bindings { get { State.Owner.EnsureUsable(); return State.Bindings; } }
     /// <summary>Adds a mode-compatible alternative binding.</summary>
@@ -51,6 +61,16 @@ public sealed class InputVector2Action
     public InputValueMode Mode => State.Mode;
     /// <summary>Latest vector. State has maximum length one; delta retains scaled source units.</summary>
     public Vector2 Value { get { State.Owner.EnsureUsable(); return State.Value; } }
+    /// <summary>Accumulates delta values until consumed. Not supported on state actions.</summary>
+    public bool BufferDeltas
+    {
+        get { State.Owner.EnsureUsable(); return State.Buffered; }
+        set => State.SetBuffering(value);
+    }
+    /// <summary>Returns accumulated displacement once. Requires BufferDeltas.</summary>
+    public Vector2 ConsumeDelta() => State.Consume();
+    /// <summary>Clears current, previous and buffered values; retains bindings and buffering settings.</summary>
+    public void Reset() => State.Reset();
     /// <summary>Immutable bindings in evaluation and persistence order.</summary>
     public IReadOnlyList<InputVector2Binding> Bindings { get { State.Owner.EnsureUsable(); return State.Bindings; } }
     /// <summary>Adds a mode-compatible alternative binding.</summary>

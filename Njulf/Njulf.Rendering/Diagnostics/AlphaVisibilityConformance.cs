@@ -13,7 +13,7 @@ namespace Njulf.Rendering.Diagnostics;
 /// the DDGI ray-query candidate path. The gate intentionally measures binary
 /// visibility; color and radiance are not accepted as coverage evidence.
 /// </summary>
-public static class AlphaVisibilityConformanceContract
+internal static class AlphaVisibilityConformanceContract
 {
     public const int ReportSchemaVersion = 2;
     public const int EvidenceSchemaVersion = 1;
@@ -432,7 +432,7 @@ public sealed record AlphaVisibilityRawEvidence(
     }
 }
 
-public static class AlphaVisibilityConformanceEvaluator
+internal static class AlphaVisibilityConformanceEvaluator
 {
     public static IReadOnlyList<AlphaVisibilityDistanceResult> Evaluate(
         AlphaVisibilityRawEvidence evidence)

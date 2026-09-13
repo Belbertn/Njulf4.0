@@ -9,6 +9,8 @@ public sealed record GraphicsSettingsChange
 {
     /// <summary>Quality preset applied before individual fields. Null leaves this setting unchanged.</summary>
     public RenderQualityPreset? QualityPreset { get; init; }
+    /// <summary>Shadow-only tier, applied after QualityPreset and before explicit overrides.</summary>
+    public ShadowQualityPreset? ShadowPreset { get; init; }
     /// <summary>Linear resolution multiplier relative to the destination dimensions. Null leaves this setting unchanged.</summary>
     public float? ResolutionScale { get; init; }
     /// <summary>Manual linear exposure multiplier, used when automatic exposure is disabled. Null leaves this setting unchanged.</summary>

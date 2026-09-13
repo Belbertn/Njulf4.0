@@ -80,7 +80,7 @@ namespace Njulf.Rendering.Data
     /// homogeneous expression at the sphere centre and expands that expression
     /// by the norm of its world-space gradient.
     /// </summary>
-    public static class DirectionalShadowClipReference
+    internal static class DirectionalShadowClipReference
     {
         // A small scale-aware slack preserves conservative boundary behaviour
         // when CPU and GPU evaluate the same float matrix with different fused

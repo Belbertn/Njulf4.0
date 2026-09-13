@@ -12,7 +12,7 @@ namespace Njulf.Rendering.Pipeline;
 /// view culling. One indirect compute workgroup owns one instance command;
 /// its 64 lanes append only complete selected-LOD meshlet commands.
 /// </summary>
-public sealed unsafe class FoliageAuthoredExpandPass
+internal sealed unsafe class FoliageAuthoredExpandPass
 {
     private readonly VulkanContext _context;
     private readonly BufferManager _bufferManager;

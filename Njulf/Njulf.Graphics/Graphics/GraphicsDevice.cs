@@ -135,6 +135,8 @@ public abstract class GraphicsSettingsController
     public abstract GraphicsSettingsResult Preview(GraphicsSettingsChange change);
     /// <summary>Queues a change and completes after its frame-boundary resource preparation.</summary>
     /// <remarks>Cancellation is honored until processing begins. A busy controller rejects another request.
-    /// Unsupported and restart-required changes report a result without partially applying the request.</remarks>
+    /// Unsupported and restart-required changes report a result without partially applying the request.
+    /// Keep the render loop running while awaiting completion; blocking the device thread prevents the frame boundary.
+    /// Inspect the returned Outcome and Fields rather than assuming task completion means the change was applied.</remarks>
     public abstract Task<GraphicsSettingsResult> ApplyAsync(GraphicsSettingsChange change, CancellationToken cancellationToken = default);
 }

@@ -17,7 +17,7 @@ namespace Njulf.Rendering.Pipeline;
 /// the procedural environment prefilter. The scheduler is deliberately queried by work kind, so
 /// this pass cannot consume a face unit or begin before the six raw faces are complete.
 /// </summary>
-public sealed unsafe class ReflectionProbePrefilterPass : RenderPassBase
+internal sealed unsafe class ReflectionProbePrefilterPass : RenderPassBase
 {
     private const int MaximumMipsPerFrame = 16;
     private const int DescriptorSetCount = RenderingConstants.FramesInFlight * MaximumMipsPerFrame;

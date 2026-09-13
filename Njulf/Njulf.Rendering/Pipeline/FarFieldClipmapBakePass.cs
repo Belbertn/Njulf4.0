@@ -12,7 +12,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class FarFieldClipmapBakePass : RenderPassBase
+    internal sealed unsafe class FarFieldClipmapBakePass : RenderPassBase
     {
         private const string EntryPoint = "main";
         private const uint VoxelizeModeClear = 0;

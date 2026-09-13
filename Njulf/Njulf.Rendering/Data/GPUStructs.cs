@@ -57,7 +57,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUMeshInfo
+    internal struct GPUMeshInfo
     {
         public Vector4 BoundingSphere;
         public uint SkinningDataOffset;
@@ -107,7 +107,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSkinningPushConstants
+    internal struct GPUSkinningPushConstants
     {
         public uint DispatchIndex;
         public uint CurrentFrameIndex;
@@ -116,7 +116,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleInstance
+    internal struct GPUParticleInstance
     {
         public Vector4 PositionSize;
         public Vector4 VelocityRotation;
@@ -135,7 +135,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleBatch
+    internal struct GPUParticleBatch
     {
         public uint Start;
         public uint Count;
@@ -144,7 +144,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleFrameData
+    internal struct GPUParticleFrameData
     {
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -156,7 +156,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticlePushConstants
+    internal struct GPUParticlePushConstants
     {
         public uint CurrentFrameIndex;
         public uint ParticleInstanceBufferBaseIndex;
@@ -169,7 +169,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleEmitter
+    internal struct GPUParticleEmitter
     {
         public Matrix4x4 WorldMatrix;
         public Vector4 SpawnShape0;
@@ -192,14 +192,14 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleCurveSample
+    internal struct GPUParticleCurveSample
     {
         public Vector4 Color;
         public Vector4 Properties;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleState
+    internal struct GPUParticleState
     {
         public Vector4 PositionAge;
         public Vector4 VelocityLifetime;
@@ -239,7 +239,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleDrawCommand
+    internal struct GPUParticleDrawCommand
     {
         public uint VertexCount;
         public uint InstanceCount;
@@ -248,14 +248,14 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleSortKey
+    internal struct GPUParticleSortKey
     {
         public uint Key;
         public uint InstanceIndex;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleResetPushConstants
+    internal struct GPUParticleResetPushConstants
     {
         public uint CurrentFrameIndex;
         public uint ParticleCapacity;
@@ -268,7 +268,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleSortPushConstants
+    internal struct GPUParticleSortPushConstants
     {
         public uint CurrentFrameIndex;
         public uint ParticleCapacity;
@@ -281,7 +281,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticleSimulatePushConstants
+    internal struct GPUParticleSimulatePushConstants
     {
         public uint CurrentFrameIndex;
         public uint ParticleCapacity;
@@ -298,7 +298,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUMeshlet
+    internal struct GPUMeshlet
     {
         public Vector3 BoundingSphereCenter;
         public float BoundingSphereRadius;
@@ -493,7 +493,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUObjectData
+    internal struct GPUObjectData
     {
         public Matrix4x4 WorldMatrix;
         public Matrix4x4 WorldMatrixInverseTranspose;
@@ -512,7 +512,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDebugLineVertex
+    internal struct GPUDebugLineVertex
     {
         public Vector3 Position;
         public float Padding0;
@@ -525,7 +525,7 @@ namespace Njulf.Rendering.Data
     /// carries only the sampled logical identity and immutable frame tags.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiProbeDebugInstance
+    internal struct GPUDdgiProbeDebugInstance
     {
         public const uint SchedulerVisibleFlag = 1u << 0;
 
@@ -636,7 +636,7 @@ namespace Njulf.Rendering.Data
     /// and usually-unused UV transforms from the fragment hot path.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUForwardMaterialData
+    internal struct GPUForwardMaterialData
     {
         public const uint UvSetBits = 4u;
         public const uint UvSetMask = (1u << (int)UvSetBits) - 1u;
@@ -859,7 +859,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSceneData
+    internal struct GPUSceneData
     {
         public Matrix4x4 ViewMatrix;
         public Matrix4x4 ProjectionMatrix;
@@ -881,7 +881,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUMeshletDrawCommand
+    internal struct GPUMeshletDrawCommand
     {
         public uint MeshletIndex;
         public uint InstanceId;
@@ -895,7 +895,7 @@ namespace Njulf.Rendering.Data
     /// so this stream stays at one 16-byte record per render instance.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSceneInstanceCandidate
+    internal struct GPUSceneInstanceCandidate
     {
         public uint InstanceId;
         public uint MaterialIndex;
@@ -904,7 +904,7 @@ namespace Njulf.Rendering.Data
     }
 
     [Flags]
-    public enum GPUSceneInstanceClassification : uint
+    internal enum GPUSceneInstanceClassification : uint
     {
         SimpleOpaque = 0,
         SimpleNormalOpaque = 1,
@@ -916,7 +916,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSceneLodTransitionState
+    internal struct GPUSceneLodTransitionState
     {
         public uint SourceLod;
         public uint TargetLod;
@@ -925,7 +925,7 @@ namespace Njulf.Rendering.Data
     }
 
     [Flags]
-    public enum GPUMeshletDrawFlags : uint
+    internal enum GPUMeshletDrawFlags : uint
     {
         None = 0,
         NeedsGpuFrustumTest = 1u << 0,
@@ -939,7 +939,7 @@ namespace Njulf.Rendering.Data
     }
 
     [Flags]
-    public enum GPUMeshletCommandFlags : uint
+    internal enum GPUMeshletCommandFlags : uint
     {
         None = 0,
         MaterialDoubleSided = 1u << 0,
@@ -957,7 +957,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUPackedMeshletDrawCommand
+    internal struct GPUPackedMeshletDrawCommand
     {
         public uint MeshletIndex;
         public uint InstanceId;
@@ -967,7 +967,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUMeshletTaskFrameData
+    internal struct GPUMeshletTaskFrameData
     {
         public Vector4 FrustumPlane0;
         public Vector4 FrustumPlane1;
@@ -986,7 +986,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliagePrototype
+    internal struct GPUFoliagePrototype
     {
         public uint MeshMetadataIndex;
         public uint MeshletOffset;
@@ -1008,7 +1008,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliageImpostor
+    internal struct GPUFoliageImpostor
     {
         public uint AlbedoOpacityTextureIndex;
         public uint NormalTextureIndex;
@@ -1021,14 +1021,14 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliageImpostorView
+    internal struct GPUFoliageImpostorView
     {
         public Vector4 Direction;
         public Vector4 AtlasRectangle;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliagePatch
+    internal struct GPUFoliagePatch
     {
         public Vector4 BoundsMinDensity;
         public Vector4 BoundsMaxSeed;
@@ -1048,7 +1048,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliageCluster
+    internal struct GPUFoliageCluster
     {
         public Vector4 WorldCenterRadius;
         public Vector4 BoundsMinDensity;
@@ -1060,7 +1060,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliageInstance
+    internal struct GPUFoliageInstance
     {
         public Vector4 PositionScale;
         public Vector4 RotationWind;
@@ -1072,7 +1072,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliageMeshletDrawCommand
+    internal struct GPUFoliageMeshletDrawCommand
     {
         public uint MeshletIndex;
         public uint InstanceIndex;
@@ -1103,7 +1103,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliageDispatchArgs
+    internal struct GPUFoliageDispatchArgs
     {
         public uint GroupCountX;
         public uint GroupCountY;
@@ -1216,7 +1216,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliageProceduralDrawCommand
+    internal struct GPUFoliageProceduralDrawCommand
     {
         public uint ClusterIndex;
         public uint LodBand;
@@ -1229,7 +1229,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliageAuthoredInstanceCommand
+    internal struct GPUFoliageAuthoredInstanceCommand
     {
         public uint InstanceIndex;
         public uint ClusterIndex;
@@ -1247,7 +1247,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSceneOpaqueCompactionPushConstants
+    internal struct GPUSceneOpaqueCompactionPushConstants
     {
         public Vector4 CameraPosition;
         public uint CurrentFrameIndex;
@@ -1308,7 +1308,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUForwardVisibilityCompactionPushConstants
+    internal struct GPUForwardVisibilityCompactionPushConstants
     {
         public uint CurrentFrameIndex;
         public uint SimpleInputCapacity;
@@ -1341,7 +1341,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliageCullPushConstants
+    internal struct GPUFoliageCullPushConstants
     {
         public Vector4 CameraPositionMaxDistance;
         public uint CurrentFrameIndex;
@@ -1364,7 +1364,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFoliageDrawPushConstants
+    internal struct GPUFoliageDrawPushConstants
     {
         internal const uint DisableGlobalIlluminationFlag = 1u << 5;
         private const uint TraceResolutionScaleMask = 0x3u;
@@ -1427,7 +1427,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUTiledLightHeader
+    internal struct GPUTiledLightHeader
     {
         public uint LightCount;
         public uint LightOffset;
@@ -1437,13 +1437,13 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPULightIndex
+    internal struct GPULightIndex
     {
         public uint LightIndex;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUScreenToViewParams
+    internal struct GPUScreenToViewParams
     {
         public Vector2 ScreenDimensions;
         public Vector2 InvScreenDimensions;
@@ -1452,7 +1452,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPULightCullingParams
+    internal struct GPULightCullingParams
     {
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewProjectionMatrix;
@@ -1467,7 +1467,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDepthPushConstants
+    internal struct GPUDepthPushConstants
     {
         public Matrix4x4 ViewProjectionMatrix;
         public Vector2 ScreenDimensions;
@@ -1485,7 +1485,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUForwardPushConstants
+    internal struct GPUForwardPushConstants
     {
         public const int MaximumReflectionCaptureLayer = 0x1FFF;
         public const int MaximumPackedLightCount = 1024;
@@ -1858,7 +1858,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUMotionVectorPushConstants
+    internal struct GPUMotionVectorPushConstants
     {
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 PreviousViewProjectionMatrix;
@@ -1880,7 +1880,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPULightCullPushConstants
+    internal struct GPULightCullPushConstants
     {
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewProjectionMatrix;
@@ -1925,7 +1925,7 @@ namespace Njulf.Rendering.Data
     /// preserves the established 320-byte shadow-data ABI.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDirectionalShadowParameters
+    internal struct GPUDirectionalShadowParameters
     {
         // World-space diameter of one shadow-map texel for cascades 0..3.
         public Vector4 CascadeWorldTexelSizes;
@@ -1951,7 +1951,7 @@ namespace Njulf.Rendering.Data
     /// for the deterministic directional ray-shadow mask pass.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDirectionalRayShadowPushConstants
+    internal struct GPUDirectionalRayShadowPushConstants
     {
         public Matrix4x4 InverseViewProjectionMatrix;
         // xyz = camera position, w = maximum camera-to-receiver distance.
@@ -1974,7 +1974,7 @@ namespace Njulf.Rendering.Data
 
     /// <summary>Full-resolution visibility mask contract for up to four area emitters.</summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUAreaRayShadowPushConstants
+    internal struct GPUAreaRayShadowPushConstants
     {
         public Matrix4x4 InverseViewProjectionMatrix;
         public Vector4 CameraPosition;
@@ -1993,7 +1993,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDirectionalShadowTemporalPushConstants
+    internal struct GPUDirectionalShadowTemporalPushConstants
     {
         public Matrix4x4 InverseViewProjectionMatrix;
         public Vector4 CameraPositionAndMaximumDistance;
@@ -2015,7 +2015,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDirectionalShadowSpatialPushConstants
+    internal struct GPUDirectionalShadowSpatialPushConstants
     {
         public Matrix4x4 InverseViewProjectionMatrix;
         public Vector4 CameraPositionAndMaximumDistance;
@@ -2031,7 +2031,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSpotShadow
+    internal struct GPUSpotShadow
     {
         public Matrix4x4 LightViewProjection;
         public Vector4 AtlasScaleOffset;
@@ -2043,7 +2043,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUPointShadow
+    internal struct GPUPointShadow
     {
         public Matrix4x4 FaceViewProjection0;
         public Matrix4x4 FaceViewProjection1;
@@ -2060,7 +2060,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPULocalLightShadowIndex
+    internal struct GPULocalLightShadowIndex
     {
         public int SpotShadowIndex;
         public int PointShadowIndex;
@@ -2069,7 +2069,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUEnvironmentData
+    internal struct GPUEnvironmentData
     {
         // Words 0..11 are the established environment ABI. Keep them stable so
         // HDR environments and external shader tooling remain compatible.
@@ -2122,7 +2122,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUReflectionProbeHeader
+    internal struct GPUReflectionProbeHeader
     {
         public int ProbeCount;
         public int MaxProbesPerPixel;
@@ -2147,7 +2147,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUReflectionProbe
+    internal struct GPUReflectionProbe
     {
         public Matrix4x4 WorldToProbe;
         public Vector4 PositionAndRadius;
@@ -2161,7 +2161,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiProbeVolumeHeader
+    internal struct GPUDdgiProbeVolumeHeader
     {
         public int VolumeCount;
         public int ProbeCount;
@@ -2186,7 +2186,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiProbeVolume
+    internal struct GPUDdgiProbeVolume
     {
         public Vector4 OriginAndFirstProbeIndex;
         public Vector4 SizeAndProbeCountX;
@@ -2200,7 +2200,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiProbeState
+    internal struct GPUDdgiProbeState
     {
         public Vector4 Irradiance;
         public Vector4 Visibility;
@@ -2211,7 +2211,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiProbeUpdateRequest
+    internal struct GPUDdgiProbeUpdateRequest
     {
         public uint ProbeIndex;
         public uint VolumeIndex;
@@ -2224,7 +2224,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiProbeRelocationClassification
+    internal struct GPUDdgiProbeRelocationClassification
     {
         public Vector4 Relocation;
         public Vector4 Classification;
@@ -2237,7 +2237,7 @@ namespace Njulf.Rendering.Data
     /// matrix preserves the established row-major normal-transform contract.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4, Size = DdgiRayQueryInstanceAbi.SizeInBytes)]
-    public struct GPUDdgiRayQueryInstance
+    internal struct GPUDdgiRayQueryInstance
     {
         public uint AbiVersion;
         public uint GeometryClass;
@@ -2295,7 +2295,7 @@ namespace Njulf.Rendering.Data
     // live in the params header instead of pass-local state so every shader that
     // samples DDGI can identify the published (receiver-visible) atlas.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiParams
+    internal struct GPUSimpleDdgiParams
     {
         public Vector4 GridOriginAndSpacing;
         public Vector4 GridCountsAndProbeCount;
@@ -2342,7 +2342,7 @@ namespace Njulf.Rendering.Data
 
     // 112 bytes. Appended after GPUSimpleDdgiParams in the simple DDGI params buffer.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiVolume
+    internal struct GPUSimpleDdgiVolume
     {
         public Vector4 OriginAndSpacing;
         public Vector4 GridCountsAndFirstProbe;
@@ -2369,7 +2369,7 @@ namespace Njulf.Rendering.Data
     // them out of float-packed volume metadata avoids precision loss at the
     // hard virtual-probe limit.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiVolumePaging
+    internal struct GPUSimpleDdgiVolumePaging
     {
         public uint VirtualFirstProbe;
         public uint PageTableFirst;
@@ -2385,7 +2385,7 @@ namespace Njulf.Rendering.Data
     // generation stamp every delayed feedback record; MappingGenerationCounter
     // is the one monotonic, non-zero allocator for page owner tokens.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiResidencyHeader
+    internal struct GPUSimpleDdgiResidencyHeader
     {
         public uint FrameSerialLow;
         public uint FrameSerialHigh;
@@ -2406,7 +2406,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiPageTableEntry
+    internal struct GPUSimpleDdgiPageTableEntry
     {
         public uint PhysicalPagePlusOne;
         public uint MappingGeneration;
@@ -2417,7 +2417,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiPageHistory
+    internal struct GPUSimpleDdgiPageHistory
     {
         public uint VisibleDemandEpoch;
         public uint ReceiverDemandEpoch;
@@ -2428,7 +2428,7 @@ namespace Njulf.Rendering.Data
     // Explicit development-only command embedded in the fixed demand-counter
     // region. Shipping demand producers never write this record.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiPageDevelopmentControl
+    internal struct GPUSimpleDdgiPageDevelopmentControl
     {
         public uint CommandSerial;
         public uint VirtualPagePlusOne;
@@ -2440,7 +2440,7 @@ namespace Njulf.Rendering.Data
     // access. Frame values are diagnostic/retention metadata and never serve as
     // completion tokens for resource destruction.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiPhysicalPageMetadata
+    internal struct GPUSimpleDdgiPhysicalPageMetadata
     {
         public uint OwnerVirtualPagePlusOne;
         public uint MappingGeneration;
@@ -2463,7 +2463,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiPageInitWork
+    internal struct GPUSimpleDdgiPageInitWork
     {
         public uint VirtualPageIndex;
         public uint PhysicalPageIndex;
@@ -2475,7 +2475,7 @@ namespace Njulf.Rendering.Data
     // stable scalar prefix occupies 256 bytes and future fields can be appended
     // without changing copy size or permitting a page-table readback.
     [StructLayout(LayoutKind.Sequential, Pack = 4, Size = 1024)]
-    public struct GPUSimpleDdgiResidencyFeedback
+    internal struct GPUSimpleDdgiResidencyFeedback
     {
         public uint FrameSerialLow;
         public uint FrameSerialHigh;
@@ -2576,7 +2576,7 @@ namespace Njulf.Rendering.Data
     // 112-byte depth-demand ABI. One shader invocation predicts one 8x8
     // receiver tile and stamps a packed epoch/distance demand record.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiPageDemandPushConstants
+    internal struct GPUSimpleDdgiPageDemandPushConstants
     {
         public Matrix4x4 InverseViewProjectionMatrix;
         public Vector4 CameraPositionAndPadding;
@@ -2598,7 +2598,7 @@ namespace Njulf.Rendering.Data
     // frame-stamped signed L2 coefficient tail. The published 2x2 cache record
     // remains 16 bytes.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiReceiverCachePushConstants
+    internal struct GPUSimpleDdgiReceiverCachePushConstants
     {
         public Matrix4x4 InverseViewProjectionMatrix;
         public Vector4 CameraPositionAndPadding;
@@ -2621,7 +2621,7 @@ namespace Njulf.Rendering.Data
     // the exact world-space surface and stable geometry identity; compute needs
     // only the frame/camera context required by the unchanged DDGI gather.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiMaskedFeedbackCompactPushConstants
+    internal struct GPUSimpleDdgiMaskedFeedbackCompactPushConstants
     {
         public Vector4 CameraPositionAndPadding;
         public uint CurrentFrameIndex;
@@ -2636,7 +2636,7 @@ namespace Njulf.Rendering.Data
     // deterministic 2x2 representative and admits only compatible gather
     // sidecars.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiReceiverCacheResolvePushConstants
+    internal struct GPUSimpleDdgiReceiverCacheResolvePushConstants
     {
         public Matrix4x4 InverseViewProjectionMatrix;
         public Vector4 CameraPositionAndPadding;
@@ -2656,7 +2656,7 @@ namespace Njulf.Rendering.Data
     // 128-byte ABI shared by adaptive classification, gather-list
     // compaction, indirect finalization, and canonical-history seeding.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiReceiverCacheAdaptivePushConstants
+    internal struct GPUSimpleDdgiReceiverCacheAdaptivePushConstants
     {
         public Matrix4x4 InverseViewProjectionMatrix;
         public Vector4 CameraPositionAndPadding;
@@ -2677,7 +2677,7 @@ namespace Njulf.Rendering.Data
     // Frozen 28-byte ABI used only by the controlled depth-only benchmark.
     // Production surface-aware resolve never consumes this layout.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiReceiverCacheLegacyResolvePushConstants
+    internal struct GPUSimpleDdgiReceiverCacheLegacyResolvePushConstants
     {
         public uint GatherWidth;
         public uint GatherHeight;
@@ -2692,7 +2692,7 @@ namespace Njulf.Rendering.Data
     // feedback. CurrentFrame remains the virtual-state age clock; the two
     // publication fields bound the visible partial-page cohort in probe units.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiPageResidencyPushConstants
+    internal struct GPUSimpleDdgiPageResidencyPushConstants
     {
         public uint ParamsBufferIndex;
         public uint ProbeStateBufferIndex;
@@ -2725,7 +2725,7 @@ namespace Njulf.Rendering.Data
     // validity/reserved flags in bits 24..31. Direction is reconstructed from
     // probe/ray identity and the checked-in rotation codebook.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiRayResult
+    internal struct GPUSimpleDdgiRayResult
     {
         public Vector4 RadianceDistance;
         public uint PackedVisibilityHitEpoch;
@@ -2734,7 +2734,7 @@ namespace Njulf.Rendering.Data
     // 32-byte validation/rollback scratch record. It is never reinterpreted as
     // GPUSimpleDdgiRayResult; changing modes recreates the scratch allocation.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiLegacyRayResult
+    internal struct GPUSimpleDdgiLegacyRayResult
     {
         public Vector4 RadianceDistance;
         public Vector4 DirectionHitFlags;
@@ -2749,7 +2749,7 @@ namespace Njulf.Rendering.Data
     // 24-bit physical generation, a combined three-bit validity/exact-hit-kind
     // code, and the five-bit direction epoch.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiTransportRayCache
+    internal struct GPUSimpleDdgiTransportRayCache
     {
         public Vector4 SourceRadianceDistance;
         public uint PackedDirection;
@@ -2761,7 +2761,7 @@ namespace Njulf.Rendering.Data
 
     // Exact Compact-28 persistent source-cache ABI.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiTransportRayCacheCompact28
+    internal struct GPUSimpleDdgiTransportRayCacheCompact28
     {
         public uint PackedSourceRadianceXY;
         public uint PackedSourceRadianceZReserved;
@@ -2774,7 +2774,7 @@ namespace Njulf.Rendering.Data
 
     // Exact Compact-24 persistent source-cache ABI.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiTransportRayCacheCompact24
+    internal struct GPUSimpleDdgiTransportRayCacheCompact24
     {
         public uint PackedSourceRadianceXY;
         public uint PackedSourceRadianceZDistance;
@@ -2786,7 +2786,7 @@ namespace Njulf.Rendering.Data
 
     // 32 bytes. Simple DDGI per-probe state: relocation.xyz/active, then flags/age/classification/debug.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiProbeState
+    internal struct GPUSimpleDdgiProbeState
     {
         public Vector4 RelocationAndActive;
         public uint Flags;
@@ -2801,7 +2801,7 @@ namespace Njulf.Rendering.Data
     // and the final word is the canonical atlas probe address. Compute and
     // scheduler shaders must continue to use GPUSimpleDdgiProbeState.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiReceiverProbe
+    internal struct GPUSimpleDdgiReceiverProbe
     {
         public uint PackedRelocationXY;
         public uint PackedRelocationZWeight;
@@ -2814,7 +2814,7 @@ namespace Njulf.Rendering.Data
     // epoch, so sparse physical identity is appended instead of aliasing either
     // correctness field. Twelve words retain 16-byte record alignment.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiProbeUpdate
+    internal struct GPUSimpleDdgiProbeUpdate
     {
         public uint ProbeIndex;
         public uint VolumeIndex;
@@ -2844,7 +2844,7 @@ namespace Njulf.Rendering.Data
 
     // 48 bytes. Mirrors SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiRelocationClassification
+    internal struct GPUSimpleDdgiRelocationClassification
     {
         public Vector4 RelocationDistance;
         public Vector4 Classification;
@@ -2856,7 +2856,7 @@ namespace Njulf.Rendering.Data
     // four vectors describe the bounded virtual-page cache and the independently
     // versioned material payload used by production tracing and page baking.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFarFieldClipmapParams
+    internal struct GPUFarFieldClipmapParams
     {
         public Vector4 OriginAndVoxelSize;
         public Vector4 ResolutionAndExtent;
@@ -2875,7 +2875,7 @@ namespace Njulf.Rendering.Data
     // page coordinate is stable; the physical-page index is bounded by the
     // selected quality tier and is never inferred from world size.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFarFieldPageTableEntry
+    internal struct GPUFarFieldPageTableEntry
     {
         public int WorldPageX;
         public int WorldPageY;
@@ -2889,7 +2889,7 @@ namespace Njulf.Rendering.Data
 
     // 96 bytes. Static opaque instance metadata for far-field voxelization.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFarFieldInstance
+    internal struct GPUFarFieldInstance
     {
         public uint VertexOffset;
         public uint IndexOffset;
@@ -2908,7 +2908,7 @@ namespace Njulf.Rendering.Data
     // 32 bytes / eight uint words. The V2 far-field payload is deliberately a
     // separate ABI from the one-word V1 occupancy/RGB8 encoding.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFarFieldMaterialVoxelV2
+    internal struct GPUFarFieldMaterialVoxelV2
     {
         public uint WinnerKey;
         public uint CoverageConeAndFlags;
@@ -2923,7 +2923,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiPushConstants
+    internal struct GPUSimpleDdgiPushConstants
     {
         public uint ParamsBufferIndex;
         public uint IrradianceAtlasBufferIndex;
@@ -2967,7 +2967,7 @@ namespace Njulf.Rendering.Data
     /// the frozen participant list, its bounded workspace, and atomic summary.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiTransportAuditPushConstants
+    internal struct GPUSimpleDdgiTransportAuditPushConstants
     {
         public uint ParamsBufferIndex;
         public uint RayResultScratchBufferIndex;
@@ -3193,7 +3193,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiPublishPushConstants
+    internal struct GPUSimpleDdgiPublishPushConstants
     {
         public uint ParamsBufferIndex;
         public uint IrradianceAtlasBufferIndex;
@@ -3216,7 +3216,7 @@ namespace Njulf.Rendering.Data
     // never float bitcasts.  Ray targets are bounded by the authored DDGI
     // budgets and therefore fit in uint without lossy conversion.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiSchedulerFrame
+    internal struct GPUSimpleDdgiSchedulerFrame
     {
         public uint ActiveProbeCount;
         public uint ActiveVolumeCount;
@@ -3290,7 +3290,7 @@ namespace Njulf.Rendering.Data
     // scheduler policy changes.  Current/previous origins and toroidal offsets
     // are explicit so a shader can fail closed on incompatible remaps.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiSchedulerVolumePolicy
+    internal struct GPUSimpleDdgiSchedulerVolumePolicy
     {
         public uint FirstProbe;
         public uint ProbeCount;
@@ -3352,7 +3352,7 @@ namespace Njulf.Rendering.Data
     // integer fields so overlap handling cannot accidentally reinterpret
     // ownership metadata as a float.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiSchedulerDirtyRegion
+    internal struct GPUSimpleDdgiSchedulerDirtyRegion
     {
         public Vector4 Minimum;
         public Vector4 Maximum;
@@ -3370,7 +3370,7 @@ namespace Njulf.Rendering.Data
     // scheduler ABI keeps dirty-latency start and the applied invalidation
     // marker in separate words; neither is allowed to alias the other.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiSchedulerProbeState
+    internal struct GPUSimpleDdgiSchedulerProbeState
     {
         public uint LastCommittedUpdateFrame;
         public uint LastCommittedSourceRefreshFrame;
@@ -3396,7 +3396,7 @@ namespace Njulf.Rendering.Data
     // 32 bytes.  Invalid candidates use ProbeIndex == uint.MaxValue.  The
     // remaining words are packed only from bounded integer enums/counts.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiSchedulerCandidate
+    internal struct GPUSimpleDdgiSchedulerCandidate
     {
         public uint ProbeIndex;
         public uint VolumeIndex;
@@ -3416,7 +3416,7 @@ namespace Njulf.Rendering.Data
     // ExpectedRayInvocationCount carries the low 16 bits of the exact
     // CPU-planned scroll transaction serial instead of a quadrature witness.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiUpdateOutcome
+    internal struct GPUSimpleDdgiUpdateOutcome
     {
         public uint QueueTransactionGeneration;
         public uint SchedulerResourceGeneration;
@@ -3444,7 +3444,7 @@ namespace Njulf.Rendering.Data
     // so every command begins at the same alignment and a failed schedule can
     // reset x without touching neighbouring metadata.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiDispatchIndirectCommand
+    internal struct GPUSimpleDdgiDispatchIndirectCommand
     {
         public uint GroupCountX;
         public uint GroupCountY;
@@ -3456,7 +3456,7 @@ namespace Njulf.Rendering.Data
     // shipping summary; this header is the portion consumed by CPU admission
     // and stale-generation validation.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiSchedulerFeedback
+    internal struct GPUSimpleDdgiSchedulerFeedback
     {
         public uint FrameSerialLow;
         public uint FrameSerialHigh;
@@ -3544,7 +3544,7 @@ namespace Njulf.Rendering.Data
     // stage. That keeps stage dispatch cheap without uploading a second header
     // for every pass.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSimpleDdgiSchedulePushConstants
+    internal struct GPUSimpleDdgiSchedulePushConstants
     {
         public uint ArenaBufferIndex;
         public uint ParamsBufferIndex;
@@ -3582,7 +3582,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFarFieldVoxelizePushConstants
+    internal struct GPUFarFieldVoxelizePushConstants
     {
         public uint ParamsBufferIndex;
         public uint VoxelBufferIndex;
@@ -3605,7 +3605,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUSkyboxPushConstants
+    internal struct GPUSkyboxPushConstants
     {
         public Matrix4x4 InverseViewMatrix;
         public Matrix4x4 InverseProjectionMatrix;
@@ -3616,14 +3616,14 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUHiZBuildPushConstants
+    internal struct GPUHiZBuildPushConstants
     {
         public Vector2 SourceDimensions;
         public Vector2 DestinationDimensions;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUBloomPushConstants
+    internal struct GPUBloomPushConstants
     {
         public Vector2 SourceDimensions;
         public Vector2 DestinationDimensions;
@@ -3636,7 +3636,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUCompositePushConstants
+    internal struct GPUCompositePushConstants
     {
         public uint SceneColorTextureIndex;
         public uint BloomTextureIndex;
@@ -3657,7 +3657,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUWeightedOitCompositePushConstants
+    internal struct GPUWeightedOitCompositePushConstants
     {
         public uint AccumulationTextureIndex;
         public uint RevealageTextureIndex;
@@ -3666,7 +3666,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUAutoExposurePushConstants
+    internal struct GPUAutoExposurePushConstants
     {
         public Vector2 SourceDimensions;
         public uint SceneColorTextureIndex;
@@ -3690,7 +3690,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUFogPushConstants
+    internal struct GPUFogPushConstants
     {
         public Matrix4x4 InverseViewProjectionMatrix;
         public Vector4 CameraPositionAndTime;
@@ -3712,7 +3712,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUVolumetricFogFrameData
+    internal struct GPUVolumetricFogFrameData
     {
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewProjectionMatrix;
@@ -3740,7 +3740,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUVolumetricDensityVolume
+    internal struct GPUVolumetricDensityVolume
     {
         public Vector4 PositionAndShape;
         public Vector4 Rotation;
@@ -3756,7 +3756,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUVolumetricFogPushConstants
+    internal struct GPUVolumetricFogPushConstants
     {
         public uint FrameIndex;
         public uint Stage;
@@ -3803,7 +3803,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUAntiAliasingPushConstants
+    internal struct GPUAntiAliasingPushConstants
     {
         public Vector2 SourceDimensions;
         public Vector2 InvSourceDimensions;
@@ -3834,7 +3834,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUAmbientOcclusionPushConstants
+    internal struct GPUAmbientOcclusionPushConstants
     {
         public Matrix4x4 InverseProjectionMatrix;
         public Matrix4x4 ProjectionMatrix;
@@ -3851,7 +3851,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUAmbientOcclusionBlurPushConstants
+    internal struct GPUAmbientOcclusionBlurPushConstants
     {
         public Matrix4x4 InverseProjectionMatrix;
         public Vector2 Dimensions;
@@ -3863,7 +3863,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUGtaoPushConstants
+    internal struct GPUGtaoPushConstants
     {
         public Matrix4x4 InverseProjectionMatrix;
         public Matrix4x4 ProjectionMatrix;
@@ -3881,7 +3881,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUVariableRateShadingPushConstants
+    internal struct GPUVariableRateShadingPushConstants
     {
         public Matrix4x4 InverseProjectionMatrix;
         public Vector2 SourceDimensions;
@@ -3899,7 +3899,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUGtaoTemporalPushConstants
+    internal struct GPUGtaoTemporalPushConstants
     {
         public Vector2 Dimensions;
         public Vector2 SceneDimensions;
@@ -3914,7 +3914,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUGtaoSpatialPushConstants
+    internal struct GPUGtaoSpatialPushConstants
     {
         public Vector2 SourceDimensions;
         public Vector2 OutputDimensions;
@@ -3925,7 +3925,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUDdgiUpdatePushConstants
+    internal struct GPUDdgiUpdatePushConstants
     {
         public Vector4 EnvironmentRadianceAndIntensity;
         public Vector4 RelocationParams;

@@ -95,7 +95,7 @@ public readonly record struct OpacityMicromapRuntimeRegistrationSnapshot(
 /// cloned model instances, and remove the payload before the last mesh lease
 /// can be released.
 /// </summary>
-public sealed class OpacityMicromapRuntimeRegistrationStore
+internal sealed class OpacityMicromapRuntimeRegistrationStore
 {
     private readonly object _sync = new();
     private readonly Dictionary<MeshHandle, Entry> _entries = new();

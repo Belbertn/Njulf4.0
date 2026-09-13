@@ -17,7 +17,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed class ParticleSystemManager : IDisposable
+    internal sealed class ParticleSystemManager : IDisposable
     {
         private const float MaxDeltaSeconds = 1.0f / 15.0f;
         private const uint InitialParticleCapacity = 1024;

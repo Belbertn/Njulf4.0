@@ -28,7 +28,8 @@ foreach ($rootName in $roots) {
             if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
             $relative = [IO.Path]::GetRelativePath($workspace, $entry.FullName).Replace('\','/')
             # Cache is operational data; pinned campaign references remain usable.
-            if ($relative -eq 'artifacts/shader-cache' -or $relative -eq '.perf-loop-runs/campaign') { continue }
+            if ($relative -eq 'artifacts/shader-cache' -or $relative -eq '.perf-loop-runs/campaign' -or
+                $relative -eq 'artifacts/tools/ffmpeg-9.0.1') { continue } # Active pinned build dependency.
             if ($entry.PSIsContainer) { $pending.Push($entry.FullName); continue }
             if ($tracked.Contains($relative) -or $entry.LastWriteTimeUtc -ge $cutoff) { continue }
             $extension = $entry.Extension.ToLowerInvariant()

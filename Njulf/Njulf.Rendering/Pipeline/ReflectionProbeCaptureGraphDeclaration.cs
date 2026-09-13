@@ -32,7 +32,7 @@ public readonly record struct ReflectionProbeCaptureGraphPass(
 /// its compatibility pass order; these declarations are executed only when authored captures have
 /// work and make the private scratch/depth/publish dependencies inspectable and testable.
 /// </summary>
-public static class ReflectionProbeCaptureGraphDeclaration
+internal static class ReflectionProbeCaptureGraphDeclaration
 {
     private static readonly IReadOnlyList<ReflectionProbeCaptureGraphPass> Passes =
     [

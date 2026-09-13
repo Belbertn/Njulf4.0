@@ -10,7 +10,7 @@ namespace Njulf.Rendering.Pipeline;
 /// intentionally separate from the render-graph declaration: a graph resource
 /// name alone must never make a forward MRT variant selectable.
 /// </summary>
-public static class ForwardNearFieldDirectSourceContract
+internal static class ForwardNearFieldDirectSourceContract
 {
     private static readonly Format[] ReceiverAttachmentFormats =
     [
@@ -239,7 +239,7 @@ public readonly record struct ForwardNearFieldDirectSourcePipelineConfiguration(
 /// binding only establishes provenance and prevents it being inferred from a
 /// generic scene-colour image.
 /// </summary>
-public sealed class ForwardNearFieldDirectSourceAttachmentBinding
+internal sealed class ForwardNearFieldDirectSourceAttachmentBinding
 {
     private readonly RenderTarget[] _targets;
 

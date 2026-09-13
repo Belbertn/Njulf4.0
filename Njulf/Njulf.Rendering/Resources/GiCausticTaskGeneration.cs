@@ -469,7 +469,7 @@ public sealed class GiCausticTaskGenerationBatch
 }
 
 /// <summary>Deterministic compiler for emitted-power × hero-potential proposals.</summary>
-public static class GiCausticTaskGenerationCompiler
+internal static class GiCausticTaskGenerationCompiler
 {
     private const ulong FnvOffset = 14695981039346656037UL;
     private const ulong FnvPrime = 1099511628211UL;
@@ -965,7 +965,7 @@ public static class GiCausticTaskGenerationCompiler
 /// Concrete transfer producer. It uploads only immutable generation metadata;
 /// the compute task pass creates every task and audits all proposal factors.
 /// </summary>
-public sealed unsafe class GiCausticTaggedTransportGpuProducer :
+internal sealed unsafe class GiCausticTaggedTransportGpuProducer :
     IGiCausticTaggedTransportProducer
 {
     private readonly VulkanContext _context;

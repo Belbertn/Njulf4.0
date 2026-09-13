@@ -7,6 +7,7 @@ using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering.Data;
 using Njulf.Core.Math;
+using Njulf.Framework;
 using Njulf.Graphics;
 using Njulf.Input;
 using NUnit.Framework;

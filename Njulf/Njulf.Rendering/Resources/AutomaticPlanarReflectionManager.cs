@@ -21,7 +21,7 @@ namespace Njulf.Rendering.Resources;
 /// allocated levels so every byte remains visible to the central allocation
 /// tracker while shaders still receive a complete roughness mip chain.
 /// </summary>
-public sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
+internal sealed unsafe class AutomaticPlanarReflectionManager : IDisposable
 {
     public const uint MetadataMagic = 0x31524c50u; // "PLR1"
     public const uint MetadataVersion = 3u;

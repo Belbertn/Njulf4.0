@@ -1,4 +1,6 @@
 using Njulf.Audio;
+using Njulf.Audio.Assets;
+using Njulf.Assets;
 using Njulf.Core;
 using Njulf.Core.Camera;
 using Njulf.Core.Math;
@@ -13,12 +15,17 @@ internal sealed class AudioExample(ExampleOptions options) : ExampleGame(options
 {
     private const uint SoundBlockerLayer = 2;
     private AudioSystem? _audio;
+    private AudioScope? _localAudio;
+    private IContentScope? _audioContent;
     private AudioSource? _source;
+    private AudioClip? _effectClip;
+    private InputAction _effect = null!;
     private PhysicsScene _physics = null!;
     private RenderObject _wall = null!;
     private ColliderHandle _wallCollider;
     private InputAction _toggleWall = null!, _toggleOcclusion = null!, _pause = null!;
     private InputAction _forward = null!, _back = null!, _left = null!, _right = null!, _turnLeft = null!, _turnRight = null!;
+    private InputAction _mute = null!, _fade = null!, _restart = null!;
     private bool _occlusionEnabled = true;
     private float _queryCountdown;
     private bool _observedBlocked, _observedClear;
@@ -29,14 +36,16 @@ internal sealed class AudioExample(ExampleOptions options) : ExampleGame(options
         MaximumFramesPerSecond = 90;
         Camera.Position = new(0, 1.5f, 6);
         _physics = new(PhysicsMode.QueryOnly, Scene);
+        RegisterModule(new PhysicsHostModule(_physics));
         AddBox(new(0, -.25f, 0), new(16, .5f, 16), new(.3f, .35f, .4f, 1));
         AddBox(new(0, 1.5f, -2), new(.5f, .5f, .5f), new(.9f, .5f, .1f, 1));
         _wall = AddBox(new(0, 1.5f, 1), new(3, 3, .25f), new(.2f, .5f, .7f, 1));
-        _wallCollider = _physics.Register(_wall.Id, [ColliderShape.Box(new(3, 3, .25f))],
-            layer: SoundBlockerLayer, node: _wall.Node, entity: _wall);
+        _wallCollider = _physics.RegisterStatic(_wall, ColliderShape.Box(new(3, 3, .25f)), layer: SoundBlockerLayer);
+        _effect = Input.CreateButton("One-shot effect", InputKey.F);
         _toggleWall = Bind("Toggle audio wall", InputKey.Space);
         _toggleOcclusion = Bind("Toggle occlusion", InputKey.O);
         _pause = Bind("Pause audio", InputKey.P);
+        _mute = Bind("Mute SFX", InputKey.M); _fade = Bind("Fade SFX", InputKey.G); _restart = Bind("Restart sound", InputKey.R);
         _forward = Bind("Walk forward", InputKey.W); _back = Bind("Walk back", InputKey.S);
         _left = Bind("Walk left", InputKey.A); _right = Bind("Walk right", InputKey.D);
         _turnLeft = Bind("Turn left", InputKey.Left); _turnRight = Bind("Turn right", InputKey.Right);
@@ -48,9 +57,18 @@ internal sealed class AudioExample(ExampleOptions options) : ExampleGame(options
         }
         if (_audio != null)
         {
+            RegisterModule(new AudioHostModule(_audio));
             _audio.MasterGain = .5f;
-            var clip = _audio.LoadWav(Path.Combine(AppContext.BaseDirectory, "Assets", "Audio", "occlusion-loop.wav"));
-            _source = _audio.CreateSource(clip);
+            Content.RegisterAudio(_audio);
+            _audioContent = Content.CreateScope();
+            // Same phase, reverse disposal order: local voices, then cached clips.
+            RegisterModule(new AudioContentLifetime(_audioContent));
+            _localAudio = RegisterModule(_audio.CreateScope());
+            var clip = _audioContent.Load<AudioClip>("Audio/occlusion-loop.wav");
+            if (!ReferenceEquals(clip, _audioContent.Load<AudioClip>("Audio/./occlusion-loop.wav")))
+                throw new InvalidOperationException("Audio content did not reuse its cached clip.");
+            _effectClip = clip;
+            _source = _localAudio.CreateSource(clip);
             _source.Position = new(0, 1.5f, -2);
             _source.ReferenceDistance = 3;
             _source.Looping = true;
@@ -59,7 +77,7 @@ internal sealed class AudioExample(ExampleOptions options) : ExampleGame(options
             _source.Play();
             Console.WriteLine($"OpenAL ready; EFX={_audio.SupportsEfx} (otherwise volume-only occlusion).");
         }
-        Console.WriteLine("WASD: move. Left/Right: turn. Space: wall. O: occlusion. P: pause/resume sound. Orange box is the source.");
+        Console.WriteLine("WASD: move. Left/Right: turn. Space: wall. O: occlusion. P: pause/resume. F: one-shot. M: mute SFX. G: fade SFX. R: restart. Orange box is the source.");
     }
 
     private InputAction Bind(string name, InputKey key)
@@ -121,15 +139,17 @@ internal sealed class AudioExample(ExampleOptions options) : ExampleGame(options
         if (_toggleOcclusion.WasPressed) { _occlusionEnabled = !_occlusionEnabled; _queryCountdown = 0; }
         if (_audio != null && _source != null)
         {
-            _audio.SetListener(Camera.Position, Camera.Forward, Camera.Up);
+            if (_mute.WasPressed) _audio.SFX.Muted = !_audio.SFX.Muted;
+            if (_fade.WasPressed) _audio.SFX.FadeTo(_audio.SFX.Volume < .5f ? 1 : 0, 1);
+            if (_restart.WasPressed) _source.Restart();
+            if (_effect.WasPressed) _localAudio!.PlayOneShot(_effectClip!, Camera.Position, .5f);
             if (_pause.WasPressed)
             {
-                if (_source.State == AudioPlaybackState.Playing) _source.Pause();
-                else { QueryOcclusion(); _source.Play(); }
+                IsPaused = !IsPaused;
+                if (!IsPaused) QueryOcclusion();
             }
             _queryCountdown -= dt;
             if (_source.State == AudioPlaybackState.Playing && _queryCountdown <= 0) QueryOcclusion();
-            _audio.Update(dt);
         }
         Window.Title = $"Audio | wall={_wall.Visible} | occlusion={_occlusionEnabled} | blocked={_source?.Occlusion:F0} | EFX={_audio?.SupportsEfx}";
     }
@@ -143,9 +163,15 @@ internal sealed class AudioExample(ExampleOptions options) : ExampleGame(options
         }
         finally
         {
-            _audio?.Dispose(); // Sources and clips released before the output device.
-            _physics?.Dispose();
+            // Registered modules release voices, then content, then the device.
             base.Unload();
         }
+    }
+
+    private sealed class AudioContentLifetime(IContentScope content) : IGameModule
+    {
+        public GameModulePhase Phase => GameModulePhase.AudioSpatial;
+        public void Update(GameModuleFrame frame) { }
+        public void Dispose() => content.Dispose();
     }
 }

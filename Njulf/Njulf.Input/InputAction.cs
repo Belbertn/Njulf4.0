@@ -31,6 +31,14 @@ public sealed class InputAction
     public bool WasPressed { get { State.Owner.EnsureUsable(); return State.Previous.X == 0 && State.Value.X != 0; } }
     /// <summary>True only for the update that changes from down to up.</summary>
     public bool WasReleased { get { State.Owner.EnsureUsable(); return State.Previous.X != 0 && State.Value.X == 0; } }
+    /// <summary>Opt in to one pending press surviving input updates until consumed. Multiple observed presses coalesce.</summary>
+    public bool BufferPresses
+    {
+        get { State.Owner.EnsureUsable(); return State.Buffered; }
+        set => State.SetBuffering(value);
+    }
+    /// <summary>Returns and clears the pending press. Requires BufferPresses; does not change WasPressed or IsDown.</summary>
+    public bool ConsumePressed() => State.Consume().X != 0;
     /// <summary>Raised once on an up-to-down transition, on the game thread.</summary>
     public event Action? Pressed;
     /// <summary>Raised once on a down-to-up transition, on the game thread.</summary>
@@ -49,7 +57,7 @@ public sealed class InputAction
     public InputRebindSession BeginRebind(int bindingIndex, InputKey? cancelKey = InputKey.Escape) =>
         State.Owner.BeginRebind(State, bindingIndex, InputBindingPart.Whole, cancelKey);
     /// <summary>Clears current and previous state without firing events; keeps bindings.</summary>
-    public void Reset() { State.Owner.EnsureUsable(); State.Value = State.Previous = default; }
+    public void Reset() => State.Reset();
     internal void Notify()
     {
         if (WasPressed) { Pressed?.Invoke(); State.Owner.NotifyPressed(this); }

@@ -11,7 +11,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class SpotShadowAtlas : IDisposable
+    internal sealed unsafe class SpotShadowAtlas : IDisposable
     {
         private const int MaxSpotShadowRecords = LightManager.MaxLights;
         private readonly VulkanContext _context;

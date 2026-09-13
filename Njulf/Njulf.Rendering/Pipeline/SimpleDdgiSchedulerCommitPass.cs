@@ -16,7 +16,7 @@ namespace Njulf.Rendering.Pipeline;
 /// Completes the GPU-owned Simple-DDGI transaction after publication and copies
 /// only the fixed feedback summary to a delayed host-visible slot.
 /// </summary>
-public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
+internal sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
 {
     private static readonly string[] ShaderNames =
     [

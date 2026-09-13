@@ -14,6 +14,7 @@ namespace Njulf.Editor;
 /// </summary>
 internal sealed unsafe class RenderingSettingsEditorPanel
 {
+    private static readonly ShadowQualityPreset[] ShadowPresets = Enum.GetValues<ShadowQualityPreset>();
     private static readonly SettingEditor[] ExposureEditors = BuildEditors<RenderSettings>(static property =>
         property.Name is
             nameof(RenderSettings.Exposure) or
@@ -106,6 +107,18 @@ internal sealed unsafe class RenderingSettingsEditorPanel
                 foreach (var field in _lastResult.Fields)
                     ImGui.TextWrapped($"{field.Field}: {field.Reason}");
         }
+
+        ImGui.BeginDisabled(_controller == null || _pending != null || _controller.IsPending);
+        if (ImGui.BeginCombo("Shadow quality", "Apply a preset"))
+        {
+            foreach (var preset in ShadowPresets)
+                if (ImGui.Selectable(preset.ToString()))
+                    _pending = _controller!.ApplyAsync(new() { ShadowPreset = preset });
+            ImGui.EndCombo();
+        }
+        ImGui.EndDisabled();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Changes only the shadow tier; resources are prepared at a frame boundary. Specialist overrides remain in the Shadows panel.");
 
         if (ImGui.Button("Reset visualization overrides"))
             settings.ResetRenderViewOverrides();

@@ -18,7 +18,7 @@ namespace Njulf.Rendering.Pipeline
     /// lazily on first execution so normal and None frames pay no allocation,
     /// upload, dispatch, or draw cost.
     /// </summary>
-    public sealed unsafe class DebugOverlayPass : RenderPassBase
+    internal sealed unsafe class DebugOverlayPass : RenderPassBase
     {
         private const string EntryPoint = "main";
         private readonly RenderTargetManager _renderTargets;

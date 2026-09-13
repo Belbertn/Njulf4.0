@@ -14,13 +14,26 @@ using Silk.NET.Windowing;
 
 namespace Microsoft.Extensions.DependencyInjection
 {
+    /// <summary>Registers the Vulkan renderer and its owned dependencies for a custom window host.</summary>
     public static class RenderingServiceCollectionExtensions
     {
+        /// <summary>Registers rendering with default startup options; does not initialize it or run a frame loop.</summary>
+        /// <param name="services">Host service collection, configured before building its provider.</param>
+        /// <param name="window">Borrowed Vulkan-capable window; the host initializes and disposes it.</param>
+        /// <returns>The same collection for further registrations.</returns>
         public static IServiceCollection AddRendering(this IServiceCollection services, IWindow window)
         {
             return services.AddRendering(window, configure: null);
         }
 
+        /// <summary>Registers rendering and configures startup options synchronously before renderer construction.</summary>
+        /// <remarks>Register once per provider/window. Game already calls this. Custom hosts resolve IRenderer,
+        /// initialize it after the native window loads, drive frames/resizes and dispose scene/content before the
+        /// provider, then the window. AddAssets and AddInput are separate opt-ins. Runtime changes use GraphicsDevice.Settings.</remarks>
+        /// <param name="services">Host service collection; null is rejected.</param>
+        /// <param name="window">Host-owned Vulkan window; null is rejected. Registration does not create its native surface.</param>
+        /// <param name="configure">Optional callback receiving provider-owned startup options.</param>
+        /// <returns>The same collection for further registrations.</returns>
         public static IServiceCollection AddRendering(
             this IServiceCollection services,
             IWindow window,

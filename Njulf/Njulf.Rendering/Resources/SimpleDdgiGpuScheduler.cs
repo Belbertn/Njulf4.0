@@ -111,7 +111,7 @@ public readonly record struct SimpleDdgiRingRebaseEvidence(
 /// per-probe authority; those remain in <see cref="SimpleDdgiVolumeManager"/>
 /// only while <see cref="SimpleDdgiSchedulerMode.CpuReference"/> is active.
 /// </summary>
-public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
+internal sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
 {
     private readonly VulkanContext _context;
     private readonly BufferManager _bufferManager;

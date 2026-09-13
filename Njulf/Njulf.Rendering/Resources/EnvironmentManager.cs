@@ -15,7 +15,7 @@ using GpuVector4 = Njulf.Core.Math.Vector4;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class EnvironmentManager : IDisposable
+    internal sealed unsafe class EnvironmentManager : IDisposable
     {
         private static readonly ulong EnvironmentDataSize = (ulong)Marshal.SizeOf<GPUEnvironmentData>();
 

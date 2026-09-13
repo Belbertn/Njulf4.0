@@ -1,3 +1,4 @@
+using Njulf.Framework;
 using Njulf.Assets;
 using Njulf.Core;
 using Njulf.Core.Interfaces;
@@ -6,6 +7,12 @@ using Njulf.Core.Scene;
 using Njulf.Input;
 using Njulf.Graphics;
 using Njulf.Rendering;
+#if (physics)
+using Njulf.Physics;
+#endif
+#if (audio)
+using Njulf.Audio;
+#endif
 
 namespace NjulfGame;
 
@@ -36,6 +43,11 @@ internal static class Program
 internal sealed class StarterGame(int frameLimit) : Game
 {
     private InputAction _exit = null!;
+#if (audio)
+    private InputAction _playSound = null!;
+    private AudioScope? _sounds;
+    private AudioClip? _impact;
+#endif
     private bool _loaded;
     public int PresentedFrames { get; private set; }
 
@@ -50,15 +62,39 @@ internal sealed class StarterGame(int frameLimit) : Game
     {
         _exit = Input.CreateAction("Exit");
         _exit.AddBinding(new InputBinding(InputKey.Escape));
+        // Keep the visible sky and ambient illumination at this small scene's light level.
+        Scene.Environment = new SceneEnvironment { AtmosphereIntensity = .02f };
         Scene.Add(new SceneLight
         {
             Type = SceneLightType.Directional,
             Direction = new Vector3(-0.5f, -1, -1).Normalized(),
             Color = Vector3.One,
-            Intensity = 3
+            Intensity = 1
         });
         Model model = Content.Load<Model>("Assets/tetrahedron.gltf", new ContentLoadOptions { RequireCooked = true });
-        Scene.Add(model.CreateInstance());
+        var instance = model.CreateInstance();
+        Scene.Add(instance);
+#if (physics)
+        IsFixedTimeStep = true;
+        var world = RegisterModule(new PhysicsHostModule(new PhysicsScene(PhysicsMode.Simulation, Scene))).World;
+        instance.PlacementRoot.Position = new Vector3(0, 2, 0);
+        world.RegisterDynamic(instance, ColliderShape.Box(Vector3.One));
+        // An invisible static floor catches the object at y = -1.
+        world.Register(Guid.NewGuid(), [ColliderShape.Box(new Vector3(20, 1, 20))],
+            pose: new PhysicsPose(new Vector3(0, -1.5f, 0)));
+#endif
+#if (audio)
+        _playSound = Input.CreateButton("Play sound", InputKey.Space);
+        AudioSystem? audio = null;
+        try { audio = new AudioSystem(); }
+        catch (InvalidOperationException error) { Console.Error.WriteLine($"Audio unavailable: {error.Message}"); }
+        if (audio != null)
+        {
+            RegisterModule(new AudioHostModule(audio));
+            _sounds = RegisterModule(audio.CreateScope());
+            _impact = _sounds.LoadWav(Path.Combine(ContentRoot, "Assets", "impact.wav"));
+        }
+#endif
         _loaded = true;
     }
 
@@ -66,6 +102,9 @@ internal sealed class StarterGame(int frameLimit) : Game
     {
         base.Update(gameTime);
         if (_exit.WasPressed) Exit();
+#if (audio)
+        if (_playSound.WasPressed && _sounds != null) _sounds.PlayOneShot(_impact!, Camera.Position);
+#endif
     }
 
     protected override void OnFramePresented()

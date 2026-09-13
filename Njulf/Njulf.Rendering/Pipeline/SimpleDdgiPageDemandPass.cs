@@ -18,7 +18,7 @@ namespace Njulf.Rendering.Pipeline;
 /// invocation covers a 64x64 receiver tile and stamps four stratified samples;
 /// no page list is copied to or selected by the CPU.
 /// </summary>
-public sealed unsafe class SimpleDdgiPageDemandPass : RenderPassBase
+internal sealed unsafe class SimpleDdgiPageDemandPass : RenderPassBase
 {
     internal const uint ReceiverTileSize = 64u;
     internal const uint WorkgroupWidth = 4u;

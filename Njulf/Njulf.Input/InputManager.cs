@@ -3,11 +3,12 @@ using System.Collections.Generic;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Silk.NET.Input;
+using Njulf.Input.Advanced;
 
 namespace Njulf.Input
 {
     /// <summary>Silk-backed game-thread input service. The host owns its lifetime.</summary>
-    public sealed partial class InputManager : IInputManager, IDisposable
+    public sealed partial class InputManager : IInputManager, INativeInputIntegration, IDisposable
     {
         private readonly IInputContext _inputContext;
         private readonly Dictionary<string, InputActionState> _actions = new(StringComparer.Ordinal);
@@ -42,19 +43,49 @@ namespace Njulf.Input
         /// <inheritdoc />
         public event System.Action<InputAction>? ActionReleased;
         /// <summary>Raw input events for optional UI integrations. Game actions remain unchanged.</summary>
-        public event System.Action<Key, char>? RawKeyDown;
+        private event System.Action<Key, char>? RawKeyDown;
+        event System.Action<Key, char>? INativeInputIntegration.RawKeyDown
+        {
+            add => RawKeyDown += value;
+            remove => RawKeyDown -= value;
+        }
         /// <summary>Native key release for UI integrations on the game thread.</summary>
-        public event System.Action<Key>? RawKeyUp;
+        private event System.Action<Key>? RawKeyUp;
+        event System.Action<Key>? INativeInputIntegration.RawKeyUp
+        {
+            add => RawKeyUp += value;
+            remove => RawKeyUp -= value;
+        }
         /// <summary>Text characters delivered by the platform on the game thread.</summary>
-        public event System.Action<char>? RawTextInput;
+        private event System.Action<char>? RawTextInput;
+        event System.Action<char>? INativeInputIntegration.RawTextInput
+        {
+            add => RawTextInput += value;
+            remove => RawTextInput -= value;
+        }
         /// <inheritdoc />
         public event System.Action<char>? TextInput;
         /// <summary>Native button code and pressed state for UI integrations.</summary>
-        public event System.Action<int, bool>? RawMouseButtonChanged;
+        private event System.Action<int, bool>? RawMouseButtonChanged;
+        event System.Action<int, bool>? INativeInputIntegration.RawMouseButtonChanged
+        {
+            add => RawMouseButtonChanged += value;
+            remove => RawMouseButtonChanged -= value;
+        }
         /// <summary>Client-area cursor position in pixels, using Njulf math.</summary>
-        public event System.Action<Vector2>? RawMouseMoved;
+        private event System.Action<Vector2>? RawMouseMoved;
+        event System.Action<Vector2>? INativeInputIntegration.RawMouseMoved
+        {
+            add => RawMouseMoved += value;
+            remove => RawMouseMoved -= value;
+        }
         /// <summary>Horizontal and vertical platform scroll increments.</summary>
-        public event System.Action<Vector2>? RawMouseScrolled;
+        private event System.Action<Vector2>? RawMouseScrolled;
+        event System.Action<Vector2>? INativeInputIntegration.RawMouseScrolled
+        {
+            add => RawMouseScrolled += value;
+            remove => RawMouseScrolled -= value;
+        }
 
         /// <inheritdoc />
         public Vector2 MousePosition { get { EnsureUsable(); return _mousePosition; } }
@@ -156,7 +187,7 @@ namespace Njulf.Input
         /// <inheritdoc />
         public bool IsMouseButtonReleased(MouseButton button) => ((~_mouseMask & _previousMouseMask) & MouseBit(button)) != 0;
         /// <summary>Polls a native key directly for UI integration; unavailable devices return false.</summary>
-        public bool IsPhysicalKeyDown(Key key, int keyboardIndex = 0)
+        bool INativeInputIntegration.IsPhysicalKeyDown(Key key, int keyboardIndex)
         {
             EnsureUsable();
             if (keyboardIndex < 0 || keyboardIndex >= _keyboards.Count)
@@ -289,7 +320,7 @@ namespace Njulf.Input
         }
 
         /// <summary>Sets the native cursor mode for all mice on the game thread.</summary>
-        public void SetCursorMode(Silk.NET.Input.CursorMode mode)
+        void INativeInputIntegration.SetCursorMode(Silk.NET.Input.CursorMode mode)
         {
             EnsureUsable();
             if (!_isInitialized) Initialize();

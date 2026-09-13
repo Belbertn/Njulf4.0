@@ -10,7 +10,7 @@ namespace Njulf.Rendering.Resources;
 /// which prevents independently managed descriptors from observing different
 /// acceleration-structure generations.
 /// </summary>
-public sealed unsafe class RaySceneDescriptorBank : IDisposable
+internal sealed unsafe class RaySceneDescriptorBank : IDisposable
 {
     private readonly VulkanContext _context;
     private readonly AccelerationStructureManager _accelerationStructures;

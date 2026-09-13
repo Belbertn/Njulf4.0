@@ -28,7 +28,7 @@ namespace Njulf.Rendering.Diagnostics
         IReadOnlyList<UploadBudgetEntry> Entries,
         RenderBudgetStatus Status);
 
-    public sealed class UploadBudgetTracker
+    internal sealed class UploadBudgetTracker
     {
         private readonly ulong[] _bytesByCategory = new ulong[Enum.GetValues<UploadBudgetCategory>().Length];
         private ulong _currentFrameBytes;

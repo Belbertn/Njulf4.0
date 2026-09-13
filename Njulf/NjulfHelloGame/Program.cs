@@ -6,6 +6,7 @@ using Njulf.Core;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Scene;
+using Njulf.Framework;
 using Njulf.Graphics;
 using Njulf.Input;
 using Njulf.Rendering;
@@ -947,7 +948,7 @@ internal sealed class HelloGame : Game
         if (_smokeOptions.OpenEditorOnStartup)
         {
             _editorController.SetEnabled(true);
-            input.SetCursorMode(CursorMode.Normal);
+            ((Njulf.Input.Advanced.INativeInputIntegration)input).SetCursorMode(CursorMode.Normal);
         }
 #endif
         if (_smokeOptions.KhronosMaterialGiRenderedGate is not null)
@@ -2388,7 +2389,7 @@ internal sealed class HelloGame : Game
 
     private void UpdateEditor(float deltaTime)
     {
-        if (Input is not InputManager input || _editorController == null || _editorHost == null || _editorPanels == null)
+        if (Input is not Njulf.Input.Advanced.INativeInputIntegration input || _editorController == null || _editorHost == null || _editorPanels == null)
             return;
 
         bool controlDown = input.IsPhysicalKeyDown(Key.ControlLeft) || input.IsPhysicalKeyDown(Key.ControlRight);
@@ -2413,13 +2414,13 @@ internal sealed class HelloGame : Game
             _editorController.Save();
         _editorSavePressed = saveDown;
 
-        bool pickDown = input.IsMouseButtonDown(Njulf.Input.MouseButton.Left);
+        bool pickDown = Input.IsMouseButtonDown(Njulf.Input.MouseButton.Left);
         var gizmoViewport = new Njulf.Core.Math.Vector2(Math.Max(1, Window.Size.X), Math.Max(1, Window.Size.Y));
-        _editorController.Gizmos.Update(_editorController, (FirstPersonCamera)Camera!, gizmoViewport, input.MousePosition,
+        _editorController.Gizmos.Update(_editorController, (FirstPersonCamera)Camera!, gizmoViewport, Input.MousePosition,
             pickDown, !_editorHost.WantCaptureMouse, IsWindowFocused, input.IsPhysicalKeyDown(Key.Escape));
         _editorController.Gizmos.Render();
         if (pickDown && !_editorPickPressed)
-            _editorController.TryPick((FirstPersonCamera)Camera!, input.MousePosition, gizmoViewport);
+            _editorController.TryPick((FirstPersonCamera)Camera!, Input.MousePosition, gizmoViewport);
         _editorPickPressed = pickDown;
         _editorController.UpdateSelectionHighlight();
     }

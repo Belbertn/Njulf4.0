@@ -18,7 +18,7 @@ namespace Njulf.Rendering.Pipeline;
 /// Expands compact, stable foliage-patch work records into frame-slot geometry
 /// immediately before the corresponding updateable BLAS is built.
 /// </summary>
-public sealed unsafe class DdgiFoliageProxyGenerationPass : IDisposable
+internal sealed unsafe class DdgiFoliageProxyGenerationPass : IDisposable
 {
     private const uint WorkgroupSize = 64;
     private const string ShaderName = "ddgi_foliage_proxy_generate.comp.spv";

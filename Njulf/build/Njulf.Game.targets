@@ -14,6 +14,7 @@
     <CookedAssetsOnly Condition="'$(Configuration)' == 'Release'">true</CookedAssetsOnly>
   </PropertyGroup>
   <Import Project="$(MSBuildThisFileDirectory)../Njulf.ShaderBuild/Njulf.Effects.targets" />
+  <Import Project="$(MSBuildThisFileDirectory)Njulf.Audio.targets" />
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)../NjulfHelloGame/THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="$(MSBuildThisFileDirectory)../Njulf.AssetTool/Imazen.WebP.provenance.json" Link="Imazen.WebP.provenance.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

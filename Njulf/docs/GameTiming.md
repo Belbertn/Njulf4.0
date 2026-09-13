@@ -4,6 +4,20 @@
 when unfocused. `MaximumFramesPerSecond` and VSync still control presentation pacing.
 Timing starts after `LoadAsync` completes.
 
+`IUpdateable.Update(float)` receives seconds, not a `GameTime`. Under the default host,
+the scene forwards `ElapsedGameTime.TotalSeconds`: scaled elapsed time in variable mode,
+or a full fixed interval in fixed mode. Default scene updates are skipped during effective
+pause. Direct callers choose their own timing/pause policy. Use host `GameTime` callbacks
+when total time or unscaled time is needed.
+
+Optional registered modules run after gameplay even if overrides omit `base`: each fixed
+gameplay callback is followed by physics stepping and contact delivery; after all steps,
+query synchronization, listener/emitter updates and unscaled audio maintenance run once.
+Simulation physics requires fixed mode. Query synchronization and spatial/audio maintenance
+continue during pause. Scene audio pauses; only host-paused voices resume, and root music
+continues. Time scaling does not alter pitch. See
+[host modules and managed levels](FrameworkApi.md#optional-host-modules).
+
 ## Optional fixed simulation
 
 Set `IsFixedTimeStep = true`. `Update(GameTime)` still runs once per host update,

@@ -14,7 +14,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class DirectionalShadowPass : RenderPassBase
+    internal sealed unsafe class DirectionalShadowPass : RenderPassBase
     {
         private static readonly string[] StaticCascadeDebugLabels = CreateCascadeDebugLabels("Static");
         private static readonly string[] DynamicCascadeDebugLabels = CreateCascadeDebugLabels("Dynamic");

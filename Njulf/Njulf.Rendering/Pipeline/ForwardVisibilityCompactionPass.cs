@@ -12,7 +12,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class ForwardVisibilityCompactionPass : RenderPassBase
+    internal sealed unsafe class ForwardVisibilityCompactionPass : RenderPassBase
     {
         private const uint WorkgroupSize = 64;
         private const int SimpleOpaqueIndirectDispatchSlot = 1;

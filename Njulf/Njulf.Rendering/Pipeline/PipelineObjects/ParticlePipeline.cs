@@ -12,7 +12,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline.PipelineObjects
 {
-    public sealed unsafe class ParticlePipeline : IDisposable
+    internal sealed unsafe class ParticlePipeline : IDisposable
     {
         private const string EntryPoint = "main";
         private const uint AlphaBlendFamily = 1u << 0;

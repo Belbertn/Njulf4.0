@@ -11,6 +11,87 @@ namespace Njulf.Tests;
 public sealed class InputGameplayTests
 {
     [Test]
+    public void BindingHelpersProduceOrdinaryActionValues()
+    {
+        using var rig = new InputTestRig();
+        var move = rig.Input.CreateWasd("Move").BindGamepadStick(GamepadStick.Left);
+        var jump = rig.Input.CreateButton("Jump", InputKey.Space).Bind(GamepadButton.A);
+        var fire = rig.Input.CreateButton("Fire", MouseButton.Left);
+        var look = rig.Input.CreateGamepadStick("Look", GamepadStick.Right, deadZone: 0);
+        rig.Keys.UnionWith([Key.W, Key.D]); rig.Input.Update();
+        AssertVector(move.Value, new(MathF.Sqrt(.5f), MathF.Sqrt(.5f)));
+        rig.Keys.Clear(); rig.Sticks[0] = new(0, 1, 0); rig.Sticks[1] = new(1, 0, -1);
+        rig.Buttons.Add(new(ButtonName.A, 0, true)); rig.Input.Update();
+        AssertVector(move.Value, Vector2.UnitX); AssertVector(look.Value, Vector2.UnitY);
+        Assert.That(jump.WasPressed, Is.True);
+        Assert.That(fire.Bindings[0].DeviceType, Is.EqualTo(BindingDeviceType.Mouse));
+    }
+
+    [Test]
+    public void BufferedPressSurvivesNoStepAndCoalescesWithoutCatchUpReplay()
+    {
+        using var rig = new InputTestRig();
+        var jump = rig.Input.CreateButton("Jump", InputKey.Space, bufferPresses: true);
+        rig.Input.Update();
+        // Two presses observed by input, with no simulation steps between them.
+        for (int i = 0; i < 2; i++)
+        {
+            rig.Keys.Add(Key.Space); rig.Input.Update();
+            rig.Keys.Clear(); rig.Input.Update();
+        }
+        Assert.That(jump.WasPressed, Is.False);
+        int commands = 0;
+        for (int step = 0; step < 4; step++) if (jump.ConsumePressed()) commands++;
+        Assert.That(commands, Is.EqualTo(1));
+        rig.Keys.Add(Key.Space); rig.Input.Update();
+        Assert.That(jump.ConsumePressed(), Is.True);
+        Assert.That(jump.WasPressed && jump.IsDown, Is.True, "Consumption does not change frame polling.");
+        rig.Input.Update(); Assert.That(jump.ConsumePressed(), Is.False, "Holding is not another press.");
+    }
+
+    [Test]
+    public void BufferedDeltasAccumulateOnceAndResetWithSuppression()
+    {
+        using var rig = new InputTestRig();
+        var look = rig.Input.CreateMouseLook("Look", 2, bufferDeltas: true);
+        var wheel = rig.Input.CreateFloatAction("Wheel", mode: InputValueMode.Delta);
+        wheel.AddBinding(new(MouseAxis.WheelY)); wheel.BufferDeltas = true;
+        rig.Move(10, 10); rig.Move(12, 13); rig.Wheel(0, 1); rig.Input.Update();
+        rig.Move(15, 17); rig.Wheel(0, 2); rig.Input.Update(); rig.Input.Update();
+        AssertVector(look.Value, Vector2.Zero);
+        AssertVector(look.ConsumeDelta(), new(10, 14)); AssertVector(look.ConsumeDelta(), Vector2.Zero);
+        Assert.That(wheel.ConsumeDelta(), Is.EqualTo(3)); Assert.That(wheel.ConsumeDelta(), Is.Zero);
+        rig.Move(16, 18); rig.Input.Update(); look.Reset(); AssertVector(look.ConsumeDelta(), Vector2.Zero);
+        rig.Move(17, 19); rig.Input.Update(); rig.Input.SetCursorMode(InputCursorMode.Captured);
+        AssertVector(look.ConsumeDelta(), Vector2.Zero);
+        rig.Move(17, 19); rig.Input.Update(); rig.Input.SetFocused(false);
+        AssertVector(look.ConsumeDelta(), Vector2.Zero);
+        Assert.Throws<InvalidOperationException>(() => rig.Input.CreateWasd("Move").BufferDeltas = true);
+    }
+
+    [TestCase("focus")]
+    [TestCase("context")]
+    [TestCase("rebind")]
+    [TestCase("reset")]
+    public void BufferedCommandsAreDiscardedWhenGameplayIsSuppressed(string reason)
+    {
+        using var rig = new InputTestRig();
+        var context = rig.Input.CreateContext("Game"); rig.Input.ActiveContext = context;
+        var jump = rig.Input.CreateButton("Jump", InputKey.Space, context, bufferPresses: true);
+        var look = rig.Input.CreateMouseLook("Look", context: context, bufferDeltas: true);
+        rig.Input.Update(); rig.Keys.Add(Key.Space); rig.Move(0, 0); rig.Move(5, 2); rig.Input.Update();
+        switch (reason)
+        {
+            case "focus": rig.Input.SetFocused(false); break;
+            case "context": rig.Input.ActiveContext = null; rig.Input.Update(); break;
+            case "rebind": jump.BeginRebind(0); break;
+            case "reset": jump.Reset(); look.Reset(); break;
+        }
+        Assert.That(jump.ConsumePressed(), Is.False);
+        AssertVector(look.ConsumeDelta(), Vector2.Zero);
+    }
+
+    [Test]
     public void DigitalComposites_CancelNormalizeAndSelectStrongestAlternative()
     {
         using var rig = new InputTestRig();
@@ -126,7 +207,7 @@ public sealed class InputGameplayTests
     {
         using var rig = new InputTestRig();
         IInputManager input = rig.Input;
-        string text = "", raw = ""; input.TextInput += c => text += c; rig.Input.RawTextInput += c => raw += c;
+        string text = "", raw = ""; input.TextInput += c => text += c; ((Njulf.Input.Advanced.INativeInputIntegration)rig.Input).RawTextInput += c => raw += c;
         var action = input.CreateAction("Held"); action.AddBinding(new(InputKey.A));
         input.SetCursorMode(InputCursorMode.Captured);
         Assert.That(rig.NativeCursor, Is.EqualTo(NativeCursorMode.Disabled), "Unsupported raw motion falls back to relative capture.");

@@ -338,6 +338,13 @@
           "Silk.NET.OpenAL.Soft.Native": "[1.23.1, )"
         }
       },
+      "njulf.audio.assets": {
+        "type": "Project",
+        "dependencies": {
+          "Njulf.Assets": "[1.0.0, )",
+          "Njulf.Audio": "[1.0.0, )"
+        }
+      },
       "njulf.core": {
         "type": "Project"
       },

@@ -79,6 +79,17 @@ namespace Njulf.Core.Camera
             return Matrix4x4.CreateLookAt(Position, Position + _forward, _up);
         }
 
+        public override void LookAt(Vector3 target, Vector3 up)
+        {
+            var basis = LookAtBasis(Position, target, up);
+            _forward = basis.Forward; _right = basis.Right; _up = basis.Up;
+            _yaw = System.MathF.Atan2(_forward.X, -_forward.Z);
+            _pitch = System.MathF.Asin(System.Math.Clamp(-_forward.Y, -1f, 1f));
+            Matrix4x4 unrolled = Matrix4x4.CreateRotationX(_pitch) * Matrix4x4.CreateRotationY(_yaw);
+            _roll = System.MathF.Atan2(-Vector3.Dot(_right, Vector3.UnitY * unrolled), Vector3.Dot(_right, Vector3.UnitX * unrolled));
+            Update();
+        }
+
         public void MoveForward(float amount)
         {
             Position += _forward * amount;

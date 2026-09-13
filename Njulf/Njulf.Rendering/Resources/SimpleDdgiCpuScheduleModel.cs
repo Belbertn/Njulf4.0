@@ -46,7 +46,7 @@ public enum SimpleDdgiSchedulerCandidateReason : ushort
 /// has a bounded range and is validated before it can reach an indirect command
 /// or a queue record.
 /// </summary>
-public static class SimpleDdgiSchedulerAbi
+internal static class SimpleDdgiSchedulerAbi
 {
     public const uint InvalidCandidateProbeIndex = uint.MaxValue;
     public const int WorkClassBits = 3;
@@ -464,7 +464,7 @@ public readonly record struct SimpleDdgiRayBucket(
     public uint TraceGroupCount => SimpleDdgiIndirectDispatchMath.RayGroupCount(ProbeCount, RaysPerProbe);
 }
 
-public static class SimpleDdgiIndirectDispatchMath
+internal static class SimpleDdgiIndirectDispatchMath
 {
     public const uint TraceLocalSize = 64;
     public const uint RelocateLocalSize = 64;
@@ -558,7 +558,7 @@ public static class SimpleDdgiIndirectDispatchMath
 /// CpuReference validation and GpuMirror; GpuResident never calls it on the
 /// render thread.
 /// </summary>
-public static class SimpleDdgiCpuScheduleModel
+internal static class SimpleDdgiCpuScheduleModel
 {
     /// <summary>
     /// CPU oracle for the residual-volume portion of the resident tail quota

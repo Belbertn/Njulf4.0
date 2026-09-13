@@ -532,7 +532,7 @@ internal static class GiPipelineCacheFileCodec
 /// <see cref="Cache"/>. The historical type name is retained for diagnostics
 /// and capture-schema compatibility.
 /// </summary>
-public sealed unsafe class GiPipelineCacheService : IDisposable
+internal sealed unsafe class GiPipelineCacheService : IDisposable
 {
     private const string EngineAbi =
         "Njulf.GI.PipelineCache/1;SimpleDdgiPush=136;BindlessABI=20260809";

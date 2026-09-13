@@ -17,7 +17,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class GpuParticleRuntimeManager : IDisposable
+    internal sealed unsafe class GpuParticleRuntimeManager : IDisposable
     {
         private const uint InitialParticleCapacity = 65536;
         private const uint InitialEmitterCapacity = 1024;

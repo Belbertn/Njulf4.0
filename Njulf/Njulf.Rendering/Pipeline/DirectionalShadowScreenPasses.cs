@@ -14,7 +14,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline;
 
-public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
+internal sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
 {
     private const uint WorkgroupSize = 8u;
     private readonly RenderTargetManager _renderTargets;
@@ -447,7 +447,7 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
     }
 }
 
-public sealed unsafe class DirectionalShadowSpatialPass : RenderPassBase
+internal sealed unsafe class DirectionalShadowSpatialPass : RenderPassBase
 {
     private const uint WorkgroupSize = 8u;
     private readonly DirectionalShadowHistoryResources _resources;

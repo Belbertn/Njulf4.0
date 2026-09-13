@@ -11,7 +11,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline;
 
-public sealed unsafe partial class ForwardPlusPass
+internal sealed unsafe partial class ForwardPlusPass
 {
     private readonly BufferHandle[] _maskedFeedbackCompactBuffers =
         new BufferHandle[FramesInFlight];

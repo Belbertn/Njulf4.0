@@ -10,7 +10,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class WeightedTransparentPass : RenderPassBase
+    internal sealed unsafe class WeightedTransparentPass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;

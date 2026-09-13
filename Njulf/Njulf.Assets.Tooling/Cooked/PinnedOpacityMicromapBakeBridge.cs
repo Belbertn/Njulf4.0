@@ -47,7 +47,7 @@ public sealed record PinnedOpacityMicromapBakeBridgeOptions
 }
 
 /// <summary>Frozen native C ABI sizes for the supported 64-bit AssetTool.</summary>
-public static class PinnedOpacityMicromapBridgeAbi
+internal static class PinnedOpacityMicromapBridgeAbi
 {
     public const uint Version = 1U;
     public const int BridgeInfoBytes64 = 32;

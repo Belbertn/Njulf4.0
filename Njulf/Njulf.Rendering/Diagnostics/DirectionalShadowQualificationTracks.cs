@@ -48,7 +48,7 @@ public readonly record struct DirectionalShadowCaptureVariant(
 /// contains no wall-clock or random state, so CSM, hybrid, hard, and soft A/B
 /// captures consume byte-identical camera/light tracks.
 /// </summary>
-public static class DirectionalShadowQualificationTracks
+internal static class DirectionalShadowQualificationTracks
 {
     private static readonly IReadOnlyList<DirectionalShadowQualificationTrack>
         Catalog = BuildCatalog();

@@ -15,7 +15,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline;
 
-public sealed unsafe class ImGuiRenderPass : RenderPassBase
+internal sealed unsafe class ImGuiRenderPass : RenderPassBase
 {
     private readonly BufferManager _buffers;
     private readonly StagingRing _staging;

@@ -15,7 +15,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class MotionVectorPass : RenderPassBase
+    internal sealed unsafe class MotionVectorPass : RenderPassBase
     {
         internal const ShaderStageFlags MeshPipelinePushConstantStages =
             ShaderStageFlags.TaskBitExt |

@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Njulf.Audio\Njulf.Audio.csproj" />
+    <ProjectReference Include="..\Njulf.Audio.Assets\Njulf.Audio.Assets.csproj" />
     <ProjectReference Include="..\Njulf.Physics\Njulf.Physics.csproj" />
     <ProjectReference Include="..\Njulf.Core\Njulf.Core.csproj" />
     <ProjectReference Include="..\Njulf.Graphics\Njulf.Graphics.csproj" />
@@ -15,7 +16,7 @@
     <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
     <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />
     <None Update="Assets\tetrahedron.gltf" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="Assets\Audio\*.wav" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <NjulfAudioContent Include="Assets/Audio/occlusion-loop.wav" Link="Audio/occlusion-loop.wav" />
     <None Update="Assets\Content\**\*" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Assets\Effects\*.njeffect.json" CopyToOutputDirectory="PreserveNewest" />
     <NjulfEffectShader Include="Assets\Effects\*.frag;Assets\Effects\*.comp" />
@@ -24,4 +25,5 @@
     <ProjectReference Include="..\Njulf.Framework\Njulf.Framework.csproj" />
   </ItemGroup>
   <Import Project="..\Njulf.ShaderBuild\Njulf.Effects.targets" />
+  <Import Project="../build/Njulf.Audio.targets" />
 </Project>

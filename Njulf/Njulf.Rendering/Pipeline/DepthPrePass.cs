@@ -17,7 +17,7 @@ namespace Njulf.Rendering.Pipeline
     /// Depth prepass: renders all visible meshlets to create a hi-Z depth buffer.
     /// Uses mesh shaders with reverse-Z (depth cleared to 0.0, greater comparison).
     /// </summary>
-    public sealed unsafe class DepthPrePass : RenderPassBase
+    internal sealed unsafe class DepthPrePass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly PipelineObjects.FoliagePipeline? _foliagePipeline;

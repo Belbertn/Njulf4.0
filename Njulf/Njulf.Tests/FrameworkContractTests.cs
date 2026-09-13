@@ -1,4 +1,5 @@
 using Njulf.Core;
+using Njulf.Framework;
 using Njulf.Graphics;
 using NUnit.Framework;
 

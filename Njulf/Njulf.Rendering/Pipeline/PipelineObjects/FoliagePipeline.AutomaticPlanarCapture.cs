@@ -3,7 +3,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline.PipelineObjects;
 
-public sealed unsafe partial class FoliagePipeline
+internal sealed unsafe partial class FoliagePipeline
 {
     private readonly VkPipeline[,] _automaticPlanarCapturePipelines = new VkPipeline[2, 2];
 

@@ -18,7 +18,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class DebugDrawPass : RenderPassBase
+    internal sealed unsafe class DebugDrawPass : RenderPassBase
     {
         private const string EntryPoint = "main";
         private const int InitialVertexCapacity = 4096;

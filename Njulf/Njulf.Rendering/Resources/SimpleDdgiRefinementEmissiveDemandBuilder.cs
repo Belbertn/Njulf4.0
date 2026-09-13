@@ -23,7 +23,7 @@ public readonly record struct SimpleDdgiRefinementEmissiveDemandDiagnostics(
 /// fixed top-K pass, so a scene with thousands of emissive triangles cannot
 /// inflate the brick allocator's CPU cost or input cardinality.
 /// </summary>
-public static class SimpleDdgiRefinementEmissiveDemandBuilder
+internal static class SimpleDdgiRefinementEmissiveDemandBuilder
 {
     public const int MaximumDemandCount = 64;
     private const float MinimumArea = 1e-6f;

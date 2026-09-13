@@ -30,7 +30,7 @@ public enum AsyncComputeProjectionFailure : byte
 /// The arrays grow only at immutable resource-plan generation boundaries, so a rejected plan
 /// cannot partially mutate the next frame and a stable plan performs no allocation.
 /// </summary>
-public sealed class AsyncComputeResourceStateProjection
+internal sealed class AsyncComputeResourceStateProjection
 {
     private const int MaximumCapacity = 131_072;
 
@@ -285,7 +285,7 @@ public readonly record struct AsyncComputePlanVariantKey(
     ulong TimelineValueBase = 0UL);
 
 /// <summary>Bounded LRU cache for validated immutable submission plans.</summary>
-public sealed class AsyncComputePlanVariantCache
+internal sealed class AsyncComputePlanVariantCache
 {
     private readonly AsyncComputePlanVariantKey[] _keys;
     private readonly AsyncComputeSubmissionPlan?[] _plans;
@@ -408,7 +408,7 @@ public readonly record struct AsyncComputeValidationEvent(
 /// segment only when the supplied segment identity is exact; otherwise the involved path is
 /// quarantined and Auto timing/certification remains disabled for it.
 /// </summary>
-public sealed class AsyncComputeValidationLedger
+internal sealed class AsyncComputeValidationLedger
 {
     private readonly Segment[] _segments;
     private readonly AsyncComputeValidationEvent[] _events;

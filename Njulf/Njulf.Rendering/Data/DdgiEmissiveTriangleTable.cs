@@ -46,7 +46,7 @@ public readonly record struct DdgiEmissiveTriangleTableStats(
 /// luminance times world area); the GPU divides by the exact stored triangle
 /// probability and area, preserving an unbiased one-sample estimator.
 /// </summary>
-public static class DdgiEmissiveTriangleTable
+internal static class DdgiEmissiveTriangleTable
 {
     public const int MaximumAliasEntryCount = ushort.MaxValue;
     public const uint AliasIndexMask = 0x0000_FFFFu;

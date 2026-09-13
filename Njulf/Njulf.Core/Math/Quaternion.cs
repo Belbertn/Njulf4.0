@@ -14,6 +14,7 @@ namespace Njulf.Core.Math
 
         public static readonly Quaternion Identity = new(0f, 0f, 0f, 1f);
 
+        /// <summary>Creates a quaternion from raw components; does not normalize.</summary>
         public Quaternion(float x, float y, float z, float w)
         {
             X = x;
@@ -22,6 +23,7 @@ namespace Njulf.Core.Math
             W = w;
         }
 
+        /// <summary>Creates an axis-angle rotation in radians. The axis is normalized; supply a nonzero axis.</summary>
         public Quaternion(Vector3 axis, float angle)
         {
             axis = axis.Normalized();
@@ -34,6 +36,7 @@ namespace Njulf.Core.Math
             W = c;
         }
 
+        /// <summary>Creates the legacy Euler rotation in radians: X is roll about Z, Y is pitch about X, Z is yaw about Y.</summary>
         public Quaternion(Vector3 eulerAngles)
         {
             float roll = eulerAngles.X * 0.5f;
@@ -56,14 +59,17 @@ namespace Njulf.Core.Math
         public float Length() => (float)System.Math.Sqrt(X * X + Y * Y + Z * Z + W * W);
         public float LengthSquared() => X * X + Y * Y + Z * Z + W * W;
 
+        /// <summary>Returns a normalized copy, or Identity for zero length.</summary>
         public Quaternion Normalized()
         {
             float len = Length();
             return len > 0 ? this / len : Identity;
         }
 
+        /// <summary>Negates the vector part; for unit quaternions this is the inverse rotation.</summary>
         public Quaternion Conjugate() => new(-X, -Y, -Z, W);
 
+        /// <summary>Returns the conjugate divided by squared length, or Identity for zero length.</summary>
         public Quaternion Inverse()
         {
             float lenSq = LengthSquared();
@@ -84,6 +90,7 @@ namespace Njulf.Core.Math
 
         public static float Dot(Quaternion a, Quaternion b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z + a.W * b.W;
 
+        /// <summary>Interpolates unit rotations along the shortest arc; t is not clamped.</summary>
         public static Quaternion Slerp(Quaternion a, Quaternion b, float t)
         {
             float dot = Dot(a, b);
@@ -105,8 +112,10 @@ namespace Njulf.Core.Math
             return a * s0 + b * s1;
         }
 
+        /// <summary>Interpolates components and normalizes the result. Does not correct quaternion sign; prefer Slerp for rotations.</summary>
         public static Quaternion Lerp(Quaternion a, Quaternion b, float t) => (a + (b - a) * t).Normalized();
 
+        /// <summary>Returns conventional X/Y/Z roll, pitch and yaw in radians. This legacy decomposition is not the inverse of the Euler constructor's axis mapping.</summary>
         public Vector3 ToEulerAngles()
         {
             float sinrCosp = 2f * (W * X + Y * Z);
@@ -127,6 +136,7 @@ namespace Njulf.Core.Math
             return new Vector3(roll, pitch, yaw);
         }
 
+        /// <summary>Converts the quaternion to the engine's rotation matrix convention. Supply a unit quaternion.</summary>
         public Matrix4x4 ToMatrix4x4()
         {
             float xx = X * X, yy = Y * Y, zz = Z * Z;
@@ -140,6 +150,7 @@ namespace Njulf.Core.Math
                 0f, 0f, 0f, 1f);
         }
 
+        /// <summary>Extracts a quaternion from the rotation portion of a matrix; remove scale and shear first.</summary>
         public static Quaternion FromMatrix4x4(Matrix4x4 m)
         {
             float trace = m.M11 + m.M22 + m.M33;

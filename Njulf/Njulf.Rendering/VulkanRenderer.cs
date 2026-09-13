@@ -383,6 +383,7 @@ namespace Njulf.Rendering
         private readonly HiZVisibilityPolicyRuntimeState _hizVisibilityPolicyState = new();
         private Scene? _lastHiZScene;
         private bool _hasLastHiZCameraPose;
+        private ICamera? _lastHiZCamera;
         private Vector3 _lastHiZCameraPosition;
         private Vector3 _lastHiZCameraForward;
         private int _previousHiZCameraMotionSuppressionFramesRemaining;
@@ -611,6 +612,8 @@ namespace Njulf.Rendering
 
         public bool EnableTransparentPass { get; set; } = true;
         public bool EnableMeshletDebugView { get; set; }
+        /// <summary>Advanced mutable renderer controls. Prefer GraphicsDevice.Settings for common runtime
+        /// changes with impact/completion receipts; configure startup values through RenderingOptions.InitialSettings.</summary>
         public RenderSettings Settings { get; }
 
         /// <summary>Activates local shadows explicitly requested by an editor light change.</summary>
@@ -1191,7 +1194,7 @@ namespace Njulf.Rendering
             }
         }
 
-        public VulkanRenderer(
+        internal VulkanRenderer(
             IWindow window,
             VulkanContext context,
             SwapchainManager swapchainManager,
@@ -5238,6 +5241,7 @@ namespace Njulf.Rendering
             bool cameraCut = DetectHiZCameraCut(camera);
             UpdatePreviousHiZCameraMotionSuppression(camera, cameraCut);
             _lastHiZScene = scene;
+            _lastHiZCamera = camera;
             _lastHiZCameraPosition = camera.Position;
             _lastHiZCameraForward = camera.Forward.Normalized();
             _hasLastHiZCameraPose = true;
@@ -5280,7 +5284,7 @@ namespace Njulf.Rendering
                     decision,
                     hybridReflectionRequired,
                     sceneChanged,
-                    cameraCut);
+                    cameraCut) with { CameraCut = cameraCut };
             }
             finally
             {
@@ -5552,7 +5556,7 @@ namespace Njulf.Rendering
 
         private bool DetectHiZCameraCut(ICamera camera)
         {
-            if (!_hasLastHiZCameraPose)
+            if (!_hasLastHiZCameraPose || !ReferenceEquals(camera, _lastHiZCamera))
                 return true;
 
             HiZVisibilityPolicySettings policy = Settings.HiZVisibilityPolicy;

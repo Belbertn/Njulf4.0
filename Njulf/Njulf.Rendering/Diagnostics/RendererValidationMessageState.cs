@@ -47,7 +47,7 @@ public sealed record RendererValidationMessageSnapshot(
 /// Callback threads only increment counters and retain bounded error text;
 /// exceptions are raised later at a managed frame boundary.
 /// </summary>
-public sealed class RendererValidationMessageState
+internal sealed class RendererValidationMessageState
 {
     private const int MaximumRetainedMessageLength = 4096;
 

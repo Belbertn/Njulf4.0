@@ -16,7 +16,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline;
 
-public sealed unsafe partial class ForwardPlusPass
+internal sealed unsafe partial class ForwardPlusPass
 {
     private const int AdaptiveReceiverDescriptorBindingCount = 12;
 

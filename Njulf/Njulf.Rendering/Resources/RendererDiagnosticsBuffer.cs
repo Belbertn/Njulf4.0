@@ -15,7 +15,7 @@ using Vma;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class RendererDiagnosticsBuffer : IDisposable
+    internal sealed unsafe class RendererDiagnosticsBuffer : IDisposable
     {
         public const int MeshletCounterCount = 9;
         public const int DdgiForwardEstimateCounterBase = MeshletCounterCount;

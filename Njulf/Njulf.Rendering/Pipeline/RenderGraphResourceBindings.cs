@@ -293,7 +293,7 @@ namespace Njulf.Rendering.Pipeline
     /// Fully validated immutable lookup plan. Construction performs all duplicate, range, alias,
     /// and overlap checks once; frame execution only indexes precomputed read-only arrays.
     /// </summary>
-    public sealed class RenderGraphResourcePlan
+    internal sealed class RenderGraphResourcePlan
     {
         private readonly Guid _ownerId;
         private readonly IReadOnlyDictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>> _bindings;
@@ -660,7 +660,7 @@ namespace Njulf.Rendering.Pipeline
     /// therefore reject a plan without mutating ownership, then atomically commit the accepted
     /// plan only after all command buffers were recorded successfully.
     /// </summary>
-    public sealed class RenderGraphResourceBindings
+    internal sealed class RenderGraphResourceBindings
     {
         private readonly Guid _planOwnerId = Guid.NewGuid();
         private readonly Dictionary<RenderGraphAllocationIdentity, uint> _owners = new();

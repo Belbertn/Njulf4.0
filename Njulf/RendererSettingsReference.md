@@ -1,7 +1,39 @@
 # Renderer Settings Reference
 
-This is a readable index of renderer-facing settings exposed by `VulkanRenderer.Settings`,
-plus the nearby renderer-level toggles and sample runtime controls.
+Configure startup through `Game.ConfigureRendering(RenderingOptions)`, using
+`options.InitialSettings` for initial quality and specialist settings. Prefer
+`GraphicsDevice.Settings.Preview` / `ApplyAsync` for common runtime changes.
+The detailed `VulkanRenderer.Settings` controls below are advanced mutable settings.
+
+| Change | When it takes effect |
+| --- | --- |
+| Exposure, tone mapper, automatic exposure, async scheduling, timing and diagnostic overlays | Next frame boundary; `Runtime` receipt |
+| Quality/shadow presets, resolution, shadow enable/map size, AA/AO and reflection/GI modes | Existing resource preparation; `ResourceRebuild` receipt, completion after preparation |
+| Startup window/device/validation options; presets changing startup-admitted GI graph branches or profiles | Restart; controller returns `RestartRequired` without changing the live device |
+
+Use `Preview` to inspect the particular request: unchanged values require no work,
+invalid requests are rejected, and restart-required requests do not partially apply.
+Direct advanced settings writes retain their existing behavior but do not return receipts.
+Device-thread callers must allow frames to continue while awaiting `ApplyAsync`.
+
+### Shadow-only presets
+
+At startup use `options.InitialSettings.Shadows.ApplyPreset(ShadowQualityPreset.High)`.
+At runtime use `GraphicsDevice.Settings.ApplyAsync(new() { ShadowPreset = ShadowQualityPreset.High })`.
+Overall quality presets run first, shadow presets second, and explicit fields last.
+
+| Shadow tier | Cascades | Filtering | Local lights |
+| --- | --- | --- | --- |
+| Low | 1 | Legacy PCF/bias | Spot, point and area shadows disabled |
+| Medium | 2 | Adaptive tent PCF/world-texel bias | Spot/point enabled; one area light, one sample |
+| High | 2 | Adaptive tent PCF/world-texel bias | Spot/point enabled; at least two area lights, one sample |
+| Ultra | 4 | Adaptive tent PCF/world-texel bias | Spot/point enabled; four area lights, two samples |
+
+These reuse the existing rendering tiers, including their history behavior: temporal
+CSM is disabled for Low and enabled for other tiers. High retains an existing higher
+area-light limit. Map dimensions, directional enablement, ray mode and other specialist
+overrides remain as authored; use explicit shadow enable/size fields when needed.
+Only resolved values are persisted; no new JSON preset field or schema version is needed.
 
 ## Renderer-Level Toggles
 

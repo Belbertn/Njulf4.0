@@ -732,7 +732,7 @@ public readonly record struct GiCausticVulkanRuntimeDiagnostics(
 /// remains allocation-free until an evidence-bound tagged producer and the
 /// complete shader qualification contract are admitted.
 /// </summary>
-public sealed unsafe class GiCausticVulkanRuntime : IDisposable
+internal sealed unsafe class GiCausticVulkanRuntime : IDisposable
 {
     private const ulong HeaderReadbackBytes = GiCausticGpuAbi.CacheHeaderBytes;
 

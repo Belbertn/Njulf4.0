@@ -11,7 +11,7 @@ namespace Njulf.Rendering.Pipeline;
 /// transient slices of existing scheduler/trace staging, while only the two
 /// banks and partial scratch are C3-owned allocations.
 /// </summary>
-public static class SimpleDdgiGuidingResourceNames
+internal static class SimpleDdgiGuidingResourceNames
 {
     public const string DistributionBank0 = "simple-ddgi-guiding-distribution-bank-0";
     public const string DistributionBank1 = "simple-ddgi-guiding-distribution-bank-1";
@@ -28,7 +28,7 @@ public static class SimpleDdgiGuidingResourceNames
 /// the standalone SPIR-V modules and make accidental cross-pass rebinding
 /// visible in review/tests.
 /// </summary>
-public static class SimpleDdgiGuidingGpuBindings
+internal static class SimpleDdgiGuidingGpuBindings
 {
     public const uint ExtractTrainingRecords = 0u;
     public const uint ExtractWorkItems = 1u;
@@ -60,7 +60,7 @@ public static class SimpleDdgiGuidingGpuBindings
 /// table entries mirrored in common.glsl.  Keeping the reference here prevents
 /// an eventual C3 pass implementation from silently choosing a second slot.
 /// </summary>
-public static class SimpleDdgiGuidingBindlessSlots
+internal static class SimpleDdgiGuidingBindlessSlots
 {
     public const int DistributionBank0 =
         BindlessIndex.SimpleDdgiGuidingDistributionBank0Buffer;
@@ -72,7 +72,7 @@ public static class SimpleDdgiGuidingBindlessSlots
         BindlessIndex.SimpleDdgiGuidingDirectionPdfSidecarBuffer;
 }
 
-public static class SimpleDdgiGuidingGpuPassNames
+internal static class SimpleDdgiGuidingGpuPassNames
 {
     public const string Train = "SimpleDdgiGuidingTrainPass";
     public const string Build = "SimpleDdgiGuidingBuildPass";
@@ -138,7 +138,7 @@ public readonly record struct SimpleDdgiGuidingPassDeclaration(
 /// only after a validated bank has been published; before that the canonical
 /// uniform DDGI trace path remains the sole direction producer.
 /// </summary>
-public static class SimpleDdgiGuidingPasses
+internal static class SimpleDdgiGuidingPasses
 {
     private static readonly IReadOnlyList<SimpleDdgiGuidingPassDeclaration> Disabled =
         Array.Empty<SimpleDdgiGuidingPassDeclaration>();

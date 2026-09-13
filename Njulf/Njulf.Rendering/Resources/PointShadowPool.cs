@@ -7,7 +7,7 @@ using Silk.NET.Vulkan;
 namespace Njulf.Rendering.Resources;
 
 /// <summary>Independent six-face maps; changing one light never resizes every other light.</summary>
-public sealed class PointShadowPool : IDisposable
+internal sealed class PointShadowPool : IDisposable
 {
     private readonly VulkanContext _context;
     private readonly BufferManager _buffers;

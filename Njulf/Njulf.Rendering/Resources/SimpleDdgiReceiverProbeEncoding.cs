@@ -9,7 +9,7 @@ namespace Njulf.Rendering.Resources;
 /// are normally produced by the GPU after atlas publication; this mirror keeps
 /// packing, validation, imports, and tests on the exact same numerical contract.
 /// </summary>
-public static class SimpleDdgiReceiverProbeEncoding
+internal static class SimpleDdgiReceiverProbeEncoding
 {
     public const float RelocationEncodingRangeInProbeSpacings = 0.5f;
     public const float MaximumUpdateRelocationInProbeSpacings = 0.45f;

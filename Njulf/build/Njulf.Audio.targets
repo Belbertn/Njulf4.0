@@ -1,0 +1,77 @@
+<Project>
+  <PropertyGroup>
+    <NjulfDownloadFFmpeg Condition="'$(NjulfDownloadFFmpeg)' == ''">true</NjulfDownloadFFmpeg>
+    <_NjulfAudioToolProject>$(MSBuildThisFileDirectory)../Njulf.AssetTool/Njulf.AssetTool.csproj</_NjulfAudioToolProject>
+    <_NjulfAudioTool>$(MSBuildThisFileDirectory)../Njulf.AssetTool/bin/Development/net10.0/Njulf.AssetTool.dll</_NjulfAudioTool>
+  </PropertyGroup>
+
+  <UsingTask TaskName="PrepareNjulfAudioItems" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Sources ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <OutputRoot ParameterType="System.String" Required="true" />
+      <Files ParameterType="Microsoft.Build.Framework.ITaskItem[]" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Collections.Generic" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        string root = Path.GetFullPath(OutputRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var destinations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var files = new List<Microsoft.Build.Framework.ITaskItem>();
+        foreach (var source in Sources)
+        {
+            string link = source.GetMetadata("Link");
+            if (string.IsNullOrWhiteSpace(link) || Path.IsPathRooted(link) || !Path.GetExtension(link).Equals(".wav", StringComparison.OrdinalIgnoreCase))
+            { Log.LogError("NjulfAudioContent requires a content-root-relative .wav Link: " + source.ItemSpec); continue; }
+            string output = Path.GetFullPath(Path.Combine(root, link));
+            if (!output.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !destinations.Add(output))
+            { Log.LogError("NjulfAudioContent Link escapes the output root or duplicates another output: " + link); continue; }
+            string mono = source.GetMetadata("Mono");
+            bool downmix = false;
+            if (mono.Length != 0 && !bool.TryParse(mono, out downmix))
+            { Log.LogError("NjulfAudioContent Mono must be true or false: " + source.ItemSpec); continue; }
+            var file = new Microsoft.Build.Utilities.TaskItem(output);
+            file.SetMetadata("Source", source.GetMetadata("FullPath"));
+            file.SetMetadata("Link", output.Substring(root.Length));
+            file.SetMetadata("MonoArgument", downmix ? "--mono" : "");
+            files.Add(file);
+        }
+        Files = files.ToArray();
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="PrepareNjulfAudioContent" Condition="'@(NjulfAudioContent)' != '' and '$(DesignTimeBuild)' != 'true'">
+    <PrepareNjulfAudioItems Sources="@(NjulfAudioContent)" OutputRoot="$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'njulf-audio'))">
+      <Output TaskParameter="Files" ItemName="_NjulfAudioFile" />
+    </PrepareNjulfAudioItems>
+  </Target>
+  <Target Name="ResolveNjulfFFmpeg" Condition="'@(NjulfAudioContent)' != '' and '$(DesignTimeBuild)' != 'true' and '$(NoBuild)' != 'true' and '$(NjulfFFmpeg)' == ''">
+    <Exec Condition="'$(OS)' == 'Windows_NT' and '$(NjulfDownloadFFmpeg)' == 'true'"
+          Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)../tools/resolve-ffmpeg.ps1&quot;"
+          ConsoleToMSBuild="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="NjulfFFmpeg" />
+    </Exec>
+    <PropertyGroup>
+      <NjulfFFmpeg Condition="'$(NjulfFFmpeg)' == ''">ffmpeg</NjulfFFmpeg>
+    </PropertyGroup>
+  </Target>
+  <Target Name="CookNjulfAudioContent" DependsOnTargets="PrepareNjulfAudioContent;ResolveNjulfFFmpeg"
+          Condition="'@(NjulfAudioContent)' != '' and '$(DesignTimeBuild)' != 'true' and '$(NoBuild)' != 'true'">
+    <MSBuild Projects="$(_NjulfAudioToolProject)" Targets="Restore;Build" BuildInParallel="false"
+             Properties="Configuration=Development;CookedAssetsOnly=false;SelfContained=false"
+             RemoveProperties="RuntimeIdentifier;RuntimeIdentifiers;ArtifactsPath;BaseIntermediateOutputPath;IntermediateOutputPath;MSBuildProjectExtensionsPath;OutputPath;OutDir;PublishDir;PublishSingleFile;PublishTrimmed;PublishAot;ContinuousIntegrationBuild" />
+    <Exec Command="dotnet &quot;$(_NjulfAudioTool)&quot; cook audio &quot;%(_NjulfAudioFile.Source)&quot; --out &quot;%(_NjulfAudioFile.Identity)&quot; --ffmpeg &quot;$(NjulfFFmpeg)&quot; %(_NjulfAudioFile.MonoArgument)" />
+  </Target>
+  <Target Name="CollectNjulfAudioContent" BeforeTargets="AssignTargetPaths" DependsOnTargets="PrepareNjulfAudioContent;CookNjulfAudioContent"
+          Condition="'@(NjulfAudioContent)' != '' and '$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <Content Include="@(_NjulfAudioFile)">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <NjulfGameContent>true</NjulfGameContent>
+      </Content>
+    </ItemGroup>
+  </Target>
+</Project>

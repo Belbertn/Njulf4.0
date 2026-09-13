@@ -24,7 +24,7 @@ namespace Njulf.Rendering.Pipeline
     /// receiver publication, and sparse residency are resolved in the vertex
     /// shader without readback or a probe-pool scan.
     /// </summary>
-    public sealed unsafe class SimpleDdgiProbeDebugPass : RenderPassBase
+    internal sealed unsafe class SimpleDdgiProbeDebugPass : RenderPassBase
     {
         internal const int MaximumSampledProbeCount = 768;
         internal const uint SphereVertexCount = 8u * 2u * 3u;

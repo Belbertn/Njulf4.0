@@ -14,7 +14,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class SceneOpaqueCompactionPass : RenderPassBase
+    internal sealed unsafe class SceneOpaqueCompactionPass : RenderPassBase
     {
 #if NJULF_SCENE_COMPACTION_COUNTER_READBACK
         private const bool BuildCounterReadbackEnabled = true;

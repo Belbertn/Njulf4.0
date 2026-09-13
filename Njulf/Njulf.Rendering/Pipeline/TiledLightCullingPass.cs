@@ -17,7 +17,7 @@ namespace Njulf.Rendering.Pipeline
     /// Input: light buffer, depth buffer
     /// Output: per-tile light lists (headers + indices)
     /// </summary>
-    public sealed unsafe class TiledLightCullingPass : RenderPassBase
+    internal sealed unsafe class TiledLightCullingPass : RenderPassBase
     {
         private readonly PipelineObjects.ComputePipeline _computePipeline;
         private readonly BufferManager _bufferManager;

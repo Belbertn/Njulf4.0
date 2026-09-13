@@ -22,7 +22,7 @@ public interface IReflectionProbeCompletionValueProvider
 /// AwaitingGpuCompletion only after the copy has been recorded and the renderer-owned completion
 /// value has been attached; logical publication happens on a later poll.
 /// </summary>
-public sealed class ReflectionProbePublishPass : RenderPassBase
+internal sealed class ReflectionProbePublishPass : RenderPassBase
 {
     private readonly ReflectionProbeManager _manager;
     private readonly ReflectionSettings _settings;

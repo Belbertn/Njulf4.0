@@ -8,6 +8,18 @@
   "preferNameDirectory": true,
   "tags": { "language": "C#", "type": "project" },
   "symbols": {
+    "physics": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "false",
+      "description": "Include fixed-step physics and a falling object"
+    },
+    "audio": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "false",
+      "description": "Include scoped audio and a Space-triggered sound"
+    },
     "engine-root": {
       "type": "parameter",
       "datatype": "string",
@@ -15,5 +27,6 @@
       "description": "Absolute path to the Njulf engine checkout",
       "replaces": "NJULF_ENGINE_ROOT"
     }
-  }
+  },
+  "sources": [{ "modifiers": [{ "condition": "(!audio)", "exclude": ["Assets/impact.wav"] }] }]
 }

@@ -7,7 +7,7 @@ using NumericsVector3 = System.Numerics.Vector3;
 
 namespace Njulf.Rendering.Data
 {
-    public static class LocalShadowDataBuilder
+    internal static class LocalShadowDataBuilder
     {
         private const float PointShadowMinimumFaceOverlapTexels = 2f;
 

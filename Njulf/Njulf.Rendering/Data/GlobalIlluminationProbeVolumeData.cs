@@ -53,7 +53,7 @@ public readonly record struct DdgiProbeVolumeRuntimeMetadata(
 /// automatic ring volumes at runtime, but this ABI remains available to the
 /// scene/editor and V1 discovery paths so authored data is not discarded.
 /// </summary>
-public static class GlobalIlluminationProbeVolumeData
+internal static class GlobalIlluminationProbeVolumeData
 {
     public const int EnabledFlag = 1 << 0;
     public const int ProbeRelocationEnabledFlag = 1 << 1;

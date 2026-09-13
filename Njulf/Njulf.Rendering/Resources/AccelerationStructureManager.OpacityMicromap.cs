@@ -6,7 +6,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Resources;
 
-public sealed unsafe partial class AccelerationStructureManager
+internal sealed unsafe partial class AccelerationStructureManager
 {
     private const int MaximumOpacityMicromapBuildStartsPerFrame = 1;
     private const ulong OpacityMicromapScratchAddressAlignment = 256UL;

@@ -17,7 +17,7 @@ namespace Njulf.Rendering.Pipeline;
 /// the bounded Simple-DDGI page pool. All page-table mutation precedes scheduler
 /// classification in the same serial graph segment.
 /// </summary>
-public sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
+internal sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
 {
     private static readonly string[] ShaderNames =
     [

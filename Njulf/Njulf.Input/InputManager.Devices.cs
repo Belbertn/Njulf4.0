@@ -87,6 +87,8 @@ public sealed partial class InputManager
     private void ClearMotion()
     {
         _mouseDelta = default; _pendingScroll = _mouseScrollDelta = 0;
+        foreach (var action in _actions.Values)
+            if (action.Mode == InputValueMode.Delta) action.Pending = default;
         foreach (var motion in _mouseMotion.Values)
         {
             motion.Pending = motion.Published = motion.PendingWheel = motion.PublishedWheel = default;
@@ -133,7 +135,10 @@ public sealed partial class InputManager
     private void GateHeldActions()
     {
         foreach (var action in _actions.Values)
+        {
+            action.Pending = default;
             if (action.Mode == InputValueMode.State) action.WaitForNeutral = true;
+        }
     }
 
     private float ReadAxis(BindingSpec spec)

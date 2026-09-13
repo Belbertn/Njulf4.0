@@ -1,6 +1,7 @@
 using Njulf.Core;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Framework;
 using Njulf.Physics;
 using NUnit.Framework;
 
@@ -9,6 +10,48 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class PhysicsTests
 {
+    [Test]
+    public void VisualRegistrationDerivesIdentityBindingLayersAndRemoval()
+    {
+        using var scene = new Scene(); using var physics = new PhysicsScene(PhysicsMode.QueryOnly, scene);
+        var visual = new RenderObject(TestGraphicsResources.Mesh("box"), TestGraphicsResources.Material("material"));
+        visual.Position = new(0, 0, 4); scene.Add(visual);
+        uint targets = CollisionLayers.Bit(3);
+        var handle = physics.RegisterStatic(visual, ColliderShape.Box(Vector3.One), layer: targets);
+        Assert.That(physics.Raycast(Vector3.Zero, Vector3.UnitZ, 10, out var hit, QueryFilter.All), Is.True);
+        Assert.That(hit.OwnerId, Is.EqualTo(visual.Id)); Assert.That(hit.Collider, Is.EqualTo(handle));
+        Assert.That(physics.Raycast(Vector3.Zero, Vector3.UnitZ, 10, out _, QueryFilter.None), Is.False);
+        Assert.That(physics.Raycast(Vector3.Zero, Vector3.UnitZ, 10, out _, new(targets)), Is.True);
+        visual.Position = new(0, 0, 6);
+        Assert.That(physics.Raycast(Vector3.Zero, Vector3.UnitZ, 10, out hit), Is.True);
+        Assert.That(hit.Distance, Is.EqualTo(5.5).Within(.001));
+        scene.Remove(visual); Assert.That(physics.ColliderCount, Is.Zero);
+        Assert.Throws<ArgumentException>(() => physics.GetPose(handle));
+        Assert.That(CollisionLayers.Bit(31), Is.EqualTo(0x80000000u));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CollisionLayers.Bit(32));
+    }
+
+    [Test]
+    public void ModelRegistrationUsesPlacementIdentityAndBodyHelpersPublishTransforms()
+    {
+        using var scene = new Scene(); using var physics = new PhysicsScene(PhysicsMode.Simulation, scene);
+        using var template = new Model();
+        var moving = template.CreateInstance(); var platform = template.CreateInstance();
+        moving.PlacementRoot.Position = new(0, 5, 0); platform.PlacementRoot.Position = new(5, 0, 0);
+        scene.Add(moving); scene.Add(platform);
+        var body = physics.RegisterDynamic(moving, ColliderShape.Sphere(.5f), new BodySettings { Mass = 2 });
+        var kinematic = physics.RegisterKinematic(platform, new[] { ColliderShape.Box(Vector3.One) });
+        Assert.That(physics.Raycast(new(0, 5, -3), Vector3.UnitZ, 10, out var hit), Is.True);
+        Assert.That(hit.OwnerId, Is.EqualTo(moving.PlacementRoot.Id));
+        physics.SetKinematicTarget(kinematic, new(new(5, 1, 0))); physics.Step(.1f);
+        Assert.That(moving.PlacementRoot.WorldMatrix.Translation.Y, Is.LessThan(5));
+        Assert.That(platform.PlacementRoot.WorldMatrix.Translation.Y, Is.EqualTo(1).Within(.001));
+        scene.Remove(moving);
+        Assert.Throws<ArgumentException>(() => physics.GetPose(body));
+        Assert.That(physics.ColliderCount, Is.EqualTo(1));
+        scene.Clear(); Assert.That(physics.ColliderCount, Is.Zero);
+    }
+
     private static ColliderHandle Box(PhysicsScene physics, Vector3 position, BodyKind kind = BodyKind.Static, uint layer = 1, uint mask = uint.MaxValue) =>
         physics.Register(Guid.NewGuid(), [ColliderShape.Box(Vector3.One)], new PhysicsPose(position), new BodySettings { Kind = kind }, layer, mask);
     private static void Steps(PhysicsScene physics, int count) { for (int i = 0; i < count; i++) physics.Step(1f / 60); }
@@ -106,7 +149,7 @@ public sealed class PhysicsTests
     public void ParentRotationScaleAndMeshOffsetAgreeWithNjulfMatrix(PhysicsMode mode)
     {
         using var scene = new Scene(); using var physics = new PhysicsScene(mode, scene);
-        var parent = new SceneNode { LocalMatrix = Matrix4x4.CreateScale(new(2)) * new Quaternion(Vector3.UnitY, .7f).ToMatrix4x4() * Matrix4x4.CreateTranslation(new(4, 0, 1)) };
+        var parent = new SceneNode { LocalMatrix = Matrix4x4.CreateScale(2) * new Quaternion(Vector3.UnitY, .7f).ToMatrix4x4() * Matrix4x4.CreateTranslation(new(4, 0, 1)) };
         var node = new SceneNode { Position = new(1, 0, 0) }; node.SetParent(parent, false);
         var offset = Matrix4x4.CreateTranslation(new(2, 0, 0));
         var handle = physics.Register(Guid.NewGuid(), [ColliderShape.Sphere(.5f).WithLocalTransform(offset)], node: node);
@@ -175,7 +218,9 @@ public sealed class PhysicsTests
             }
             else ended = true;
         };
-        Steps(physics, 120);
+        using var module = new PhysicsHostModule(physics);
+        for (int i = 0; i < 120; i++)
+            module.FixedUpdate(new GameTime(TimeSpan.FromSeconds((i + 1) / 60.0), TimeSpan.FromSeconds(1.0 / 60)));
         Assert.That(began && ended, Is.True);
         Assert.That(physics.GetPose(excluded).Position.Y, Is.LessThan(-3));
     }
@@ -227,7 +272,7 @@ public sealed class PhysicsTests
         Assert.Throws<ArgumentException>(() => physics.Register(Guid.NewGuid(), [ColliderShape.Sphere(1)], new PhysicsPose(Vector3.Zero, default)));
         Assert.Throws<InvalidOperationException>(() => Box(physics, Vector3.Zero, BodyKind.Dynamic));
         var node = new SceneNode(); physics.Register(Guid.NewGuid(), [ColliderShape.Sphere(1)], node: node);
-        node.LocalMatrix = Matrix4x4.CreateScale(new(2));
+        node.LocalMatrix = Matrix4x4.CreateScale(2);
         Assert.Throws<InvalidOperationException>(() => physics.Synchronize());
         var error = Task.Run(() => { try { physics.Synchronize(); return false; } catch (InvalidOperationException) { return true; } }).GetAwaiter().GetResult();
         Assert.That(error, Is.True);

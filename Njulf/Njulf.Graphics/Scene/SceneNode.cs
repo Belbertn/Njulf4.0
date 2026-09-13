@@ -41,8 +41,80 @@ public sealed class SceneNode : IIdentifiedSceneEntity
         }
     }
 
+    /// <summary>Local translation relative to Parent. Editing translation preserves shear.</summary>
+    public Vector3 LocalPosition { get => Position; set => Position = value; }
+    public Quaternion LocalRotation
+    {
+        get => Decompose(LocalMatrix).Rotation;
+        set { var trs = Decompose(LocalMatrix); SetLocalTransform(trs.Position, value, trs.Scale); }
+    }
+    public Vector3 LocalScale
+    {
+        get => Decompose(LocalMatrix).Scale;
+        set { var trs = Decompose(LocalMatrix); SetLocalTransform(trs.Position, trs.Rotation, value); }
+    }
+
+    /// <summary>Local rotation convenience; like RenderObject.Rotation, editing replaces non-TRS components.</summary>
+    public Quaternion Rotation
+    {
+        get => LegacyLocalTransform().Rotation;
+        set { var trs = LegacyLocalTransform(); SetLocalTransform(trs.Position, value, trs.Scale); }
+    }
+    /// <summary>Local scale convenience; like RenderObject.Scale, editing replaces non-TRS components.</summary>
+    public Vector3 Scale
+    {
+        get => LegacyLocalTransform().Scale;
+        set { var trs = LegacyLocalTransform(); SetLocalTransform(trs.Position, trs.Rotation, value); }
+    }
+
+    public Vector3 WorldPosition
+    {
+        get => WorldMatrix.Translation;
+        set
+        {
+            Matrix4x4 world = WorldMatrix;
+            world.M41 = value.X; world.M42 = value.Y; world.M43 = value.Z;
+            SetWorldMatrix(world);
+        }
+    }
+    public Quaternion WorldRotation
+    {
+        get => Decompose(WorldMatrix).Rotation;
+        set { var trs = Decompose(WorldMatrix); SetWorldTransform(trs.Position, value, trs.Scale); }
+    }
+    public Vector3 WorldScale
+    {
+        get => Decompose(WorldMatrix).Scale;
+        set { var trs = Decompose(WorldMatrix); SetWorldTransform(trs.Position, trs.Rotation, value); }
+    }
+
+    /// <summary>Replaces the local matrix with scale * rotation * translation.</summary>
+    /// <remarks>Physics-owned dynamic poses must use PhysicsScene.Teleport. Kinematic motion uses
+    /// SetKinematicTarget; changing collider scale requires recreating its registration.</remarks>
+    public void SetLocalTransform(Vector3 position, Quaternion rotation, Vector3 scale) =>
+        LocalMatrix = Compose(position, rotation, scale);
+
+    /// <summary>Replaces the world transform; requires an invertible parent. May produce local shear.</summary>
+    public void SetWorldTransform(Vector3 position, Quaternion rotation, Vector3 scale) =>
+        SetWorldMatrix(Compose(position, rotation, scale));
+
+    private static Matrix4x4 Compose(Vector3 position, Quaternion rotation, Vector3 scale) =>
+        Matrix4x4.CreateScale(scale) * RenderObject.NormalizeRotation(rotation).ToMatrix4x4() * Matrix4x4.CreateTranslation(position);
+
+    private static (Vector3 Position, Quaternion Rotation, Vector3 Scale) Decompose(Matrix4x4 matrix)
+    {
+        if (RenderObject.TryDecompose(matrix, out var position, out var rotation, out var scale))
+            return (position, rotation, scale);
+        throw new InvalidOperationException("Rotation/scale components require a non-degenerate TRS matrix. Use an explicit matrix or whole-TRS setter to replace shear.");
+    }
+
+    private (Vector3 Position, Quaternion Rotation, Vector3 Scale) LegacyLocalTransform() =>
+        RenderObject.TryDecompose(LocalMatrix, out var position, out var rotation, out var scale)
+            ? (position, rotation, scale) : (LocalMatrix.Translation, Quaternion.Identity, LocalMatrix.Scale);
+
     public event Action<SceneNode, Matrix4x4, Matrix4x4>? WorldChanged;
 
+    /// <summary>Reparents this node, preserving world placement by default; false preserves the local matrix.</summary>
     public void SetParent(SceneNode? parent, bool keepWorld = true)
     {
         if (ReferenceEquals(_parent, parent)) return;

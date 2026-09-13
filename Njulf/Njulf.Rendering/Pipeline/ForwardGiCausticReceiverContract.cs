@@ -10,7 +10,7 @@ namespace Njulf.Rendering.Pipeline;
 /// energy-conserving diffuse BRDF during photon gather; no C4 energy is ever
 /// written by the forward producer.
 /// </summary>
-public static class ForwardGiCausticReceiverContract
+internal static class ForwardGiCausticReceiverContract
 {
     public const uint ShaderSemanticVersion = 1u;
     public const uint ColorAttachmentCount = 2u;
@@ -133,7 +133,7 @@ public readonly record struct ForwardGiCausticReceiverPipelineConfiguration(
         new(false, default, 0UL, 0u, 0u, 0u);
 }
 
-public sealed class ForwardGiCausticReceiverAttachmentBinding
+internal sealed class ForwardGiCausticReceiverAttachmentBinding
 {
     public ForwardGiCausticReceiverAttachmentBinding(
         RenderTarget receiverPayload,

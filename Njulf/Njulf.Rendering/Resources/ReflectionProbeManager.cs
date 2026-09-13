@@ -20,7 +20,7 @@ namespace Njulf.Rendering.Resources
     /// array layers. A layer is never exposed to shaders until its capture/prefilter work has
     /// been explicitly published.
     /// </summary>
-    public sealed unsafe class ReflectionProbeManager : IDisposable
+    internal sealed unsafe class ReflectionProbeManager : IDisposable
     {
         public const int AbsoluteMaxProbeCapacity = 256;
         private static readonly ulong MetadataBufferSize =

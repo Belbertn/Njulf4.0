@@ -1,0 +1,179 @@
+[
+  {
+    "Mode": "baseline",
+    "FullFrame": {
+      "Bounds": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "DisplayMean": 249.6470668943534,
+      "DisplayMedian": 252.29399999999998,
+      "NearWhiteFraction": 0.53681640625,
+      "HdrMean": 6.56579872407546,
+      "HdrMedian": 2.2627515625
+    },
+    "Sky": {
+      "Bounds": [
+        100,
+        40,
+        1180,
+        240
+      ],
+      "DisplayMean": 254.98217112776922,
+      "DisplayMedian": 254.99999999999997,
+      "NearWhiteFraction": 1,
+      "HdrMean": 10.033093258193757,
+      "HdrMedian": 9.713264843749998
+    },
+    "Floor": {
+      "Bounds": [
+        200,
+        550,
+        1080,
+        680
+      ],
+      "DisplayMean": 245.75417988620217,
+      "DisplayMedian": 245.5198,
+      "NearWhiteFraction": 0,
+      "HdrMean": 1.7333994280733191,
+      "HdrMedian": 1.7518287109375
+    },
+    "CubeFront": {
+      "Bounds": [
+        620,
+        320,
+        650,
+        420
+      ],
+      "DisplayMean": 251.4047607999945,
+      "DisplayMedian": 251.29399999999998,
+      "NearWhiteFraction": 1,
+      "HdrMean": 2.359007863932276,
+      "HdrMedian": 2.3618875
+    },
+    "FrameMedianMs": 16.6272,
+    "FrameP95Ms": 19.4386,
+    "FrameP99Ms": 94.4965,
+    "ValidationErrors": 0
+  },
+  {
+    "Mode": "candidate",
+    "FullFrame": {
+      "Bounds": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "DisplayMean": 116.52676259437993,
+      "DisplayMedian": 106.1238,
+      "NearWhiteFraction": 0,
+      "HdrMean": 0.15551959773776197,
+      "HdrMedian": 0.1111672607421875
+    },
+    "Sky": {
+      "Bounds": [
+        100,
+        40,
+        1180,
+        240
+      ],
+      "DisplayMean": 144.68890767830104,
+      "DisplayMedian": 144.023,
+      "NearWhiteFraction": 0,
+      "HdrMean": 0.20066423825195515,
+      "HdrMedian": 0.19427921142578122
+    },
+    "Floor": {
+      "Bounds": [
+        200,
+        550,
+        1080,
+        680
+      ],
+      "DisplayMean": 90.18888975514069,
+      "DisplayMedian": 90.76559999999999,
+      "NearWhiteFraction": 0,
+      "HdrMean": 0.08769807189827963,
+      "HdrMedian": 0.0884781005859375
+    },
+    "CubeFront": {
+      "Bounds": [
+        620,
+        320,
+        650,
+        420
+      ],
+      "DisplayMean": 107.13583399999528,
+      "DisplayMedian": 107.1238,
+      "NearWhiteFraction": 0,
+      "HdrMean": 0.11308667291259833,
+      "HdrMedian": 0.1130954833984375
+    },
+    "FrameMedianMs": 16.6543,
+    "FrameP95Ms": 18.0925,
+    "FrameP99Ms": 48.2527,
+    "ValidationErrors": 0
+  },
+  {
+    "Mode": "final",
+    "FullFrame": {
+      "Bounds": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "DisplayMean": 116.60401293921697,
+      "DisplayMedian": 106.1238,
+      "NearWhiteFraction": 0,
+      "HdrMean": 0.15559669132233567,
+      "HdrMedian": 0.11116718749999999
+    },
+    "Sky": {
+      "Bounds": [
+        100,
+        40,
+        1180,
+        240
+      ],
+      "DisplayMean": 144.68890767830104,
+      "DisplayMedian": 144.023,
+      "NearWhiteFraction": 0,
+      "HdrMean": 0.20066423825195515,
+      "HdrMedian": 0.19427921142578122
+    },
+    "Floor": {
+      "Bounds": [
+        200,
+        550,
+        1080,
+        680
+      ],
+      "DisplayMean": 90.19039498940634,
+      "DisplayMedian": 90.76559999999999,
+      "NearWhiteFraction": 0,
+      "HdrMean": 0.08770027547357387,
+      "HdrMedian": 0.0884785888671875
+    },
+    "CubeFront": {
+      "Bounds": [
+        620,
+        320,
+        650,
+        420
+      ],
+      "DisplayMean": 107.13479026666194,
+      "DisplayMedian": 107.1238,
+      "NearWhiteFraction": 0,
+      "HdrMean": 0.11308303581949929,
+      "HdrMedian": 0.1130954833984375
+    },
+    "FrameMedianMs": 16.6339,
+    "FrameP95Ms": 18.2683,
+    "FrameP99Ms": 50.164,
+    "ValidationErrors": 0
+  }
+]

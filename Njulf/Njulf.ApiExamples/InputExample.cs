@@ -24,16 +24,15 @@ internal sealed class InputExample(ExampleOptions options) : ExampleGame(options
     protected override void Load()
     {
         base.Load();
+        IsFixedTimeStep = true;
+        TargetElapsedTime = TimeSpan.FromSeconds(1.0 / 60);
         _gameplay = Input.CreateContext("Gameplay"); _menuContext = Input.CreateContext("Menu");
         _menuToggle = Button("Menu", InputKey.Escape); _menuToggle.AddBinding(new(GamepadButton.Start));
         _quit = Button("Quit", InputKey.F12);
-        _jump = Button("Jump", InputKey.Space, _gameplay); _jump.AddBinding(new(GamepadButton.A));
-        _move = Input.CreateVector2Action("Move", _gameplay);
-        _move.AddBinding(new(new InputBinding(InputKey.A), new InputBinding(InputKey.D), new InputBinding(InputKey.S), new InputBinding(InputKey.W)));
-        _move.AddBinding(new(GamepadStick.Left));
-        _mouseLook = Input.CreateVector2Action("MouseLook", _gameplay, InputValueMode.Delta);
-        _mouseLook.AddBinding(InputVector2Binding.MouseMotion(scale: .002f));
-        _stickLook = Input.CreateVector2Action("StickLook", _gameplay); _stickLook.AddBinding(new(GamepadStick.Right));
+        _jump = Input.CreateButton("Jump", InputKey.Space, _gameplay, bufferPresses: true).Bind(GamepadButton.A);
+        _move = Input.CreateWasd("Move", _gameplay).BindGamepadStick(GamepadStick.Left);
+        _mouseLook = Input.CreateMouseLook("MouseLook", .002f, _gameplay, bufferDeltas: true);
+        _stickLook = Input.CreateGamepadStick("StickLook", GamepadStick.Right, _gameplay);
         _throttle = Input.CreateFloatAction("Throttle", _gameplay); _throttle.AddBinding(new(GamepadAxis.RightTrigger));
         _wheel = Input.CreateFloatAction("SpeedWheel", _gameplay, InputValueMode.Delta); _wheel.AddBinding(new(MouseAxis.WheelY));
         _accept = Button("Accept", InputKey.Enter, _menuContext); _accept.AddBinding(new(GamepadButton.A));
@@ -110,13 +109,19 @@ internal sealed class InputExample(ExampleOptions options) : ExampleGame(options
             { _lastMenuMove = _menuMove.Value; Console.WriteLine($"Menu navigation: {_lastMenuMove}"); }
             return;
         }
-        float dt = (float)time.ElapsedGameTime.TotalSeconds;
         _speed = System.Math.Clamp(_speed + _wheel.Value * .25f, .25f, 20);
+    }
+
+    protected override void FixedUpdate(GameTime time)
+    {
+        base.FixedUpdate(time);
+        if (_menu || _capture is { Status: InputRebindStatus.Pending }) return;
+        float dt = (float)time.ElapsedGameTime.TotalSeconds;
         Camera.Position += (Camera.Right * _move.Value.X + Camera.Forward * _move.Value.Y) * (_speed + _throttle.Value * 5) * dt;
-        var look = _mouseLook.Value;
+        var look = _mouseLook.ConsumeDelta();
         var stick = _stickLook.Value * (2 * dt); // Held stick is a rate; mouse is already a displacement.
         if (Camera is FirstPersonCamera camera) camera.RotateYawPitch(-look.X - stick.X, -look.Y + stick.Y);
-        if (_jump.WasPressed) Console.WriteLine("Jump action pressed.");
+        if (_jump.ConsumePressed()) Console.WriteLine("Jump command consumed once in FixedUpdate.");
     }
 
     protected override void Unload()

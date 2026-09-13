@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Njulf.Rendering.Diagnostics;
 
-public sealed class ContentFallbackDiagnostics
+internal sealed class ContentFallbackDiagnostics
 {
     private readonly List<ContentFallbackEvent> _events = new();
 

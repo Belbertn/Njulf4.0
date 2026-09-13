@@ -11,7 +11,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class DirectionalShadowResources : IDisposable
+    internal sealed unsafe class DirectionalShadowResources : IDisposable
     {
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;

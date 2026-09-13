@@ -15,7 +15,7 @@ namespace Njulf.Rendering.Resources;
 /// Lazy, double-buffered full-resolution surface-validity history. Allocation
 /// is owned independently from any one temporal consumer.
 /// </summary>
-public sealed unsafe class TemporalSurfaceValidityResources : IDisposable
+internal sealed unsafe class TemporalSurfaceValidityResources : IDisposable
 {
     private readonly VulkanContext _context;
     private readonly BufferManager _bufferManager;

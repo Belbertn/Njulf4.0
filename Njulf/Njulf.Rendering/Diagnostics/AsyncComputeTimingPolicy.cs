@@ -31,7 +31,7 @@ namespace Njulf.Rendering.Diagnostics
     /// Callers are expected to invalidate a workload when resolution, scene, GI mode, or major
     /// feature state changes.
     /// </summary>
-    public sealed class AsyncComputeTimingPolicy
+    internal sealed class AsyncComputeTimingPolicy
     {
         private readonly Dictionary<AsyncComputeTimingKey, PathState> _states = new();
         private readonly int _windowCapacity;

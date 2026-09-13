@@ -4,7 +4,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline.PipelineObjects;
 
-public sealed unsafe partial class MeshPipeline
+internal sealed unsafe partial class MeshPipeline
 {
     private readonly AutomaticPlanarCapturePipelineBank _automaticPlanarPipelineBank = new();
     private readonly VkPipeline[] _automaticPlanarColorPipelines = new VkPipeline[6];

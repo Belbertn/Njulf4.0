@@ -12,6 +12,36 @@ namespace Njulf.Tests
     public sealed class InputManagerTests
     {
         [Test]
+        public void AdvancedInputForwardsNativeEventsAndUnsubscribes()
+        {
+            var (keyboard, keys) = InputDeviceProxy.Create<IKeyboard>();
+            keys.Methods["IsKeyPressed"] = args => (Key)args![0]! == Key.A;
+            var (mouse, pointer) = InputDeviceProxy.Create<IMouse>();
+            using var input = new InputManager(new TestInputContext(keyboards: [keyboard], mice: [mouse]));
+            input.Initialize();
+            var native = (Njulf.Input.Advanced.INativeInputIntegration)input;
+            string text = "";
+            Vector2 position = Vector2.Zero;
+            void OnText(char c) => text += c;
+            void OnMove(Vector2 value) => position = value;
+            native.RawTextInput += OnText;
+            native.RawMouseMoved += OnMove;
+            keys.Raise("KeyChar", keyboard, 'a');
+            RaiseMouseMove(pointer, mouse, 30, 40);
+            Assert.That(text, Is.EqualTo("a"));
+            AssertVector(position, new Vector2(30, 40));
+            Assert.That(native.IsPhysicalKeyDown(Key.A), Is.True);
+            Assert.That(native.IsPhysicalKeyDown(Key.A, 9), Is.False);
+            native.RawTextInput -= OnText;
+            native.RawMouseMoved -= OnMove;
+            keys.Raise("KeyChar", keyboard, 'b');
+            RaiseMouseMove(pointer, mouse, 50, 60);
+            Assert.That(text, Is.EqualTo("a"));
+            AssertVector(position, new Vector2(30, 40));
+            AssertVector(input.MousePosition, new Vector2(50, 60));
+        }
+
+        [Test]
         public void FirstMouseMove_InitializesPositionWithoutDelta()
         {
             var (mouse, state) = InputDeviceProxy.Create<IMouse>();

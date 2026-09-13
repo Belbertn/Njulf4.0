@@ -4,7 +4,7 @@ using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Data;
 
-public sealed unsafe partial class SceneDataBuilder
+internal sealed unsafe partial class SceneDataBuilder
 {
     private Scene? _secondaryScene;
     private SecondarySceneSnapshot? _secondarySnapshot;

@@ -1,0 +1,1243 @@
+{
+  "date": "2026-09-13",
+  "revision": "09be7c7d2a70784bf91e876d9bd6a3eba8b2cc2b",
+  "dirty_before_task": true,
+  "internalized_declarations": 305,
+  "groups": {
+    "Njulf.Assets.Tooling/Cooked": 1,
+    "Njulf.Rendering/Data": 142,
+    "Njulf.Rendering/Diagnostics": 20,
+    "Njulf.Rendering/Memory": 1,
+    "Njulf.Rendering/Pipeline": 100,
+    "Njulf.Rendering/Resources": 41
+  },
+  "preserved_contracts": [
+    "Editor/tooling services and cooker entry points",
+    "Documented diagnostic results and snapshot readers/writers",
+    "Njulf.Graphics.Vulkan extension contracts",
+    "GPU field order, packing and values",
+    "Settings schema version 28, defaults and migrations"
+  ],
+  "internalized": [
+    {
+      "path": "Njulf/Njulf.Assets.Tooling/Cooked/PinnedOpacityMicromapBakeBridge.cs",
+      "type": "PinnedOpacityMicromapBridgeAbi"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/DdgiEmissiveSourceSetBuilder.cs",
+      "type": "DdgiEmissiveSourceSetBuilder"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/DdgiEmissiveSpatialHierarchy.cs",
+      "type": "DdgiEmissiveSpatialHierarchy"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/DdgiEmissiveTransportCache.cs",
+      "type": "DdgiEmissiveTableCache"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/DdgiEmissiveTriangleTable.cs",
+      "type": "DdgiEmissiveTriangleTable"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/DdgiVfxMacroEmitterReducer.cs",
+      "type": "DdgiVfxMacroEmitterReducer"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/DirectionalShadowClipReference.cs",
+      "type": "DirectionalShadowClipReference"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/DirectionalShadowDataBuilder.cs",
+      "type": "DirectionalShadowDataBuilder"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/FarFieldMaterialPayloadV2.cs",
+      "type": "FarFieldMaterialPayloadV2"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUAmbientOcclusionBlurPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUAmbientOcclusionPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUAntiAliasingPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUAreaRayShadowPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUAutoExposurePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUBloomPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUCompositePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDdgiProbeDebugInstance"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDdgiProbeRelocationClassification"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDdgiProbeState"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDdgiProbeUpdateRequest"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDdgiProbeVolume"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDdgiProbeVolumeHeader"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDdgiRayQueryInstance"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDdgiUpdatePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDebugLineVertex"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDepthPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDirectionalRayShadowPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDirectionalShadowParameters"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDirectionalShadowSpatialPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUDirectionalShadowTemporalPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUEnvironmentData"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFarFieldClipmapParams"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFarFieldInstance"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFarFieldMaterialVoxelV2"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFarFieldPageTableEntry"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFarFieldVoxelizePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFogPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliageAuthoredInstanceCommand"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliageCluster"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliageCullPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliageDispatchArgs"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliageDrawPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliageImpostor"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliageImpostorView"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliageInstance"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliageMeshletDrawCommand"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliagePatch"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliageProceduralDrawCommand"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUFoliagePrototype"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUForwardMaterialData"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUForwardPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUForwardVisibilityCompactionPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUGtaoPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUGtaoSpatialPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUGtaoTemporalPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUHiZBuildPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPULightCullPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPULightCullingParams"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPULightIndex"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPULocalLightShadowIndex"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUMeshInfo"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUMeshlet"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUMeshletCommandFlags"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUMeshletDrawCommand"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUMeshletDrawFlags"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUMeshletTaskFrameData"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUMotionVectorPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUObjectData"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUPackedMeshletDrawCommand"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleBatch"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleCurveSample"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleDrawCommand"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleEmitter"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleFrameData"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleInstance"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticlePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleResetPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleSimulatePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleSortKey"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleSortPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUParticleState"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUPointShadow"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUReflectionProbe"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUReflectionProbeHeader"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSceneData"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSceneInstanceCandidate"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSceneInstanceClassification"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSceneLodTransitionState"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSceneOpaqueCompactionPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUScreenToViewParams"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiDispatchIndirectCommand"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiLegacyRayResult"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiMaskedFeedbackCompactPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiPageDemandPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiPageDevelopmentControl"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiPageHistory"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiPageInitWork"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiPageResidencyPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiPageTableEntry"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiParams"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiPhysicalPageMetadata"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiProbeState"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiProbeUpdate"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiPublishPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiRayResult"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiReceiverCacheAdaptivePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiReceiverCacheLegacyResolvePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiReceiverCachePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiReceiverCacheResolvePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiReceiverProbe"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiRelocationClassification"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiResidencyFeedback"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiResidencyHeader"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiSchedulePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiSchedulerCandidate"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiSchedulerDirtyRegion"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiSchedulerFeedback"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiSchedulerFrame"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiSchedulerProbeState"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiSchedulerVolumePolicy"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiTransportAuditPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiTransportRayCache"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiTransportRayCacheCompact24"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiTransportRayCacheCompact28"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiUpdateOutcome"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiVolume"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSimpleDdgiVolumePaging"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSkinningPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSkyboxPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUSpotShadow"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUTiledLightHeader"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUVariableRateShadingPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUVolumetricDensityVolume"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUVolumetricFogFrameData"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUVolumetricFogPushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GPUStructs.cs",
+      "type": "GPUWeightedOitCompositePushConstants"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/GlobalIlluminationProbeVolumeData.cs",
+      "type": "GlobalIlluminationProbeVolumeData"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/LocalShadowDataBuilder.cs",
+      "type": "LocalShadowDataBuilder"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/ReflectionProbeData.cs",
+      "type": "ReflectionProbeData"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/SceneDataBuilder.SecondaryViews.cs",
+      "type": "SceneDataBuilder"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/SceneDataBuilder.cs",
+      "type": "SceneDataBuilder"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Data/SceneRenderingData.cs",
+      "type": "SceneRenderingData"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/AlphaVisibilityConformance.cs",
+      "type": "AlphaVisibilityConformanceContract"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/AlphaVisibilityConformance.cs",
+      "type": "AlphaVisibilityConformanceEvaluator"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/AsyncComputeTimingPolicy.cs",
+      "type": "AsyncComputeTimingPolicy"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/ContentFallbackDiagnostics.cs",
+      "type": "ContentFallbackDiagnostics"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/DirectionalShadowQualificationTracks.cs",
+      "type": "DirectionalShadowQualificationTracks"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/GiDiagnosticsContracts.cs",
+      "type": "GiDiagnosticWarningFactory"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/GiDiagnosticsContracts.cs",
+      "type": "GiFeatureStateFactory"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/GiDiagnosticsContracts.cs",
+      "type": "GiResidencyReporter"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/GiDiagnosticsContracts.cs",
+      "type": "GiWarningEvaluator"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/GiDiagnosticsContracts.cs",
+      "type": "ResolvedGiSettingsMetadataFactory"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/GiDiagnosticsContracts.cs",
+      "type": "SimpleDdgiLayoutTelemetryFactory"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/GiDiagnosticsContracts.cs",
+      "type": "SimpleDdgiProbeResidencyTelemetryFactory"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/GiDiagnosticsContracts.cs",
+      "type": "SimpleDdgiSchedulerPolicyTelemetryFactory"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/ImageByteEstimator.cs",
+      "type": "ImageByteEstimator"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/MaterialTransportProvenance.cs",
+      "type": "MaterialTransportProvenanceEncoding"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/MeshletSystemQualification.cs",
+      "type": "MeshletSystemQualificationContract"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/RendererResourceLeakAuditor.cs",
+      "type": "RendererResourceLeakAuditor"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/RendererValidationMessageState.cs",
+      "type": "RendererValidationMessageState"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/RuntimeStallTracker.cs",
+      "type": "RuntimeStallTracker"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Diagnostics/UploadBudgetTracker.cs",
+      "type": "UploadBudgetTracker"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Memory/GpuBufferUploader.cs",
+      "type": "GpuBufferUploader"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AmbientOcclusionBlurPass.cs",
+      "type": "AmbientOcclusionBlurPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AmbientOcclusionPass.cs",
+      "type": "AmbientOcclusionPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AntiAliasingPass.cs",
+      "type": "AntiAliasingPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AreaRayShadowPass.cs",
+      "type": "AreaRayShadowPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AsyncComputeCertificationEvidence.cs",
+      "type": "AsyncComputeCertificationEvidence"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AsyncComputePassCatalog.cs",
+      "type": "AsyncComputePassCatalog"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AsyncComputeScheduler.cs",
+      "type": "AsyncComputeScheduler"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AsyncComputeScheduler.cs",
+      "type": "AsyncComputeSchedulerInput"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AsyncComputeStateContracts.cs",
+      "type": "AsyncComputePlanVariantCache"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AsyncComputeStateContracts.cs",
+      "type": "AsyncComputeResourceStateProjection"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AsyncComputeStateContracts.cs",
+      "type": "AsyncComputeValidationLedger"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AutoExposurePass.cs",
+      "type": "AutoExposurePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/AutomaticPlanarReflectionPass.cs",
+      "type": "AutomaticPlanarReflectionPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/BloomPass.cs",
+      "type": "BloomPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/DdgiFoliageProxyGenerationPass.cs",
+      "type": "DdgiFoliageProxyGenerationPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/DebugDrawPass.cs",
+      "type": "DebugDrawPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/DebugOverlayPass.cs",
+      "type": "DebugOverlayPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/DepthPrePass.cs",
+      "type": "DepthPrePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/DirectionalRayShadowPass.cs",
+      "type": "DirectionalRayShadowPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/DirectionalShadowPass.cs",
+      "type": "DirectionalShadowPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/DirectionalShadowScreenPasses.cs",
+      "type": "DirectionalShadowSpatialPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/DirectionalShadowScreenPasses.cs",
+      "type": "DirectionalShadowTemporalPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/FarFieldClipmapBakePass.cs",
+      "type": "FarFieldClipmapBakePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/FogPass.cs",
+      "type": "FogPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/FoliageAuthoredExpandPass.cs",
+      "type": "FoliageAuthoredExpandPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/FoliageCullPass.cs",
+      "type": "FoliageCullPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardAdvancedGiCombinedContract.cs",
+      "type": "ForwardAdvancedGiCombinedContract"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardGiCausticReceiverContract.cs",
+      "type": "ForwardGiCausticReceiverAttachmentBinding"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardGiCausticReceiverContract.cs",
+      "type": "ForwardGiCausticReceiverContract"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardHybridReflectionReceiverContract.cs",
+      "type": "ForwardHybridReflectionReceiverAttachmentBinding"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardHybridReflectionReceiverContract.cs",
+      "type": "ForwardHybridReflectionReceiverContract"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardNearFieldDirectSourceContract.cs",
+      "type": "ForwardNearFieldDirectSourceAttachmentBinding"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardNearFieldDirectSourceContract.cs",
+      "type": "ForwardNearFieldDirectSourceContract"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardPlusPass.AdaptiveReceiverCache.cs",
+      "type": "ForwardPlusPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardPlusPass.MaskedFeedbackCompaction.cs",
+      "type": "ForwardPlusPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardPlusPass.SecondaryViews.cs",
+      "type": "ForwardPlusPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardPlusPass.SparseHybridLobePayload.cs",
+      "type": "ForwardPlusPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardPlusPass.cs",
+      "type": "ForwardPlusPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ForwardVisibilityCompactionPass.cs",
+      "type": "ForwardVisibilityCompactionPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/GiPipelineCacheService.cs",
+      "type": "GiPipelineCacheService"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/GpuParticleResetPass.cs",
+      "type": "GpuParticleResetPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/GpuParticleSimulatePass.cs",
+      "type": "GpuParticleSimulatePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/GpuParticleSortPass.cs",
+      "type": "GpuParticleSortPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/HiZBuildPass.cs",
+      "type": "HiZBuildPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ImGuiRenderPass.cs",
+      "type": "ImGuiRenderPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/MotionVectorPass.cs",
+      "type": "MotionVectorPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ParticlePass.cs",
+      "type": "ParticlePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/PipelineObjects/CompositePipeline.cs",
+      "type": "CompositePipeline"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/PipelineObjects/ComputePipeline.cs",
+      "type": "ComputePipeline"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/PipelineObjects/FoliagePipeline.AutomaticPlanarCapture.cs",
+      "type": "FoliagePipeline"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/PipelineObjects/FoliagePipeline.cs",
+      "type": "FoliagePipeline"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/PipelineObjects/MeshPipeline.AutomaticPlanarCapture.cs",
+      "type": "MeshPipeline"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/PipelineObjects/MeshPipeline.cs",
+      "type": "MeshPipeline"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/PipelineObjects/ParticlePipeline.cs",
+      "type": "ParticlePipeline"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/PipelineObjects/SkyboxPipeline.cs",
+      "type": "SkyboxPipeline"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/PipelineObjects/WeightedOitCompositePipeline.cs",
+      "type": "WeightedOitCompositePipeline"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/PointShadowPass.cs",
+      "type": "PointShadowPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/QueueOwnershipTransferRecorder.cs",
+      "type": "QueueOwnershipTransferRecorder"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ReflectionProbeCaptureGraphDeclaration.cs",
+      "type": "ReflectionProbeCaptureGraphDeclaration"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ReflectionProbeCapturePass.cs",
+      "type": "ForwardPlusReflectionProbeCaptureSceneRenderer"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ReflectionProbeCapturePass.cs",
+      "type": "IReflectionProbeCaptureSceneRenderer"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ReflectionProbeCapturePass.cs",
+      "type": "ReflectionProbeCapturePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ReflectionProbePrefilterPass.cs",
+      "type": "ReflectionProbePrefilterPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ReflectionProbePublishPass.cs",
+      "type": "ReflectionProbePublishPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/RenderGraph.cs",
+      "type": "RenderGraph"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/RenderGraphResourceBindings.cs",
+      "type": "RenderGraphResourceBindings"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/RenderGraphResourceBindings.cs",
+      "type": "RenderGraphResourcePlan"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/RenderPassBase.cs",
+      "type": "RenderPassBase"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SceneOpaqueCompactionPass.cs",
+      "type": "SceneOpaqueCompactionPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiAcceleratedSolvePass.cs",
+      "type": "SimpleDdgiAcceleratedSolvePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiDirectionalRadiancePass.cs",
+      "type": "SimpleDdgiDirectionalRadiancePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiGuidingPasses.cs",
+      "type": "SimpleDdgiGuidingBindlessSlots"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiGuidingPasses.cs",
+      "type": "SimpleDdgiGuidingGpuBindings"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiGuidingPasses.cs",
+      "type": "SimpleDdgiGuidingGpuPassNames"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiGuidingPasses.cs",
+      "type": "SimpleDdgiGuidingPasses"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiGuidingPasses.cs",
+      "type": "SimpleDdgiGuidingResourceNames"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiLightTreePass.cs",
+      "type": "SimpleDdgiLightTreePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiNearFieldResidualPasses.cs",
+      "type": "SimpleDdgiNearFieldResidualGpuPassNames"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiPageDemandPass.cs",
+      "type": "SimpleDdgiPageDemandPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiPageFeedbackPass.cs",
+      "type": "SimpleDdgiPageFeedbackPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiPageResidencyPass.cs",
+      "type": "SimpleDdgiPageResidencyPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiPasses.cs",
+      "type": "SimpleDdgiBlendPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiPasses.cs",
+      "type": "SimpleDdgiComputePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiPasses.cs",
+      "type": "SimpleDdgiPublishPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiPasses.cs",
+      "type": "SimpleDdgiRelocateClassifyPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiPasses.cs",
+      "type": "SimpleDdgiTracePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiPasses.cs",
+      "type": "SimpleDdgiTransportAuditPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiPasses.cs",
+      "type": "SimpleDdgiTransportPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiProbeDebugPass.cs",
+      "type": "SimpleDdgiProbeDebugPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiSchedulePass.cs",
+      "type": "SimpleDdgiSchedulePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiSchedulerCommitPass.cs",
+      "type": "SimpleDdgiSchedulerCommitPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SimpleDdgiUrgentRelightPass.cs",
+      "type": "SimpleDdgiUrgentRelightPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SkinningPass.cs",
+      "type": "SkinningPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SkyboxPass.cs",
+      "type": "SkyboxPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/SpotShadowPass.cs",
+      "type": "SpotShadowPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/TiledLightCullingPass.cs",
+      "type": "TiledLightCullingPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/ToneMapCompositePass.cs",
+      "type": "ToneMapCompositePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/TransparentForwardPass.cs",
+      "type": "TransparentForwardPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/WeightedOitCompositePass.cs",
+      "type": "WeightedOitCompositePass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Pipeline/WeightedTransparentPass.cs",
+      "type": "WeightedTransparentPass"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/AccelerationStructureManager.OpacityMicromap.cs",
+      "type": "AccelerationStructureManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/AccelerationStructureManager.cs",
+      "type": "AccelerationStructureManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/AutoExposureManager.cs",
+      "type": "AutoExposureManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/AutomaticPlanarReflectionManager.cs",
+      "type": "AutomaticPlanarReflectionManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/DdgiFoliageProxyManager.cs",
+      "type": "DdgiFoliageProxyManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/DirectionalShadowHistoryResources.cs",
+      "type": "DirectionalShadowHistoryResources"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/DirectionalShadowHistoryResources.cs",
+      "type": "DirectionalShadowHistoryRevision"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/DirectionalShadowResources.cs",
+      "type": "DirectionalShadowResources"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/EnvironmentManager.cs",
+      "type": "EnvironmentManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/FarFieldClipmapManager.cs",
+      "type": "FarFieldClipmapManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/GiCausticTaskGeneration.cs",
+      "type": "GiCausticTaggedTransportGpuProducer"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/GiCausticTaskGeneration.cs",
+      "type": "GiCausticTaskGenerationCompiler"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/GiCausticVulkanRuntime.cs",
+      "type": "GiCausticVulkanRuntime"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/GpuParticleRuntimeManager.cs",
+      "type": "GpuParticleRuntimeManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/ModelRenderUploadService.cs",
+      "type": "ModelRenderUploadService"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/OpacityMicromapExtNativeLifecycle.cs",
+      "type": "VulkanExtOpacityMicromapNativeCommandRecorder"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/OpacityMicromapRuntimeRegistrationStore.cs",
+      "type": "OpacityMicromapRuntimeRegistrationStore"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/ParticleSystemManager.cs",
+      "type": "ParticleSystemManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/PointShadowCubemapArray.cs",
+      "type": "PointShadowCubemapArray"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/PointShadowPool.cs",
+      "type": "PointShadowPool"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/RaySceneDescriptorBank.cs",
+      "type": "RaySceneDescriptorBank"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/ReflectionProbeManager.cs",
+      "type": "ReflectionProbeManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/RenderTargetManager.cs",
+      "type": "RenderTargetManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/RendererDiagnosticsBuffer.cs",
+      "type": "RendererDiagnosticsBuffer"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiCpuScheduleModel.cs",
+      "type": "SimpleDdgiCpuScheduleModel"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiCpuScheduleModel.cs",
+      "type": "SimpleDdgiIndirectDispatchMath"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiCpuScheduleModel.cs",
+      "type": "SimpleDdgiSchedulerAbi"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiGpuScheduler.cs",
+      "type": "SimpleDdgiGpuScheduler"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiGuidingSourceCacheSidecar.cs",
+      "type": "SimpleDdgiGuidingSourceCacheSidecar"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiGuidingVulkanRuntime.cs",
+      "type": "SimpleDdgiGuidingVulkanRuntime"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiLightTreeGpuResources.cs",
+      "type": "SimpleDdgiLightTreeGpuResources"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiNearFieldResidualVulkanRuntime.cs",
+      "type": "SimpleDdgiNearFieldResidualVulkanRuntime"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiProbePageCache.cs",
+      "type": "SimpleDdgiProbePageCache"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiReceiverFeedbackVulkanRuntime.cs",
+      "type": "SimpleDdgiReceiverFeedbackVulkanRuntime"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiReceiverProbeEncoding.cs",
+      "type": "SimpleDdgiReceiverProbeEncoding"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiRefinementEmissiveDemandBuilder.cs",
+      "type": "SimpleDdgiRefinementEmissiveDemandBuilder"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SimpleDdgiVolumeManager.cs",
+      "type": "SimpleDdgiVolumeManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SkinningManager.cs",
+      "type": "SkinningManager"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/SpotShadowAtlas.cs",
+      "type": "SpotShadowAtlas"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/TemporalSurfaceValidityResources.cs",
+      "type": "TemporalSurfaceValidityResources"
+    },
+    {
+      "path": "Njulf/Njulf.Rendering/Resources/VulkanMeshletPhysicalResidencyResources.cs",
+      "type": "VulkanMeshletPhysicalResidencyResources"
+    }
+  ]
+}

@@ -24,7 +24,7 @@ namespace Njulf.Rendering.Pipeline
     /// dependency. Only an acquire-side image layout transition remains when the layouts differ;
     /// buffers and layout-stable images require no per-allocation Vulkan barrier.
     /// </summary>
-    public static class QueueOwnershipTransferRecorder
+    internal static class QueueOwnershipTransferRecorder
     {
         public static unsafe QueueOwnershipTransferBarrierCounts RecordReleases(
             VulkanContext context,

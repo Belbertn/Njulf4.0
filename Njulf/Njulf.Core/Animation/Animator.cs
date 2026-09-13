@@ -5,6 +5,7 @@ using Njulf.Core.Math;
 
 namespace Njulf.Core.Animation
 {
+    /// <summary>Evaluates skeletal clips and owns mutable playback/pose state. Use one animator per independently animated instance.</summary>
     public sealed class Animator : IUpdateable
     {
         private readonly Matrix4x4[][] _skinMatrices;
@@ -16,6 +17,7 @@ namespace Njulf.Core.Animation
         private bool _playing;
         private ulong _poseRevision = 1UL;
 
+        /// <summary>Creates a bind-pose animator borrowing skeleton, skins and clips; omitted collections are empty.</summary>
         public Animator(Skeleton skeleton, IReadOnlyList<Skin>? skins = null, IReadOnlyList<AnimationClip>? clips = null)
         {
             Skeleton = skeleton ?? throw new ArgumentNullException(nameof(skeleton));
@@ -23,7 +25,6 @@ namespace Njulf.Core.Animation
             Clips = clips ?? Array.Empty<AnimationClip>();
             CurrentPose = new AnimationPose(Skeleton.Joints.Count);
             CurrentPose.ResetToBindPose(Skeleton);
-            CurrentPose.BuildGlobalMatrices(Skeleton);
 
             _skinMatrices = new Matrix4x4[Skins.Count][];
             for (int i = 0; i < _skinMatrices.Length; i++)
@@ -32,17 +33,29 @@ namespace Njulf.Core.Animation
             BuildSkinMatrices();
         }
 
+        /// <summary>Borrowed skeleton defining joint indices and hierarchy.</summary>
         public Skeleton Skeleton { get; }
+        /// <summary>Borrowed skin bindings used to build skin matrices.</summary>
         public IReadOnlyList<Skin> Skins { get; }
+        /// <summary>Borrowed available clips; playback starts only when Play is called.</summary>
         public IReadOnlyList<AnimationClip> Clips { get; }
+        /// <summary>Animator-owned mutable pose. Use EditPose to publish procedural edits and update dependent matrices.</summary>
         public AnimationPose CurrentPose { get; }
+        /// <summary>Whether Update advances playback; true by default.</summary>
         public bool Enabled { get; set; } = true;
+        /// <summary>Ordering hint for updateable collections; defaults to zero.</summary>
         public int UpdateOrder { get; set; }
+        /// <summary>Selected clip, or null before playback and after Stop.</summary>
         public AnimationClip? CurrentClip { get; private set; }
+        /// <summary>Current clip time in seconds, wrapped when looping and clamped otherwise.</summary>
         public float TimeSeconds { get; private set; }
+        /// <summary>Playback multiplier, default one; negative values play backward.</summary>
         public float Speed { get; set; } = 1.0f;
+        /// <summary>Whether clip time wraps; selected by Play and preserved by CrossFade.</summary>
         public bool Looping { get; private set; } = true;
+        /// <summary>Whether a clip is selected and playback is running.</summary>
         public bool IsPlaying => _playing && CurrentClip != null;
+        /// <summary>Whether a clip is selected but playback is stopped or paused.</summary>
         public bool IsPaused => CurrentClip != null && !_playing;
         /// <summary>
         /// Monotonic content revision for the evaluated joint pose. Consumers
@@ -50,9 +63,11 @@ namespace Njulf.Core.Animation
         /// </summary>
         public ulong PoseRevision => _poseRevision;
 
+        /// <summary>Starts the clip at time zero, looping by default, and evaluates its first pose. CubicSpline channels are unsupported.</summary>
         public void Play(AnimationClip clip, bool loop = true)
         {
-            CurrentClip = clip ?? throw new ArgumentNullException(nameof(clip));
+            ValidateClip(clip);
+            CurrentClip = clip;
             TimeSeconds = 0f;
             Looping = loop;
             _playing = true;
@@ -60,17 +75,20 @@ namespace Njulf.Core.Animation
             EvaluateCurrentPose();
         }
 
+        /// <summary>Pauses playback while retaining the clip time and pose.</summary>
         public void Pause()
         {
             _playing = false;
         }
 
+        /// <summary>Resumes the selected clip; does nothing when no clip is selected.</summary>
         public void Resume()
         {
             if (CurrentClip != null)
                 _playing = true;
         }
 
+        /// <summary>Clears playback and cross-fading and publishes the skeleton's bind pose.</summary>
         public void Stop()
         {
             CurrentClip = null;
@@ -78,21 +96,21 @@ namespace Njulf.Core.Animation
             _playing = false;
             ClearCrossFade();
             CurrentPose.ResetToBindPose(Skeleton);
-            CurrentPose.BuildGlobalMatrices(Skeleton);
             BuildSkinMatrices();
             AdvancePoseRevision();
         }
 
+        /// <summary>Evaluates the clip at the supplied seconds, wrapping or clamping according to Looping.</summary>
         public void Seek(float timeSeconds)
         {
             TimeSeconds = NormalizeClipTime(CurrentClip, timeSeconds, Looping);
             EvaluateCurrentPose();
         }
 
+        /// <summary>Transitions to the next clip from time zero. Nonpositive duration or no current clip switches immediately; duration is in playback seconds.</summary>
         public void CrossFade(AnimationClip nextClip, float durationSeconds)
         {
-            if (nextClip == null)
-                throw new ArgumentNullException(nameof(nextClip));
+            ValidateClip(nextClip);
             if (durationSeconds <= 0f || CurrentClip == null)
             {
                 Play(nextClip, Looping);
@@ -109,6 +127,32 @@ namespace Njulf.Core.Animation
             _playing = true;
         }
 
+        /// <summary>Applies procedural edits and publishes global/skin matrices and a new pose revision.</summary>
+        /// <remarks>Call after animation evaluation. Edits last until the next evaluation; partial edits are published even if the callback throws.</remarks>
+        public void EditPose(Action<AnimationPose> edit)
+        {
+            if (edit == null) throw new ArgumentNullException(nameof(edit));
+            try { edit(CurrentPose); }
+            finally
+            {
+                CurrentPose.BuildGlobalMatrices(Skeleton);
+                BuildSkinMatrices();
+                AdvancePoseRevision();
+            }
+        }
+
+        private static void ValidateClip(AnimationClip clip)
+        {
+            if (clip == null) throw new ArgumentNullException(nameof(clip));
+            for (int i = 0; i < clip.Channels.Count; i++)
+            {
+                AnimationChannel channel = clip.Channels[i];
+                if (channel.Sampler.Interpolation == AnimationInterpolation.CubicSpline)
+                    throw new NotSupportedException($"Animation clip '{clip.Name}', channel {i} (joint {channel.TargetJointIndex}, {channel.Path}) uses unsupported CubicSpline interpolation. Export or resample the clip with Linear or Step interpolation before playback.");
+            }
+        }
+
+        /// <summary>Borrows current skin matrices for a zero-based skin index. Later pose updates overwrite their contents.</summary>
         public ReadOnlySpan<Matrix4x4> GetSkinMatrices(int skinIndex)
         {
             if (skinIndex < 0 || skinIndex >= _skinMatrices.Length)

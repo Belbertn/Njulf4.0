@@ -18,7 +18,7 @@ namespace Njulf.Rendering.Pipeline;
 /// storage and finalize publishes validity last, so DDGI trace never observes a
 /// partially built hierarchy.
 /// </summary>
-public sealed unsafe class SimpleDdgiLightTreePass : RenderPassBase
+internal sealed unsafe class SimpleDdgiLightTreePass : RenderPassBase
 {
     private static readonly string[] ShaderNames =
     [

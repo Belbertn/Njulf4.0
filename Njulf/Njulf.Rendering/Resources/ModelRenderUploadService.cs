@@ -21,7 +21,7 @@ using TextureColorSpace = Njulf.Graphics.TextureColorSpace;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed class ModelRenderUploadService :
+    internal sealed class ModelRenderUploadService :
         IModelRenderUploadService,
         ICooperativeModelRenderUploadService,
         ICooperativeSourceModelRenderUploadService,

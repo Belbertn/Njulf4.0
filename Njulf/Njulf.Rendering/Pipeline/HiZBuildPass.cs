@@ -15,7 +15,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class HiZBuildPass : RenderPassBase
+    internal sealed unsafe class HiZBuildPass : RenderPassBase
     {
         private const string EntryPoint = "main";
         private static readonly uint PushConstantSize = checked((uint)Marshal.SizeOf<GPUHiZBuildPushConstants>());

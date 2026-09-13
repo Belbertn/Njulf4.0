@@ -7,8 +7,6 @@ namespace Njulf.ApiExamples;
 
 internal sealed class ContentExample(ExampleOptions options) : ExampleGame(options)
 {
-    private IContentScope? _level;
-    private IContentScope? _preparingLevel;
     private Texture? _sharedTexture;
     private Texture? _levelTexture;
     private Material? _sharedMaterial;
@@ -23,14 +21,15 @@ internal sealed class ContentExample(ExampleOptions options) : ExampleGame(optio
     {
         _cancellation = cancellationToken;
         _sharedTexture = await Content.LoadAsync<Texture>("Assets/Content/shared.png", cancellationToken: cancellationToken);
-        _level = Content.CreateScope();
-        Scene next = await _level.LoadSceneAsync("Assets/Content/level-a.njscene.json", cancellationToken: cancellationToken);
-        _sharedMaterial = await _level.LoadAsync<Material>("Assets/Content/shared.njmaterial.json", cancellationToken: cancellationToken);
-        _levelMaterial = await _level.LoadAsync<Material>("Assets/Content/level-only.njmaterial.json", cancellationToken: cancellationToken);
-        _levelTexture = _level.Load<Texture>("Assets/Content/level-only.png");
-        next.RenderObjects[0].Material = _sharedMaterial;
-        next.RenderObjects[1].Material = _levelMaterial;
-        ExchangeScene(next).Dispose();
+        await LoadLevelAsync(async (level, token) =>
+        {
+            await level.LoadSceneAsync("Assets/Content/level-a.njscene.json", cancellationToken: token);
+            _sharedMaterial = await level.Content.LoadAsync<Material>("Assets/Content/shared.njmaterial.json", cancellationToken: token);
+            _levelMaterial = await level.Content.LoadAsync<Material>("Assets/Content/level-only.njmaterial.json", cancellationToken: token);
+            _levelTexture = level.Content.Load<Texture>("Assets/Content/level-only.png");
+            level.Scene.RenderObjects[0].Material = _sharedMaterial;
+            level.Scene.RenderObjects[1].Material = _levelMaterial;
+        }, cancellationToken);
     }
 
     protected override void Update(GameTime gameTime)
@@ -43,14 +42,13 @@ internal sealed class ContentExample(ExampleOptions options) : ExampleGame(optio
 
     private async Task SwitchLevelAsync()
     {
-        _preparingLevel = Content.CreateScope();
-        Scene next = await _preparingLevel.LoadSceneAsync("Assets/Content/level-b.njscene.json", cancellationToken: _cancellation);
-        Material shared = await _preparingLevel.LoadAsync<Material>("Assets/Content/shared.njmaterial.json", cancellationToken: _cancellation);
-        foreach (RenderObject placement in next.RenderObjects) placement.Material = shared;
-        ExchangeScene(next);
-        _level!.Dispose();
-        _level = _preparingLevel;
-        _preparingLevel = null;
+        Material shared = null!;
+        await LoadLevelAsync(async (level, token) =>
+        {
+            await level.LoadSceneAsync("Assets/Content/level-b.njscene.json", cancellationToken: token);
+            shared = await level.Content.LoadAsync<Material>("Assets/Content/shared.njmaterial.json", cancellationToken: token);
+            foreach (RenderObject placement in level.Scene.RenderObjects) placement.Material = shared;
+        }, _cancellation);
         _releasedOldLevel = _levelTexture!.IsDisposed && _levelMaterial!.IsDisposed;
         _preservedSharedAssets = ReferenceEquals(shared, _sharedMaterial) && !shared.IsDisposed && !_sharedTexture!.IsDisposed;
         if (!_releasedOldLevel || !_preservedSharedAssets)
@@ -60,9 +58,8 @@ internal sealed class ContentExample(ExampleOptions options) : ExampleGame(optio
 
     protected override void Unload()
     {
-        ExchangeScene(new Scene());
-        _preparingLevel?.Dispose();
-        _level?.Dispose();
+        // Shutdown has drained pending loading and is already outside update/render callbacks.
+        UnloadLevelAsync().GetAwaiter().GetResult();
         if (_sharedTexture != null)
         {
             bool survivedLevels = !_sharedTexture.IsDisposed;

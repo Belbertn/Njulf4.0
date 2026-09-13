@@ -13,7 +13,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class FoliageCullPass : IDisposable
+    internal sealed unsafe class FoliageCullPass : IDisposable
     {
         private const uint WorkgroupSize = 64;
         private readonly VulkanContext _context;

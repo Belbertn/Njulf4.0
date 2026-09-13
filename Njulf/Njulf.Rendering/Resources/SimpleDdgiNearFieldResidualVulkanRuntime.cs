@@ -138,7 +138,7 @@ internal sealed class SimpleDdgiNearFieldResidualTargetBinding
 /// sets, pipelines, history parity, and the exact sequence of stage records.
 /// It is constructed only after immutable C5 evidence has admitted the graph.
 /// </summary>
-public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposable
+internal sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposable
 {
     internal const uint ConsecutiveTelemetryFailureRebuildThreshold = 3U;
 

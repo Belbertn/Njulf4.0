@@ -196,7 +196,7 @@ namespace Njulf.Rendering.Pipeline
             .ToArray();
     }
 
-    public sealed record AsyncComputeSchedulerInput(
+    internal sealed record AsyncComputeSchedulerInput(
         AsyncComputeMode Mode,
         AsyncComputeQueueCapabilities QueueCapabilities,
         RenderGraphResourceBindings ResourceBindings,
@@ -213,7 +213,7 @@ namespace Njulf.Rendering.Pipeline
     /// therefore gives the renderer a complete all-or-nothing validation point before recording
     /// any async command buffer.
     /// </summary>
-    public sealed class AsyncComputeScheduler
+    internal sealed class AsyncComputeScheduler
     {
         public AsyncComputeSubmissionPlan Compile(AsyncComputeSchedulerInput input)
         {

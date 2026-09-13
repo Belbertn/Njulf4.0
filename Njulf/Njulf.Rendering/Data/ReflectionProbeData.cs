@@ -7,7 +7,7 @@ using Njulf.Graphics;
 
 namespace Njulf.Rendering.Data
 {
-    public static class ReflectionProbeData
+    internal static class ReflectionProbeData
     {
         public const int BoxProjectionFlag = 1 << 0;
         public const int CapturedRadianceAvailableFlag = 1 << 1;

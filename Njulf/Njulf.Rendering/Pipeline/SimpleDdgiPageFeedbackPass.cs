@@ -17,7 +17,7 @@ namespace Njulf.Rendering.Pipeline;
 /// delayed residency summary. It is deliberately ordered after lifecycle
 /// commit so publication and rejection counters describe the same frame.
 /// </summary>
-public sealed unsafe class SimpleDdgiPageFeedbackPass : RenderPassBase
+internal sealed unsafe class SimpleDdgiPageFeedbackPass : RenderPassBase
 {
     private readonly RenderSettings _settings;
     private readonly SimpleDdgiVolumeManager _volumeManager;

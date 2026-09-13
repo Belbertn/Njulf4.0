@@ -14,14 +14,26 @@ public sealed unsafe class AudioSystem : IDisposable
     private bool _disposed;
     private readonly List<AudioSource> _sources = [];
     private readonly List<AudioClip> _clips = [];
+    private readonly List<AudioSource> _oneShots = [];
+    private readonly List<AudioScope> _scopes = [];
+    /// <summary>Maximum simultaneous pooled one-shots; ordinary sources are independent of this limit.</summary>
+    public int OneShotCapacity { get; }
     private float _masterGain = 1, _blockedGain = .35f, _blockedHighFrequencyGain = .1f, _smoothingSeconds = .1f;
     internal AL Al { get; private set; } = null!;
     internal EffectExtension? Efx { get; private set; }
     public bool SupportsEfx => Efx != null;
+    /// <summary>System-owned music group; ignores simulation pause by default.</summary>
+    public AudioGroup Music { get; private set; } = null!;
+    /// <summary>System-owned effects group; scope-owned voices follow simulation pause by default.</summary>
+    public AudioGroup SFX { get; private set; } = null!;
+    /// <summary>System-owned UI group; ignores simulation pause by default.</summary>
+    public AudioGroup UI { get; private set; } = null!;
 
     /// <summary>Opens the default output device, or the named device. Initialization failure throws.</summary>
-    public AudioSystem(string? deviceName = null)
+    public AudioSystem(string? deviceName = null, int oneShotCapacity = 32)
     {
+        if (oneShotCapacity < 1) throw new ArgumentOutOfRangeException(nameof(oneShotCapacity));
+        OneShotCapacity = oneShotCapacity;
         try
         {
             _alc = ALContext.GetApi(soft: true);
@@ -36,15 +48,23 @@ public sealed unsafe class AudioSystem : IDisposable
     }
 
     // Transfers device/API ownership; used by headless OpenAL Soft loopback tests.
-    internal AudioSystem(ALContext alc, Device* device, int[] attributes, bool enableEfx = true)
+    internal AudioSystem(ALContext alc, Device* device, int[] attributes, bool enableEfx = true, int oneShotCapacity = 32)
     {
         _alc = alc; _device = device;
-        try { Initialize(attributes, enableEfx); }
+        OneShotCapacity = oneShotCapacity;
+        try
+        {
+            if (oneShotCapacity < 1) throw new ArgumentOutOfRangeException(nameof(oneShotCapacity));
+            Initialize(attributes, enableEfx);
+        }
         catch { Dispose(); throw; }
     }
 
     private void Initialize(int[]? attributes, bool enableEfx)
     {
+        Music = new(this, AudioPausePolicy.IgnoreSimulationPause);
+        SFX = new(this, AudioPausePolicy.FollowScope);
+        UI = new(this, AudioPausePolicy.IgnoreSimulationPause);
         if (_device == null) throw new InvalidOperationException("OpenAL could not open the output device.");
         fixed (int* values = attributes) _context = _alc.CreateContext(_device, values);
         if (_context == null || !_alc.MakeContextCurrent(_context))
@@ -58,6 +78,7 @@ public sealed unsafe class AudioSystem : IDisposable
         CheckError();
     }
 
+    /// <summary>Master volume multiplier in [0,1], default 1, applied to all sources and groups.</summary>
     public float MasterGain
     {
         get => _masterGain;
@@ -122,10 +143,74 @@ public sealed unsafe class AudioSystem : IDisposable
         return source;
     }
 
+    /// <summary>Creates a grouped voice with an optional world-position binding, sampled before playback and during maintenance.</summary>
+    public AudioSource CreateSource(AudioClip clip, AudioGroup group, bool spatial = true, Func<Vector3>? position = null)
+    {
+        CheckGroup(group);
+        var source = CreateSource(clip, spatial);
+        try { source.Group = group; source.PositionProvider = position; return source; }
+        catch { source.Dispose(); throw; }
+    }
+
+    internal void CheckGroup(AudioGroup group)
+    {
+        Check(); ArgumentNullException.ThrowIfNull(group);
+        if (!ReferenceEquals(group.Owner, this)) throw new ArgumentException("The group belongs to another audio system.", nameof(group));
+    }
+
+    internal void RefreshGroup(AudioGroup group)
+    {
+        foreach (var source in _sources)
+            if (ReferenceEquals(source.Group, group)) source.RefreshGroup();
+    }
+
+    /// <summary>Creates inactive local audio. Register the scope with GameLevel or Game to follow activation, pause, and disposal.</summary>
+    public AudioScope CreateScope()
+    {
+        Check();
+        var scope = new AudioScope(this);
+        _scopes.Add(scope);
+        return scope;
+    }
+
+    /// <summary>Plays a mono spatial effect at position with volume in [0,1]. Returns false if every pooled voice is busy.</summary>
+    /// <remarks>Completed voices are reused across clips. Active sounds are never stolen. Call Update to release completed clip attachments.</remarks>
+    public bool PlayOneShot(AudioClip clip, Vector3 position, float volume = 1)
+        => PlayOneShot(clip, SFX, position, volume);
+
+    public bool PlayOneShot(AudioClip clip, AudioGroup group, Vector3 position, float volume = 1)
+    {
+        CheckGroup(group);
+        Check(); ArgumentNullException.ThrowIfNull(clip); clip.Check();
+        if (!ReferenceEquals(clip.Owner, this)) throw new ArgumentException("The clip belongs to another audio system.", nameof(clip));
+        if (clip.Channels != 1) throw new ArgumentException("Spatial audio requires a mono clip.", nameof(clip));
+        Finite(position); Unit(volume);
+        ReclaimOneShots();
+        AudioSource? source = _oneShots.Find(s => !s.HasClip);
+        if (source == null)
+        {
+            if (_oneShots.Count == OneShotCapacity) return false;
+            source = CreateSource(clip);
+            _oneShots.Add(source);
+        }
+        try { source.Group = group; source.PlayOneShot(clip, position, volume); }
+        catch { source.DetachClip(); throw; }
+        return true;
+    }
+
+    internal void ReclaimOneShots()
+    {
+        foreach (var source in _oneShots)
+            if (source.HasClip && source.State is AudioPlaybackState.Stopped or AudioPlaybackState.Initial)
+                source.DetachClip();
+    }
+
     /// <summary>Call after updating listener/source positions. Playback itself is mixed by OpenAL.</summary>
     public void Update(float unscaledDeltaSeconds)
     {
         Check(); Nonnegative(unscaledDeltaSeconds);
+        Music.Update(unscaledDeltaSeconds); SFX.Update(unscaledDeltaSeconds); UI.Update(unscaledDeltaSeconds);
+        ReclaimOneShots();
         foreach (var source in _sources) source.Update(unscaledDeltaSeconds);
         CheckError();
     }
@@ -133,6 +218,7 @@ public sealed unsafe class AudioSystem : IDisposable
     private void InvalidateOcclusion() { foreach (var source in _sources) source.InvalidateOcclusion(); }
     internal void Remove(AudioSource source) => _sources.Remove(source);
     internal void Remove(AudioClip clip) => _clips.Remove(clip);
+    internal void Remove(AudioScope scope) => _scopes.Remove(scope);
     internal void Check()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -180,7 +266,9 @@ public sealed unsafe class AudioSystem : IDisposable
         if (_context != null)
         {
             _alc.MakeContextCurrent(_context);
+            foreach (var scope in _scopes.ToArray()) scope.Dispose();
             while (_sources.Count > 0) _sources[^1].Dispose();
+            _oneShots.Clear();
             while (_clips.Count > 0) _clips[^1].Dispose();
             Efx?.Dispose();
             _alc.MakeContextCurrent(null);

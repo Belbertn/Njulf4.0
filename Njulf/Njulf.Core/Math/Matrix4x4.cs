@@ -36,6 +36,7 @@ namespace Njulf.Core.Math
             M41 = m41; M42 = m42; M43 = m43; M44 = m44;
         }
 
+        /// <summary>Gets or sets an element by zero-based row and column, each in [0,3].</summary>
         public float this[int row, int col]
         {
             get
@@ -76,7 +77,9 @@ namespace Njulf.Core.Math
             }
         }
 
+        /// <summary>Returns row-vector translation from M41, M42 and M43.</summary>
         public Vector3 Translation => new(M41, M42, M43);
+        /// <summary>Returns lengths of the first three rows; signs and shear are not recovered.</summary>
         public Vector3 Scale => new(
             (float)System.Math.Sqrt(M11 * M11 + M12 * M12 + M13 * M13),
             (float)System.Math.Sqrt(M21 * M21 + M22 * M22 + M23 * M23),
@@ -129,18 +132,28 @@ namespace Njulf.Core.Math
             m.M31 * s, m.M32 * s, m.M33 * s, m.M34 * s,
             m.M41 * s, m.M42 * s, m.M43 * s, m.M44 * s);
 
+        /// <summary>Creates a row-vector translation in scene units.</summary>
+        public static Matrix4x4 CreateTranslation(float x, float y, float z) => CreateTranslation(new Vector3(x, y, z));
+        /// <summary>Creates a scale matrix; factors are dimensionless.</summary>
+        public static Matrix4x4 CreateScale(float scale) => CreateScale(new Vector3(scale));
+        /// <summary>Creates a scale matrix; factors are dimensionless.</summary>
+        public static Matrix4x4 CreateScale(float x, float y, float z) => CreateScale(new Vector3(x, y, z));
+
+        /// <summary>Creates a row-vector translation in scene units.</summary>
         public static Matrix4x4 CreateTranslation(Vector3 position) => new(
             1f, 0f, 0f, 0f,
             0f, 1f, 0f, 0f,
             0f, 0f, 1f, 0f,
             position.X, position.Y, position.Z, 1f);
 
+        /// <summary>Creates a scale matrix; factors are dimensionless.</summary>
         public static Matrix4x4 CreateScale(Vector3 scale) => new(
             scale.X, 0f, 0f, 0f,
             0f, scale.Y, 0f, 0f,
             0f, 0f, scale.Z, 0f,
             0f, 0f, 0f, 1f);
 
+        /// <summary>Creates an X-axis rotation in radians.</summary>
         public static Matrix4x4 CreateRotationX(float radians)
         {
             float c = (float)System.Math.Cos(radians);
@@ -152,6 +165,7 @@ namespace Njulf.Core.Math
                 0f, 0f, 0f, 1f);
         }
 
+        /// <summary>Creates a Y-axis rotation in radians.</summary>
         public static Matrix4x4 CreateRotationY(float radians)
         {
             float c = (float)System.Math.Cos(radians);
@@ -163,6 +177,7 @@ namespace Njulf.Core.Math
                 0f, 0f, 0f, 1f);
         }
 
+        /// <summary>Creates a Z-axis rotation in radians.</summary>
         public static Matrix4x4 CreateRotationZ(float radians)
         {
             float c = (float)System.Math.Cos(radians);
@@ -174,6 +189,7 @@ namespace Njulf.Core.Math
                 0f, 0f, 0f, 1f);
         }
 
+        /// <summary>Creates an axis-angle rotation in radians, normalizing the supplied nonzero axis.</summary>
         public static Matrix4x4 CreateFromAxisAngle(Vector3 axis, float angle)
         {
             float c = (float)System.Math.Cos(angle);
@@ -187,6 +203,7 @@ namespace Njulf.Core.Math
                 0f, 0f, 0f, 1f);
         }
 
+        /// <summary>Creates a right-handed view matrix looking from cameraPosition toward cameraTarget; up must not be parallel to the view direction.</summary>
         public static Matrix4x4 CreateLookAt(Vector3 cameraPosition, Vector3 cameraTarget, Vector3 cameraUp)
         {
             Vector3 z = (cameraPosition - cameraTarget).Normalized();
@@ -199,6 +216,7 @@ namespace Njulf.Core.Math
                 -Vector3.Dot(x, cameraPosition), -Vector3.Dot(y, cameraPosition), -Vector3.Dot(z, cameraPosition), 1f);
         }
 
+        /// <summary>Creates a perspective projection with vertical field of view in radians, width/height aspect, and near/far distances in scene units.</summary>
         public static Matrix4x4 CreatePerspectiveFieldOfView(float fieldOfView, float aspectRatio, float nearPlaneDistance, float farPlaneDistance)
         {
             float f = 1f / (float)System.Math.Tan(fieldOfView * 0.5f);
@@ -212,6 +230,7 @@ namespace Njulf.Core.Math
                 0f, 0f, depthOffset, 0f);
         }
 
+        /// <summary>Creates an orthographic projection with width, height and near/far distances in scene units.</summary>
         public static Matrix4x4 CreateOrthographic(float width, float height, float zNearPlane, float zFarPlane)
         {
             return new(
@@ -221,12 +240,14 @@ namespace Njulf.Core.Math
                 0f, 0f, zFarPlane / (zFarPlane - zNearPlane), 1f);
         }
 
+        /// <summary>Returns a copy with rows and columns exchanged.</summary>
         public Matrix4x4 Transpose() => new(
             M11, M21, M31, M41,
             M12, M22, M32, M42,
             M13, M23, M33, M43,
             M14, M24, M34, M44);
 
+        /// <summary>Returns the inverse matrix; throws InvalidOperationException for a singular matrix.</summary>
         public Matrix4x4 Invert()
         {
             var source = new System.Numerics.Matrix4x4(
@@ -245,6 +266,7 @@ namespace Njulf.Core.Math
                 inverse.M41, inverse.M42, inverse.M43, inverse.M44);
         }
 
+        /// <summary>Returns the determinant; zero indicates a singular matrix.</summary>
         public float Determinant() =>
             M11 * M22 * M33 * M44 + M11 * M23 * M34 * M42 + M11 * M24 * M32 * M43
             - M11 * M22 * M34 * M43 - M11 * M23 * M32 * M44 - M11 * M24 * M33 * M42

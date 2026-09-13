@@ -140,11 +140,26 @@ namespace Njulf.Core.Camera
             return new Ray(nearPoint, direction);
         }
 
-        public void LookAt(Vector3 target, Vector3 up)
+        public virtual void LookAt(Vector3 target, Vector3 up)
         {
+            if (_dirty) UpdateMatrices();
             _viewMatrix = Matrix4x4.CreateLookAt(_position, target, up);
             _viewProjectionMatrix = _viewMatrix * _projectionMatrix;
             _dirty = false;
+        }
+
+        protected static (Vector3 Forward, Vector3 Right, Vector3 Up) LookAtBasis(Vector3 position, Vector3 target, Vector3 up)
+        {
+            Vector3 forward = target - position;
+            if (!float.IsFinite(forward.LengthSquared()) || forward.LengthSquared() <= 1e-12f ||
+                !float.IsFinite(up.LengthSquared()) || up.LengthSquared() <= 1e-12f)
+                throw new ArgumentException("LookAt requires a distinct finite target and a nonzero finite up vector.");
+            forward = forward.Normalized();
+            Vector3 right = Vector3.Cross(forward, up.Normalized());
+            if (right.LengthSquared() <= 1e-12f)
+                right = Vector3.Cross(forward, System.MathF.Abs(forward.Y) < .99f ? Vector3.UnitY : Vector3.UnitZ);
+            right = right.Normalized();
+            return (forward, right, Vector3.Cross(right, forward));
         }
 
         private static Vector3 Unproject(float x, float y, float z, Matrix4x4 inverseViewProjection)

@@ -55,8 +55,23 @@ internal sealed class VulkanGraphicsSettingsController : GraphicsSettingsControl
         try { ApplyValues(candidate, change); }
         catch (ArgumentException e) { return new(GraphicsSettingsOutcome.Rejected, Current,
             Array.AsReadOnly(new[] { new GraphicsSettingsFieldResult("Request", GraphicsSettingsImpact.Rejected, e.Message) }), e.Message); }
-        if (change.QualityPreset.HasValue && !Equals(_settings.QualityPreset, candidate.QualityPreset))
+        bool persistenceChanged = _settings.ComputePersistenceSha256() != candidate.ComputePersistenceSha256();
+        if (change.QualityPreset.HasValue && persistenceChanged)
             fields.Add(new(nameof(change.QualityPreset), GraphicsSettingsImpact.ResourceRebuild, "Uses existing renderer resource preparation."));
+        if (change.ShadowPreset.HasValue &&
+            (_settings.Shadows.AreaShadowSampleCount != candidate.Shadows.AreaShadowSampleCount ||
+             _settings.Shadows.AreaShadowsEnabled != candidate.Shadows.AreaShadowsEnabled ||
+             _settings.Shadows.DirectionalBiasMode != candidate.Shadows.DirectionalBiasMode ||
+             _settings.Shadows.DirectionalCascadeCount != candidate.Shadows.DirectionalCascadeCount ||
+             _settings.Shadows.DirectionalFilterMode != candidate.Shadows.DirectionalFilterMode ||
+             _settings.Shadows.DirectionalPcfRadiusMode != candidate.Shadows.DirectionalPcfRadiusMode ||
+             _settings.Shadows.MaxShadowedAreaLights != candidate.Shadows.MaxShadowedAreaLights ||
+             _settings.Shadows.MaxShadowedPointLights != candidate.Shadows.MaxShadowedPointLights ||
+             _settings.Shadows.MaxShadowedSpotLights != candidate.Shadows.MaxShadowedSpotLights ||
+             _settings.Shadows.PointShadowsEnabled != candidate.Shadows.PointShadowsEnabled ||
+             _settings.Shadows.SpotShadowsEnabled != candidate.Shadows.SpotShadowsEnabled ||
+             _settings.Shadows.DirectionalCsmTemporalMode != candidate.Shadows.DirectionalCsmTemporalMode))
+            fields.Add(new(nameof(change.ShadowPreset), GraphicsSettingsImpact.ResourceRebuild, "Uses existing shadow resource preparation."));
         if (change.ResolutionScale.HasValue && !Equals(_settings.ResolutionScale, candidate.ResolutionScale))
             fields.Add(new(nameof(change.ResolutionScale), GraphicsSettingsImpact.ResourceRebuild, "Uses existing renderer resource preparation."));
         if (change.Exposure.HasValue && !Equals(_settings.Exposure, candidate.Exposure))
@@ -99,7 +114,6 @@ internal sealed class VulkanGraphicsSettingsController : GraphicsSettingsControl
             before.SimpleDdgiNearFieldResidualQualityPreset != after.SimpleDdgiNearFieldResidualQualityPreset)
             fields.Add(new(nameof(change.QualityPreset), GraphicsSettingsImpact.RestartRequired,
                 "The preset changes startup-admitted graph branches or their resource profile."));
-        bool persistenceChanged = _settings.ComputePersistenceSha256() != candidate.ComputePersistenceSha256();
         if (persistenceChanged && fields.Count == 0)
             fields.Add(new("Preset overrides", GraphicsSettingsImpact.ResourceRebuild, "The preset resets advanced quality values."));
         if (change.QualityPreset is { } requestedPreset && ValidatePreset?.Invoke(requestedPreset) is { } rejection)
@@ -188,7 +202,9 @@ internal sealed class VulkanGraphicsSettingsController : GraphicsSettingsControl
         if (c.DebugOverlayMode is { } enumDebugOverlayMode && !Enum.IsDefined(enumDebugOverlayMode)) throw new ArgumentOutOfRangeException(nameof(c.DebugOverlayMode));
         if (c.Exposure is { } exposure && !float.IsFinite(exposure)) throw new ArgumentOutOfRangeException(nameof(c.Exposure));
         if (c.ResolutionScale is { } scale && !float.IsFinite(scale)) throw new ArgumentOutOfRangeException(nameof(c.ResolutionScale));
+        if (c.ShadowPreset is { } shadow && !Enum.IsDefined(shadow)) throw new ArgumentOutOfRangeException(nameof(c.ShadowPreset));
         if (c.QualityPreset is { } preset) s.ApplyQualityPreset(preset);
+        if (c.ShadowPreset is { } shadowPreset) s.Shadows.ApplyPreset(shadowPreset);
         if (c.ResolutionScale is { } valueResolutionScale) s.ResolutionScale = valueResolutionScale;
         if (c.Exposure is { } valueExposure) s.Exposure = valueExposure;
         if (c.ToneMapper is { } valueToneMapper) s.ToneMapper = valueToneMapper;

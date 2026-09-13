@@ -17,7 +17,7 @@ namespace Njulf.Rendering.Pipeline;
 /// depth-reprojected into the current reflected camera. Every published bank
 /// receives a GGX roughness chain before hybrid and transparent consumers run.
 /// </summary>
-public sealed unsafe class AutomaticPlanarReflectionPass : RenderPassBase
+internal sealed unsafe class AutomaticPlanarReflectionPass : RenderPassBase
 {
     private const int MaximumMipsPerCapture = 16;
     private const int ReprojectDescriptorSetCount =

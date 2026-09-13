@@ -9,7 +9,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline.PipelineObjects
 {
-    public sealed unsafe class WeightedOitCompositePipeline : IDisposable
+    internal sealed unsafe class WeightedOitCompositePipeline : IDisposable
     {
         private const string EntryPoint = "main";
 

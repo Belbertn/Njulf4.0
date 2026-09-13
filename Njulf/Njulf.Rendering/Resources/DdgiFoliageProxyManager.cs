@@ -31,7 +31,7 @@ public enum DdgiFoliageProxyLodTier : uint
 /// The renderer calls this only after the slot fence has completed, allowing a
 /// slot buffer to grow without a device-wide idle.
 /// </summary>
-public sealed class DdgiFoliageProxyManager : IDisposable
+internal sealed class DdgiFoliageProxyManager : IDisposable
 {
     public const uint ProbeInfluenceLodPolicyVersion = 1;
     public const int BladesRepresentedPerGrassCard = 64;

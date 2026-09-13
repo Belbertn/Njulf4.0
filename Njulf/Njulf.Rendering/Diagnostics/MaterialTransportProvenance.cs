@@ -17,7 +17,7 @@ public enum MaterialTransportProvenanceCode : byte
     Unknown = byte.MaxValue
 }
 
-public static class MaterialTransportProvenanceEncoding
+internal static class MaterialTransportProvenanceEncoding
 {
     public static float EncodeUnorm(MaterialTransportProvenanceCode code)
     {

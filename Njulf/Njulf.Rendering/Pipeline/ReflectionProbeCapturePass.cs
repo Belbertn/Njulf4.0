@@ -12,7 +12,7 @@ namespace Njulf.Rendering.Pipeline;
 /// linear-HDR opaque/alpha-masked scene draws into the supplied face view; returning false is a
 /// recoverable work failure and never advances scheduler progress.
 /// </summary>
-public interface IReflectionProbeCaptureSceneRenderer
+internal interface IReflectionProbeCaptureSceneRenderer
 {
     bool RecordCaptureFace(
         CommandBuffer commandBuffer,
@@ -35,7 +35,7 @@ public interface IReflectionProbeCaptureSceneRenderer
 }
 
 /// <summary>Adapter over the prepared main forward scene path.</summary>
-public sealed class ForwardPlusReflectionProbeCaptureSceneRenderer : IReflectionProbeCaptureSceneRenderer
+internal sealed class ForwardPlusReflectionProbeCaptureSceneRenderer : IReflectionProbeCaptureSceneRenderer
 {
     private readonly ForwardPlusPass _forwardPass;
 
@@ -81,7 +81,7 @@ public sealed class ForwardPlusReflectionProbeCaptureSceneRenderer : IReflection
 /// Records a bounded number of cube faces. Face completion is separate from copy completion:
 /// this pass can only make mip-0 scratch data shader-readable, never publish a layer.
 /// </summary>
-public sealed class ReflectionProbeCapturePass : RenderPassBase
+internal sealed class ReflectionProbeCapturePass : RenderPassBase
 {
     private readonly ReflectionProbeManager _manager;
     private readonly ReflectionSettings _settings;

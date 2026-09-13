@@ -8,7 +8,7 @@ using NUnit.Framework;
 namespace Njulf.Tests
 {
     [TestFixture]
-    public class SceneDataBuilderTests
+    internal class SceneDataBuilderTests
     {
         [Test]
         public void ExtractFrustum_VisibleBoxInFrontOfCamera_Intersects()

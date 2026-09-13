@@ -13,7 +13,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class AmbientOcclusionBlurPass : RenderPassBase
+    internal sealed unsafe class AmbientOcclusionBlurPass : RenderPassBase
     {
         private const string EntryPoint = "main";
 

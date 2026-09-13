@@ -22,7 +22,7 @@ namespace Njulf.Rendering.Pipeline;
 /// the current shared TLAS. Four R8-unorm visibility values are packed into
 /// each storage word, matching the planned one-byte-per-pixel footprint.
 /// </summary>
-public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
+internal sealed unsafe class DirectionalRayShadowPass : RenderPassBase
 {
     private const string ShaderName = "directional_ray_shadow.comp.spv";
     private const uint WorkgroupSize = 8u;

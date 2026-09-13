@@ -294,6 +294,8 @@ public partial class ContentManager
         public Task<ContentPreloadResult<T>> PreloadAsync<T>(IEnumerable<ContentPreloadRequest> requests, ContentPreloadOptions? options = null, CancellationToken cancellationToken = default) =>
             manager.InScope(owner, () => manager.PreloadAsync<T>(requests, options, cancellationToken));
         public Scene LoadScene(string path, SceneLoadOptions? options = null) => manager.InScope(owner, () => manager.LoadScene(path, options));
+        public Task<ModelInstance> LoadModelInstanceAsync(Scene scene, string path, ContentLoadOptions? options = null, CancellationToken cancellationToken = default) =>
+            manager.InScope(owner, () => manager.LoadModelInstanceAsync(scene, path, options, cancellationToken));
         public Task<Scene> LoadSceneAsync(string path, SceneLoadOptions? options = null, CancellationToken cancellationToken = default) =>
             manager.InScope(owner, () => manager.LoadSceneAsync(path, options, cancellationToken));
         public void Unload<T>(T asset) { ObjectDisposedException.ThrowIf(manager._disposed || owner.Closed, this); if (asset != null) manager.ReleaseAsset(owner, asset); }

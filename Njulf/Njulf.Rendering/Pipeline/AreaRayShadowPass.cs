@@ -23,7 +23,7 @@ namespace Njulf.Rendering.Pipeline;
 /// rectangle, disk, or tube emitters. One R8 visibility value per emitter is
 /// packed into each per-pixel storage word.
 /// </summary>
-public sealed unsafe class AreaRayShadowPass : RenderPassBase
+internal sealed unsafe class AreaRayShadowPass : RenderPassBase
 {
     private const string ShaderName = "area_ray_shadow.comp.spv";
     private const uint WorkgroupSize = 8u;

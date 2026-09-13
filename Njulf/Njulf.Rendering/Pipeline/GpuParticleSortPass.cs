@@ -13,7 +13,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class GpuParticleSortPass : IDisposable
+    internal sealed unsafe class GpuParticleSortPass : IDisposable
     {
         private const string EntryPoint = "main";
         private const uint ModeBuildKeys = 0;

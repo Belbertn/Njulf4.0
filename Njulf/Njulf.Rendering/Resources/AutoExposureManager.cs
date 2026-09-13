@@ -11,7 +11,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class AutoExposureManager : IDisposable
+    internal sealed unsafe class AutoExposureManager : IDisposable
     {
         public const int HistogramBinCount = 256;
         public const int StateWordCount = 8;

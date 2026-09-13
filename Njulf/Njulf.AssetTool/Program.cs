@@ -24,6 +24,7 @@ internal static class Program
                 "validate" => await RunValidate(args[1..], writeJson: false).ConfigureAwait(false),
                 "import" => await RunValidate(args[1..], writeJson: false, singleAsset: true).ConfigureAwait(false),
                 "report" => await RunValidate(args[1..], writeJson: true).ConfigureAwait(false),
+                "cook" when args.Length > 1 && args[1] == "audio" => AudioCookCommand.Run(args[2..]),
                 "cook" => RunCook(args[1..]),
                 "clean-stale" => RunCleanStale(args[1..]),
                 "migrate" => RunMigrate(args[1..]),
@@ -700,6 +701,7 @@ internal static class Program
 
     private static void PrintUsage()
     {
+        Console.WriteLine("  Njulf.AssetTool cook audio <source.wav|mp3|ogg|flac> --out <file.wav> [--mono] [--ffmpeg <executable>]");
         Console.WriteLine("Usage:");
         Console.WriteLine("  Njulf.AssetTool validate <path-or-folder> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>] [--timeout-ms <ms>] [--max-bytes <bytes>] [--high-texture-bytes <bytes>] [--child-process-all]");
         Console.WriteLine("  Njulf.AssetTool import <path> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>]");

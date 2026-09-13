@@ -14,7 +14,7 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline;
 
-public static class SimpleDdgiNearFieldResidualGpuPassNames
+internal static class SimpleDdgiNearFieldResidualGpuPassNames
 {
     public const string Reset = "SimpleDdgiNearFieldResidualResetPass";
     public const string Prepare = "SimpleDdgiNearFieldResidualPreparePass";

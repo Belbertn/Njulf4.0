@@ -11,6 +11,8 @@ internal abstract class InputActionState(InputManager owner, string name, InputA
     internal BindingShape Shape { get; } = shape;
     internal object ActionObject { get; set; } = null!;
     internal Vector2 Value, Previous;
+    internal bool Buffered { get; private set; }
+    internal Vector2 Pending;
     internal bool WaitForNeutral;
     private bool _wasEnabled = context is null;
     internal abstract int Count { get; }
@@ -20,6 +22,30 @@ internal abstract class InputActionState(InputManager owner, string name, InputA
     internal abstract void Clear();
     internal Action? Notify;
     internal Action? OnInvalidate;
+
+    internal void SetBuffering(bool enabled)
+    {
+        Owner.EnsureUsable();
+        if (Shape != BindingShape.Button && Mode != InputValueMode.Delta)
+            throw new InvalidOperationException("Only button presses and delta actions can be buffered; read Value for state axes.");
+        if (Buffered != enabled) Pending = default;
+        Buffered = enabled;
+    }
+
+    internal Vector2 Consume()
+    {
+        Owner.EnsureUsable();
+        if (!Buffered) throw new InvalidOperationException("Enable buffering on this action before consuming commands.");
+        Vector2 result = Pending;
+        Pending = default;
+        return result;
+    }
+
+    internal void Reset()
+    {
+        Owner.EnsureUsable();
+        Value = Previous = Pending = default;
+    }
 
     internal void ValidateMode(BindingSpec spec)
     {
@@ -41,12 +67,18 @@ internal abstract class InputActionState(InputManager owner, string name, InputA
         _wasEnabled = enabled;
         if (raw.LengthSquared() == 0) WaitForNeutral = false;
         Value = enabled && !WaitForNeutral ? raw : Vector2.Zero;
+        if (!enabled) Pending = default;
+        else if (Buffered)
+        {
+            if (Mode == InputValueMode.Delta) Pending += Value;
+            else if (Previous.X == 0 && Value.X != 0) Pending = Vector2.UnitX;
+        }
     }
 
     internal void Invalidate()
     {
         Clear(); OnInvalidate?.Invoke(); Notify = null; OnInvalidate = null;
-        Value = Previous = Vector2.Zero;
+        Value = Previous = Pending = Vector2.Zero;
     }
 }
 
@@ -79,6 +111,6 @@ internal sealed class InputActionState<TBinding> : InputActionState where TBindi
     internal override Action PrepareBindings(BindingSpec[] specs)
     {
         var bindings = specs.Select(spec => { ValidateMode(spec); return _create(spec); }).ToArray();
-        return () => { _bindings.Clear(); _bindings.AddRange(bindings); WaitForNeutral = Mode == InputValueMode.State; };
+        return () => { _bindings.Clear(); _bindings.AddRange(bindings); Pending = default; WaitForNeutral = Mode == InputValueMode.State; };
     }
 }

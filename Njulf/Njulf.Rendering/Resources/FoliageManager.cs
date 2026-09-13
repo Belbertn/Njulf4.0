@@ -147,7 +147,7 @@ public sealed class FoliageManager : IDisposable
         return _lastSnapshot;
     }
 
-    public FoliageGpuBuildSnapshot PrepareFrame(
+    internal FoliageGpuBuildSnapshot PrepareFrame(
         Scene scene,
         FoliageSettings settings,
         CommandBuffer commandBuffer,

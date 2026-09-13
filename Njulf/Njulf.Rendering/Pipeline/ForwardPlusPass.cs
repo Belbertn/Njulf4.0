@@ -24,7 +24,7 @@ namespace Njulf.Rendering.Pipeline
     /// Input: meshlet data, material data, textures, light index buffers
     /// Uses mesh shaders and bindless resource access.
     /// </summary>
-    public sealed unsafe partial class ForwardPlusPass : RenderPassBase
+    internal sealed unsafe partial class ForwardPlusPass : RenderPassBase
     {
         // The receiver accelerator evaluates one exact gather per 12x12 block,
         // then reconstructs one FP16 value per 2x2 screen block. Its sidecar

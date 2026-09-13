@@ -14,7 +14,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed class FarFieldClipmapManager : IDisposable
+    internal sealed class FarFieldClipmapManager : IDisposable
     {
         private const ulong MinBufferSize = 16;
         private const ulong LegacyVoxelStride = sizeof(uint);

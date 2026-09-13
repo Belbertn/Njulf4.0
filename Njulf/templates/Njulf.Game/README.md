@@ -20,6 +20,19 @@ The starter uses the Low graphics preset at native resolution. Change it in
 `ConfigureRendering` as your game grows. `--frames N` exits after N fully rendered frames.
 Ship the entire publish folder; users need the GPU driver, but no .NET or Vulkan SDK installation.
 
+The template accepts independent `--physics` and `--audio` options (both off by default).
+With physics, the model drops onto an invisible floor using fixed-step simulation.
+With audio, Space plays the bundled mono PCM16 impact sound. Audio initialization failure
+is reported and allows silent play. Registered host modules own stepping, maintenance,
+and disposal. The prepared WAV needs no conversion tool to build or run.
+
+Set `InitialWindowState = Silk.NET.Windowing.WindowState.Fullscreen` before `Run` for
+fullscreen, or `WindowBorderStyle = Silk.NET.Windowing.WindowBorder.Hidden` for a
+borderless window. Normal/resizable is the default; set `WindowWidth`/`WindowHeight`
+for the initial client size. See the engine's `docs/GettingStarted.md` for the mode table.
+The compact `SphereShooter` example shows movement, physics shots, spatial impact audio,
+pause/resume, and managed level replacement (`docs/BasicSphereShooter.md`).
+
 Runtime files that are not model-cooker inputs must be explicit project items:
 
 ```xml

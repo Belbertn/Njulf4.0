@@ -2,6 +2,7 @@ using System;
 using Hexa.NET.ImGui;
 using Njulf.Core.Math;
 using Njulf.Input;
+using Njulf.Input.Advanced;
 using Silk.NET.Input;
 
 namespace Njulf.Editor;
@@ -9,11 +10,11 @@ namespace Njulf.Editor;
 /// <summary>Forwards raw Silk input to ImGui without changing the action-based game input model.</summary>
 public sealed class EditorInputBridge : IDisposable
 {
-    private readonly InputManager _input;
+    private readonly Njulf.Input.Advanced.INativeInputIntegration _input;
     private readonly ImGuiEditorOverlayHost _host;
     private bool _disposed;
 
-    public EditorInputBridge(InputManager input, ImGuiEditorOverlayHost host)
+    public EditorInputBridge(INativeInputIntegration input, ImGuiEditorOverlayHost host)
     {
         _input = input ?? throw new ArgumentNullException(nameof(input));
         _host = host ?? throw new ArgumentNullException(nameof(host));
