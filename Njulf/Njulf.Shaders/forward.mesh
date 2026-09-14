@@ -64,6 +64,9 @@ layout(location = 7) out vec2 meshTexCoord2[];
 layout(location = 8) out vec4 meshVertexColor[];
 #endif
 
+layout(location=9) flat out uint opticalDrawOrdinal[];
+layout(location=10) out vec3 opticalPreviousWorld[];
+layout(location=11) perprimitiveEXT flat out uint opticalPrimitiveOrdinal[];
 layout(push_constant) uniform ForwardPushConstantBlock
 {
     GPUForwardPushConstants Push;
@@ -144,6 +147,8 @@ void main()
         vec3 worldTangent = normalize(TransformRowMajorVector(vertex.Tangent.xyz, instanceBufferIndex, objectWordOffset));
 
         gl_MeshVerticesEXT[vertexSlot].gl_Position = MulRowMajor(worldPosition, pc.Push.ViewProjectionMatrix);
+        opticalDrawOrdinal[vertexSlot] = drawCommandIndex;
+        opticalPreviousWorld[vertexSlot] = TransformRowMajorPoint(vertex.Position, instanceBufferIndex, objectWordOffset + 36u).xyz;
         meshNormal[vertexSlot] = worldNormal;
         meshTexCoord[vertexSlot] = vertex.TexCoord;
 #if !FORWARD_PER_PRIMITIVE_IDS
@@ -164,6 +169,7 @@ void main()
          triangleSlot < meshlet.LocalTriangleCount;
          triangleSlot += gl_WorkGroupSize.x)
     {
+        opticalPrimitiveOrdinal[triangleSlot] = triangleSlot;
         uint triangleOffset = triangleSlot * 3u;
         uint i0 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 0u);
         uint i1 = ReadMeshletLocalTriangleIndex(meshlet, triangleOffset + 1u);

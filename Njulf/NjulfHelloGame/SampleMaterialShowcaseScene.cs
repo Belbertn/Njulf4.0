@@ -59,6 +59,11 @@ internal static class SampleMaterialShowcaseScene
         settings.Transparency.ThickTransmissionMode = ThickTransmissionMode.RayQuery;
         settings.Transparency.DispersionMode = DispersionMode.RgbTriplet;
         settings.Transparency.ThickTransmissionMaximumDistance = 30f;
+        // Close-up glass and water cover hundreds of thousands of fragments.
+        // The general scene budgets expose random reflection admissions and
+        // a first-come refraction cutoff in this deliberately optical workload.
+        settings.Transparency.SceneReflectionRayTaskBudget = 1_048_576;
+        settings.Transparency.ThickTransmissionRayTaskBudget = 2_097_152;
         settings.Environment.Enabled = true;
         settings.Environment.SkyIntensity = 0.75f;
         settings.Environment.DiffuseIntensity = 0.8f;
@@ -115,6 +120,8 @@ internal static class SampleMaterialShowcaseScene
             "MaterialShowcase.Floor",
             CoreMatrix4x4.Identity);
 
+        // Reflective samples occupy the left side; glass and water occupy the right.
+        // Matte samples separate the groups within the existing GI bounds.
         AddSphere(
             scene,
             sphereMesh,
@@ -132,14 +139,14 @@ internal static class SampleMaterialShowcaseScene
                     CausticCasterPolicy = GiCausticCasterPolicy.Mirror
                 }),
             "ReflectionTest.Chrome",
-            new CoreVector3(-1.8f, SphereCenterY, 0.0f));
+            new CoreVector3(-3.8f, SphereCenterY, 0.1f));
 
         AddSphere(
             scene,
             sphereMesh,
             CreateMaterial(materialManager, new CoreVector3(1.0f, 0.76f, 0.46f), metallic: 1.0f, roughness: 0.16f),
             "ReflectionTest.SmoothGold",
-            new CoreVector3(-0.6f, SphereCenterY, 0.0f));
+            new CoreVector3(-2.2f, SphereCenterY, 0.1f));
 
         AddSphere(
             scene,
@@ -158,14 +165,14 @@ internal static class SampleMaterialShowcaseScene
                     CausticCasterPolicy = GiCausticCasterPolicy.RoughSpecular
                 }),
             "ReflectionTest.BrushedMetal",
-            new CoreVector3(0.6f, SphereCenterY, 0.0f));
+            new CoreVector3(-3.8f, SphereCenterY, 1.65f));
 
         AddSphere(
             scene,
             sphereMesh,
             CreateMaterial(materialManager, new CoreVector3(0.88f, 0.96f, 1.0f), metallic: 0.0f, roughness: 0.08f),
             "ReflectionTest.GlossyDielectric",
-            new CoreVector3(1.8f, SphereCenterY, 0.0f));
+            new CoreVector3(-2.2f, SphereCenterY, 1.65f));
 
         AddSphere(
             scene,
@@ -184,7 +191,7 @@ internal static class SampleMaterialShowcaseScene
                     ClearcoatNormalScale = 1f
                 }),
             "MaterialQuality.ClearcoatPaint",
-            new CoreVector3(-3.0f, SphereCenterY, 1.35f));
+            new CoreVector3(-3.8f, SphereCenterY, 3.2f));
 
         AddSphere(
             scene,
@@ -202,7 +209,7 @@ internal static class SampleMaterialShowcaseScene
                     SheenRoughness = 0.4f
                 }),
             "MaterialQuality.SheenVelvet",
-            new CoreVector3(-1.8f, SphereCenterY, 1.35f));
+            new CoreVector3(-0.5f, SphereCenterY, 0.1f));
 
         AddSphere(
             scene,
@@ -220,7 +227,7 @@ internal static class SampleMaterialShowcaseScene
                     AnisotropyRotation = 0f
                 }),
             "MaterialQuality.AnisotropicMetal",
-            new CoreVector3(-0.6f, SphereCenterY, 1.35f));
+            new CoreVector3(-2.2f, SphereCenterY, 3.2f));
 
         AddSphere(
             scene,
@@ -243,7 +250,7 @@ internal static class SampleMaterialShowcaseScene
                 },
                 blendMode: null),
             "MaterialQuality.SimpleGlass",
-            new CoreVector3(0.6f, SphereCenterY, 1.35f));
+            new CoreVector3(1.5f, SphereCenterY, 0.1f));
 
         AddSphere(
             scene,
@@ -262,7 +269,7 @@ internal static class SampleMaterialShowcaseScene
                 },
                 shadingModel: MaterialShadingModel.SubsurfaceApproximation),
             "MaterialQuality.SubsurfaceWax",
-            new CoreVector3(1.8f, SphereCenterY, 1.35f));
+            new CoreVector3(-0.5f, SphereCenterY, 1.25f));
 
         AddSphere(
             scene,
@@ -278,7 +285,7 @@ internal static class SampleMaterialShowcaseScene
                 emissive: new CoreVector3(0.1f, 0.75f, 1.0f),
                 emissiveStrength: 6f),
             "MaterialQuality.EmissiveHighIntensity",
-            new CoreVector3(3.0f, SphereCenterY, 1.35f));
+            new CoreVector3(-0.5f, SphereCenterY, 4.7f));
 
         AddSphere(
             scene,
@@ -296,7 +303,7 @@ internal static class SampleMaterialShowcaseScene
                     SpecularFactor = 0.85f
                 }),
             "MaterialQuality.SpecularTint",
-            new CoreVector3(-3.0f, SphereCenterY, 2.7f));
+            new CoreVector3(-3.8f, SphereCenterY, 4.7f));
 
         AddSphere(
             scene,
@@ -323,7 +330,7 @@ internal static class SampleMaterialShowcaseScene
                 },
                 blendMode: null),
             "MaterialQuality.VolumeGlass",
-            new CoreVector3(-1.8f, SphereCenterY, 2.7f));
+            new CoreVector3(3.7f, SphereCenterY, 1.85f));
 
         AddSphere(
             scene,
@@ -345,7 +352,7 @@ internal static class SampleMaterialShowcaseScene
                     IridescenceThicknessMaximum = 650f
                 }),
             "MaterialQuality.IridescenceFilm",
-            new CoreVector3(-0.6f, SphereCenterY, 2.7f));
+            new CoreVector3(-2.2f, SphereCenterY, 4.7f));
 
         AddSphere(
             scene,
@@ -374,7 +381,7 @@ internal static class SampleMaterialShowcaseScene
                 },
                 blendMode: null),
             "MaterialQuality.DispersionGlass",
-            new CoreVector3(0.6f, SphereCenterY, 2.7f));
+            new CoreVector3(1.5f, SphereCenterY, 2.0f));
 
         AddSphere(
             scene,
@@ -391,7 +398,7 @@ internal static class SampleMaterialShowcaseScene
                 surfaceFlags: MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows,
                 shadingModel: MaterialShadingModel.Foliage),
             "MaterialQuality.MaskedFoliage",
-            new CoreVector3(1.8f, SphereCenterY, 2.7f));
+            new CoreVector3(-0.5f, SphereCenterY, 2.4f));
 
         AddSphere(
             scene,
@@ -407,7 +414,7 @@ internal static class SampleMaterialShowcaseScene
                 featureFlags: MaterialFeatureFlags.None,
                 surfaceFlags: MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows),
             "MaterialQuality.PremultipliedAlpha",
-            new CoreVector3(3.0f, SphereCenterY, 2.7f));
+            new CoreVector3(0.65f, SphereCenterY, 3.15f));
 
         AddSphere(
             scene,
@@ -423,7 +430,7 @@ internal static class SampleMaterialShowcaseScene
                 featureFlags: MaterialFeatureFlags.None,
                 surfaceFlags: MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows),
             "MaterialQuality.DoubleSidedMatte",
-            new CoreVector3(-3.0f, SphereCenterY, 4.05f));
+            new CoreVector3(-0.5f, SphereCenterY, 3.55f));
 
         AddSphere(
             scene,
@@ -450,9 +457,9 @@ internal static class SampleMaterialShowcaseScene
                 },
                 blendMode: null),
             "Transport.RoughColoredGlass",
-            new CoreVector3(-1.8f, SphereCenterY, 4.05f));
+            new CoreVector3(3.7f, SphereCenterY, 0.1f));
 
-        CoreVector3 nestedCenter = new(-0.45f, 0.70f, 4.05f);
+        CoreVector3 nestedCenter = new(1.1f, 0.70f, 4.65f);
         AddScaledSphere(
             scene,
             sphereMesh,
@@ -508,7 +515,7 @@ internal static class SampleMaterialShowcaseScene
             nestedCenter,
             radius: 0.58f);
 
-        const float poolCenterX = 2.15f;
+        const float poolCenterX = 3.3f;
         const float poolCenterZ = 4.05f;
         const float poolWidth = 2.25f;
         const float poolDepth = 1.55f;

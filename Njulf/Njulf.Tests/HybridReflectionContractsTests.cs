@@ -713,7 +713,13 @@ public sealed class HybridReflectionContractsTests
             "HybridReflectionSpatialPass",
             "HybridReflectionCompositePass",
             "OpaqueSceneColorSnapshotPass",
-            "TransparentForwardPass"
+            "OpticalLayerClearPass",
+            "TransparentForwardPass",
+            "WeightedTransparentPass",
+            "OpticalTemporalPass",
+            "OpticalSpatialPass",
+            "OpticalCorrectionPass",
+            "WeightedOitCompositePass"
         ];
         var order = ProductionRenderPipelineDeclaration.Instance.PassOrder
             .ToList();
@@ -1596,10 +1602,9 @@ public sealed class HybridReflectionContractsTests
                 "float sparseMotionWeight = 1.0 - smoothstep("));
             Assert.That(temporal, Does.Contain(
                 "previousSparseAge < sparseHistoryAgeLimit"));
-            Assert.That(temporal, Does.Contain(
-                "mix(current.rgb, clippedHistory, sparseHistoryWeight)"));
-            Assert.That(temporal, Does.Contain(
-                "reuseSparseHistory && sparseHistoryWeight >= 0.5"));
+            // Sparse energy/confidence semantics are exercised by
+            // HybridReflectionSparseGpuTests, rather than pinning a blend
+            // expression that mixed an unobserved fallback into history.
             Assert.That(temporal, Does.Contain(
                 "previous.a * 0.97"));
             Assert.That(temporal, Does.Not.Contain(

@@ -786,6 +786,15 @@ namespace Njulf.Rendering.Data
         public long GpuHybridReflectionDdgiBaseMicroseconds { get; init; }
         public long GpuHybridReflectionResolveMicroseconds { get; init; }
         public long GpuHybridReflectionTemporalMicroseconds { get; init; }
+        public bool OpticalDenoisingActive { get; init; }
+        public ulong OpticalDenoisingAllocatedBytes { get; init; }
+        public uint OpticalDenoisingCapturedFragments { get; init; }
+        public uint OpticalDenoisingOverflowPixels { get; init; }
+        public uint OpticalDenoisingHistoryReuses { get; init; }
+        public long GpuOpticalLayerClearMicroseconds { get; init; }
+        public long GpuOpticalTemporalMicroseconds { get; init; }
+        public long GpuOpticalSpatialMicroseconds { get; init; }
+        public long GpuOpticalCorrectionMicroseconds { get; init; }
         public long GpuHybridReflectionSpatialMicroseconds { get; init; }
         public long GpuHybridReflectionCompositeMicroseconds { get; init; }
 

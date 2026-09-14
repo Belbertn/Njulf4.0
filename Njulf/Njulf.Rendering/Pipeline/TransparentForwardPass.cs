@@ -231,6 +231,8 @@ namespace Njulf.Rendering.Pipeline
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();
+            pushConstants.DiagnosticFlags = (pushConstants.DiagnosticFlags & ~OpticalDenoisingGpuContract.ExportFlag) |
+                (sceneData.OpticalDenoisingActive ? OpticalDenoisingGpuContract.ExportFlag : 0u);
             _context.Api.CmdPushConstants(
                 cmd,
                 pipelineLayout,
@@ -565,7 +567,9 @@ namespace Njulf.Rendering.Pipeline
                     checked((uint)run.DrawCount);
                 pushConstants.MeshletDrawBufferBaseIndex =
                     packedDrawRanges[index];
-                _context.Api.CmdPushConstants(
+                pushConstants.DiagnosticFlags = (pushConstants.DiagnosticFlags & ~OpticalDenoisingGpuContract.ExportFlag) |
+                (sceneData.OpticalDenoisingActive ? OpticalDenoisingGpuContract.ExportFlag : 0u);
+            _context.Api.CmdPushConstants(
                     cmd,
                     selection.Layout,
                     ShaderStageFlags.MeshBitExt |

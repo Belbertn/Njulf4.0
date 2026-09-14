@@ -4,6 +4,7 @@
 
 #include "common.glsl"
 #include "hybrid_reflection_compute.glsl"
+#include "hybrid_reflection_sparse.glsl"
 #include "automatic_planar_reflection.glsl"
 
 const uint REFLECTION_BOX_PROJECTION_ENABLED_FLAG = 1u << 1u;
@@ -338,6 +339,11 @@ void main()
         }
     }
 
+    // Preserve query-miss provenance after shading its analytic background.
+    // Otherwise sparse history keeps hits but drops misses, biasing the lobe
+    // toward dark geometry and exposing fallback patches at the next skip.
+    source = HybridReflectionResolvedSource(metadata.x, source);
+
     // The quarter-resolution/analytic boundary can cross a high-frequency
     // roughness texture many times within one material. A hard source switch
     // there alternates dark scene hits with a bright environment at texel
@@ -504,6 +510,7 @@ void main()
                     : 1.0;
             }
         }
+        clearcoatSource = HybridReflectionResolvedSource(metadata.y, clearcoatSource);
         float clearcoatNdotV = max(
             dot(clearcoatNormal, viewDirection), 0.0);
         vec3 clearcoatFresnel = HybridFresnelSchlickRoughness(

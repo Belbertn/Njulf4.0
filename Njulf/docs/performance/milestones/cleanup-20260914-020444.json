@@ -1,0 +1,17 @@
+{
+  "DateUtc": "2026-09-14T00:04:44.4471314Z",
+  "Applied": true,
+  "KeepDays": 2,
+  "TotalBytes": 27392571402,
+  "TotalFiles": 5982.0,
+  "FreeBytesBefore": 243873505280,
+  "FreeBytesAfter": 271275786240,
+  "Groups": [
+    {
+      "Path": "artifacts/optical-denoising-20260914",
+      "Files": 5982,
+      "Bytes": 27392571402
+    }
+  ],
+  "Failures": []
+}

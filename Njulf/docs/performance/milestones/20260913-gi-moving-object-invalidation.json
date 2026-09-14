@@ -1,0 +1,135 @@
+{
+  "date": "2026-09-13",
+  "revision": "cc35bcc6fc69854dd96e316cd6e14ec69b139e8e",
+  "startedClean": true,
+  "decision": "Keep: fix shuffled scheduler ordinal used as world lattice ordinal for dirty bounds",
+  "liveInputs": {
+    "origin": [
+      -9.1875,
+      -3.9375,
+      -7.4375
+    ],
+    "min": [
+      -7.5222235,
+      -1.0048462,
+      -1.9231516
+    ],
+    "max": [
+      -1.3613374,
+      2.6494808,
+      1.4974298
+    ],
+    "spacing": 0.875,
+    "count": 10976,
+    "stride": 5489,
+    "expected": 324,
+    "missed": 180,
+    "wrong": 180,
+    "examples": [
+      {
+        "sequenceOrdinal": 7925,
+        "probeIndex": 2437,
+        "probePosition": [
+          -8.3125,
+          -1.3125,
+          -2.1875
+        ],
+        "testedPosition": [
+          -8.3125,
+          -1.3125,
+          10.0625
+        ]
+      },
+      {
+        "sequenceOrdinal": 7927,
+        "probeIndex": 2439,
+        "probePosition": [
+          -6.5625,
+          -1.3125,
+          -2.1875
+        ],
+        "testedPosition": [
+          -6.5625,
+          -1.3125,
+          10.0625
+        ]
+      }
+    ],
+    "notes": "Read-only debugger inputs from the physics-simulation example on 2026-09-13; misses calculated from the old production spatial mapping, not GPU counter readback. GPU regression independently executes both production helpers."
+  },
+  "gpuRegression": {
+    "device": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "before": [
+      {
+        "stride": 1,
+        "scrolled": false,
+        "missed": 0,
+        "spurious": 0
+      },
+      {
+        "stride": 5489,
+        "scrolled": false,
+        "missed": 120,
+        "spurious": 120
+      },
+      {
+        "stride": 5489,
+        "scrolled": true,
+        "missed": 120,
+        "spurious": 120
+      }
+    ],
+    "after": [
+      {
+        "stride": 1,
+        "scrolled": false,
+        "missed": 0,
+        "spurious": 0
+      },
+      {
+        "stride": 5489,
+        "scrolled": false,
+        "missed": 0,
+        "spurious": 0
+      },
+      {
+        "stride": 5489,
+        "scrolled": true,
+        "missed": 0,
+        "spurious": 0
+      }
+    ]
+  },
+  "checks": {
+    "gpuTestsPassed": 6,
+    "productionShaderModulesRecompiled": 13,
+    "spirvValidatedModules": 13,
+    "physicsCandidateFrames": 600,
+    "candidateValidationErrors": 0,
+    "shaderAssemblySha256": "608395886CFAA9CC33555CA7C85892D5F1E1852C74022C7203A04EA53FFCDCE9"
+  },
+  "frameIntervalsMilliseconds": {
+    "baseline": {
+      "validation": "Off",
+      "median": 11.118,
+      "p95": 12.523,
+      "p99": 14.557,
+      "samples": 480
+    },
+    "candidateDiagnostic": {
+      "validation": "Standard",
+      "median": 11.127,
+      "p95": 14.341,
+      "p99": 25.837,
+      "samples": 480
+    },
+    "comparable": false,
+    "reason": "Different validation and physics steps/cache preparation; no performance or visual-settling-latency claim."
+  },
+  "evidenceRoot": "artifacts/gi-box-invalidation-20260913",
+  "limitations": [
+    "No deterministic image pair at the exact reported box pose.",
+    "The GPU test verifies spatial invalidation coverage, not end-to-end convergence or scheduler latency.",
+    "Inactive retry and other budget policies were not changed."
+  ]
+}

@@ -1,0 +1,154 @@
+{
+  "date": "2026-09-14",
+  "revision": "cc35bcc6fc69854dd96e316cd6e14ec69b139e8e",
+  "dirty": true,
+  "device": "NVIDIA GeForce RTX 3060 Laptop GPU",
+  "driver": "610.248.0",
+  "tests": {
+    "total": "329",
+    "executed": "329",
+    "passed": "326",
+    "failed": "3",
+    "error": "0",
+    "timeout": "0",
+    "aborted": "0",
+    "inconclusive": "0",
+    "passedButRunAborted": "0",
+    "notRunnable": "0",
+    "notExecuted": "0",
+    "disconnected": "0",
+    "warning": "0",
+    "completed": "0",
+    "inProgress": "0",
+    "pending": "0"
+  },
+  "known_failures": [
+    "ExactReceiverPublication_DefersCacheSpecializationsWithoutRenderTimeCreation",
+    "VulkanRuntime_ResetHeadersUseSingleOrderedTransferWrites",
+    "HybridReceiverCache_UsesCompactProducerOnlyForEligibleSurfacePath"
+  ],
+  "cold_compilation_trials": [
+    {
+      "candidate": "initial export",
+      "status": "rejected",
+      "reason": "Geometry capability from gl_PrimitiveID; replaced with perprimitiveEXT user varying"
+    },
+    {
+      "candidate": "restricted export",
+      "status": "inconclusive",
+      "reason": "Stopped at ~237 seconds, earlier than the original control completed"
+    },
+    {
+      "candidate": "selective spirv-opt cleanup",
+      "status": "inconclusive; not integrated",
+      "reason": "Stopped at ~112 seconds"
+    },
+    {
+      "candidate": "original ray fragment with current mesh/layout",
+      "first_full_quality_seconds": 329.771,
+      "status": "control",
+      "limitation": "Not an original whole-pipeline baseline; later pipeline compilation polluted frame timings. Desktop screenshot discarded."
+    }
+  ],
+  "spirv_validation": {
+    "artifacts": 542,
+    "failed": [],
+    "seconds": 195.631
+  },
+  "bypass_validation": {
+    "status": "passed",
+    "validationWarningCount": 0,
+    "validationErrorCount": 0,
+    "giDiagnosticErrorCount": 0
+  },
+  "normal_build": {
+    "log": "artifacts/optical-denoising-20260914/final-build.log",
+    "errors": 0,
+    "warnings": 47,
+    "refreshed_shader_artifacts": 542
+  },
+  "focused_tests": {
+    "passed": 39,
+    "failed": 0,
+    "skipped": 0
+  },
+  "modules": {
+    "forward_transparent_ray.frag.spv": {
+      "bytes": 933184,
+      "sha256": "4eab9f3392bfaa46146504351840961d04409cefab900e24964c664217f58172"
+    },
+    "optical_temporal.comp.spv": {
+      "bytes": 27920,
+      "sha256": "91b87a723dcbb8c5502ad64ea19a8c0d35e72dfd33e5503ac48bd5ceb2e8ecb7"
+    },
+    "optical_spatial.comp.spv": {
+      "bytes": 19252,
+      "sha256": "fb4fc748500e85b6513538a563c93ebfb6f291252a8c0078cf51938b169d65e1"
+    },
+    "optical_correct.comp.spv": {
+      "bytes": 9564,
+      "sha256": "0b0000a51b560fb0d037b5d11b3d9b323a0bc0553d3552bcf1f56462a755a06b"
+    }
+  },
+  "measurements": {
+    "weighted_caustics": "On",
+    "roi_high_frequency_rms_reduction_percent": {
+      "water": 81.92,
+      "nested_glass": 81.3,
+      "blue_glass": 99.54
+    },
+    "sorted_caustics": "Off",
+    "limitations": [
+      "GI warming and initialization activity affect frame tails",
+      "Spatial ROI noise metric includes image detail",
+      "Long animated-water sequences not qualified",
+      "Later captures lack final shutdown health reports",
+      "Final lazy allocation change build/test verified without another capture",
+      "Cold native ray pipeline compilation remains slow"
+    ],
+    "overflow_pixels": 8008,
+    "diagnostic_frames": 120,
+    "allocated_bytes": 536870464,
+    "weighted_filtered": {
+      "cpu_p95_ms": 79.7,
+      "cpu_average_ms": 70.5,
+      "total_gpu_ms": 70.34,
+      "cpu_max_ms": 266.4,
+      "optical_gpu_ms": 27.371
+    },
+    "sorted_filtered": {
+      "cpu_p95_ms": 77.37,
+      "cpu_average_ms": 68.42,
+      "total_gpu_ms": 72.143,
+      "cpu_max_ms": 205.73,
+      "optical_gpu_ms": 27.467
+    },
+    "roi_mean_change_percent": {
+      "opaque": -0.004,
+      "water": 0.02,
+      "nested_glass": 0.11,
+      "blue_glass": 0.34
+    },
+    "resolution": [
+      1600,
+      900
+    ],
+    "sorted_bypass": {
+      "cpu_p95_ms": 55.85,
+      "cpu_average_ms": 41.51,
+      "total_gpu_ms": 44.4,
+      "cpu_max_ms": 192.19,
+      "optical_gpu_ms": 0.149
+    },
+    "steady_state_qualified": false,
+    "sorted_reused_lobes": 599583,
+    "captured_records": 401826
+  },
+  "cleanup": {
+    "retention_days": 2,
+    "removed_files": 5982,
+    "removed_gib": 25.51,
+    "report": "cleanup-20260914-020444.json",
+    "failures": 0
+  }
+}

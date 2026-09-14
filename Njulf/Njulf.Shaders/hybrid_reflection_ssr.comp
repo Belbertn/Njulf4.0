@@ -4,6 +4,7 @@
 
 #include "common.glsl"
 #include "hybrid_reflection_compute.glsl"
+#include "hybrid_reflection_sparse.glsl"
 
 #ifndef NJULF_HYBRID_REFLECTION_SPARSE_LOBE_INPUT
 #define NJULF_HYBRID_REFLECTION_SPARSE_LOBE_INPUT 0
@@ -550,8 +551,8 @@ void HybridTraceLobe(
     }
 
     uvec2 invocation = uvec2(pixel);
-    uint phase = HybridHash(pc.TemporalSampleIndex ^
-        (lobeId * 0x9e3779b9u)) % (tier * tier);
+    uint phase = HybridReflectionSamplePhase(
+        invocation, tier, pc.TemporalSampleIndex, lobeId);
     uint lane = (invocation.y % tier) * tier + invocation.x % tier;
     if (lane != phase)
     {

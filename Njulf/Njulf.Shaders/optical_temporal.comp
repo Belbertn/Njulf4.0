@@ -1,0 +1,5 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "optical_compute.glsl"
+#include "optical_temporal_kernel.glsl"
+void main() { OpticalTemporalPixel(ivec2(gl_GlobalInvocationID.xy)); }

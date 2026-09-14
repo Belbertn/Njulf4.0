@@ -1,0 +1,32 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x=64) in;
+layout(set=0,binding=0) readonly buffer Input { uint Words[]; } inputData;
+layout(set=0,binding=1) buffer Output { uint Words[]; } outputData;
+layout(push_constant) uniform Dispatch { uint count; } dispatch;
+#define OPTICAL_STORAGE_DEFINED
+uint OpticalWord(uint b,uint w) { return inputData.Words[w+(b==0u?0u:inputData.Words[11u])]; }
+void OpticalStore(uint b,uint w,uint v) { outputData.Words[w]=v; }
+void OpticalAddHistoryReuse(uint b) { atomicAdd(outputData.Words[7u],1u); }
+struct OpticalTestPush { uint Current; uint Previous; uint Step; uint Reset; uint Weighted; uint Bypass; };
+OpticalTestPush pc;
+#include "../../../Njulf.Shaders/optical_layers.glsl"
+#include "../../../Njulf.Shaders/optical_temporal_kernel.glsl"
+#include "../../../Njulf.Shaders/optical_spatial_kernel.glsl"
+void main()
+{
+    uint index=gl_GlobalInvocationID.x;
+    if(index>=dispatch.count) return;
+    pc=OpticalTestPush(0u,1u,inputData.Words[9u],inputData.Words[10u],0u,0u);
+    ivec2 p=ivec2(index%inputData.Words[1u],index/inputData.Words[1u]);
+    if(inputData.Words[8u]==2u)
+    {
+        for(uint layer=0u;layer<OpticalCount(0u,p);++layer)
+        {
+            uint r=OpticalRecord(0u,p,layer);
+            OpticalStore(0u,r+44u,floatBitsToUint(OpticalCompositionWeight(0u,r,p,inputData.Words[12u]!=0u)));
+        }
+        return;
+    }
+    if(inputData.Words[8u]==0u) OpticalSpatialPixel(p); else OpticalTemporalPixel(p);
+}

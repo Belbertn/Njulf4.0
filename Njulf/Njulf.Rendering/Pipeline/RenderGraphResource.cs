@@ -218,7 +218,8 @@ namespace Njulf.Rendering.Pipeline
         TemporalSurfaceValidityHistory,
         OpaqueVisibility,
         OpaqueVisibilityWork,
-        SurfaceReceiverIdentity
+        SurfaceReceiverIdentity,
+        OpticalLayers
     }
 
     public enum RenderGraphResourceKind

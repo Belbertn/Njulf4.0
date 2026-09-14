@@ -22,6 +22,7 @@ public static class SampleSmokeOptionsParser
         "--max-fps",
         "--vsync",
         "--transparency-mode",
+        "--optical-denoising",
         "--health-report",
         "--baseline-snapshot-dir",
         "--sponza-gi-capture-dir",
@@ -165,6 +166,7 @@ public static class SampleSmokeOptionsParser
         bool? vSyncOverride = string.IsNullOrWhiteSpace(vSyncEnvironment)
             ? null
             : ParseBool(vSyncEnvironment, "NJULF_VSYNC");
+        string? opticalDenoisingMode = null;
         TransparencyMode transparencyMode = ParseTransparencyMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE"));
         string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
         string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
@@ -634,6 +636,11 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--vsync":
                     vSyncOverride = ParseBool(value, optionName);
+                    break;
+                case "--optical-denoising":
+                    opticalDenoisingMode = value.Trim().ToLowerInvariant();
+                    if (opticalDenoisingMode is not ("on" or "off" or "bypass"))
+                        throw new ArgumentException("--optical-denoising accepts on, off, or bypass.");
                     break;
                 case "--transparency-mode":
                     transparencyMode = ParseTransparencyMode(value);
@@ -2466,7 +2473,7 @@ public static class SampleSmokeOptionsParser
             maximumFramesPerSecondOverride,
             vSyncOverride,
             performanceOptimizationsEnabledOverride,
-            performanceOptimizationMaskOverride);
+            performanceOptimizationMaskOverride) { OpticalDenoisingMode = opticalDenoisingMode };
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)

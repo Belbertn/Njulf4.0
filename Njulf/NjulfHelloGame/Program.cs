@@ -385,6 +385,7 @@ internal sealed class HelloGame : Game
     private bool _benchmarkDynamicScenarioFrozen;
     private int _baselineScenarioRenderedFrames;
     private bool _baselineSnapshotExported;
+    private string? _baselinePendingHdrCapture;
     private float _modelRotation;
     private (int Width, int Height)? _pendingSmokeResize;
     private PendingSmokeWindowMutation? _observingSmokeWindowMutation;
@@ -416,6 +417,11 @@ internal sealed class HelloGame : Game
             qualificationCandidate:
                 _smokeOptions.Benchmark.MaterialGiQualificationCandidate);
         _sceneKind = _smokeOptions.SceneKind;
+        // Baseline pairs must use identical water animation, independent of
+        // native pipeline compilation time. Optical sample frames still advance.
+        if (_sceneKind == SampleSceneKind.MaterialShowcase &&
+            !string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))
+            TimeScale = 0;
         _startupLog = new RendererStartupLog(_smokeOptions.StartupLogPath, commandLineArgs);
 
         Name = "Njulf Hello Game";
@@ -734,7 +740,8 @@ internal sealed class HelloGame : Game
 
         if (!string.IsNullOrWhiteSpace(
                 _smokeOptions.BaselineSnapshotDirectory) &&
-            _sceneKind != SampleSceneKind.Bistro)
+            _sceneKind != SampleSceneKind.Bistro &&
+            _sceneKind != SampleSceneKind.MaterialShowcase)
         {
             SamplePerformanceScenario baselineScenario =
                 ResolveBaselineSnapshotScenario();
@@ -1018,6 +1025,18 @@ internal sealed class HelloGame : Game
                 // representative Bistro view used when the scene starts or is cycled.
                 ApplyBistroCameraPreset(camera);
             }
+            else if (_sceneKind == SampleSceneKind.MaterialShowcase)
+            {
+                // Optical regression view: keep the showcase lighting instead
+                // of applying the unrelated Sponza interior baseline profile.
+                camera.Position = new CoreVector3(-1.0603592f, 1.71337f, 6.446394f);
+                camera.Yaw = 0.043464772f;
+                camera.Pitch = 0.38022974f;
+                camera.FieldOfView = MathF.PI / 3.2f;
+                camera.Update();
+                renderer.Settings.AutoExposure.Enabled = false;
+                renderer.Settings.Exposure = 0.0625f;
+            }
             else
             {
                 SamplePerformanceScenario baselineScenario = ResolveBaselineSnapshotScenario();
@@ -1261,6 +1280,7 @@ internal sealed class HelloGame : Game
 
     private void ApplySmokeRenderSettings(VulkanRenderer renderer)
     {
+        ApplyOpticalDenoisingOverride(renderer.Settings);
         ApplyPerformanceOptimizationOverrides(renderer.Settings);
         if (_smokeOptions.QualityPresetOverride.HasValue)
         {
@@ -1442,8 +1462,16 @@ internal sealed class HelloGame : Game
         ApplyScenePostOverrides(renderer.Settings);
     }
 
+    private void ApplyOpticalDenoisingOverride(RenderSettings settings)
+    {
+        if (_smokeOptions.OpticalDenoisingMode is not { } mode) return;
+        settings.OpticalDenoising.Enabled = mode != "off";
+        settings.OpticalDenoising.BypassFilter = mode == "bypass";
+    }
+
     private void ApplyPreInitializationRenderSettings(RenderSettings settings)
     {
+        ApplyOpticalDenoisingOverride(settings);
         ArgumentNullException.ThrowIfNull(settings);
         ApplyPerformanceOptimizationOverrides(settings);
         if (_smokeOptions.AsyncComputeModeOverride.HasValue)
@@ -5167,6 +5195,17 @@ internal sealed class HelloGame : Game
 
     private void CaptureBaselineSnapshotIfRequested()
     {
+        if (_baselinePendingHdrCapture != null && Renderer is VulkanRenderer pendingRenderer)
+        {
+            var capture = pendingRenderer.GetLinearHdrCaptureResult(_baselinePendingHdrCapture);
+            if (!capture.IsTerminal)
+                return;
+            if (capture.State == Njulf.Rendering.Debug.LinearHdrCaptureState.Failed)
+                Console.Error.WriteLine($"Baseline HDR capture failed: {capture.Error}");
+            _baselinePendingHdrCapture = null;
+            Exit();
+            return;
+        }
         if (_baselineSnapshotExported ||
             string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory) ||
             _inputController == null)
@@ -5179,7 +5218,9 @@ internal sealed class HelloGame : Game
             Renderer is VulkanRenderer shadowRenderer && shadowRenderer.LastDiagnostics.PointShadowSelectedCount == 0)
             return;
         _baselineScenarioRenderedFrames++;
-        int requiredFrames = _sceneKind == SampleSceneKind.VfxShowcase
+        int requiredFrames = _sceneKind == SampleSceneKind.MaterialShowcase
+            ? 120
+            : _sceneKind == SampleSceneKind.VfxShowcase
             ? VolumetricBaselineCaptureFrameCount
             : BaselineCaptureFrameCount;
         if (_baselineScenarioRenderedFrames < requiredFrames)
@@ -5189,7 +5230,8 @@ internal sealed class HelloGame : Game
         ExportBaselineSnapshot(directoryName, label);
 
         _baselineSnapshotExported = true;
-        Exit();
+        if (_baselinePendingHdrCapture == null)
+            Exit();
     }
 
     private SamplePerformanceScenario ResolveBaselineSnapshotScenario()
@@ -5209,6 +5251,8 @@ internal sealed class HelloGame : Game
     {
         if (_sceneKind == SampleSceneKind.Bistro)
             return ("bistro", "Baseline Bistro snapshot");
+        if (_sceneKind == SampleSceneKind.MaterialShowcase)
+            return ("material-showcase", "Baseline optical material showcase snapshot");
         if (_sceneKind == SampleSceneKind.VfxShowcase)
             return ("volumetric-vfx-showcase",
                 "Baseline volumetric VFX showcase snapshot");
@@ -5229,6 +5273,18 @@ internal sealed class HelloGame : Game
 
         string directory = System.IO.Path.Combine(_smokeOptions.BaselineSnapshotDirectory, scenarioDirectoryName);
         _inputController.ExportPerformanceSnapshotFile(directory, label);
+        if (_sceneKind == SampleSceneKind.MaterialShowcase && Renderer is VulkanRenderer renderer)
+        {
+            renderer.Settings.Debug.Enabled = true;
+            renderer.Settings.Debug.AllowScreenshots = true;
+            renderer.RequestScreenshot(System.IO.Path.Combine(directory, "exact-camera.png"));
+            string hdrPath = System.IO.Path.Combine(directory, "scene.pfm");
+            if (renderer.RequestLinearHdrCapture(hdrPath))
+                _baselinePendingHdrCapture = hdrPath;
+            else
+                Console.Error.WriteLine("Baseline HDR capture request was rejected.");
+            return;
+        }
         CaptureDiagnosticScreenshot(System.IO.Path.Combine(directory, "exact-camera.png"));
     }
 

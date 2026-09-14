@@ -33,6 +33,7 @@ internal sealed unsafe class VulkanMaterialConformanceHarness : IDisposable
     private CommandPool _commandPool;
     private PhysicalDeviceMemoryProperties _memoryProperties;
     private bool _disposed;
+    private byte[]? _computeShaderBytes;
 
     private VulkanMaterialConformanceHarness()
     {
@@ -47,8 +48,17 @@ internal sealed unsafe class VulkanMaterialConformanceHarness : IDisposable
     public static bool TryCreate(
         out VulkanMaterialConformanceHarness? harness,
         out string unavailableReason)
+        => TryCreate(null, out harness, out unavailableReason);
+
+    public static bool TryCreate(
+        byte[]? computeShaderBytes,
+        out VulkanMaterialConformanceHarness? harness,
+        out string unavailableReason)
     {
-        var candidate = new VulkanMaterialConformanceHarness();
+        var candidate = new VulkanMaterialConformanceHarness
+        {
+            _computeShaderBytes = computeShaderBytes
+        };
         try
         {
             candidate.Initialize();
@@ -114,6 +124,21 @@ internal sealed unsafe class VulkanMaterialConformanceHarness : IDisposable
             DeviceName,
             DeviceApiVersion,
             DriverVersion);
+    }
+
+    // Two storage bindings and the existing invocation-count push constant
+    // also support small numerical fixtures without another Vulkan device harness.
+    public uint[] RunCompute(ReadOnlySpan<uint> input, int outputWordCount, uint invocationCount)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(outputWordCount);
+        ArgumentOutOfRangeException.ThrowIfZero(invocationCount);
+        using HostStorageBuffer inputBuffer = CreateInitializedBuffer(input);
+        using HostStorageBuffer outputBuffer = CreateOutputBuffer<uint>(outputWordCount);
+        using HostStorageBuffer unused = CreateOutputBuffer<uint>(1);
+        UpdateDescriptorSet([inputBuffer, outputBuffer, unused, unused, unused, unused]);
+        Execute(invocationCount);
+        return outputBuffer.ReadArray<uint>(outputWordCount);
     }
 
     public void Dispose()
@@ -426,7 +451,7 @@ internal sealed unsafe class VulkanMaterialConformanceHarness : IDisposable
 
     private void CreatePipeline()
     {
-        byte[] spirv = LoadShaderBytes();
+        byte[] spirv = _computeShaderBytes ?? LoadShaderBytes();
         ShaderModule shaderModule = default;
         try
         {

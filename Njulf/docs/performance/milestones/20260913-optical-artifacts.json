@@ -1,0 +1,132 @@
+{
+  "Date": "2026-09-13",
+  "SourceRevision": "cc35bcc6fc69854dd96e316cd6e14ec69b139e8e",
+  "Dirty": true,
+  "Hardware": "NVIDIA GeForce RTX 3060 Laptop GPU",
+  "Timings": "Single diagnostic-frame snapshots; not a steady-state or tail-latency comparison",
+  "P95Milliseconds": null,
+  "P99Milliseconds": null,
+  "Runs": {
+    "budget-control": {
+      "Capture": "performance-20260913-063545-9608580-073407e4d88c4fcab3cef8089ceffa9e.json",
+      "Camera": {
+        "PositionX": -1.0603592,
+        "PositionY": 1.71337,
+        "PositionZ": 6.446394,
+        "YawRadians": 0.043464772,
+        "PitchRadians": 0.38022974,
+        "FieldOfViewRadians": 0.98174775,
+        "NearPlane": 0.05,
+        "FarPlane": 120,
+        "ViewHash": "sha256:0ac65e87cf08091114a511b7eaed697d1c2c89f804e3bbf3fa65e69503656e52",
+        "ProjectionHash": "sha256:58233ad73b2cecdd4dc17db00752e0dca63df98c34ee76759b2e536036f96c0b",
+        "CameraCutSerial": 0
+      },
+      "Frame": {
+        "FrameSerial": 478,
+        "FramesSinceSceneLoad": 119,
+        "WarmupState": "LocalVolumeWarmup",
+        "FramesSinceLastRingRecenter": -1,
+        "FramesSinceLastAtlasClear": 120,
+        "DdgiCacheGeneration": 1,
+        "SimpleDdgiTransportGeneration": 31,
+        "TransportConvergencePending": true,
+        "TransportConvergedProbeCount": 12547,
+        "TransportPendingProbeCount": 0
+      },
+      "GpuFrameUs": 38917,
+      "ForwardOpaqueUs": 4505,
+      "TransparentUs": 20966,
+      "ReflectionRays": 0,
+      "ReflectionActiveTiles": 76,
+      "ReflectionReuseTiles": 19917,
+      "ReflectionSpatialUs": 488,
+      "TransparentRayRequests": 313670,
+      "TransparentRayAdmitted": 313670,
+      "TransparentRayRejected": 0,
+      "TransparentRayBudget": 1048576,
+      "ValidationErrors": 0,
+      "Classifier": {
+        "FileName": "hybrid_reflection_classify.comp.spv",
+        "Sha256": "01972fc04388265060842428177df6afb47c28dc49eb56890c1fd999130f4b7d",
+        "SourceKind": "embedded"
+      },
+      "ImageSha256": "8FC329C918D75525C2ED65FD7E7BEEF693CFFF94883DD38BF373F05D6C0FC740"
+    },
+    "accepted": {
+      "Capture": "performance-20260913-064717-7025067-d40d651c5c65496394ab57bb3d17b8f1.json",
+      "Camera": {
+        "PositionX": -1.0603592,
+        "PositionY": 1.71337,
+        "PositionZ": 6.446394,
+        "YawRadians": 0.043464772,
+        "PitchRadians": 0.38022974,
+        "FieldOfViewRadians": 0.98174775,
+        "NearPlane": 0.05,
+        "FarPlane": 120,
+        "ViewHash": "sha256:0ac65e87cf08091114a511b7eaed697d1c2c89f804e3bbf3fa65e69503656e52",
+        "ProjectionHash": "sha256:58233ad73b2cecdd4dc17db00752e0dca63df98c34ee76759b2e536036f96c0b",
+        "CameraCutSerial": 0
+      },
+      "Frame": {
+        "FrameSerial": 516,
+        "FramesSinceSceneLoad": 119,
+        "WarmupState": "LocalVolumeWarmup",
+        "FramesSinceLastRingRecenter": -1,
+        "FramesSinceLastAtlasClear": 120,
+        "DdgiCacheGeneration": 1,
+        "SimpleDdgiTransportGeneration": 31,
+        "TransportConvergencePending": true,
+        "TransportConvergedProbeCount": 12547,
+        "TransportPendingProbeCount": 0
+      },
+      "GpuFrameUs": 40027,
+      "ForwardOpaqueUs": 4703,
+      "TransparentUs": 21336,
+      "ReflectionRays": 3815,
+      "ReflectionActiveTiles": 5368,
+      "ReflectionReuseTiles": 14625,
+      "ReflectionSpatialUs": 281,
+      "TransparentRayRequests": 313412,
+      "TransparentRayAdmitted": 313412,
+      "TransparentRayRejected": 0,
+      "TransparentRayBudget": 1048576,
+      "ValidationErrors": 0,
+      "Classifier": {
+        "FileName": "hybrid_reflection_classify.comp.spv",
+        "Sha256": "b0c1c6ae047e24e57126440a0ce4c39260ebb24eaf2113b8717a33fe72c44da3",
+        "SourceKind": "override"
+      },
+      "ImageSha256": "7A7F2A7A3B9A8CF7577B10BDB8E3CF4D76B33DD42AC219352C06A0F24FF6D97D"
+    }
+  },
+  "RejectedDenoiser": {
+    "Renderer": "Both stopped during first transparent ray pipeline creation after multi-minute waits; no beauty frame; prototype removed",
+    "GpuNumericalTest": "Passed",
+    "FourLaneVariance": 0.0466297,
+    "FullSubgroupVariance": 0.023989629,
+    "InputVariance": 1,
+    "CancelledWaits": {
+      "rejected-full-subgroup": {
+        "StartupSecondsAtCancellation": 214.261,
+        "NativePipelineSecondsAtCancellation": 206.052
+      },
+      "rejected-four-tap": {
+        "StartupSecondsAtCancellation": 323.522,
+        "NativePipelineSecondsAtCancellation": 316.218
+      }
+    }
+  },
+  "Remaining": "Transparent reflection/transmission stochastic noise requires a separate layer-aware optical-radiance denoising pass",
+  "FinalValidation": {
+    "DevelopmentBuild": "Passed",
+    "BuildWarnings": 47,
+    "BuildErrors": 0,
+    "CanonicalClassifierSpirvValidation": "Passed",
+    "FocusedTestsPassed": 46,
+    "FocusedTestsFailed": 3,
+    "FailureInputsUnchangedFromHead": true,
+    "ShowcaseMemoryEnvelopeCheck": "Passed",
+    "RendererValidationErrors": 0
+  }
+}

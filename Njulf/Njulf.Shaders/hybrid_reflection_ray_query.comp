@@ -32,6 +32,7 @@ bool GiCausticFinite(vec3 value)
 #include "directional_ray_visibility.glsl"
 #include "ray_query_surface.glsl"
 #include "hybrid_reflection_compute.glsl"
+#include "hybrid_reflection_sparse.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -506,6 +507,12 @@ void main()
     }
     else
     {
+        uvec4 metadata = imageLoad(HybridRawMetadata, coordinate);
+        if (lobeId == 0u)
+            metadata.x = HybridReflectionRayMissMetadata();
+        else
+            metadata.y = HybridReflectionRayMissMetadata();
+        imageStore(HybridRawMetadata, coordinate, metadata);
         atomicAdd(HybridCounters[HYBRID_REFLECTION_COUNTER_RAY_MISSES], 1u);
     }
 }

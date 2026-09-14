@@ -735,6 +735,15 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.GpuHybridReflectionResolveMicroseconds,
             GpuHybridReflectionTemporalMicroseconds =
                 sceneData.GpuHybridReflectionTemporalMicroseconds,
+            OpticalDenoisingActive = sceneData.OpticalDenoisingActive,
+            OpticalDenoisingAllocatedBytes = sceneData.OpticalDenoisingAllocatedBytes,
+            OpticalDenoisingCapturedFragments = sceneData.OpticalDenoisingCapturedFragments,
+            OpticalDenoisingOverflowPixels = sceneData.OpticalDenoisingOverflowPixels,
+            OpticalDenoisingHistoryReuses = sceneData.OpticalDenoisingHistoryReuses,
+            GpuOpticalLayerClearMicroseconds = sceneData.GpuOpticalLayerClearMicroseconds,
+            GpuOpticalTemporalMicroseconds = sceneData.GpuOpticalTemporalMicroseconds,
+            GpuOpticalSpatialMicroseconds = sceneData.GpuOpticalSpatialMicroseconds,
+            GpuOpticalCorrectionMicroseconds = sceneData.GpuOpticalCorrectionMicroseconds,
             GpuHybridReflectionSpatialMicroseconds =
                 sceneData.GpuHybridReflectionSpatialMicroseconds,
             GpuHybridReflectionCompositeMicroseconds =
@@ -3303,6 +3312,10 @@ internal sealed class RendererDiagnosticsAssembler
             sceneData.GpuLightCullMicroseconds +
             sceneData.GpuForwardOpaqueMicroseconds +
             sceneData.GpuTransparentMicroseconds +
+            sceneData.GpuOpticalLayerClearMicroseconds +
+            sceneData.GpuOpticalTemporalMicroseconds +
+            sceneData.GpuOpticalSpatialMicroseconds +
+            sceneData.GpuOpticalCorrectionMicroseconds +
             sceneData.GpuParticleMicroseconds +
             sceneData.GpuTrailBeamMicroseconds +
             sceneData.GpuFogMicroseconds +

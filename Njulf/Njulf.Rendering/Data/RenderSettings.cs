@@ -53,6 +53,7 @@ namespace Njulf.Rendering.Data
         public BloomSettings Bloom { get; } = new();
         public EnvironmentSettings Environment { get; } = new();
         public ReflectionSettings Reflections { get; } = new();
+        public OpticalDenoisingSettings OpticalDenoising { get; } = new();
         public AmbientOcclusionSettings AmbientOcclusion { get; } = new();
         public GlobalIlluminationSettings GlobalIllumination { get; } = new();
         public AntiAliasingSettings AntiAliasing { get; } = new();
@@ -758,6 +759,7 @@ namespace Njulf.Rendering.Data
             public FogFile? Fog { get; init; }
             public bool ReflectionsEnabled { get; init; } = true;
             public ReflectionSettingsFile? Reflections { get; init; }
+            public OpticalDenoisingSettings? OpticalDenoising { get; init; }
             public ShadowSettingsFile? Shadows { get; init; }
             [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
             public bool? ShadowsEnabled { get; init; }
@@ -804,6 +806,13 @@ namespace Njulf.Rendering.Data
                     Fog = FogFile.FromSettings(settings.Fog),
                     ReflectionsEnabled = settings.Reflections.Enabled,
                     Reflections = ReflectionSettingsFile.FromSettings(settings.Reflections),
+                    OpticalDenoising = new OpticalDenoisingSettings
+                    {
+                        Enabled = settings.OpticalDenoising.Enabled,
+                        BypassFilter = settings.OpticalDenoising.BypassFilter,
+                        LayerLimit = settings.OpticalDenoising.LayerLimit,
+                        MemoryBudgetMiB = settings.OpticalDenoising.MemoryBudgetMiB
+                    },
                     Shadows = ShadowSettingsFile.FromSettings(settings.Shadows),
                     ParticlesEnabled = settings.Particles.Enabled,
                     MeshletNormalConeCullingEnabled =
@@ -854,6 +863,13 @@ namespace Njulf.Rendering.Data
                 {
                     settings.AmbientOcclusion.Enabled =
                         AmbientOcclusionEnabled;
+                }
+                if (OpticalDenoising is { } optical)
+                {
+                    settings.OpticalDenoising.Enabled = optical.Enabled;
+                    settings.OpticalDenoising.BypassFilter = optical.BypassFilter;
+                    settings.OpticalDenoising.LayerLimit = optical.LayerLimit;
+                    settings.OpticalDenoising.MemoryBudgetMiB = optical.MemoryBudgetMiB;
                 }
                 Environment?.ApplyTo(settings.Environment);
                 GlobalIllumination?.ApplyTo(

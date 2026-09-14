@@ -1065,8 +1065,9 @@ namespace Njulf.Rendering.Descriptors
         public const int TemporalSurfaceValidityBufferFrame1 =
             TemporalSurfaceValidityBufferBase + 1;
 
-        public const int StaticBufferCount =
-            TemporalSurfaceValidityBufferFrame1 + 1;
+        public const int OpticalLayerBufferBase = TemporalSurfaceValidityBufferFrame1 + 1;
+        public const int OpticalLayerBufferFrame1 = OpticalLayerBufferBase + 1;
+        public const int StaticBufferCount = OpticalLayerBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1261,6 +1262,8 @@ namespace Njulf.Rendering.Descriptors
                     SimpleDdgiMaskedFeedbackCompactBufferFrame1 => nameof(SimpleDdgiMaskedFeedbackCompactBufferFrame1),
                     HybridReflectionSparseLobeBufferBase => nameof(HybridReflectionSparseLobeBufferBase),
                     HybridReflectionSparseLobeBufferFrame1 => nameof(HybridReflectionSparseLobeBufferFrame1),
+                    OpticalLayerBufferBase => nameof(OpticalLayerBufferBase),
+                    OpticalLayerBufferFrame1 => nameof(OpticalLayerBufferFrame1),
                     TemporalSurfaceValidityBufferBase => nameof(TemporalSurfaceValidityBufferBase),
                     TemporalSurfaceValidityBufferFrame1 => nameof(TemporalSurfaceValidityBufferFrame1),
                     SceneOpaqueCompactedMeshletDrawBufferBase => nameof(SceneOpaqueCompactedMeshletDrawBufferBase),

@@ -1,0 +1,24 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "optical_compute.glsl"
+layout(set=1,binding=0,rgba16f) uniform image2D OpticalSceneColor;
+layout(set=1,binding=1,rgba16f) uniform image2D OpticalAccumulation;
+void main()
+{
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy); uint b=pc.Current;
+    if(pc.Bypass!=0u || !OpticalPixelValid(b,p) || OpticalCount(b,p)==0u) return;
+    vec3 correction=vec3(0.0);
+    for(uint layer=0u;layer<OpticalCount(b,p);++layer)
+    {
+        uint r=OpticalRecord(b,p,layer);
+        float weight=OpticalCompositionWeight(b,r,p,pc.Weighted!=0u);
+        for(uint lobe=0u;lobe<2u;++lobe)
+            if(OpticalFloat(b,r+55u+lobe*4u)>0.0)
+                correction+=(OpticalVec(b,r+52u+lobe*4u)-OpticalVec(b,r+12u+lobe*4u))*OpticalVec(b,r+20u+lobe*4u)*weight;
+    }
+    if(!OpticalFinite(correction) || all(equal(correction,vec3(0.0)))) return;
+    vec4 original=pc.Weighted!=0u?imageLoad(OpticalAccumulation,p):imageLoad(OpticalSceneColor,p);
+    if(!OpticalFinite(original.rgb)) return;
+    vec4 result=vec4(clamp(original.rgb+correction,vec3(0.0),vec3(65504.0)),original.a);
+    if(pc.Weighted!=0u) imageStore(OpticalAccumulation,p,result); else imageStore(OpticalSceneColor,p,result);
+}

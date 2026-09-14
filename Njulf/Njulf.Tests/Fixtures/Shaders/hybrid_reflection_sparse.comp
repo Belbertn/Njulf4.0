@@ -1,0 +1,98 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "../../../Njulf.Shaders/common.glsl"
+#include "../../../Njulf.Shaders/hybrid_reflection_compute.glsl"
+#include "../../../Njulf.Shaders/hybrid_reflection_sparse.glsl"
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) readonly buffer TestInput { uint Words[]; } inputData;
+layout(set = 0, binding = 1) buffer TestOutput { uint Words[]; } outputData;
+layout(push_constant) uniform Dispatch { uint count; } dispatch;
+struct TestSpatialPush
+{
+    uint ScreenWidth; uint ScreenHeight; uint Iteration;
+    float NormalPower; float DepthSigma; float RoughnessSigma;
+};
+TestSpatialPush pc;
+uint TestRecord(ivec2 pixel) { return 8u + (uint(pixel.y) * pc.ScreenWidth + uint(pixel.x)) * 16u; }
+float TestFloat(uint word) { return uintBitsToFloat(inputData.Words[word]); }
+vec3 TestNormal(uint r) { return vec3(TestFloat(r + 2u), TestFloat(r + 3u), TestFloat(r + 4u)); }
+uvec4 HybridReadSpatialPayload(ivec2 pixel)
+{
+    uint r = TestRecord(pixel);
+    uvec4 payload;
+    NjulfHybridReflectionCreatePayload(TestNormal(r), TestNormal(r), vec3(0.72),
+        TestFloat(r + 5u), TestFloat(r + 5u), 1.0, 0u,
+        uvec3(inputData.Words[r], 1u, 1u), payload);
+    return payload;
+}
+uvec2 HybridReadSpatialMetadata(ivec2 pixel)
+{
+    uint r = TestRecord(pixel);
+    return HybridPackHistoryMetadata(HybridReceiverIdentity(HybridReadSpatialPayload(pixel)),
+        TestFloat(r + 1u), TestNormal(r), inputData.Words[r + 6u], 1u,
+        inputData.Words[r + 7u], inputData.Words[r + 12u] != 0u);
+}
+float HybridReadSpatialDepth(ivec2 pixel) { return TestFloat(TestRecord(pixel) + 1u); }
+bool HybridReadSpatialClassifiedReuse(ivec2 pixel)
+{
+    uint r = TestRecord(pixel);
+    return HybridReflectionClassifiedReuse(HybridPackMetadata(inputData.Words[r + 6u],
+        1.0, HYBRID_REFLECTION_REASON_RESOLUTION_SKIP, inputData.Words[r + 13u],
+        inputData.Words[r + 12u] != 0u));
+}
+vec4 HybridReadSpatialInput(ivec2 pixel)
+{
+    uint r = TestRecord(pixel);
+    return vec4(TestFloat(r + 8u), TestFloat(r + 9u), TestFloat(r + 10u), TestFloat(r + 11u));
+}
+#include "../../../Njulf.Shaders/hybrid_reflection_spatial_kernel.glsl"
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= dispatch.count) return;
+    if (inputData.Words[0u] == 3u)
+    {
+        vec4 carried = HybridReflectionCarryObservation(
+            vec3(uintBitsToFloat(inputData.Words[1u])), 0.8, float(index) / 4.0);
+        outputData.Words[index * 2u] = floatBitsToUint(carried.r);
+        outputData.Words[index * 2u + 1u] = floatBitsToUint(carried.a);
+        return;
+    }
+    if (inputData.Words[0u] == 2u)
+    {
+        uint raw = index == 0u ? HybridReflectionRayMissMetadata()
+            : index == 3u ? HybridPackMetadata(HYBRID_REFLECTION_SOURCE_SSR,
+                1.0, HYBRID_REFLECTION_REASON_NONE, 0u, true)
+            : HybridPackMetadata(HYBRID_REFLECTION_SOURCE_NONE, 0.0,
+                index == 1u ? HYBRID_REFLECTION_REASON_RAY_BUDGET
+                    : HYBRID_REFLECTION_REASON_RESOLUTION_SKIP, 0u, false);
+        uint source = HybridReflectionResolvedSource(raw,
+            HybridMetadataValid(raw) ? HybridMetadataSource(raw) : HYBRID_REFLECTION_SOURCE_DDGI);
+        outputData.Words[index * 3u] = HybridMetadataValid(raw) ? 1u : 0u;
+        outputData.Words[index * 3u + 1u] = source;
+        outputData.Words[index * 3u + 2u] = HybridReflectionSpatialSupport(
+            HybridPackHistoryMetadata(1u, 0.5, vec3(0, 0, 1), source, 1u,
+                HYBRID_REFLECTION_HISTORY_SPARSE_RESOLUTION, true)) ? 1u : 0u;
+        return;
+    }
+    if (inputData.Words[0u] == 0u)
+    {
+        uint tier = inputData.Words[3u];
+        uvec2 block = uvec2((index / 64u) % 8u, index / 512u);
+        outputData.Words[index] = HybridReflectionSamplePhase(block * tier, tier,
+            inputData.Words[4u] + index % 64u, inputData.Words[5u]);
+        return;
+    }
+    pc = TestSpatialPush(inputData.Words[1u], inputData.Words[2u],
+        inputData.Words[6u], 32.0, 0.0025, 0.12);
+    ivec2 pixel = ivec2(index % pc.ScreenWidth, index / pc.ScreenWidth);
+    bool filterTile = HybridReflectionFilterTile(TestFloat(TestRecord(pixel) + 5u),
+        0.0, 0.005, inputData.Words[7u] != 0u);
+    vec4 result = filterTile
+        ? HybridFilterSpatialPixel(pixel, HybridReadSpatialPayload(pixel))
+        : HybridReadSpatialInput(pixel);
+    for (uint c = 0u; c < 4u; c++)
+        outputData.Words[index * 4u + c] = floatBitsToUint(result[c]);
+}

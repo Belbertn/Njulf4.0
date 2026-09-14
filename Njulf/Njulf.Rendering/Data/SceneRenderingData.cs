@@ -249,6 +249,11 @@ namespace Njulf.Rendering.Data
         public float HiZPolicyAdaptiveSmoothedSavedToCostRatio { get; set; }
         public int HiZPolicyAdaptiveSuppressedFrameCount { get; set; }
         public string HiZPolicyAdaptiveStatus { get; set; } = string.Empty;
+        public bool OpticalDenoisingActive { get; set; }
+        public ulong OpticalDenoisingAllocatedBytes { get; set; }
+        public uint OpticalDenoisingCapturedFragments { get; set; }
+        public uint OpticalDenoisingOverflowPixels { get; set; }
+        public uint OpticalDenoisingHistoryReuses { get; set; }
         public bool TransparentPassEnabled { get; set; } = true;
         public TransparencyMode TransparencyMode { get; set; } = TransparencyMode.SortedAlphaBlend;
         public TransparencyDebugView TransparencyDebugView { get; set; } = TransparencyDebugView.None;
@@ -1053,6 +1058,10 @@ namespace Njulf.Rendering.Data
         public long GpuHybridReflectionDdgiBaseMicroseconds { get; set; }
         public long GpuHybridReflectionResolveMicroseconds { get; set; }
         public long GpuHybridReflectionTemporalMicroseconds { get; set; }
+        public long GpuOpticalLayerClearMicroseconds { get; set; }
+        public long GpuOpticalTemporalMicroseconds { get; set; }
+        public long GpuOpticalSpatialMicroseconds { get; set; }
+        public long GpuOpticalCorrectionMicroseconds { get; set; }
         public long GpuHybridReflectionSpatialMicroseconds { get; set; }
         public long GpuHybridReflectionCompositeMicroseconds { get; set; }
         public bool AmbientOcclusionEnabled { get; set; }
@@ -2097,6 +2106,11 @@ namespace Njulf.Rendering.Data
             OcclusionBias = 0.0005f;
             DepthPrePassEnabled = true;
             HiZBuildEnabled = true;
+            OpticalDenoisingActive = false;
+            OpticalDenoisingAllocatedBytes = 0;
+            OpticalDenoisingCapturedFragments = 0;
+            OpticalDenoisingOverflowPixels = 0;
+            OpticalDenoisingHistoryReuses = 0;
             TransparentPassEnabled = true;
             TransparencyMode = TransparencyMode.SortedAlphaBlend;
             TransparencyDebugView = TransparencyDebugView.None;
@@ -2931,6 +2945,10 @@ namespace Njulf.Rendering.Data
             GpuHybridReflectionDdgiBaseMicroseconds = 0;
             GpuHybridReflectionResolveMicroseconds = 0;
             GpuHybridReflectionTemporalMicroseconds = 0;
+            GpuOpticalLayerClearMicroseconds = 0;
+            GpuOpticalTemporalMicroseconds = 0;
+            GpuOpticalSpatialMicroseconds = 0;
+            GpuOpticalCorrectionMicroseconds = 0;
             GpuHybridReflectionSpatialMicroseconds = 0;
             GpuHybridReflectionCompositeMicroseconds = 0;
             AmbientOcclusionEnabled = false;

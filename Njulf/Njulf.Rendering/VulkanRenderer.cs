@@ -4741,6 +4741,8 @@ namespace Njulf.Rendering
 
             SetViewportAndScissor(_currentCommandBuffer);
 
+            _productionPipelines.OpticalDenoising?.Prepare(sceneData);
+
             // Execute render graph
             sceneData.SecondaryCommandBufferEnabled = Settings.UseSecondaryCommandBuffers ? 1 : 0;
             bool asyncTimelineAvailable =
@@ -7450,7 +7452,9 @@ namespace Njulf.Rendering
                     _hybridReflectionRuntime?.GetIndirectBuffer(0) ??
                     BufferHandle.Invalid,
                     _hybridReflectionRuntime?.GetIndirectBuffer(1) ??
-                    BufferHandle.Invalid));
+                    BufferHandle.Invalid),
+                _productionPipelines.OpticalDenoising?.GetLayerBuffer(0) ?? BufferHandle.Invalid,
+                _productionPipelines.OpticalDenoising?.GetLayerBuffer(1) ?? BufferHandle.Invalid);
         }
 
         /// <summary>
@@ -7688,6 +7692,11 @@ namespace Njulf.Rendering
                     frameIndex: frameIndex);
             }
 
+            for (int opticalBank = 0; opticalBank < 2; opticalBank++)
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.OpticalLayers,
+                    $"Optical layer/history bank {opticalBank}",
+                    _productionPipelines.OpticalDenoising?.GetLayerBuffer(opticalBank) ?? BufferHandle.Invalid,
+                    queueFamilies, graphicsFamily);
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MeshGeometryBuffers, "Mesh vertex positions",
                 _meshManager.VertexPositionBuffer, queueFamilies, graphicsFamily);
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MeshGeometryBuffers,
@@ -8330,7 +8339,9 @@ namespace Njulf.Rendering
             CausticAsyncBufferIdentity CausticBuffers,
             GuidingAsyncBufferIdentity GuidingBuffers,
             NearFieldResidualAsyncBufferIdentity NearFieldResidualBuffers,
-            HybridReflectionAsyncBufferIdentity HybridReflectionBuffers);
+            HybridReflectionAsyncBufferIdentity HybridReflectionBuffers,
+            BufferHandle OpticalLayers0,
+            BufferHandle OpticalLayers1);
 
         private readonly record struct HybridReflectionAsyncBufferIdentity(
             BufferHandle Tasks0,
@@ -8697,6 +8708,10 @@ namespace Njulf.Rendering
                 timings.GetGpuMicrosecondsOrZero("HybridReflectionResolvePass");
             sceneData.GpuHybridReflectionTemporalMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("HybridReflectionTemporalPass");
+            sceneData.GpuOpticalLayerClearMicroseconds = timings.GetGpuMicrosecondsOrZero("OpticalLayerClearPass");
+            sceneData.GpuOpticalTemporalMicroseconds = timings.GetGpuMicrosecondsOrZero("OpticalTemporalPass");
+            sceneData.GpuOpticalSpatialMicroseconds = timings.GetGpuMicrosecondsOrZero("OpticalSpatialPass");
+            sceneData.GpuOpticalCorrectionMicroseconds = timings.GetGpuMicrosecondsOrZero("OpticalCorrectionPass");
             sceneData.GpuHybridReflectionSpatialMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("HybridReflectionSpatialPass");
             sceneData.GpuHybridReflectionCompositeMicroseconds =

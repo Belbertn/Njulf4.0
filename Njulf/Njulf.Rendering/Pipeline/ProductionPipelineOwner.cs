@@ -108,6 +108,7 @@ internal sealed class ProductionPipelineOwner
             new("reflection-capture", () => { _reflectionProbeCapturePass?.Dispose(); _reflectionProbeCapturePass = null; })]);
         if (_reflectionCleanup.TryDrain() is { } failure) throw failure;
     }
+    internal OpticalDenoisingRuntime? OpticalDenoising { get; private set; }
     private ForwardPlusPass? _forwardPlusPass;
     private ReflectionProbeCapturePass? _reflectionProbeCapturePass;
     private ReflectionProbePrefilterPass? _reflectionProbePrefilterPass;
@@ -1002,6 +1003,11 @@ internal sealed class ProductionPipelineOwner
             _dependencies.Context, _dependencies.Swapchain, _dependencies.BindlessHeap,
             hybridReflectionRuntime)));
 
+        OpticalDenoising = new OpticalDenoisingRuntime(_dependencies.Context, _dependencies.BindlessHeap,
+            _dependencies.BufferManager, _dependencies.RenderTargets!, _dependencies.Settings,
+            _dependencies.GiPipelineCacheService);
+        AddPassInstance(_passOwnership.Track(new OpticalDenoisingPass("OpticalLayerClearPass", 0,
+            _dependencies.Context, _dependencies.Swapchain, _dependencies.BindlessHeap, OpticalDenoising)));
         var transparentForwardPass = _passOwnership.Track(new TransparentForwardPass(
             _dependencies.Context,
             _dependencies.Swapchain,
@@ -1024,6 +1030,12 @@ internal sealed class ProductionPipelineOwner
             _dependencies.SimpleDdgiReceiverFeedback));
         AddPassInstance(weightedTransparentPass);
 
+        AddPassInstance(_passOwnership.Track(new OpticalDenoisingPass("OpticalTemporalPass", 1,
+            _dependencies.Context, _dependencies.Swapchain, _dependencies.BindlessHeap, OpticalDenoising)));
+        AddPassInstance(_passOwnership.Track(new OpticalDenoisingPass("OpticalSpatialPass", 2,
+            _dependencies.Context, _dependencies.Swapchain, _dependencies.BindlessHeap, OpticalDenoising)));
+        AddPassInstance(_passOwnership.Track(new OpticalDenoisingPass("OpticalCorrectionPass", 3,
+            _dependencies.Context, _dependencies.Swapchain, _dependencies.BindlessHeap, OpticalDenoising)));
         var weightedOitCompositePass = _passOwnership.Track(new WeightedOitCompositePass(
             _dependencies.Context, _dependencies.Swapchain, _dependencies.BindlessHeap, _weightedOitCompositePipeline, _dependencies.RenderTargets!));
         AddPassInstance(weightedOitCompositePass);

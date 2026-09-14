@@ -170,7 +170,8 @@ namespace Njulf.Rendering.Resources
 
         private static readonly RenderTargetDescriptor WeightedOitAccumulationDescriptor = new(
             colorAttachment: true,
-            sampled: true);
+            sampled: true,
+            storage: true);
 
         private static readonly RenderTargetDescriptor WeightedOitRevealageDescriptor = new(
             colorAttachment: true,

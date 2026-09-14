@@ -44,6 +44,10 @@ public sealed class SampleMaterialShowcaseSceneTests
                 Is.EqualTo(GiCausticMode.WorldCacheExperiment));
             Assert.That(settings.Transparency.ThickTransmissionMode,
                 Is.EqualTo(ThickTransmissionMode.RayQuery));
+            Assert.That(ThickTransmissionModeResolver.Resolve(
+                    settings.Transparency,
+                    new ThickTransmissionModeCapabilities(true, true, true, true)).UsesRayQueries,
+                Is.True, "Optical coverage headroom must fit the memory envelope without demoting refraction.");
             Assert.That(settings.Transparency.DispersionMode,
                 Is.EqualTo(DispersionMode.RgbTriplet));
             Assert.That(settings.Reflections.Mode,

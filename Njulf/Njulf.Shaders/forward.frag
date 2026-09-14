@@ -11,6 +11,9 @@
 #endif
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
+#ifndef NJULF_VISIBILITY_COMPUTE
+#extension GL_EXT_mesh_shader : require
+#endif
 
 #if defined(FORWARD_SIMPLE_OPAQUE) && !defined(NJULF_VISIBILITY_COMPUTE)
 #extension GL_EXT_mesh_shader : require
@@ -515,6 +518,8 @@ layout(push_constant) uniform ForwardPushConstantBlock
 {
     GPUForwardPushConstants Push;
 } pc;
+
+#include "optical_forward.glsl"
 
 vec3 ForwardWorldPositionDx(vec3 position)
 {
@@ -3556,8 +3561,11 @@ bool ForwardTryReserveTransparentReflectionRay(
             requested - admittedCount);
     }
     if (!admitted)
+    {
+        opticalReflectionObserved = 0.0;
         ForwardAddTransparentReflectionEstimate(
             TRANSPARENT_REFLECTION_BUDGET_REJECT_COUNTER);
+    }
     return admitted;
 }
 
@@ -3909,6 +3917,7 @@ bool ForwardTraceTransparentRayReflection(
             TRANSPARENT_REFLECTION_RAY_MISS_COUNTER);
         return false;
     }
+    opticalReflectionDistance = hit.Distance;
     result.Radiance = ForwardShadeTransparentReflectionHit(
         hit, reflectionDirection, environment, header);
     result.Confidence = clamp(1.0 - hit.Distance /
@@ -4271,9 +4280,12 @@ vec3 EvaluateTransparentReflectionSpecular(
         (fresnel * brdf.x + brdf.y) * specularOcclusion;
     vec3 result = geometricSpecular * geometricWeight +
         fallbackSpecular * (1.0 - geometricWeight);
+    opticalReflectionWeight = (fresnel * brdf.x + brdf.y) * specularOcclusion;
+    opticalReflection = result / max(opticalReflectionWeight, vec3(1e-8));
     uint selectedSource = geometricWeight >= 0.5
         ? geometric.Source
         : fallbackSource;
+    opticalReflectionSource = selectedSource;
 
     if (geometricEnabled)
     {
@@ -4780,8 +4792,15 @@ uint ForwardThickTransmissionSeed(
     uint materialRevision)
 {
     uvec2 pixel = uvec2(max(floor(ForwardScreenPixel()), vec2(0.0)));
+    uint sequence = 0u;
+#if OPTICAL_FORWARD_ACTIVE
+    // Independent observations are necessary for temporal convergence. Keep
+    // the legacy deterministic sample in off/bypass mode for identity checks.
+    if (OpticalExportEnabled())
+        sequence = OpticalWord(OpticalForwardBuffer(), 8u);
+#endif
     return ThickTransmissionHash(
-        stableObjectIdentity ^ materialRevision ^
+        stableObjectIdentity ^ materialRevision ^ sequence * 0xc2b2ae35u ^
         pixel.x * 0x9e3779b9u ^ pixel.y * 0x85ebca6bu);
 }
 
@@ -5170,6 +5189,9 @@ bool ForwardTraceThickTransmissionChannel(
 
 void WriteForwardColor(vec4 color)
 {
+#if OPTICAL_FORWARD_ACTIVE
+    if (!opticalExported) OpticalInvalidatePixel();
+#endif
 #if NJULF_C5_TRACE_RESOLUTION_SOURCE
     // The source-only program has no SceneColor attachment. Debug paths are
     // rejected by admission; retaining this no-op keeps shared material
@@ -5923,6 +5945,10 @@ void main()
         radiometricOwnership,
         leakAttenuation,
         outputAlpha);
+#endif
+#if OPTICAL_FORWARD_ACTIVE
+    opticalReflectionWeight *= specularFactor / glassOpacity;
+    OpticalExport(material, geometricNormal, normal, roughness, outputAlpha);
 #endif
     WriteForwardColor(vec4(color, outputAlpha));
 }
@@ -8213,6 +8239,7 @@ void main()
         directLighting + emissive;
 #endif
 
+    opticalReflectionWeight *= baseLayerSpecularScale;
     if (hasMaterialExtension)
     {
         float nDotV = max(dot(normal, viewDirection), 0.0);
@@ -8304,6 +8331,7 @@ void main()
                 color = specularFactor > 0.0
                     ? max(color, vec3(0.0)) / glassOpacity
                     : vec3(0.0);
+                opticalReflectionWeight *= specularFactor > 0.0 ? 1.0 / glassOpacity : 0.0;
                 outputAlpha = min(outputAlpha, glassOpacity);
             }
             else if (extensionEnvironment.Enabled != 0u)
@@ -8312,6 +8340,8 @@ void main()
             vec3 orientedNormal = normalize(normal);
             vec3 transmitted = vec3(0.0);
             bool resolvedPhysicalPath = false;
+            bool opticalPhysicalRequested = volumeGiTransport && ForwardThickTransmissionRayQueryEnabled();
+            opticalTransmissionObserved = opticalPhysicalRequested ? 0.0 : 1.0;
 #if DIRECTIONAL_TRANSPARENT_RAY_QUERY && \
     !NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
             if (volumeGiTransport &&
@@ -8328,6 +8358,7 @@ void main()
                         material,
                         materialExtension,
                         orientedNormal);
+                opticalScatterNormal = scatterNormal;
                 uint randomSeed = ForwardThickTransmissionSeed(
                     stableObjectIdentity,
                     material.MaterialRevision);
@@ -8347,6 +8378,8 @@ void main()
                         centralRadiance,
                         centralPath);
                 transmitted = centralRadiance;
+                opticalTransmissionObserved = resolvedPhysicalPath ? 1.0 : 0.0;
+                opticalTransmissionDistance = resolvedPhysicalPath ? centralPath.PathLength : 0.0;
                 if (resolvedPhysicalPath &&
                     ForwardThickTransmissionDispersionEnabled() &&
                     dispersion > 0.0)
@@ -8365,6 +8398,7 @@ void main()
                         incidentDirection, scatterNormal, roughness,
                         randomSeed, THICK_TRANSMISSION_SPECTRAL_BLUE,
                         extensionEnvironment, blueRadiance, bluePath);
+                    opticalTransmissionObserved = redValid && blueValid ? 1.0 : 0.0;
                     // The central IOR is exactly the green-channel IOR in the
                     // Khronos RGB approximation, so the already-traced central
                     // path is the deterministic green sample.
@@ -8442,6 +8476,10 @@ void main()
                 }
             }
 
+            opticalTransmission = transmitted;
+            opticalTransmissionWeight = albedo * transmissionFactor;
+            opticalTransmissionSource = opticalPhysicalRequested ? 5u : 1u;
+            opticalReflectionWeight *= 1.0 - transmissionFactor;
             transmitted *= albedo;
             color = mix(color, transmitted, transmissionFactor);
             outputAlpha = min(outputAlpha, mix(1.0, 0.35, transmissionFactor));
@@ -8470,6 +8508,10 @@ void main()
         exactFeedbackLeakAttenuation,
         finalOutputAlpha);
 #endif
+#endif
+#if OPTICAL_FORWARD_ACTIVE
+    if (geometryDecal) { opticalExported = true; OpticalInvalidatePixel(); }
+    else OpticalExport(material, geometricNormal, normal, roughness, finalOutputAlpha);
 #endif
     WriteForwardColor(vec4(color, finalOutputAlpha));
 }

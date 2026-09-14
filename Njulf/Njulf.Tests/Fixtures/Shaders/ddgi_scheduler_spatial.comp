@@ -1,0 +1,42 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, std430) readonly buffer Input { uint words[]; } inputData;
+layout(set = 0, binding = 1, std430) writeonly buffer Output { uvec2 probes[]; } outputData;
+layout(push_constant) uniform Dispatch { uint count; } dispatch;
+
+// Bind the production spatial helpers to one serialized production volume policy
+// followed by two serialized dirty regions. No renderer or bindless state is needed.
+const uint SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES = 16u;
+struct SpatialPush { uint DirtyRegionOffsetWords; };
+const SpatialPush pc = SpatialPush(48u);
+uint SchedulerArenaRead(uint offset) { return inputData.words[offset]; }
+uint SchedulerFrame(uint offset) { return 2u; }
+uint SchedulerDirtyRegionCount() { return 2u; }
+uint SchedulerVolumeFirstProbe(uint volume) { return inputData.words[0]; }
+uint SchedulerVolumeProbeCount(uint volume) { return inputData.words[1]; }
+uint SchedulerVolumeCurrentCountX(uint volume) { return inputData.words[16]; }
+uint SchedulerVolumeCurrentCountY(uint volume) { return inputData.words[17]; }
+uint SchedulerVolumeCurrentCountZ(uint volume) { return inputData.words[18]; }
+uint SchedulerVolumePhysicalOffsetX(uint volume) { return inputData.words[22]; }
+uint SchedulerVolumePhysicalOffsetY(uint volume) { return inputData.words[23]; }
+uint SchedulerVolumePhysicalOffsetZ(uint volume) { return inputData.words[24]; }
+uint SchedulerVolumeSequenceStride(uint volume) { return inputData.words[34]; }
+vec3 SchedulerVolumeOrigin(uint volume) {
+    return vec3(uintBitsToFloat(inputData.words[8]), uintBitsToFloat(inputData.words[9]),
+        uintBitsToFloat(inputData.words[10]));
+}
+float SchedulerVolumeSpacing(uint volume) { return uintBitsToFloat(inputData.words[11]); }
+
+#include "../../../Njulf.Shaders/ddgi_simple_schedule_spatial.glsl"
+
+void main()
+{
+    uint ordinal = gl_GlobalInvocationID.x;
+    if (ordinal >= dispatch.count)
+        return;
+    uint reasons;
+    SchedulerDirtyIntersects(0u, ordinal, reasons);
+    outputData.probes[ordinal] = uvec2(SchedulerSequenceProbeIndex(0u, ordinal), reasons);
+}

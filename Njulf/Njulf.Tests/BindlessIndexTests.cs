@@ -61,7 +61,7 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.SceneGpuLodHistoryBufferFrame1, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferBase + 1));
             Assert.That(BindlessIndex.DdgiDynamicGeometryBufferBase, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferFrame1 + 1));
             Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(
-                BindlessIndex.TemporalSurfaceValidityBufferFrame1 + 1));
+                BindlessIndex.OpticalLayerBufferFrame1 + 1));
             Assert.That(BindlessIndex.TemporalSurfaceValidityBufferBase,
                 Is.EqualTo(BindlessIndex.HybridReflectionSparseLobeBufferFrame1 + 1));
             Assert.That(
@@ -211,6 +211,8 @@ public sealed class BindlessIndexTests
             ["HYBRID_REFLECTION_SPARSE_LOBE_BUFFER_FRAME1_INDEX"] = BindlessIndex.HybridReflectionSparseLobeBufferFrame1,
             ["TEMPORAL_SURFACE_VALIDITY_BUFFER_BASE_INDEX"] = BindlessIndex.TemporalSurfaceValidityBufferBase,
             ["TEMPORAL_SURFACE_VALIDITY_BUFFER_FRAME1_INDEX"] = BindlessIndex.TemporalSurfaceValidityBufferFrame1,
+            ["OPTICAL_LAYER_BUFFER_BASE_INDEX"] = BindlessIndex.OpticalLayerBufferBase,
+            ["OPTICAL_LAYER_BUFFER_FRAME1_INDEX"] = BindlessIndex.OpticalLayerBufferFrame1,
             ["AREA_LIGHT_LTC_MATRIX_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcMatrixTexture,
             ["AREA_LIGHT_LTC_AMPLITUDE_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcAmplitudeTexture,
             ["OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX"] = BindlessIndex.OpaqueSceneColorSnapshotTexture,

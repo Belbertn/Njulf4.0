@@ -1,0 +1,32 @@
+{
+  "DateUtc": "2026-09-13T04:34:42.1115138Z",
+  "Applied": true,
+  "KeepDays": 2,
+  "TotalBytes": 356747758,
+  "TotalFiles": 278.0,
+  "FreeBytesBefore": 274908237824,
+  "FreeBytesAfter": 275265552384,
+  "Groups": [
+    {
+      "Path": "artifacts/audio-publish",
+      "Files": 94,
+      "Bytes": 118825991
+    },
+    {
+      "Path": "artifacts/audio-content-publish",
+      "Files": 94,
+      "Bytes": 118825991
+    },
+    {
+      "Path": ".codex-tmp/sphere-lighting",
+      "Files": 89,
+      "Bytes": 118812640
+    },
+    {
+      "Path": ".codex-tmp/jitter-integration",
+      "Files": 1,
+      "Bytes": 283136
+    }
+  ],
+  "Failures": []
+}

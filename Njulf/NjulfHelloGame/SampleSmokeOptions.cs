@@ -101,6 +101,7 @@ public sealed record SampleSmokeOptions(
     /// It is host state, not a command-line smoke-test input.
     /// </summary>
     public bool OpenEditorOnStartup { get; init; }
+    public string? OpticalDenoisingMode { get; init; }
 
     public bool Enabled =>
         Mode != SampleSmokeMode.None ||
