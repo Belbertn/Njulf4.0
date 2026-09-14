@@ -1379,6 +1379,11 @@ namespace Njulf.Rendering.Data
         public long GpuDirectionalShadowMicroseconds { get; init; }
         public long GpuDirectionalRayShadowMicroseconds { get; init; }
         public long GpuAreaRayShadowMicroseconds { get; init; }
+        public long GpuAreaShadowDenoiseMicroseconds { get; init; }
+        public bool AreaDenoisingActive { get; init; }
+        public bool AmdReflectionDenoisingActive { get; init; }
+        public ulong AmdReflectionDenoisingAllocatedBytes { get; init; }
+        public ulong AreaDenoisingAllocatedBytes { get; init; }
         public long GpuDirectionalShadowTemporalMicroseconds { get; init; }
         public long GpuDirectionalShadowSpatialMicroseconds { get; init; }
         public long GpuSpotShadowMicroseconds { get; init; }

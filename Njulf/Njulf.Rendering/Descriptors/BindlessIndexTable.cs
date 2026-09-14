@@ -1067,7 +1067,10 @@ namespace Njulf.Rendering.Descriptors
 
         public const int OpticalLayerBufferBase = TemporalSurfaceValidityBufferFrame1 + 1;
         public const int OpticalLayerBufferFrame1 = OpticalLayerBufferBase + 1;
-        public const int StaticBufferCount = OpticalLayerBufferFrame1 + 1;
+        public const int AmdShadowBufferBase = OpticalLayerBufferFrame1 + 1;
+        public const int AmdReflectionBufferBase = AmdShadowBufferBase + 8;
+        public const int OpticalCompactBufferBase = AmdReflectionBufferBase + 2;
+        public const int StaticBufferCount = OpticalCompactBufferBase + 2;
 
         // ============================================
         // UTILITY METHODS
@@ -1119,6 +1122,12 @@ namespace Njulf.Rendering.Descriptors
         /// </summary>
         public static string GetIndexName(int index)
         {
+            if (index >= OpticalCompactBufferBase && index < OpticalCompactBufferBase + 2)
+                return $"OpticalCompactState{index - OpticalCompactBufferBase}";
+            if (index >= AmdShadowBufferBase && index < AmdReflectionBufferBase)
+                return $"AmdShadowState{index - AmdShadowBufferBase}";
+            if (index >= AmdReflectionBufferBase && index < AmdReflectionBufferBase + 2)
+                return $"AmdReflectionState{index - AmdReflectionBufferBase}";
             if (index >= 0 && index < StaticBufferCount)
             {
                 return index switch

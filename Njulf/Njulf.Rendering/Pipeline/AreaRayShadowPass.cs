@@ -46,6 +46,10 @@ internal sealed unsafe class AreaRayShadowPass : RenderPassBase
     private uint _allocatedHeight;
     private ulong _bufferBytes;
     private ulong _nextAllocationRetryFrame;
+    private AmdShadowDenoiser? _denoiser;
+
+    public void RecordDenoising(CommandBuffer cmd, int frameIndex, SceneRenderingData scene) =>
+        _denoiser?.Record(cmd, frameIndex, scene);
 
     public AreaRayShadowPass(
         VulkanContext context,
@@ -86,7 +90,7 @@ internal sealed unsafe class AreaRayShadowPass : RenderPassBase
             ? _maskBuffers[frameIndex]
             : BufferHandle.Invalid;
 
-    public override bool SupportsSecondaryCommandBuffer => true;
+    public override bool SupportsSecondaryCommandBuffer => false;
 
     public override void Initialize()
     {
@@ -217,6 +221,9 @@ internal sealed unsafe class AreaRayShadowPass : RenderPassBase
                 RaySceneConsumer.AreaLightShadows,
                 RaySceneGeometryCategory.DirectionalShadowDefault);
         sceneData.AreaRayShadowPassEnabled = execute;
+        _denoiser ??= new AmdShadowDenoiser(_context, _bindlessHeap, _bufferManager,
+            _renderTargets, _pipelineCacheService);
+        _denoiser.Prepare(sceneData, execute && _settings.AreaDenoisingEnabled);
         return execute;
     }
 
@@ -249,6 +256,7 @@ internal sealed unsafe class AreaRayShadowPass : RenderPassBase
             frameIndex);
 
         SelectedLocalShadow[] selected = sceneData.AreaShadowLights;
+        bool denoising = sceneData.AreaDenoisingActive;
         uint Index(int slot) => slot < selected.Length
             ? checked((uint)selected[slot].LightIndex)
             : 0u;
@@ -267,7 +275,7 @@ internal sealed unsafe class AreaRayShadowPass : RenderPassBase
             InstanceMask = AccelerationStructureManager
                 .DirectionalShadowInstanceMask,
             TemporalSampleIndex = sceneData.TemporalSampleIndex,
-            TraceSampleCount = checked((uint)Math.Clamp(
+            TraceSampleCount = denoising ? 0x80000001u : checked((uint)Math.Clamp(
                 sceneData.AreaShadowSampleCount,
                 1,
                 4)),
@@ -283,8 +291,8 @@ internal sealed unsafe class AreaRayShadowPass : RenderPassBase
             &push);
         _context.Api.CmdDispatch(
             commandBuffer,
-            (_allocatedWidth + WorkgroupSize - 1u) / WorkgroupSize,
-            (_allocatedHeight + WorkgroupSize - 1u) / WorkgroupSize,
+            ((_allocatedWidth + (denoising ? 1u : 0u)) / (denoising ? 2u : 1u) + WorkgroupSize - 1u) / WorkgroupSize,
+            ((_allocatedHeight + (denoising ? 1u : 0u)) / (denoising ? 2u : 1u) + WorkgroupSize - 1u) / WorkgroupSize,
             1u);
     }
 
@@ -344,6 +352,7 @@ internal sealed unsafe class AreaRayShadowPass : RenderPassBase
 
     public override void Cleanup()
     {
+        _denoiser?.Dispose(); _denoiser = null;
         PipelineAvailable = false;
         for (int index = 0; index < _maskBuffers.Length; index++)
         {

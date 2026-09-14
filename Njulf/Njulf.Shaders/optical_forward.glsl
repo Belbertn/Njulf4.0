@@ -47,7 +47,7 @@ void OpticalExport(GPUMaterialData material, vec3 geometricNormal, vec3 normal, 
     uint index=atomicAdd(BindlessStorageBuffers[nonuniformEXT(b)].Words[5u],1u);
     if (index>=OpticalWord(b,3u)) { OpticalInvalidatePixel(); return; }
     OpticalStore(b,p+1u+slot,index);
-    uint r=OPTICAL_HEADER_WORDS+OpticalWord(b,1u)*OpticalWord(b,2u)*OPTICAL_PIXEL_WORDS+index*OPTICAL_RECORD_WORDS;
+    uint r=OPTICAL_HEADER_WORDS+OpticalWord(b,1u)*OpticalWord(b,2u)*OpticalPixelWords(b)+index*OPTICAL_RECORD_WORDS;
     GPUObjectData obj=ReadInstanceData(pc.Push.CurrentFrameIndex,fragObjectIndex);
     OpticalStore(b,r,obj.NearFieldStableObjectId);
     OpticalStore(b,r+1u,obj.NearFieldStableMaterialId ^ (material.MaterialRevision*0x9e3779b9u));

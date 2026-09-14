@@ -1,0 +1,8 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#include "amd_reflection_callbacks.glsl"
+#include "ThirdParty/FidelityFX/denoiser/ffx_denoiser_reflections_resolve_temporal.h"
+layout(local_size_x=8,local_size_y=8) in;
+void main() { ArDispatchPixel=ivec2(gl_WorkGroupID.xy*8u+ffxRemapForWaveReduction(gl_LocalInvocationIndex)); ResolveTemporal(gl_LocalInvocationIndex,gl_WorkGroupID.y*((ar.Width+7u)/8u)+gl_WorkGroupID.x,gl_LocalInvocationID.xy); }
+

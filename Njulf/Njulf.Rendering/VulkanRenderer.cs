@@ -8661,6 +8661,8 @@ namespace Njulf.Rendering
                 timings.GetGpuMicrosecondsOrZero("DirectionalRayShadowPass");
             sceneData.GpuAreaRayShadowMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("AreaRayShadowPass");
+            sceneData.GpuAreaShadowDenoiseMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("AreaShadowDenoisePass");
             sceneData.GpuDirectionalShadowTemporalMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("DirectionalShadowTemporalPass");
             sceneData.GpuDirectionalShadowSpatialMicroseconds =

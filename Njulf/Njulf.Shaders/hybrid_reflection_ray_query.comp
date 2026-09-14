@@ -482,6 +482,10 @@ void main()
             max(pc.CameraPositionAndMaximumDistance.w, 0.001), 0.65, 1.0);
         if (lobeId == 0u)
         {
+            if (HybridTaskReserved != 0u)
+                WriteStorageWord(HybridTaskReserved,
+                    128u + (uint(coordinate.y) * pc.ScreenWidth + uint(coordinate.x)) * 16u,
+                    floatBitsToUint(hit.Distance));
             float auxiliary = imageLoad(
                 HybridRawRadiance, coordinate).a;
             imageStore(HybridRawRadiance, coordinate,

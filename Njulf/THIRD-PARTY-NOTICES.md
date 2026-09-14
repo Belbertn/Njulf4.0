@@ -48,3 +48,8 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Upstream license: https://github.com/selfshadow/ltc_code/blob/master/LICENSE
+# AMD FidelityFX Denoiser
+
+FidelityFX SDK 1.1.4, revision c6efa6bf7f2027b3ec94f28578bb5965eabb9e55.
+Copyright (C) 2024 Advanced Micro Devices, Inc. MIT license; the full notice is
+retained in Njulf.Shaders/ThirdParty/FidelityFX/LICENSE.txt and in each source.

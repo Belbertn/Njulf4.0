@@ -14,16 +14,18 @@ internal static class OpticalDenoisingGpuContract
     public const uint ExportFlag = 1u << 16;
 
     public static (ulong Bytes, uint Capacity) Allocation(uint width, uint height,
-        int budgetMiB, ulong maximumStorageRange, int banks = 2)
+        int budgetMiB, ulong maximumStorageRange, int banks = 2, bool compactExport = false)
     {
         if (width == 0 || height == 0 || banks < 2) return default;
         ulong pixels = checked((ulong)width * height);
-        ulong prefix = checked((HeaderWords + pixels * PixelWords) * 4);
+        uint layers = compactExport ? 8u : MaximumLayers;
+        uint pixelWords = compactExport ? 9u : PixelWords;
+        ulong prefix = checked((HeaderWords + pixels * pixelWords) * 4);
         ulong budget = checked((ulong)budgetMiB * 1024 * 1024 / (uint)banks);
         if (maximumStorageRange != 0) budget = Math.Min(budget, maximumStorageRange);
         budget = Math.Min(budget, uint.MaxValue);
         if (budget <= prefix + RecordWords * 4) return default;
-        uint capacity = checked((uint)Math.Min(pixels * MaximumLayers,
+        uint capacity = checked((uint)Math.Min(pixels * layers,
             (budget - prefix) / (RecordWords * 4)));
         return (prefix + (ulong)capacity * RecordWords * 4, capacity);
     }

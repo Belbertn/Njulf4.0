@@ -102,6 +102,8 @@ public sealed record SampleSmokeOptions(
     /// </summary>
     public bool OpenEditorOnStartup { get; init; }
     public string? OpticalDenoisingMode { get; init; }
+    public string? ReflectionDenoiserOverride { get; init; }
+    public bool? AreaDenoisingOverride { get; init; }
 
     public bool Enabled =>
         Mode != SampleSmokeMode.None ||

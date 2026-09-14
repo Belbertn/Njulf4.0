@@ -1,0 +1,498 @@
+{
+  "revision": "e9cc5c6443e3fe4a4ad07d516c18a7d2439b216c",
+  "dirty": true,
+  "hardware": "NVIDIA GeForce RTX 3060 Laptop GPU",
+  "driver": "610.248.0",
+  "vulkan": "1.4.341",
+  "area": [
+    {
+      "name": "area-existing",
+      "resolution": "1920x1080",
+      "cpu": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 4.9916625,
+        "MinMilliseconds": 3.081,
+        "MaxMilliseconds": 57.492,
+        "P95Milliseconds": 6.33,
+        "MedianMilliseconds": 4.407,
+        "P50Milliseconds": 4.407,
+        "P99Milliseconds": 14.532
+      },
+      "gpu": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 23.228366666666673,
+        "MinMilliseconds": 17.578,
+        "MaxMilliseconds": 27.256,
+        "P95Milliseconds": 26.84,
+        "MedianMilliseconds": 26.0955,
+        "P50Milliseconds": 26.0955,
+        "P99Milliseconds": 26.983
+      },
+      "passes": [
+        {
+          "Name": "AreaRayShadowPass",
+          "Count": 240,
+          "AverageMilliseconds": 2.533466666666667,
+          "MinMilliseconds": 1.893,
+          "MaxMilliseconds": 2.634,
+          "P95Milliseconds": 2.612,
+          "MedianMilliseconds": 2.574,
+          "P50Milliseconds": 2.574,
+          "P99Milliseconds": 2.626
+        },
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 0.6298166666666674,
+          "MinMilliseconds": 0.483,
+          "MaxMilliseconds": 0.667,
+          "P95Milliseconds": 0.661,
+          "MedianMilliseconds": 0.648,
+          "P50Milliseconds": 0.648,
+          "P99Milliseconds": 0.664
+        }
+      ],
+      "areaBytes": 0,
+      "reflectionBytes": 0
+    },
+    {
+      "name": "area-shadow-only",
+      "resolution": "1920x1080",
+      "cpu": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 3.7098000000000035,
+        "MinMilliseconds": 2.169,
+        "MaxMilliseconds": 19.577,
+        "P95Milliseconds": 4.839,
+        "MedianMilliseconds": 3.4405,
+        "P50Milliseconds": 3.4405,
+        "P99Milliseconds": 9.906
+      },
+      "gpu": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 21.86342916666667,
+        "MinMilliseconds": 19.515,
+        "MaxMilliseconds": 28.516,
+        "P95Milliseconds": 28.268,
+        "MedianMilliseconds": 21.299999999999997,
+        "P50Milliseconds": 21.299999999999997,
+        "P99Milliseconds": 28.505
+      },
+      "passes": [
+        {
+          "Name": "AreaRayShadowPass",
+          "Count": 240,
+          "AverageMilliseconds": 2.9007249999999996,
+          "MinMilliseconds": 2.301,
+          "MaxMilliseconds": 3.031,
+          "P95Milliseconds": 2.979,
+          "MedianMilliseconds": 2.9275,
+          "P50Milliseconds": 2.9275,
+          "P99Milliseconds": 3.007
+        },
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 0.6313166666666671,
+          "MinMilliseconds": 0.483,
+          "MaxMilliseconds": 0.671,
+          "P95Milliseconds": 0.661,
+          "MedianMilliseconds": 0.65,
+          "P50Milliseconds": 0.65,
+          "P99Milliseconds": 0.666
+        }
+      ],
+      "areaBytes": 100120512,
+      "reflectionBytes": 0
+    },
+    {
+      "name": "area-reconstructed",
+      "resolution": "1920x1080",
+      "cpu": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.1623208333333337,
+        "MinMilliseconds": 1.511,
+        "MaxMilliseconds": 10.005,
+        "P95Milliseconds": 3.512,
+        "MedianMilliseconds": 1.888,
+        "P50Milliseconds": 1.888,
+        "P99Milliseconds": 6.669
+      },
+      "gpu": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 24.773054166666675,
+        "MinMilliseconds": 23.946,
+        "MaxMilliseconds": 25.559,
+        "P95Milliseconds": 25.283,
+        "MedianMilliseconds": 24.8485,
+        "P50Milliseconds": 24.8485,
+        "P99Milliseconds": 25.391
+      },
+      "passes": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 5.468183333333334,
+          "MinMilliseconds": 5.059,
+          "MaxMilliseconds": 5.862,
+          "P95Milliseconds": 5.611,
+          "MedianMilliseconds": 5.497,
+          "P50Milliseconds": 5.497,
+          "P99Milliseconds": 5.635
+        },
+        {
+          "Name": "AreaShadowDenoisePass",
+          "Count": 240,
+          "AverageMilliseconds": 2.135504166666665,
+          "MinMilliseconds": 1.899,
+          "MaxMilliseconds": 2.428,
+          "P95Milliseconds": 2.397,
+          "MedianMilliseconds": 2.0955000000000004,
+          "P50Milliseconds": 2.0955000000000004,
+          "P99Milliseconds": 2.407
+        },
+        {
+          "Name": "AreaRayShadowPass",
+          "Count": 240,
+          "AverageMilliseconds": 0.8652625000000004,
+          "MinMilliseconds": 0.649,
+          "MaxMilliseconds": 1,
+          "P95Milliseconds": 0.988,
+          "MedianMilliseconds": 0.962,
+          "P50Milliseconds": 0.962,
+          "P99Milliseconds": 0.998
+        }
+      ],
+      "areaBytes": 100120512,
+      "reflectionBytes": 265940224
+    },
+    {
+      "name": "area-final",
+      "resolution": "1920x1080",
+      "cpu": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.145508333333333,
+        "MinMilliseconds": 1.477,
+        "MaxMilliseconds": 16.109,
+        "P95Milliseconds": 2.717,
+        "MedianMilliseconds": 1.952,
+        "P50Milliseconds": 1.952,
+        "P99Milliseconds": 5.318
+      },
+      "gpu": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 25.225237499999984,
+        "MinMilliseconds": 23.868,
+        "MaxMilliseconds": 41.913,
+        "P95Milliseconds": 26.744,
+        "MedianMilliseconds": 24.712,
+        "P50Milliseconds": 24.712,
+        "P99Milliseconds": 41.05
+      },
+      "passes": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 5.403225000000002,
+          "MinMilliseconds": 4.835,
+          "MaxMilliseconds": 5.577,
+          "P95Milliseconds": 5.548,
+          "MedianMilliseconds": 5.423500000000001,
+          "P50Milliseconds": 5.423500000000001,
+          "P99Milliseconds": 5.572
+        },
+        {
+          "Name": "AreaShadowDenoisePass",
+          "Count": 240,
+          "AverageMilliseconds": 2.149816666666667,
+          "MinMilliseconds": 1.831,
+          "MaxMilliseconds": 2.495,
+          "P95Milliseconds": 2.405,
+          "MedianMilliseconds": 2.1055,
+          "P50Milliseconds": 2.1055,
+          "P99Milliseconds": 2.435
+        },
+        {
+          "Name": "AreaRayShadowPass",
+          "Count": 240,
+          "AverageMilliseconds": 0.845083333333333,
+          "MinMilliseconds": 0.604,
+          "MaxMilliseconds": 0.988,
+          "P95Milliseconds": 0.972,
+          "MedianMilliseconds": 0.947,
+          "P50Milliseconds": 0.947,
+          "P99Milliseconds": 0.986
+        }
+      ],
+      "areaBytes": 100120512,
+      "reflectionBytes": 265940224
+    }
+  ],
+  "glass": [
+    {
+      "name": "glass-final",
+      "resolution": "1600x900",
+      "kind": "diagnostic snapshot; validation enabled, not steady state",
+      "diagnostics": {
+        "OpticalDenoisingActive": true,
+        "OpticalDenoisingAllocatedBytes": 536641600,
+        "OpticalDenoisingCapturedFragments": 298460,
+        "OpticalDenoisingOverflowPixels": 8008,
+        "OpticalDenoisingHistoryReuses": 124801,
+        "GpuOpticalLayerClearMicroseconds": 195,
+        "GpuOpticalTemporalMicroseconds": 3700,
+        "GpuOpticalSpatialMicroseconds": 3028,
+        "GpuOpticalCorrectionMicroseconds": 3377,
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 184682624,
+        "GpuFrameMicroseconds": 51695
+      },
+      "quality": {
+        "width": 1600,
+        "height": 900,
+        "finite": true,
+        "minimum": 0.0,
+        "maximum": 618.5,
+        "rois": {
+          "blue_glass": {
+            "roi": [
+              430,
+              490,
+              570,
+              590
+            ],
+            "mean": 0.9870901622235979,
+            "high_frequency_rms": 0.05943979883808845
+          },
+          "nested_glass": {
+            "roi": [
+              955,
+              510,
+              1065,
+              585
+            ],
+            "mean": 4.435871762215909,
+            "high_frequency_rms": 0.0010253436281071056
+          },
+          "water": {
+            "roi": [
+              1415,
+              515,
+              1535,
+              555
+            ],
+            "mean": 1.0010067673543295,
+            "high_frequency_rms": 0.029009492345267
+          },
+          "opaque_control": {
+            "roi": [
+              260,
+              330,
+              320,
+              390
+            ],
+            "mean": 0.24323422539520262,
+            "high_frequency_rms": 0.032372088089863756
+          }
+        }
+      }
+    },
+    {
+      "name": "glass-bypass",
+      "resolution": "1600x900",
+      "kind": "diagnostic snapshot; validation enabled, not steady state",
+      "diagnostics": {
+        "OpticalDenoisingActive": true,
+        "OpticalDenoisingAllocatedBytes": 536870464,
+        "OpticalDenoisingCapturedFragments": 298460,
+        "OpticalDenoisingOverflowPixels": 8008,
+        "OpticalDenoisingHistoryReuses": 0,
+        "GpuOpticalLayerClearMicroseconds": 111,
+        "GpuOpticalTemporalMicroseconds": 0,
+        "GpuOpticalSpatialMicroseconds": 0,
+        "GpuOpticalCorrectionMicroseconds": 37,
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 184682624,
+        "GpuFrameMicroseconds": 40931
+      },
+      "quality": {
+        "width": 1600,
+        "height": 900,
+        "finite": true,
+        "minimum": 0.0,
+        "maximum": 618.5,
+        "rois": {
+          "blue_glass": {
+            "roi": [
+              430,
+              490,
+              570,
+              590
+            ],
+            "mean": 0.9831737205618722,
+            "high_frequency_rms": 0.05938906669343832
+          },
+          "nested_glass": {
+            "roi": [
+              955,
+              510,
+              1065,
+              585
+            ],
+            "mean": 4.435847960179924,
+            "high_frequency_rms": 0.0010233496196858439
+          },
+          "water": {
+            "roi": [
+              1415,
+              515,
+              1535,
+              555
+            ],
+            "mean": 1.0151035590750377,
+            "high_frequency_rms": 0.4988214592726996
+          },
+          "opaque_control": {
+            "roi": [
+              260,
+              330,
+              320,
+              390
+            ],
+            "mean": 0.2470293817773395,
+            "high_frequency_rms": 0.027256166587745295
+          }
+        }
+      }
+    },
+    {
+      "name": "glass-weighted",
+      "resolution": "1600x900",
+      "kind": "diagnostic snapshot; validation enabled, not steady state",
+      "diagnostics": {
+        "OpticalDenoisingActive": true,
+        "OpticalDenoisingAllocatedBytes": 536641600,
+        "OpticalDenoisingCapturedFragments": 298460,
+        "OpticalDenoisingOverflowPixels": 8008,
+        "OpticalDenoisingHistoryReuses": 124447,
+        "GpuOpticalLayerClearMicroseconds": 169,
+        "GpuOpticalTemporalMicroseconds": 3114,
+        "GpuOpticalSpatialMicroseconds": 2492,
+        "GpuOpticalCorrectionMicroseconds": 2551,
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 184682624,
+        "GpuFrameMicroseconds": 48003
+      },
+      "quality": {
+        "width": 1600,
+        "height": 900,
+        "finite": true,
+        "minimum": 0.0,
+        "maximum": 618.5,
+        "rois": {
+          "blue_glass": {
+            "roi": [
+              430,
+              490,
+              570,
+              590
+            ],
+            "mean": 0.987677924610247,
+            "high_frequency_rms": 0.05906978319226367
+          },
+          "nested_glass": {
+            "roi": [
+              955,
+              510,
+              1065,
+              585
+            ],
+            "mean": 4.43589803186553,
+            "high_frequency_rms": 0.001011337316304936
+          },
+          "water": {
+            "roi": [
+              1415,
+              515,
+              1535,
+              555
+            ],
+            "mean": 1.0076574773076374,
+            "high_frequency_rms": 0.028219139200441605
+          },
+          "opaque_control": {
+            "roi": [
+              260,
+              330,
+              320,
+              390
+            ],
+            "mean": 0.23611528306388854,
+            "high_frequency_rms": 0.04823541961715561
+          }
+        }
+      }
+    }
+  ],
+  "limitations": [
+    "Early area-existing and area-shadow-only runs overlapped CPU shader builds; not a matched speedup claim.",
+    "Glass snapshots exported, processes manually stopped after waiting in pipeline compilation at shutdown.",
+    "Static captures only; moving camera/occluder qualification remains open."
+  ],
+  "finalValidation": {
+    "build": "Normal Development build: 0 warnings, 0 errors",
+    "spirv": "16 final AMD/compact shaders passed Vulkan 1.3 spirv-val",
+    "tests": "75 passed; 0 failed; 0 skipped",
+    "testReport": "artifacts/amd-denoising-20260914/tests/denoising-final.trx",
+    "areaStandardSmoke": {
+      "status": "passed",
+      "validationWarningCount": 0,
+      "validationErrorCount": 0,
+      "producerIdentity": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "e9cc5c6443e3fe4a4ad07d516c18a7d2439b216c",
+        "shaderFingerprint": "c71bc521884d46dc86ae8eb2d684db107da328b95301b0f60dd74abdac250ac8",
+        "settingsFingerprint": "490d00be3471aa8f5e99fd58ade59a1625f3882f994c07677652ab9466d4567a",
+        "sourceSettingsFingerprints": [
+          "490d00be3471aa8f5e99fd58ade59a1625f3882f994c07677652ab9466d4567a"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": ""
+      }
+    },
+    "areaResizeSmoke": {
+      "status": "passed",
+      "validationWarningCount": 0,
+      "validationErrorCount": 0,
+      "operations": [
+        {
+          "Name": "resize",
+          "Status": "passed",
+          "FrameIndex": 1,
+          "Detail": "requested=1280x720, logical=1280x720, framebuffer=1280x720, state=Normal, observed=True, elapsedMs=1349.1"
+        },
+        {
+          "Name": "resize",
+          "Status": "passed",
+          "FrameIndex": 2,
+          "Detail": "requested=1600x900, logical=1600x900, framebuffer=1600x900, state=Normal, observed=True, elapsedMs=1385.4"
+        },
+        {
+          "Name": "resize",
+          "Status": "passed",
+          "FrameIndex": 3,
+          "Detail": "requested=800x600, logical=800x600, framebuffer=800x600, state=Normal, observed=True, elapsedMs=1504.2"
+        }
+      ]
+    }
+  }
+}

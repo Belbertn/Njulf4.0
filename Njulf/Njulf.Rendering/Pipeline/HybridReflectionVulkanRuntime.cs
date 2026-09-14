@@ -23,7 +23,7 @@ namespace Njulf.Rendering.Pipeline;
 /// independently while this object retains the shared descriptor ABI, bounded
 /// per-frame ray queues, history revision, and pipeline lifetime.
 /// </summary>
-internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
+internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
 {
     private const uint WorkgroupSize = HybridReflectionGpuContract.ScreenTileSize;
     private const ulong TaskHeaderBytes = 16UL;
@@ -445,6 +445,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             FailureDetail = string.Empty;
             TryCreateRayPipeline();
             EnsureResources();
+            PrepareAmdResources();
             if (_publicationPreparation != null &&
                 !_publicationPreparation())
             {
@@ -507,6 +508,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         try
         {
             EnsureResources();
+            PrepareAmdResources();
         }
         catch (Exception exception)
         {
@@ -525,6 +527,10 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             sceneData.HybridReflectionPassEnabled = false;
             return false;
         }
+        sceneData.AmdReflectionDenoisingActive = _amdActive;
+        sceneData.AmdReflectionDenoisingAllocatedBytes =
+            (_amdStates[0].IsValid ? _bufferManager.GetBufferSize(_amdStates[0]) : 0UL) +
+            (_amdStates[1].IsValid ? _bufferManager.GetBufferSize(_amdStates[1]) : 0UL);
 
         if (_preparedFrameSerial != sceneData.DdgiFrameSerial ||
             _preparedTemporalSample != sceneData.TemporalSampleIndex)
@@ -968,6 +974,11 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         // Temporal clamps against a 3x3 neighborhood of resolved pixels. Keep
         // the publication boundary until a fused kernel provides a tile halo.
         TransitionTemporalResources(commandBuffer, bank);
+        if (RecordAmdTemporal(commandBuffer, bank, sceneData))
+        {
+            _historyValid = true;
+            return;
+        }
         BindPipelineAndDescriptors(commandBuffer, _temporalPipeline, bank,
             bindRayScene: false);
         var push = new GPUHybridReflectionTemporalPushConstants
@@ -1274,6 +1285,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         }
 
         SynchronizePreviousHybridFrame(commandBuffer);
+        BeginAmdFrame(commandBuffer, bank);
         TransitionSsrResources(commandBuffer, bank);
         ResetTaskAndCounterBuffers(commandBuffer, bank);
         if (_currentResetReasons != ReflectionHistoryResetReason.None)
@@ -1385,7 +1397,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             0u,
             _allocatedTaskCapacity,
             0u,
-            0u
+            _amdActive ? checked((uint)(BindlessIndex.AmdReflectionBufferBase + bank)) : 0u
         };
         _context.Api.CmdUpdateBuffer(commandBuffer, task, 0UL, taskHeader);
         _context.Api.CmdFillBuffer(commandBuffer, counters, 0UL,
@@ -1594,6 +1606,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
 
     private int ResolveSpatialPassCount(SceneRenderingData sceneData)
     {
+        if (_amdActive || _settings.Reflections.Denoiser == ReflectionDenoiser.Off) return 0;
         int configured = _settings.Reflections.SpatialFilterPassCount;
         return sceneData.EffectiveReflectionImplementation ==
             ReflectionImplementationMode.Adaptive
@@ -2446,6 +2459,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
 
     private void DestroyBuffers()
     {
+        DestroyBufferArray(_amdStates);
+        _amdActive = false;
         DestroyBufferArray(_taskBuffers);
         DestroyBufferArray(_counterBuffers);
         DestroyBufferArray(_counterReadbackBuffers);
@@ -2477,6 +2492,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         DestroyPipeline(ref _ddgiExactMissPipeline);
         DestroyPipeline(ref _resolvePipeline);
         DestroyPipeline(ref _temporalPipeline);
+        for (int i = 0; i < _amdPipelines.Length; i++) DestroyPipeline(ref _amdPipelines[i]);
         DestroyPipeline(ref _spatialPipeline);
         DestroyPipeline(ref _compositePipeline);
         DestroyPipeline(ref _opaqueSceneColorSnapshotPipeline);

@@ -1,0 +1,12 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#include "amd_reflection_callbacks.glsl"
+layout(local_size_x=8,local_size_y=8) in;
+void main() {
+ ivec2 p=ivec2(gl_GlobalInvocationID.xy); if(!ArInside(p)) return;
+ imageStore(HybridHistoryCurrent,p,imageLoad(HybridRawRadiance,p));
+ imageStore(HybridMomentsCurrent,p,vec4(0));
+ uvec4 payload=texelFetch(HybridReceiverPayload,p,0);
+ imageStore(HybridMetadataCurrent,p,uvec4(HybridPackHistoryMetadata(HybridReceiverIdentity(payload),FFX_DNSR_Reflections_LoadDepth(p),FFX_DNSR_Reflections_LoadWorldSpaceNormal(p),HybridMetadataSource(imageLoad(HybridRawMetadata,p).x),1u,0u,HybridReflectionPayloadValid(payload)),0,0));
+}

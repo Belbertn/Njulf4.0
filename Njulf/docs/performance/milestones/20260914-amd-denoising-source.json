@@ -1,0 +1,334 @@
+[
+  {
+    "path": "Njulf.Rendering/Core/VulkanContext.cs",
+    "sha256": "882e4694ce6bad50fe1e2cea11b7bd5971890c62c1ef961a3963a09cb0a3280a"
+  },
+  {
+    "path": "Njulf.Rendering/Data/OpticalDenoisingGpuContract.cs",
+    "sha256": "5d9cdee0edf7f1da21fa62c5e152db6a1688a82f94fe3e39ea71cfdc1931bccc"
+  },
+  {
+    "path": "Njulf.Rendering/Data/OpticalDenoisingSettings.cs",
+    "sha256": "6f8da9b74edc1a3e08b75a19f087085d7b134d61306d6723759104163796e961"
+  },
+  {
+    "path": "Njulf.Rendering/Data/ReflectionSettings.cs",
+    "sha256": "891ac1828a982c753c6ebcb36288efd77b47ed2733ecdef40bb209f3dc21b781"
+  },
+  {
+    "path": "Njulf.Rendering/Data/RendererDiagnostics.cs",
+    "sha256": "18bf7baa4653a6cfd7c29e876355d7a8b7206ef009fb649201684ea87782fabb"
+  },
+  {
+    "path": "Njulf.Rendering/Data/RenderSettings.cs",
+    "sha256": "c7cafd11dbc0d4f90c177a449032f5cfd43137394f9b392ff00ac7d827af3493"
+  },
+  {
+    "path": "Njulf.Rendering/Data/SceneRenderingData.cs",
+    "sha256": "c9224d1a45c17ebebfccd3bffc274abfc9e27870834346264c83b3837b8d01e8"
+  },
+  {
+    "path": "Njulf.Rendering/Data/ShadowSettings.cs",
+    "sha256": "d2b2427de15e09c960d8a80ce8b63689bf9bf4a141fc65d9f845f55046dbd158"
+  },
+  {
+    "path": "Njulf.Rendering/Descriptors/BindlessIndexTable.cs",
+    "sha256": "0902bfb7ba59c55198acb6a6b5fa52c02da981cd5b5ceb40af4082d64d6f4d70"
+  },
+  {
+    "path": "Njulf.Rendering/Diagnostics/RendererDiagnosticsAssembler.cs",
+    "sha256": "006c13f94b441e062316320dca3929387d6db7788347f4b021d6ea26f78f59f5"
+  },
+  {
+    "path": "Njulf.Rendering/Pipeline/AmdShadowDenoiser.cs",
+    "sha256": "b408235ec7dbfacbffb6d4c799cdad67cc599f739a32bb3df12f24f3955ec592"
+  },
+  {
+    "path": "Njulf.Rendering/Pipeline/AreaRayShadowPass.cs",
+    "sha256": "170c5c853ccbcc7582b61b919d122b4d7c61629f3aad81d08abef32f16c1f18e"
+  },
+  {
+    "path": "Njulf.Rendering/Pipeline/AsyncComputePassCatalog.cs",
+    "sha256": "2f3df237e7b9f0074694873e16d0c1d23435f5d96750c805060ec4945ffb0bee"
+  },
+  {
+    "path": "Njulf.Rendering/Pipeline/HybridReflectionVulkanRuntime.Amd.cs",
+    "sha256": "c249f7d05b401479fe92f6a278256320e8e4880014fe31cf42a4721dc205275e"
+  },
+  {
+    "path": "Njulf.Rendering/Pipeline/HybridReflectionVulkanRuntime.cs",
+    "sha256": "e1855afdaba938dd31dc767b4b7c5565ad7f9ac9fb7af33aa56debb65a95a19f"
+  },
+  {
+    "path": "Njulf.Rendering/Pipeline/OpticalDenoisingRuntime.cs",
+    "sha256": "45a73918db5b52db47b24cad6384cb0af150b37d6cbcffa53531d71d278938c8"
+  },
+  {
+    "path": "Njulf.Rendering/Pipeline/ProductionPipelineOwner.cs",
+    "sha256": "b8a1ac376e7b5eca9e14a9246c8d4c9059967f2739f4ba33d0ded2603f39d049"
+  },
+  {
+    "path": "Njulf.Rendering/Pipeline/ProductionRenderPipelineDeclaration.cs",
+    "sha256": "94d11a731de29174cfe3e58906f6566af6a985110833ad12ee28a10388e0d5b9"
+  },
+  {
+    "path": "Njulf.Rendering/Pipeline/RenderFeatureIsolationPolicy.cs",
+    "sha256": "30885337a7ec7f49a6091a84e0b3d36f1c7a3078c3f8ebbee90dedd1421afa15"
+  },
+  {
+    "path": "Njulf.Rendering/VulkanRenderer.cs",
+    "sha256": "379047817dd65d9c0238dc040bfac86af39d281640c2c6f815de5618b21356d9"
+  },
+  {
+    "path": "Njulf.Shaders/amd_reflection_callbacks.glsl",
+    "sha256": "7e8fc5ff62fdebf2f0032f4822893588c30114baf347dfc40006c4c6dcf52674"
+  },
+  {
+    "path": "Njulf.Shaders/amd_reflection_copy.comp",
+    "sha256": "368205da9a81eaf00f9862ba51bb4224958c299c27be0d8a8c4fbba9199d0e58"
+  },
+  {
+    "path": "Njulf.Shaders/amd_reflection_half_callbacks.glsl",
+    "sha256": "cbceae525d3cbafc7e5a2889690d15a1619036153665562a08799297e4665904"
+  },
+  {
+    "path": "Njulf.Shaders/amd_reflection_prefilter_half.comp",
+    "sha256": "f62ea3073eba7183b4dc665e99f0eeaf212a43689d4c9de8cc9485a1e5c36faa"
+  },
+  {
+    "path": "Njulf.Shaders/amd_reflection_prefilter.comp",
+    "sha256": "d1a3070704c678daabd6b4871474d931f55ff5d47f95cf6fad739bec77e19deb"
+  },
+  {
+    "path": "Njulf.Shaders/amd_reflection_prepare.comp",
+    "sha256": "0e8e5b09d1486a6addaeb62c7735c9954bf778d239e4eb40d34ddfc50e5dcb86"
+  },
+  {
+    "path": "Njulf.Shaders/amd_reflection_reproject_half.comp",
+    "sha256": "c7d141e340594fabb7d41e8a6489a0fae4cf304501153ddb3d6ae9d5db2a2f23"
+  },
+  {
+    "path": "Njulf.Shaders/amd_reflection_reproject.comp",
+    "sha256": "7a23d2043b788eabad6149e529b5393e2d9eebdda4b572f7129847089589e9d7"
+  },
+  {
+    "path": "Njulf.Shaders/amd_reflection_temporal_half.comp",
+    "sha256": "8e902008d50f343e112a61d3ae099e73a8e292cd305b9d4f0242448a13a1ee64"
+  },
+  {
+    "path": "Njulf.Shaders/amd_reflection_temporal.comp",
+    "sha256": "a240ff5295bf677a29e4ef25e28e95249da73d72a9e23c33a73c21392ea13006"
+  },
+  {
+    "path": "Njulf.Shaders/amd_shadow_callbacks.glsl",
+    "sha256": "dbf5c2a73c9654c2b3238eef4849953812c3ac46ecc5d20493bd11e847b427a6"
+  },
+  {
+    "path": "Njulf.Shaders/amd_shadow_classify.comp",
+    "sha256": "4e443f87d253b867e70a890a6b01f39916a3cb239361b7294b30ba518da8b079"
+  },
+  {
+    "path": "Njulf.Shaders/amd_shadow_filter.comp",
+    "sha256": "4419f18dbe037d63c5c77f56cddc3c4cb538201fe0802617a374ce56d1f957c5"
+  },
+  {
+    "path": "Njulf.Shaders/amd_shadow_prepare.comp",
+    "sha256": "c4aa9dbb93470c193f345c6c71c9c84537ecfd141ccb31bc21b520ea26cbfee5"
+  },
+  {
+    "path": "Njulf.Shaders/amd_shadow_publish.comp",
+    "sha256": "741dad7422bc3367b5a139935f2509a2a35418173bc9af8b4c767593c1bd707a"
+  },
+  {
+    "path": "Njulf.Shaders/area_ray_shadow.comp",
+    "sha256": "33b843fd45813a4e76bbd1672a560b741ddb552251af72efc5cd7402192e54e8"
+  },
+  {
+    "path": "Njulf.Shaders/common.glsl",
+    "sha256": "9c48dbb61e894faba7b38f1dcad9ae92fb7620c2bd074197253d09e28b39d7f3"
+  },
+  {
+    "path": "Njulf.Shaders/hybrid_reflection_ray_query.comp",
+    "sha256": "26499f83e62cd2f58fb2bdf7d6a280e39f7db43dd53e734bb0993db0c850839d"
+  },
+  {
+    "path": "Njulf.Shaders/hybrid_reflection_ssr.comp",
+    "sha256": "740b2d73c22d6207e99ca732fe50f95991dce7ddbebebb5cb82ced71c5ba7762"
+  },
+  {
+    "path": "Njulf.Shaders/Njulf.Shaders.csproj",
+    "sha256": "9ca654e8eebf4b65e004043a754d2d1a142c9806bb851f851b831a2ec0f4a91f"
+  },
+  {
+    "path": "Njulf.Shaders/optical_compact_correct.comp",
+    "sha256": "b31215111af39c93a0043946065ff935a215d947310a42ac44c871e276fd0251"
+  },
+  {
+    "path": "Njulf.Shaders/optical_compact_prepare_kernel.glsl",
+    "sha256": "1e9d449c49b806eb883f892636babf3d5079907d6b0520ab33b649c6274cb4e7"
+  },
+  {
+    "path": "Njulf.Shaders/optical_compact_prepare.comp",
+    "sha256": "77fd108a04357db9906a732eb57794b2450a5452fa823175a01965cbb143630f"
+  },
+  {
+    "path": "Njulf.Shaders/optical_compact_spatial_kernel.glsl",
+    "sha256": "bf53ef87826aa240a085bbebb39db3639a95cb933d44e6f35268101dd3bf20e0"
+  },
+  {
+    "path": "Njulf.Shaders/optical_compact_spatial.comp",
+    "sha256": "fb5e794195380f5fd74a9eba7cd5884fca83f2947cb9076981eaeea753a60df5"
+  },
+  {
+    "path": "Njulf.Shaders/optical_compact_temporal_kernel.glsl",
+    "sha256": "5cc3ad1e2e66d34671475923fa71f66da3f2ccfff1238cec58e06e5c86d5efa3"
+  },
+  {
+    "path": "Njulf.Shaders/optical_compact_temporal.comp",
+    "sha256": "87961ef8f691f5d21d723bb04591ad3045ef47ff3f0dfb73e5a0d63d8aca4950"
+  },
+  {
+    "path": "Njulf.Shaders/optical_compact.glsl",
+    "sha256": "c7ad3cae033f97d4e2c3bef11b90c6f62f4eb2b764147998908700f43ee2b0cc"
+  },
+  {
+    "path": "Njulf.Shaders/optical_compute.glsl",
+    "sha256": "fa7bdf031e09be8c3776fbdc051935ad418418522a77c1aee2ae77486369b412"
+  },
+  {
+    "path": "Njulf.Shaders/optical_forward.glsl",
+    "sha256": "d044ce6d9de5a2654281784f3a0b5baf9b3fbc8a9fbef15958f32fdcf2b37cac"
+  },
+  {
+    "path": "Njulf.Shaders/optical_layers.glsl",
+    "sha256": "f34ba5e62b93013d8399a4d356027421f998022e15d0af0e89ffc8b1d6b0ff19"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_reflections_callbacks_glsl.h",
+    "sha256": "ac4840649fbb858b89d2e50aff933cbfe40f12e81701dbe13899c554129e6c01"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_reflections_callbacks_hlsl.h",
+    "sha256": "02a187ccd9e58919061b720aac0e3f777c30a50b802de242b01bdcfa2ef79000"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_reflections_common.h",
+    "sha256": "af9a3bd5aa440acf5f533e4a724c1f20335f828fe0e07435aad13be5afecdc2a"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_reflections_config.h",
+    "sha256": "a6e5c2d41ee43cad3ade28910a08c4be7d3bbb8a022dfb2f310147ce7c253523"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_reflections_prefilter.h",
+    "sha256": "27c805bd8482338c55d6357647dc15e53508c4dff49499a7f65fbc809ccd5165"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_reflections_reproject.h",
+    "sha256": "d24d53c17202099b4439e22a5175b9838207d769d2ca6974bba8c12b2a0359e5"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_reflections_resolve_temporal.h",
+    "sha256": "35336435b591a2319abdb1783cca40c2d278674e9941f57454ad3cc8fb41f206"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_resources.h",
+    "sha256": "a3602b781b058939bdf2f630626bc64d7fa54ffa2c66d7eb402a020f97b18436"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_shadows_callbacks_glsl.h",
+    "sha256": "535d6e15e72f4aabfb450e62ee0c8afed9a3e0cdfc792eadaf310d12136b1166"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_shadows_callbacks_hlsl.h",
+    "sha256": "072bae707908f8af7cb91dbb49dc9e616fed01a95714c2e1a26e9d0b82d28772"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_shadows_filter.h",
+    "sha256": "bc89397a08339e9c7294e13e8cc9fb839fa392ef52ed812c326052108e5f45b2"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_shadows_prepare.h",
+    "sha256": "15c082e594fed0185244231946bb82965feb417a9f48949e2c02d99a48eb567c"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_shadows_tileclassification.h",
+    "sha256": "23baad1cec39db1a23f2f285ae16e4c4e319c9ade45ecf5bb48b379a63a61e02"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/denoiser/ffx_denoiser_shadows_util.h",
+    "sha256": "aa550a65cc44037a1eccefd67d2a8ecf81ed65875fde84321fddd4a2f1ba62cb"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/ffx_common_types.h",
+    "sha256": "a19560f837c09f0c990e98b5925b731135d908e372af41c5895cbfa70cc9e5c8"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/ffx_core_cpu.h",
+    "sha256": "bdb58574cf3ba80803c4198b4661e3a1cd63c877d59833f22bf15962b164a7fe"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/ffx_core_glsl.h",
+    "sha256": "01afe5b65549b2c0951b494ca4bf570ee2aa89a64344e4c7d98ef86e6613ab42"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/ffx_core_gpu_common_half.h",
+    "sha256": "d10466cbf027c8c23858a25f8e8cbbbf521d29f373db663c9354221651e9a498"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/ffx_core_gpu_common.h",
+    "sha256": "0e3c50cb0b4592c051d87e028a1dfa54fbd097942ebb3146964db801dec095d0"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/ffx_core_hlsl.h",
+    "sha256": "98722d4b1331c437f5aee645e6f12ed722b721f2ffcb0ec523ee817857f394c7"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/ffx_core_portability.h",
+    "sha256": "a7c3a1c213ec083bec401181036cffe7a222af2c430c0bab6bd8c14e83e8a567"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/ffx_core.h",
+    "sha256": "e439aa5f516b2d2ebf070ff1d24561f04fa5f00262a2e4f760764a7d07de7997"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/LICENSE.txt",
+    "sha256": "82cf74fc23885107c7f69249ac3f1dac55898ff68320eb2c753984cae6b2d78a"
+  },
+  {
+    "path": "Njulf.Shaders/ThirdParty/FidelityFX/README.md",
+    "sha256": "711c3883221fa679c87fff9e2977629686c9ee6bb0c0119f7f4f91fce2c98ecc"
+  },
+  {
+    "path": "Njulf.Tests/AmdDenoisingIntegrationTests.cs",
+    "sha256": "ca13909c41566464baf619166c2fc4d3d46a15458f504554734628c9ac1e0c23"
+  },
+  {
+    "path": "Njulf.Tests/BindlessIndexTests.cs",
+    "sha256": "ce60f29ab7ef445f82a1a8699247dccb9f36a90c42620f3b3a8f7e58e76a2988"
+  },
+  {
+    "path": "Njulf.Tests/CompactOpticalGpuTests.cs",
+    "sha256": "75893c51d9a57cf7ca5908856d8be35d3da02755d0378e96e2d43d33739a8f94"
+  },
+  {
+    "path": "Njulf.Tests/Fixtures/Shaders/optical_compact_filter.comp",
+    "sha256": "bb0116333ed212cf3b4d89436286ebe34edc9494f3644ad69266623e8984b0f9"
+  },
+  {
+    "path": "NjulfHelloGame/Program.cs",
+    "sha256": "40dbf15c95d2846726d9076a27b93f1928a64b108baeea304d2e0aa2129c8164"
+  },
+  {
+    "path": "NjulfHelloGame/SampleBenchmarkRunner.cs",
+    "sha256": "c0c241fb1a7565181f9f7d5426238db091ce252371755a08aab7ae3fc97bfc22"
+  },
+  {
+    "path": "NjulfHelloGame/SampleSmokeOptions.cs",
+    "sha256": "5e8afc7bb520d970057df979d5a5cdeb63424e97ab1c97f27c034682ea07035d"
+  },
+  {
+    "path": "NjulfHelloGame/SampleSmokeOptionsParser.cs",
+    "sha256": "fd5e17a584771c6fb07a519d1fc7b1bcf013739d24d1d66f7387f31d5336d8c3"
+  }
+]

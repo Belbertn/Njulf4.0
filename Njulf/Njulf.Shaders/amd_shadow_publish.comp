@@ -1,0 +1,24 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#include "amd_shadow_callbacks.glsl"
+layout(local_size_x=8,local_size_y=8) in;
+void main() {
+ ivec2 p=ivec2(gl_GlobalInvocationID.xy);if(any(greaterThanEqual(p,AdNativeSize())))return;
+ float depth=texelFetch(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],p,0).r;
+ vec2 pos=(vec2(p)+.5)*.5-.5;ivec2 base=ivec2(floor(pos));vec2 f=fract(pos);
+ float sum=0,weights=0,bestDistance=1e30,best=1.0;
+ for(int y=0;y<2;y++)for(int x=0;x<2;x++) {
+  ivec2 q=clamp(base+ivec2(x,y),ivec2(0),BufferDimensions()-1);
+  float delta=abs(LoadDepth(q)-depth),v=uintBitsToFloat(AdRead(ad.Current,q,7u));
+  if(isnan(v)||isinf(v))continue;
+  if(delta<bestDistance){bestDistance=delta;best=v;}
+  float w=(x==0?1-f.x:f.x)*(y==0?1-f.y:f.y)*exp(-delta/max(abs(depth)*.005,1e-7));
+  sum+=v*w;weights+=w;
+ }
+ float visibility=weights>1e-5?sum/weights:best;
+ uint pixel=uint(p.y*AdNativeSize().x+p.x),raw=ReadStorageWord(ad.Source,pixel),shift=ad.Slot*8u;
+ WriteStorageWord(ad.Source,pixel,(raw&~(255u<<shift))|(uint(round(clamp(visibility,0,1)*255))<<shift));
+}

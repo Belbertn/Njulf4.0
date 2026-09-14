@@ -2662,6 +2662,11 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.GpuDirectionalRayShadowMicroseconds,
             GpuAreaRayShadowMicroseconds =
                 sceneData.GpuAreaRayShadowMicroseconds,
+            GpuAreaShadowDenoiseMicroseconds = sceneData.GpuAreaShadowDenoiseMicroseconds,
+            AreaDenoisingActive = sceneData.AreaDenoisingActive,
+            AmdReflectionDenoisingActive = sceneData.AmdReflectionDenoisingActive,
+            AmdReflectionDenoisingAllocatedBytes = sceneData.AmdReflectionDenoisingAllocatedBytes,
+            AreaDenoisingAllocatedBytes = sceneData.AreaDenoisingAllocatedBytes,
             GpuDirectionalShadowTemporalMicroseconds =
                 sceneData.GpuDirectionalShadowTemporalMicroseconds,
             GpuDirectionalShadowSpatialMicroseconds =
@@ -3297,6 +3302,7 @@ internal sealed class RendererDiagnosticsAssembler
             sceneData.GpuDirectionalShadowMicroseconds +
             sceneData.GpuDirectionalRayShadowMicroseconds +
             sceneData.GpuAreaRayShadowMicroseconds +
+            sceneData.GpuAreaShadowDenoiseMicroseconds +
             sceneData.GpuDirectionalShadowTemporalMicroseconds +
             sceneData.GpuDirectionalShadowSpatialMicroseconds +
             sceneData.GpuSpotShadowMicroseconds +

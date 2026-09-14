@@ -138,6 +138,7 @@ namespace Njulf.Rendering.Core
         public Vk Api => _vk;
         public Instance Instance => _instance;
         public PhysicalDevice PhysicalDevice => _physicalDevice;
+        public bool ShaderFloat16Enabled { get; private set; }
         public Device Device => _device;
         public GpuAllocator.Allocator* Allocator => _allocator;
         public uint GraphicsQueueFamilyIndex => _graphicsQueueFamilyIndex;
@@ -1480,10 +1481,17 @@ namespace Njulf.Rendering.Core
             // their legacy extension structs beside them. Capture layers such
             // as Nsight append/inspect these aggregates; mixing both forms is
             // forbidden by VUID-VkDeviceCreateInfo-pNext-02830/06532.
+            var denoiserFeatures12 = new PhysicalDeviceVulkan12Features
+            { SType = StructureType.PhysicalDeviceVulkan12Features };
+            var denoiserFeatures = new PhysicalDeviceFeatures2
+            { SType = StructureType.PhysicalDeviceFeatures2, PNext = &denoiserFeatures12 };
+            _vk.GetPhysicalDeviceFeatures2(_physicalDevice, &denoiserFeatures);
+            ShaderFloat16Enabled = denoiserFeatures12.ShaderFloat16;
             var vulkan12Features = new PhysicalDeviceVulkan12Features
             {
                 SType = StructureType.PhysicalDeviceVulkan12Features,
                 DescriptorIndexing = true,
+                ShaderFloat16 = ShaderFloat16Enabled,
                 DescriptorBindingSampledImageUpdateAfterBind = true,
                 DescriptorBindingStorageBufferUpdateAfterBind = true,
                 DescriptorBindingPartiallyBound = true,

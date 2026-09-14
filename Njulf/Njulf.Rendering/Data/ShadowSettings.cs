@@ -246,6 +246,8 @@ namespace Njulf.Rendering.Data
         public bool LocalShadowCacheEnabled { get; set; } = true;
 
         public bool AreaShadowsEnabled { get; set; } = true;
+        /// <summary>AMD FidelityFX reconstruction of per-emitter visibility.</summary>
+        public bool AreaDenoisingEnabled { get; set; }
 
         public DirectionalShadowMode RequestedDirectionalShadowMode
         {

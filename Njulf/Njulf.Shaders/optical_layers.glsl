@@ -19,14 +19,15 @@ void OpticalStoreVec(uint b, uint w, vec3 v)
     OpticalStore(b,w,floatBitsToUint(v.x)); OpticalStore(b,w+1u,floatBitsToUint(v.y)); OpticalStore(b,w+2u,floatBitsToUint(v.z));
 }
 bool OpticalFinite(vec3 v) { return !any(isnan(v)) && !any(isinf(v)); }
-uint OpticalPixel(uint b, ivec2 p) { return OPTICAL_HEADER_WORDS + (uint(p.y)*OpticalWord(b,1u)+uint(p.x))*OPTICAL_PIXEL_WORDS; }
+uint OpticalPixelWords(uint b) { return OpticalWord(b,13u)==8u?9u:OPTICAL_PIXEL_WORDS; }
+uint OpticalPixel(uint b, ivec2 p) { return OPTICAL_HEADER_WORDS + (uint(p.y)*OpticalWord(b,1u)+uint(p.x))*OpticalPixelWords(b); }
 bool OpticalInside(uint b, ivec2 p) { return all(greaterThanEqual(p,ivec2(0))) && all(lessThan(p,ivec2(OpticalWord(b,1u),OpticalWord(b,2u)))); }
 uint OpticalCount(uint b, ivec2 p) { return OpticalWord(b, OpticalPixel(b,p)); }
 bool OpticalPixelValid(uint b, ivec2 p) { return OpticalInside(b,p) && OpticalCount(b,p) <= OpticalWord(b,4u); }
 uint OpticalRecord(uint b, ivec2 p, uint layer)
 {
     uint index = OpticalWord(b, OpticalPixel(b,p)+1u+layer);
-    return OPTICAL_HEADER_WORDS + OpticalWord(b,1u)*OpticalWord(b,2u)*OPTICAL_PIXEL_WORDS + index*OPTICAL_RECORD_WORDS;
+    return OPTICAL_HEADER_WORDS + OpticalWord(b,1u)*OpticalWord(b,2u)*OpticalPixelWords(b) + index*OPTICAL_RECORD_WORDS;
 }
 uint OpticalPackNormal(vec3 n)
 {

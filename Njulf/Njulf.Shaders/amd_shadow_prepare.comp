@@ -1,0 +1,33 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#include "amd_shadow_callbacks.glsl"
+layout(local_size_x=8,local_size_y=8) in;
+shared uint masks[2];
+vec3 AdWorld(ivec2 p) { p=AdNativePixel(p); float d=texelFetch(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],p,0).r; vec4 w=AdMatrix(16u)*vec4((vec2(p)+.5)/vec2(AdNativeSize())*2.0-1.0,d,1); return w.xyz/max(abs(w.w),1e-8)*sign(w.w); }
+void main() {
+    if(gl_LocalInvocationIndex<2u)masks[gl_LocalInvocationIndex]=0u;
+    barrier();
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy);
+    bool valid=AdInside(p);
+    if(valid) {
+        float d=texelFetch(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],AdNativePixel(p),0).r;
+        vec3 center=AdWorld(p), a=center-AdWorld(p-ivec2(1,0)), b=AdWorld(p+ivec2(1,0))-center;
+        vec3 c=center-AdWorld(p-ivec2(0,1)), e=AdWorld(p+ivec2(0,1))-center;
+        vec3 n=cross(dot(a,a)<dot(b,b)?a:b,dot(c,c)<dot(e,e)?c:e);
+        n=dot(n,n)>1e-12?normalize(n):vec3(0,1,0);
+        if(dot(n,Eye()-center)<0)n=-n;
+        AdStore(p,0u,floatBitsToUint(d)); AdStore(p,1u,AdPackNormal(n));
+    }
+    uint raw=valid?ReadStorageWord(ad.Source,uint(AdNativePixel(p).y*AdNativeSize().x+AdNativePixel(p).x)):0xffffffffu;
+    if(!valid||((raw>>(8u*ad.Slot))&255u)>127u)
+        atomicOr(masks[gl_LocalInvocationID.y/4u],1u<<((gl_LocalInvocationID.y%4u)*8u+gl_LocalInvocationID.x));
+    barrier();
+    if(gl_LocalInvocationIndex<2u) {
+        uvec2 tile=uvec2(gl_WorkGroupID.x,gl_WorkGroupID.y*2u+gl_LocalInvocationIndex);
+        if(tile.y<(ad.Height+3u)/4u)WriteStorageWord(ad.Current,AdMasks()+tile.y*((ad.Width+7u)/8u)+tile.x,masks[gl_LocalInvocationIndex]);
+    }
+}
+

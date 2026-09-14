@@ -1464,9 +1464,14 @@ internal sealed class HelloGame : Game
 
     private void ApplyOpticalDenoisingOverride(RenderSettings settings)
     {
+        if (_smokeOptions.ReflectionDenoiserOverride is { } denoiser)
+            settings.Reflections.Denoiser = Enum.Parse<ReflectionDenoiser>(denoiser, true);
+        if (_smokeOptions.AreaDenoisingOverride is { } area)
+            settings.Shadows.AreaDenoisingEnabled = area;
         if (_smokeOptions.OpticalDenoisingMode is not { } mode) return;
         settings.OpticalDenoising.Enabled = mode != "off";
         settings.OpticalDenoising.BypassFilter = mode == "bypass";
+        settings.OpticalDenoising.CompactLayers = mode == "compact";
     }
 
     private void ApplyPreInitializationRenderSettings(RenderSettings settings)

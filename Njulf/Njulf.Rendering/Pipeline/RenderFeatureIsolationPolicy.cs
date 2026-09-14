@@ -41,7 +41,7 @@ namespace Njulf.Rendering.Pipeline
             return passName switch
             {
                 "DirectionalShadowPass" or "DirectionalRayShadowPass" or
-                    "AreaRayShadowPass" or "SpotShadowPass" or
+                    "AreaRayShadowPass" or "AreaShadowDenoisePass" or "SpotShadowPass" or
                     "PointShadowPass" => AllowsShadows(mode),
                 "OpticalLayerClearPass" or "OpticalTemporalPass" or "OpticalSpatialPass" or "OpticalCorrectionPass" or "HybridReflectionClassifyPass" or "HybridReflectionSsrPass" or "HybridReflectionRayQueryPass" or "HybridReflectionDdgiBasePass" or "HybridReflectionResolvePass" or "HybridReflectionTemporalPass" or "HybridReflectionSpatialPass" or "HybridReflectionCompositePass" or "OpaqueSceneColorSnapshotPass" => AllowsReflections(mode),
                 "GtaoPass" or "GtaoTemporalPass" or "GtaoSpatialPass" =>

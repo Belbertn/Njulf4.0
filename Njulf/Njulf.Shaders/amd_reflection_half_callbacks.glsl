@@ -1,0 +1,69 @@
+// FP16 arithmetic wrappers over the same resource adapter; layouts stay identical.
+#define FFX_HALF 1
+#define FFX_DNSR_Reflections_LoadWorldSpaceNormal ArFull_FFX_DNSR_Reflections_LoadWorldSpaceNormal
+#define FFX_DNSR_Reflections_LoadRadiance ArFull_FFX_DNSR_Reflections_LoadRadiance
+#define FFX_DNSR_Reflections_LoadRadianceReprojected ArFull_FFX_DNSR_Reflections_LoadRadianceReprojected
+#define FFX_DNSR_Reflections_LoadRadianceHistory ArFull_FFX_DNSR_Reflections_LoadRadianceHistory
+#define FFX_DNSR_Reflections_LoadWorldSpaceNormalHistory ArFull_FFX_DNSR_Reflections_LoadWorldSpaceNormalHistory
+#define FFX_DNSR_Reflections_LoadRoughness ArFull_FFX_DNSR_Reflections_LoadRoughness
+#define FFX_DNSR_Reflections_LoadRayLength ArFull_FFX_DNSR_Reflections_LoadRayLength
+#define FFX_DNSR_Reflections_LoadVariance ArFull_FFX_DNSR_Reflections_LoadVariance
+#define FFX_DNSR_Reflections_LoadNumSamples ArFull_FFX_DNSR_Reflections_LoadNumSamples
+#define FFX_DNSR_Reflections_SampleRadianceHistory ArFull_FFX_DNSR_Reflections_SampleRadianceHistory
+#define FFX_DNSR_Reflections_SampleWorldSpaceNormalHistory ArFull_FFX_DNSR_Reflections_SampleWorldSpaceNormalHistory
+#define FFX_DNSR_Reflections_SampleAverageRadiance ArFull_FFX_DNSR_Reflections_SampleAverageRadiance
+#define FFX_DNSR_Reflections_SampleVarianceHistory ArFull_FFX_DNSR_Reflections_SampleVarianceHistory
+#define FFX_DNSR_Reflections_SampleNumSamplesHistory ArFull_FFX_DNSR_Reflections_SampleNumSamplesHistory
+#define FFX_DNSR_Reflections_SampleRoughnessHistory ArFull_FFX_DNSR_Reflections_SampleRoughnessHistory
+#define FFX_DNSR_Reflections_StoreVariance ArFull_FFX_DNSR_Reflections_StoreVariance
+#define FFX_DNSR_Reflections_StoreNumSamples ArFull_FFX_DNSR_Reflections_StoreNumSamples
+#define FFX_DNSR_Reflections_StoreRadianceReprojected ArFull_FFX_DNSR_Reflections_StoreRadianceReprojected
+#define FFX_DNSR_Reflections_StoreAverageRadiance ArFull_FFX_DNSR_Reflections_StoreAverageRadiance
+#define FFX_DNSR_Reflections_StorePrefilteredReflections ArFull_FFX_DNSR_Reflections_StorePrefilteredReflections
+#define FFX_DNSR_Reflections_StoreTemporalAccumulation ArFull_FFX_DNSR_Reflections_StoreTemporalAccumulation
+#include "amd_reflection_callbacks.glsl"
+#undef FFX_DNSR_Reflections_LoadWorldSpaceNormal
+#undef FFX_DNSR_Reflections_LoadRadiance
+#undef FFX_DNSR_Reflections_LoadRadianceReprojected
+#undef FFX_DNSR_Reflections_LoadRadianceHistory
+#undef FFX_DNSR_Reflections_LoadWorldSpaceNormalHistory
+#undef FFX_DNSR_Reflections_LoadRoughness
+#undef FFX_DNSR_Reflections_LoadRayLength
+#undef FFX_DNSR_Reflections_LoadVariance
+#undef FFX_DNSR_Reflections_LoadNumSamples
+#undef FFX_DNSR_Reflections_SampleRadianceHistory
+#undef FFX_DNSR_Reflections_SampleWorldSpaceNormalHistory
+#undef FFX_DNSR_Reflections_SampleAverageRadiance
+#undef FFX_DNSR_Reflections_SampleVarianceHistory
+#undef FFX_DNSR_Reflections_SampleNumSamplesHistory
+#undef FFX_DNSR_Reflections_SampleRoughnessHistory
+#undef FFX_DNSR_Reflections_StoreVariance
+#undef FFX_DNSR_Reflections_StoreNumSamples
+#undef FFX_DNSR_Reflections_StoreRadianceReprojected
+#undef FFX_DNSR_Reflections_StoreAverageRadiance
+#undef FFX_DNSR_Reflections_StorePrefilteredReflections
+#undef FFX_DNSR_Reflections_StoreTemporalAccumulation
+f16vec3 FFX_DNSR_Reflections_LoadWorldSpaceNormal(ivec2 p) { return f16vec3(ArFull_FFX_DNSR_Reflections_LoadWorldSpaceNormal(p)); }
+f16vec3 FFX_DNSR_Reflections_LoadRadiance(ivec2 p) { return f16vec3(ArFull_FFX_DNSR_Reflections_LoadRadiance(p)); }
+f16vec3 FFX_DNSR_Reflections_LoadRadianceReprojected(ivec2 p) { return f16vec3(ArFull_FFX_DNSR_Reflections_LoadRadianceReprojected(p)); }
+f16vec3 FFX_DNSR_Reflections_LoadRadianceHistory(ivec2 p) { return f16vec3(ArFull_FFX_DNSR_Reflections_LoadRadianceHistory(p)); }
+f16vec3 FFX_DNSR_Reflections_LoadWorldSpaceNormalHistory(ivec2 p) { return f16vec3(ArFull_FFX_DNSR_Reflections_LoadWorldSpaceNormalHistory(p)); }
+float16_t FFX_DNSR_Reflections_LoadRoughness(ivec2 p) { return float16_t(ArFull_FFX_DNSR_Reflections_LoadRoughness(p)); }
+float16_t FFX_DNSR_Reflections_LoadRayLength(ivec2 p) { return float16_t(ArFull_FFX_DNSR_Reflections_LoadRayLength(p)); }
+float16_t FFX_DNSR_Reflections_LoadVariance(ivec2 p) { return float16_t(ArFull_FFX_DNSR_Reflections_LoadVariance(p)); }
+float16_t FFX_DNSR_Reflections_LoadNumSamples(ivec2 p) { return float16_t(ArFull_FFX_DNSR_Reflections_LoadNumSamples(p)); }
+f16vec3 FFX_DNSR_Reflections_SampleRadianceHistory(vec2 p) { return f16vec3(ArFull_FFX_DNSR_Reflections_SampleRadianceHistory(p)); }
+f16vec3 FFX_DNSR_Reflections_SampleWorldSpaceNormalHistory(vec2 p) { return f16vec3(ArFull_FFX_DNSR_Reflections_SampleWorldSpaceNormalHistory(p)); }
+f16vec3 FFX_DNSR_Reflections_SampleAverageRadiance(vec2 p) { return f16vec3(ArFull_FFX_DNSR_Reflections_SampleAverageRadiance(p)); }
+float16_t FFX_DNSR_Reflections_SampleVarianceHistory(vec2 p) { return float16_t(ArFull_FFX_DNSR_Reflections_SampleVarianceHistory(p)); }
+float16_t FFX_DNSR_Reflections_SampleNumSamplesHistory(vec2 p) { return float16_t(ArFull_FFX_DNSR_Reflections_SampleNumSamplesHistory(p)); }
+float16_t FFX_DNSR_Reflections_SampleRoughnessHistory(vec2 p) { return float16_t(ArFull_FFX_DNSR_Reflections_SampleRoughnessHistory(p)); }
+void FFX_DNSR_Reflections_StoreVariance(ivec2 p,float16_t v) { ArFull_FFX_DNSR_Reflections_StoreVariance(p,float(v)); }
+void FFX_DNSR_Reflections_StoreNumSamples(ivec2 p,float16_t v) { ArFull_FFX_DNSR_Reflections_StoreNumSamples(p,float(v)); }
+void FFX_DNSR_Reflections_StoreRadianceReprojected(ivec2 p,f16vec3 v) { ArFull_FFX_DNSR_Reflections_StoreRadianceReprojected(p,vec3(v)); }
+void FFX_DNSR_Reflections_StoreAverageRadiance(ivec2 p,f16vec3 v) { ArFull_FFX_DNSR_Reflections_StoreAverageRadiance(p,vec3(v)); }
+void FFX_DNSR_Reflections_StorePrefilteredReflections(ivec2 p,f16vec3 v,float16_t variance) { ArFull_FFX_DNSR_Reflections_StorePrefilteredReflections(p,vec3(v),float(variance)); }
+void FFX_DNSR_Reflections_StoreTemporalAccumulation(ivec2 p,f16vec3 v,float16_t variance) { ArFull_FFX_DNSR_Reflections_StoreTemporalAccumulation(p,vec3(v),float(variance)); }
+f16vec3 LoadRadianceH(ivec3 p) { return f16vec3(LoadRadiance(p)); }
+float16_t LoadVarianceH(ivec3 p) { return float16_t(LoadVariance(p)); }
+f16vec3 FFX_DENOISER_LoadWorldSpaceNormalH(ivec2 p) { return f16vec3(FFX_DENOISER_LoadWorldSpaceNormal(p)); }

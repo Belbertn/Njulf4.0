@@ -61,7 +61,9 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.SceneGpuLodHistoryBufferFrame1, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferBase + 1));
             Assert.That(BindlessIndex.DdgiDynamicGeometryBufferBase, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferFrame1 + 1));
             Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(
-                BindlessIndex.OpticalLayerBufferFrame1 + 1));
+                BindlessIndex.OpticalCompactBufferBase + 2));
+            Assert.That(BindlessIndex.AmdShadowBufferBase, Is.EqualTo(BindlessIndex.OpticalLayerBufferFrame1 + 1));
+            Assert.That(BindlessIndex.AmdReflectionBufferBase, Is.EqualTo(BindlessIndex.AmdShadowBufferBase + 8));
             Assert.That(BindlessIndex.TemporalSurfaceValidityBufferBase,
                 Is.EqualTo(BindlessIndex.HybridReflectionSparseLobeBufferFrame1 + 1));
             Assert.That(
@@ -213,6 +215,9 @@ public sealed class BindlessIndexTests
             ["TEMPORAL_SURFACE_VALIDITY_BUFFER_FRAME1_INDEX"] = BindlessIndex.TemporalSurfaceValidityBufferFrame1,
             ["OPTICAL_LAYER_BUFFER_BASE_INDEX"] = BindlessIndex.OpticalLayerBufferBase,
             ["OPTICAL_LAYER_BUFFER_FRAME1_INDEX"] = BindlessIndex.OpticalLayerBufferFrame1,
+            ["AMD_SHADOW_BUFFER_BASE_INDEX"] = BindlessIndex.AmdShadowBufferBase,
+            ["AMD_REFLECTION_BUFFER_BASE_INDEX"] = BindlessIndex.AmdReflectionBufferBase,
+            ["OPTICAL_COMPACT_BUFFER_BASE_INDEX"] = BindlessIndex.OpticalCompactBufferBase,
             ["AREA_LIGHT_LTC_MATRIX_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcMatrixTexture,
             ["AREA_LIGHT_LTC_AMPLITUDE_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcAmplitudeTexture,
             ["OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX"] = BindlessIndex.OpaqueSceneColorSnapshotTexture,

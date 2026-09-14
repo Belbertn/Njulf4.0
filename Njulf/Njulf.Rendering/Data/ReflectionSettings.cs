@@ -13,6 +13,7 @@ using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Data
 {
+    public enum ReflectionDenoiser { Existing, Amd, Off }
     /// <summary>
     /// Selects the implementation used to execute the requested reflection
     /// mode. Auto deliberately resolves to Adaptive in production; Legacy is
@@ -71,6 +72,7 @@ namespace Njulf.Rendering.Data
 
     public sealed class ReflectionSettings
     {
+        public ReflectionDenoiser Denoiser { get; set; } = ReflectionDenoiser.Existing;
         private float _captureLodTargetPixelError = 1f;
 
         /// <summary>Select capture mesh LOD using error measured in capture pixels.</summary>

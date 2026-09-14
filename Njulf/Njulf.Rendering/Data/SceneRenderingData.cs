@@ -534,6 +534,11 @@ namespace Njulf.Rendering.Data
         public long GpuDirectionalShadowMicroseconds { get; set; }
         public long GpuDirectionalRayShadowMicroseconds { get; set; }
         public long GpuAreaRayShadowMicroseconds { get; set; }
+        public long GpuAreaShadowDenoiseMicroseconds { get; set; }
+        public bool AreaDenoisingActive { get; set; }
+        public bool AmdReflectionDenoisingActive { get; set; }
+        public ulong AmdReflectionDenoisingAllocatedBytes { get; set; }
+        public ulong AreaDenoisingAllocatedBytes { get; set; }
         public long GpuDirectionalShadowTemporalMicroseconds { get; set; }
         public long GpuDirectionalShadowSpatialMicroseconds { get; set; }
         public long GpuSpotShadowMicroseconds { get; set; }
@@ -2376,6 +2381,7 @@ namespace Njulf.Rendering.Data
             GpuDirectionalShadowMicroseconds = 0;
             GpuDirectionalRayShadowMicroseconds = 0;
             GpuAreaRayShadowMicroseconds = 0;
+            GpuAreaShadowDenoiseMicroseconds = 0;
             GpuDirectionalShadowTemporalMicroseconds = 0;
             GpuDirectionalShadowSpatialMicroseconds = 0;
             GpuSpotShadowMicroseconds = 0;
@@ -2659,6 +2665,7 @@ namespace Njulf.Rendering.Data
             DirectionalRayShadowMaskBytes = 0UL;
             DirectionalRayShadowResourceGeneration = 0u;
             AreaRayShadowPassEnabled = false;
+            AreaDenoisingActive = false;
             AreaShadowCandidateCount = 0;
             AreaShadowSelectedCount = 0;
             AreaShadowRejectedByBudgetCount = 0;
@@ -2897,6 +2904,7 @@ namespace Njulf.Rendering.Data
             AutomaticPlanarCompletedLifecycle = default;
             GpuAutomaticPlanarCaptureMicroseconds = 0;
             HybridReflectionPassEnabled = false;
+            AmdReflectionDenoisingActive = false;
             HybridReflectionWidth = 0;
             HybridReflectionHeight = 0;
             HybridReflectionRayQueryCapacity = 0;

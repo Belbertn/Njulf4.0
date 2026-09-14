@@ -150,6 +150,52 @@ vec3 AreaShadowRandom(
     return (vec3(x, y, z) + vec3(0.5)) * (1.0 / 4294967296.0);
 }
 
+// Select a geometry-weighted emitter sample before tracing. Four candidates cost
+// no visibility rays. This avoids wasting the sole AMD input ray on a tube's back.
+NjulfAreaSurfaceSample AreaShadowDenoiserSample(uvec2 pixel, GPULight light,
+    uint slot, vec3 position, vec3 normal, vec3 axis, vec3 up, vec3 right)
+{
+    NjulfAreaSurfaceSample chosen;
+    chosen.valid=false; chosen.position=light.Position; chosen.normal=axis; chosen.areaPdf=1.0;
+    float sum=0.0;
+    for(uint i=0u;i<4u;++i)
+    {
+        NjulfAreaSurfaceSample candidate=NjulfSampleAreaLightSurface(light,AreaShadowRandom(pixel,light,slot,i));
+        vec3 delta=candidate.position-position; float d2=dot(delta,delta);
+        if(!candidate.valid||d2<=1e-8)continue;
+        vec3 direction=delta*inversesqrt(d2);
+        float facing=light.Type!=GPU_LIGHT_TYPE_TUBE&&NjulfAreaLightIsTwoSided(light)
+            ?abs(dot(axis,-direction)):max(dot(candidate.normal,-direction),0.0);
+        float weight=max(dot(normal,direction),0.0)*facing/d2;
+        if(!(weight>0.0)||!DirectionalRayFinite(weight))continue;
+        sum+=weight;
+        float select=float(DirectionalRayHash(pixel.x^pixel.y*0x85ebca6bu^
+            pc.TemporalSampleIndex*0xc2b2ae35u^i*0x27d4eb2du^light.StableIdentity))*(1.0/4294967296.0);
+        if(!chosen.valid||select*sum<weight)chosen=candidate;
+    }
+    if(chosen.valid)return chosen;
+    vec3 delta=position-light.Position;
+    if(light.Type==GPU_LIGHT_TYPE_TUBE)
+    {
+        float axial=dot(delta,axis), halfLength=light.SizeX*.5, radius=light.SizeY*.5;
+        vec3 radial=delta-axis*axial; float radialLength=length(radial);
+        if(abs(axial)>halfLength&&radialLength<=radius)
+        { chosen.normal=axis*sign(axial); chosen.position=light.Position+chosen.normal*halfLength+radial; }
+        else
+        { chosen.normal=radialLength>1e-6?radial/radialLength:right;
+          chosen.position=light.Position+axis*clamp(axial,-halfLength,halfLength)+chosen.normal*radius; }
+    }
+    else
+    {
+        vec2 local=vec2(dot(delta,right),dot(delta,up));
+        if(light.Type==GPU_LIGHT_TYPE_RECTANGLE)local=clamp(local,-vec2(light.SizeX,light.SizeY)*.5,vec2(light.SizeX,light.SizeY)*.5);
+        else local*=min(1.0,light.SizeX*.5/max(length(local),1e-6));
+        chosen.position=light.Position+right*local.x+up*local.y;
+        chosen.normal=NjulfAreaLightIsTwoSided(light)&&dot(delta,axis)<0.0?-axis:axis;
+    }
+    chosen.valid=true; return chosen;
+}
+
 float AreaShadowVisibility(
     uvec2 pixel,
     vec3 worldPosition,
@@ -173,14 +219,15 @@ float AreaShadowVisibility(
     if (EvaluateNjulfFiniteRangeWindow(closestDistance, light.Range) <= 0.0)
         return 1.0;
 
-    uint sampleCount = clamp(pc.TraceSampleCount, 1u, 4u);
+    bool denoising=(pc.TraceSampleCount&0x80000000u)!=0u;
+    uint sampleCount = clamp(pc.TraceSampleCount&0x7fffffffu, 1u, 4u);
     float visibleWeight = 0.0;
     float totalWeight = 0.0;
     for (uint sampleIndex = 0u; sampleIndex < sampleCount; sampleIndex++)
     {
-        NjulfAreaSurfaceSample emitter = NjulfSampleAreaLightSurface(
-            light,
-            AreaShadowRandom(pixel, light, slot, sampleIndex));
+        NjulfAreaSurfaceSample emitter = denoising
+            ? AreaShadowDenoiserSample(pixel,light,slot,worldPosition,geometricNormal,axis,up,right)
+            : NjulfSampleAreaLightSurface(light,AreaShadowRandom(pixel, light, slot, sampleIndex));
         if (!emitter.valid)
             continue;
         vec3 toEmitter = emitter.position - worldPosition;
@@ -235,6 +282,11 @@ float AreaShadowVisibility(
 void main()
 {
     uvec2 pixel = gl_GlobalInvocationID.xy;
+    if ((pc.TraceSampleCount & 0x80000000u) != 0u)
+    {
+        if (any(greaterThanEqual(pixel, (uvec2(pc.ScreenWidth,pc.ScreenHeight)+1u)/2u))) return;
+        pixel = min(pixel*2u+1u,uvec2(pc.ScreenWidth,pc.ScreenHeight)-1u);
+    }
     if (pixel.x >= pc.ScreenWidth || pixel.y >= pc.ScreenHeight)
         return;
     uint pixelIndex = pixel.y * pc.ScreenWidth + pixel.x;

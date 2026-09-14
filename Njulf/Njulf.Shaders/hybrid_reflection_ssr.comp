@@ -581,6 +581,10 @@ void HybridTraceLobe(
     if (trace.Hit && !disoccluded &&
         trace.Confidence >= pc.ConfidenceThreshold)
     {
+        if (lobeId == 0u && HybridTaskReserved != 0u)
+            WriteStorageWord(HybridTaskReserved,
+                128u + (uint(pixel.y) * pc.ScreenWidth + uint(pixel.x)) * 16u,
+                floatBitsToUint(trace.HitDistance));
         HybridStoreLobe(pixel, lobeId,
             vec4(trace.Radiance, trace.Confidence),
             HybridPackMetadata(HYBRID_REFLECTION_SOURCE_SSR,

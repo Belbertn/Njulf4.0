@@ -961,6 +961,7 @@ public sealed class SampleBenchmarkAnalyzer
         new("DirectionalShadowPass", d => d.GpuDirectionalShadowMicroseconds),
         new("DirectionalRayShadowPass", d => d.GpuDirectionalRayShadowMicroseconds),
         new("AreaRayShadowPass", d => d.GpuAreaRayShadowMicroseconds),
+        new("AreaShadowDenoisePass", d => d.GpuAreaShadowDenoiseMicroseconds),
         new("DirectionalShadowTemporalPass", d => d.GpuDirectionalShadowTemporalMicroseconds),
         new("DirectionalShadowSpatialPass", d => d.GpuDirectionalShadowSpatialMicroseconds),
         new("SpotShadowPass", d => d.GpuSpotShadowMicroseconds),

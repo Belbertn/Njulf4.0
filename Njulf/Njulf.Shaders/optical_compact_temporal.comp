@@ -1,0 +1,5 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "optical_compact.glsl"
+#include "optical_compact_temporal_kernel.glsl"
+void main() { OpticalCompactTemporalPixel(ivec2(gl_GlobalInvocationID.xy)); }

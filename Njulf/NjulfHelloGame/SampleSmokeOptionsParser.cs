@@ -23,6 +23,8 @@ public static class SampleSmokeOptionsParser
         "--vsync",
         "--transparency-mode",
         "--optical-denoising",
+        "--reflection-denoiser",
+        "--area-denoising",
         "--health-report",
         "--baseline-snapshot-dir",
         "--sponza-gi-capture-dir",
@@ -167,6 +169,8 @@ public static class SampleSmokeOptionsParser
             ? null
             : ParseBool(vSyncEnvironment, "NJULF_VSYNC");
         string? opticalDenoisingMode = null;
+        string? reflectionDenoiser = null;
+        bool? areaDenoising = null;
         TransparencyMode transparencyMode = ParseTransparencyMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE"));
         string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
         string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
@@ -639,8 +643,16 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--optical-denoising":
                     opticalDenoisingMode = value.Trim().ToLowerInvariant();
-                    if (opticalDenoisingMode is not ("on" or "off" or "bypass"))
-                        throw new ArgumentException("--optical-denoising accepts on, off, or bypass.");
+                    if (opticalDenoisingMode is not ("on" or "off" or "bypass" or "compact"))
+                        throw new ArgumentException("--optical-denoising accepts on, off, bypass, or compact.");
+                    break;
+                case "--reflection-denoiser":
+                    reflectionDenoiser = value.Trim().ToLowerInvariant();
+                    if (reflectionDenoiser is not ("existing" or "amd" or "off"))
+                        throw new ArgumentException("--reflection-denoiser accepts existing, amd, or off.");
+                    break;
+                case "--area-denoising":
+                    areaDenoising = ParseBool(value, optionName);
                     break;
                 case "--transparency-mode":
                     transparencyMode = ParseTransparencyMode(value);
@@ -2473,7 +2485,8 @@ public static class SampleSmokeOptionsParser
             maximumFramesPerSecondOverride,
             vSyncOverride,
             performanceOptimizationsEnabledOverride,
-            performanceOptimizationMaskOverride) { OpticalDenoisingMode = opticalDenoisingMode };
+            performanceOptimizationMaskOverride) { OpticalDenoisingMode = opticalDenoisingMode,
+                ReflectionDenoiserOverride = reflectionDenoiser, AreaDenoisingOverride = areaDenoising };
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)

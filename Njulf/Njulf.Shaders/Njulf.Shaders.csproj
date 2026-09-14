@@ -62,6 +62,7 @@
         <AdditionalCompileOptions>$(NjulfReceiverAttributionOptimizationOptions)</AdditionalCompileOptions>
       </ShaderSource>
       <ShaderInclude Include="*.glsl" />
+      <ShaderInclude Include="ThirdParty\FidelityFX\**\*.h" />
       <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_source.comp">
         <Source>ddgi_simple_trace.comp</Source>
         <StorageMode>1</StorageMode>

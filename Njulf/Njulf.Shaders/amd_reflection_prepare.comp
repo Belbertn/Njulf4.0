@@ -1,0 +1,56 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#include "amd_reflection_callbacks.glsl"
+#include "hybrid_reflection_sparse.glsl"
+layout(local_size_x=8,local_size_y=8) in;
+void main() {
+ ivec2 p=ivec2(gl_GlobalInvocationID.xy);if(!ArInside(p))return;
+ uvec4 payload=texelFetch(HybridReceiverPayload,p,0);
+ vec4 raw=imageLoad(HybridRawRadiance,p);uint meta=imageLoad(HybridRawMetadata,p).x;
+ uint reason=HybridMetadataReason(meta),identity=HybridReceiverIdentity(payload);
+ if(HybridReflectionPayloadValid(payload) && HybridReflectionMissingObservation(reason)) {
+  vec2 uv=(vec2(p)+.5)*InverseRenderSize(),motion=texelFetch(HybridMotionVectors,p,0).xy;
+  vec2 previousUv=uv-motion;ivec2 q=ivec2(floor(previousUv*vec2(RenderSize())));
+  vec3 normal=FFX_DNSR_Reflections_LoadWorldSpaceNormal(p);
+  float depth=FFX_DNSR_Reflections_LoadDepth(p);
+  bool carried=false;
+  if(ar.Reset==0u && ArInside(q) && length(motion*vec2(RenderSize()))<1.5) {
+   uvec2 historyMeta=imageLoad(HybridMetadataPrevious,q).xy;
+   uint source=HybridHistoryMetadataSource(historyMeta);
+   vec4 world=ArMatrix(16u)*ArMatrix(0u)*vec4(uv*2-1,depth,1);
+   vec4 previousClip=ArMatrix(32u)*world;
+   float expectedDepth=previousClip.z/previousClip.w;
+   uint age=HybridHistoryMetadataAge(historyMeta);
+   uint maxAge=length(motion*vec2(RenderSize()))<.25?16u:2u;
+   bool sparse=HybridHistoryMetadataSparseState(historyMeta)!=HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
+   if(HybridHistoryMetadataValid(historyMeta) && HybridHistoryMetadataIdentity(historyMeta)==identity &&
+      (source==HYBRID_REFLECTION_SOURCE_SSR || source==HYBRID_REFLECTION_SOURCE_RAY_QUERY) &&
+      (!sparse || age<maxAge) && abs(ArFloat(ar.Previous,q,4u)-expectedDepth)<max(.0005,abs(expectedDepth)*.002) &&
+      dot(normal,FFX_DNSR_Reflections_LoadWorldSpaceNormalHistory(q))>.9) {
+    raw=imageLoad(HybridHistoryPrevious,q);raw.a*=.97;
+    meta=HybridPackMetadata(source,raw.a,reason,0u,true);
+    ArStore(p,0u,ArFloat(ar.Previous,q,0u));carried=true;
+   }
+  }
+  if(!carried && HybridReflectionPayloadPhysicalRoughness(payload)<.5) {
+   vec3 sum=vec3(0);float weights=0;uint source=0u;float confidence=0;
+   int radius=HybridReflectionPayloadPhysicalRoughness(payload)<.35?1:2;
+   for(int y=-radius;y<=radius;y++)for(int x=-radius;x<=radius;x++) {
+    ivec2 q=p+ivec2(x,y);if(!ArInside(q))continue;
+    uint neighborMeta=imageLoad(HybridRawMetadata,q).x,s=HybridMetadataSource(neighborMeta);
+    if(HybridReflectionMissingObservation(HybridMetadataReason(neighborMeta)) ||
+       (s!=HYBRID_REFLECTION_SOURCE_SSR && s!=HYBRID_REFLECTION_SOURCE_RAY_QUERY))continue;
+    uvec4 other=texelFetch(HybridReceiverPayload,q,0);
+    if(!HybridReflectionPayloadValid(other) || HybridReceiverIdentity(other)!=identity ||
+       abs(FFX_DNSR_Reflections_LoadRoughness(q)-FFX_DNSR_Reflections_LoadRoughness(p))>.1)continue;
+    float depthDelta=abs(FFX_DNSR_Reflections_LoadDepth(q)-depth);
+    float weight=pow(max(dot(normal,FFX_DNSR_Reflections_LoadWorldSpaceNormal(q)),0),32.0)*
+      exp(-depthDelta/max(abs(depth)*.01,1e-6))/(1.0+float(x*x+y*y));
+    vec4 value=imageLoad(HybridRawRadiance,q);sum+=value.rgb*weight;confidence+=value.a*weight;weights+=weight;source=s;
+   }
+   if(weights>1e-4){raw=vec4(sum/weights,confidence/weights);meta=HybridPackMetadata(source,raw.a,reason,0u,true);}
+  }
+ }
+ ArStoreRgb(p,13u,raw.rgb);ArWrite(p,14u,packHalf2x16(vec2(clamp(raw.z,0,65504),clamp(raw.a,0,1))));ArWrite(p,15u,meta);
+}

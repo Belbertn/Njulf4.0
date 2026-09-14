@@ -523,6 +523,8 @@ internal sealed class ProductionPipelineOwner
             _dependencies.GiPipelineCacheService));
         _areaRayShadowPass = areaRayShadowPass;
         AddPassInstance(areaRayShadowPass);
+        AddPassInstance(_passOwnership.Track(new AreaShadowDenoisePass(
+            _dependencies.Context, _dependencies.Swapchain, _dependencies.BindlessHeap, areaRayShadowPass)));
 
         AddPassInstance(_passOwnership.Track(new DirectionalShadowTemporalPass(
             _dependencies.Context,

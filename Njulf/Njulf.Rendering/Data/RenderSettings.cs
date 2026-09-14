@@ -810,6 +810,7 @@ namespace Njulf.Rendering.Data
                     {
                         Enabled = settings.OpticalDenoising.Enabled,
                         BypassFilter = settings.OpticalDenoising.BypassFilter,
+                        CompactLayers = settings.OpticalDenoising.CompactLayers,
                         LayerLimit = settings.OpticalDenoising.LayerLimit,
                         MemoryBudgetMiB = settings.OpticalDenoising.MemoryBudgetMiB
                     },
@@ -868,6 +869,7 @@ namespace Njulf.Rendering.Data
                 {
                     settings.OpticalDenoising.Enabled = optical.Enabled;
                     settings.OpticalDenoising.BypassFilter = optical.BypassFilter;
+                    settings.OpticalDenoising.CompactLayers = optical.CompactLayers;
                     settings.OpticalDenoising.LayerLimit = optical.LayerLimit;
                     settings.OpticalDenoising.MemoryBudgetMiB = optical.MemoryBudgetMiB;
                 }
@@ -1258,6 +1260,7 @@ namespace Njulf.Rendering.Data
             public float RayQueryPixelBudgetFraction { get; init; } = 0.0078125f;
             public int RayQueryHitLightLimit { get; init; } = 2;
             public int TemporalHistoryLength { get; init; } = 16;
+            public ReflectionDenoiser Denoiser { get; init; } = ReflectionDenoiser.Existing;
             public int SpatialFilterPassCount { get; init; } = 2;
 
             public static ReflectionSettingsFile FromSettings(ReflectionSettings settings) => new()
@@ -1283,6 +1286,7 @@ namespace Njulf.Rendering.Data
                 RayQueryPixelBudgetFraction = settings.RayQueryPixelBudgetFraction,
                 RayQueryHitLightLimit = settings.RayQueryHitLightLimit,
                 TemporalHistoryLength = settings.TemporalHistoryLength,
+                Denoiser = settings.Denoiser,
                 SpatialFilterPassCount = settings.SpatialFilterPassCount
             };
 
@@ -1312,6 +1316,7 @@ namespace Njulf.Rendering.Data
                 settings.RayQueryPixelBudgetFraction = RayQueryPixelBudgetFraction;
                 settings.RayQueryHitLightLimit = RayQueryHitLightLimit;
                 settings.TemporalHistoryLength = TemporalHistoryLength;
+                settings.Denoiser = Denoiser;
                 settings.SpatialFilterPassCount = SpatialFilterPassCount;
             }
         }
@@ -1482,6 +1487,7 @@ namespace Njulf.Rendering.Data
             public float ConstantDepthBias { get; init; } = 0.0005f;
             public int PcfRadius { get; init; } = 1;
             public bool AreaShadowsEnabled { get; init; } = true;
+            public bool AreaDenoisingEnabled { get; init; }
             public int MaxShadowedAreaLights { get; init; } = 2;
             public int AreaShadowSampleCount { get; init; } = 1;
 
@@ -1528,6 +1534,7 @@ namespace Njulf.Rendering.Data
                 ConstantDepthBias = settings.ConstantDepthBias,
                 PcfRadius = settings.PcfRadius,
                 AreaShadowsEnabled = settings.AreaShadowsEnabled,
+                AreaDenoisingEnabled = settings.AreaDenoisingEnabled,
                 MaxShadowedAreaLights = settings.MaxShadowedAreaLights,
                 AreaShadowSampleCount = settings.AreaShadowSampleCount
             };
@@ -1582,6 +1589,7 @@ namespace Njulf.Rendering.Data
                 settings.ConstantDepthBias = ConstantDepthBias;
                 settings.PcfRadius = PcfRadius;
                 settings.AreaShadowsEnabled = AreaShadowsEnabled;
+                settings.AreaDenoisingEnabled = AreaDenoisingEnabled;
                 settings.MaxShadowedAreaLights = MaxShadowedAreaLights;
                 settings.AreaShadowSampleCount = AreaShadowSampleCount;
             }
