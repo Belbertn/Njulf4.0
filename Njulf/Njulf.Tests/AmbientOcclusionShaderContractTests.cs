@@ -16,9 +16,7 @@ public sealed class AmbientOcclusionShaderContractTests
     {
         string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
         string renderingDirectory = FindRepoDirectory("Njulf.Rendering");
-        string forward = File.ReadAllText(Path.Combine(
-            shaderDirectory,
-            "forward.frag"));
+        string forward = ForwardShaderSource.Read();
         string targets = File.ReadAllText(Path.Combine(
             renderingDirectory,
             "Resources",

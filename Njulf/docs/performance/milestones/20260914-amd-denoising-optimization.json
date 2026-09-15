@@ -1,0 +1,2939 @@
+{
+  "date": "2026-09-14",
+  "revision": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+  "dirty": true,
+  "sourceSha256": {
+    "Njulf.Rendering/Data/RendererDiagnostics.cs": "62d99fc984e6e891f01f0e7ce7195570cc152d6493f3c48a76e2cb67ea4f04fe",
+    "Njulf.Rendering/Data/SceneRenderingData.cs": "4f3c003fccb42912ccf0c8611c69570ce2ec59e23c2498dda1fee150de547210",
+    "Njulf.Rendering/Debugging/GpuTimestampRecorder.cs": "69f54717e87d80be78b8b367b6e3a5cedede7c6047849d044a8e5355d9e74990",
+    "Njulf.Rendering/Diagnostics/RendererDiagnosticsAssembler.cs": "6ad5c2818b9493900b926a4fc93bf5894e23c5fab8279b1957928cdb87d1e113",
+    "Njulf.Rendering/Pipeline/AmdShadowDenoiser.cs": "b0be1e9a0d4343dc71bce17d733352ff64ff681f79a46a149b76479a8c59408f",
+    "Njulf.Rendering/Pipeline/AreaRayShadowPass.cs": "cc35b0a7395cfcf3861a97de621e4204be84bb3f38c700cb1c1da5eaaa28fd60",
+    "Njulf.Rendering/Pipeline/HybridReflectionGraphPasses.cs": "eecb0a7e5cbe0f18056b13ecc7598aba81f53f0b39b9218596aa6dbc7bdc6222",
+    "Njulf.Rendering/Pipeline/HybridReflectionVulkanRuntime.Amd.cs": "545b424bfbc67b2fba597a64435d10e2e391b075af80adfc7581c1d98692a996",
+    "Njulf.Rendering/Pipeline/HybridReflectionVulkanRuntime.cs": "6eaf848ad6fdd3378c702721676293d838b5d9a14569fee22cfe35082469a981",
+    "Njulf.Rendering/Pipeline/OpticalDenoisingRuntime.cs": "067b09d4bc15e57a2ac6129e4ae5bf7f9d3683602797c55a6a74284356eb95cd",
+    "Njulf.Rendering/Pipeline/ProductionRenderPipelineDeclaration.cs": "f92ca56d7693307204a1562d355686ee88c484396602e24fa4bd7cf596066787",
+    "Njulf.Rendering/VulkanRenderer.cs": "155e0edd563e1d3fd6767dd48154e70851935379766ceda60af424d7c939645b",
+    "Njulf.Shaders/amd_reflection_callbacks.glsl": "e11b91cc51b3955829eb9c8a78dbb95670cb240fda9afd7d9c79329a57873aec",
+    "Njulf.Shaders/amd_reflection_prefilter.comp": "afa24306a1de1031fdf45e4c0b4c308fa6a1f3e7a5ac939770020e4c9df30617",
+    "Njulf.Shaders/amd_reflection_prefilter_half.comp": "54726eb6a54e5d0a06d77ce75379469819df77785f86fdc8f34ea5f52a71e807",
+    "Njulf.Shaders/amd_reflection_prepare.comp": "784c64c2becb12590181814654da53f72a0df2c08cb913478c0fae1641af0229",
+    "Njulf.Shaders/amd_reflection_reproject.comp": "07f62e3e48f505847445290d29238fd5ffdce7afb6d023705cb70f96bf3cc546",
+    "Njulf.Shaders/amd_reflection_reproject_half.comp": "c4bc1bb1e213aafb0fc1fdd4c94b52df56e804559872076a6d3e82815ef7e63c",
+    "Njulf.Shaders/amd_reflection_temporal.comp": "9379d9a77cc65ae165ef0177e7d0cdba55ae5466d2795171f395d06e79e15387",
+    "Njulf.Shaders/amd_reflection_temporal_half.comp": "f938f5a56bf2c40289cb6e0f3484f2298568d1a72bf9c50bae67b0d91419fc3a",
+    "Njulf.Shaders/amd_shadow_callbacks.glsl": "108d33ae7dcb123d56bc847ac84e943731180c5103c6a39d8e37d1c4a7ef3fa0",
+    "Njulf.Shaders/amd_shadow_publish.comp": "f41d9003a3d4b9686547112eb74495dfe5b334bb5875837670bbff8472ecd8af",
+    "Njulf.Shaders/hybrid_reflection_ray_query.comp": "de786af77beb3b577171ccec8f8922db4d4cf88d9fb4c773fe3a0182cb67a576",
+    "Njulf.Shaders/hybrid_reflection_ssr.comp": "600aaa37d7a3b54010609079dd8b87c2d077f2b24fbe6611feecb27094cc3502",
+    "Njulf.Shaders/optical_compact_correct.comp": "f787267e2090f54d803a9255ac3df6d3dfcbf7f3e53f2f01c51d6d7e50a85c5d",
+    "Njulf.Shaders/optical_compact_spatial_kernel.glsl": "9bc57af5b7d10dac9f3d43e3809472a9a158076e6d08d83f544bf97ea0404d6d",
+    "Njulf.Shaders/optical_compact_temporal.comp": "ad21887e8499938df5a3b0f06f6963b8b8be0aaabf18065890bab2085a258b85",
+    "Njulf.Shaders/optical_compact_temporal_kernel.glsl": "4b3150058b83bfe856ed8621168b808023cd356ffb8538e38eb32a72d3c7c420",
+    "Njulf.Shaders/optical_compute.glsl": "6dff0be50227255b121d813e51c9ea3142c71d25fa1e0608f2c00d59729b22b3",
+    "Njulf.Tests/AmdDenoisingIntegrationTests.cs": "c2d42970e228e35d0d83f9ea89942851641d48571fdd67e9d04a397e9dff5571",
+    "Njulf.Tests/CompactOpticalGpuTests.cs": "ac4d94b869c48fc709f55ad514d5e61edb5435fe493faa6daff5ee169f6576f9",
+    "Njulf.Tests/Fixtures/Shaders/optical_compact_filter.comp": "cf82691018e54dd42b5b612113dc8f2f329d41f6917879aa74c4cce7604d94df",
+    "NjulfHelloGame/SampleBenchmarkReport.cs": "6014ea7e87b19c43d8487353e60f64517cc926368ae2cafd054970a122f5d84c",
+    "NjulfHelloGame/SampleBenchmarkRunner.cs": "7e39674be0a6913d639b9262b1e5635c0d82c64d9c9208d2ac29251d553e6262",
+    "Njulf.Shaders/optical_compact_reuse.glsl": "045c0d0f464dc354a28ecbf20b8d0859e8a47abd25113909400299a9d5a3a4fc"
+  },
+  "runs": [
+    {
+      "name": "opt-baseline-area",
+      "capturedAtUtc": "2026-09-14T06:29:17.1156398+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "c71bc521884d46dc86ae8eb2d684db107da328b95301b0f60dd74abdac250ac8",
+        "settingsFingerprint": "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e",
+        "sourceSettingsFingerprints": [
+          "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 25.46713333333334,
+        "MinMilliseconds": 23.867,
+        "MaxMilliseconds": 27.675,
+        "P95Milliseconds": 26.79,
+        "MedianMilliseconds": 25.4435,
+        "P50Milliseconds": 25.4435,
+        "P99Milliseconds": 27.497
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.169079166666666,
+        "MinMilliseconds": 1.47,
+        "MaxMilliseconds": 13.159,
+        "P95Milliseconds": 2.978,
+        "MedianMilliseconds": 1.9125,
+        "P50Milliseconds": 1.9125,
+        "P99Milliseconds": 6.927
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 2.549195833333334,
+          "MinMilliseconds": 2.43,
+          "MaxMilliseconds": 4.005,
+          "P95Milliseconds": 2.577,
+          "MedianMilliseconds": 2.5235000000000003,
+          "P50Milliseconds": 2.5235000000000003,
+          "P99Milliseconds": 3.908
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 1.4827916666666658,
+          "MinMilliseconds": 1.089,
+          "MaxMilliseconds": 2.846,
+          "P95Milliseconds": 2.145,
+          "MedianMilliseconds": 1.398,
+          "P50Milliseconds": 1.398,
+          "P99Milliseconds": 2.78
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 1.0847249999999995,
+          "MinMilliseconds": 0.928,
+          "MaxMilliseconds": 1.873,
+          "P95Milliseconds": 1.457,
+          "MedianMilliseconds": 1.0375,
+          "P50Milliseconds": 1.0375,
+          "P99Milliseconds": 1.824
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.5498916666666666,
+          "MinMilliseconds": 0.422,
+          "MaxMilliseconds": 1.244,
+          "P95Milliseconds": 1.055,
+          "MedianMilliseconds": 0.495,
+          "P50Milliseconds": 0.495,
+          "P99Milliseconds": 1.163
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.23086666666666625,
+          "MinMilliseconds": 0.155,
+          "MaxMilliseconds": 1.291,
+          "P95Milliseconds": 0.603,
+          "MedianMilliseconds": 0.185,
+          "P50Milliseconds": 0.185,
+          "P99Milliseconds": 0.617
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.17609999999999987,
+          "MinMilliseconds": 0.121,
+          "MaxMilliseconds": 1.013,
+          "P95Milliseconds": 0.556,
+          "MedianMilliseconds": 0.14,
+          "P50Milliseconds": 0.14,
+          "P99Milliseconds": 0.811
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.5330416666666674,
+          "MinMilliseconds": 0.5,
+          "MaxMilliseconds": 1.178,
+          "P95Milliseconds": 0.549,
+          "MedianMilliseconds": 0.517,
+          "P50Milliseconds": 0.517,
+          "P99Milliseconds": 1.117
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.15715000000000004,
+          "MinMilliseconds": 0.105,
+          "MaxMilliseconds": 0.575,
+          "P95Milliseconds": 0.534,
+          "MedianMilliseconds": 0.125,
+          "P50Milliseconds": 0.125,
+          "P99Milliseconds": 0.545
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.15354583333333355,
+          "MinMilliseconds": 0.107,
+          "MaxMilliseconds": 1.348,
+          "P95Milliseconds": 0.52,
+          "MedianMilliseconds": 0.125,
+          "P50Milliseconds": 0.125,
+          "P99Milliseconds": 0.57
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.1393374999999999,
+          "MinMilliseconds": 0.09,
+          "MaxMilliseconds": 0.554,
+          "P95Milliseconds": 0.519,
+          "MedianMilliseconds": 0.11,
+          "P50Milliseconds": 0.11,
+          "P99Milliseconds": 0.538
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage6",
+          "Count": 240,
+          "AverageMilliseconds": 0.13733750000000003,
+          "MinMilliseconds": 0.095,
+          "MaxMilliseconds": 0.533,
+          "P95Milliseconds": 0.519,
+          "MedianMilliseconds": 0.104,
+          "P50Milliseconds": 0.104,
+          "P99Milliseconds": 0.529
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.11891250000000002,
+          "MinMilliseconds": 0.07,
+          "MaxMilliseconds": 0.998,
+          "P95Milliseconds": 0.495,
+          "MedianMilliseconds": 0.086,
+          "P50Milliseconds": 0.086,
+          "P99Milliseconds": 0.505
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.10999999999999989,
+          "MinMilliseconds": 0.079,
+          "MaxMilliseconds": 0.512,
+          "P95Milliseconds": 0.487,
+          "MedianMilliseconds": 0.087,
+          "P50Milliseconds": 0.087,
+          "P99Milliseconds": 0.509
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.15838749999999963,
+          "MinMilliseconds": 0.127,
+          "MaxMilliseconds": 0.571,
+          "P95Milliseconds": 0.175,
+          "MedianMilliseconds": 0.147,
+          "P50Milliseconds": 0.147,
+          "P99Milliseconds": 0.566
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.10519166666666656,
+          "MinMilliseconds": 0.071,
+          "MaxMilliseconds": 1.059,
+          "P95Milliseconds": 0.113,
+          "MedianMilliseconds": 0.087,
+          "P50Milliseconds": 0.087,
+          "P99Milliseconds": 0.543
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage6",
+          "Count": 240,
+          "AverageMilliseconds": 0.11960416666666653,
+          "MinMilliseconds": 0.097,
+          "MaxMilliseconds": 0.743,
+          "P95Milliseconds": 0.11,
+          "MedianMilliseconds": 0.104,
+          "P50Milliseconds": 0.104,
+          "P99Milliseconds": 0.532
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage6",
+          "Count": 240,
+          "AverageMilliseconds": 0.11305416666666704,
+          "MinMilliseconds": 0.097,
+          "MaxMilliseconds": 0.768,
+          "P95Milliseconds": 0.109,
+          "MedianMilliseconds": 0.105,
+          "P50Milliseconds": 0.105,
+          "P99Milliseconds": 0.524
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.0935916666666666,
+          "MinMilliseconds": 0.079,
+          "MaxMilliseconds": 0.91,
+          "P95Milliseconds": 0.108,
+          "MedianMilliseconds": 0.087,
+          "P50Milliseconds": 0.087,
+          "P99Milliseconds": 0.11
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.09906249999999989,
+          "MinMilliseconds": 0.081,
+          "MaxMilliseconds": 0.512,
+          "P95Milliseconds": 0.107,
+          "MedianMilliseconds": 0.088,
+          "P50Milliseconds": 0.088,
+          "P99Milliseconds": 0.499
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.0965750000000002,
+          "MinMilliseconds": 0.076,
+          "MaxMilliseconds": 0.506,
+          "P95Milliseconds": 0.103,
+          "MedianMilliseconds": 0.092,
+          "P50Milliseconds": 0.092,
+          "P99Milliseconds": 0.329
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.09491250000000001,
+          "MinMilliseconds": 0.077,
+          "MaxMilliseconds": 0.496,
+          "P95Milliseconds": 0.099,
+          "MedianMilliseconds": 0.093,
+          "P50Milliseconds": 0.093,
+          "P99Milliseconds": 0.121
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.04324583333333317,
+          "MinMilliseconds": 0.039,
+          "MaxMilliseconds": 0.049,
+          "P95Milliseconds": 0.046,
+          "MedianMilliseconds": 0.044,
+          "P50Milliseconds": 0.044,
+          "P99Milliseconds": 0.048
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.04140833333333324,
+          "MinMilliseconds": 0.027,
+          "MaxMilliseconds": 0.466,
+          "P95Milliseconds": 0.036,
+          "MedianMilliseconds": 0.033,
+          "P50Milliseconds": 0.033,
+          "P99Milliseconds": 0.452
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 5.656441666666665,
+          "MinMilliseconds": 4.999,
+          "MaxMilliseconds": 7.667,
+          "P95Milliseconds": 6.865,
+          "MedianMilliseconds": 5.492,
+          "P50Milliseconds": 5.492,
+          "P99Milliseconds": 7.05
+        },
+        {
+          "Name": "AreaShadowDenoisePass",
+          "Count": 240,
+          "AverageMilliseconds": 2.236691666666667,
+          "MinMilliseconds": 1.696,
+          "MaxMilliseconds": 3.557,
+          "P95Milliseconds": 2.475,
+          "MedianMilliseconds": 2.294,
+          "P50Milliseconds": 2.294,
+          "P99Milliseconds": 3.41
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": false,
+        "OpticalDenoisingAllocatedBytes": 0,
+        "OpticalDenoisingHistoryReuses": 0,
+        "AreaDenoisingActive": true,
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 265940224,
+        "AreaDenoisingAllocatedBytes": 100120512
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-baseline-glass",
+      "capturedAtUtc": "2026-09-14T06:30:35.7260141+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "c71bc521884d46dc86ae8eb2d684db107da328b95301b0f60dd74abdac250ac8",
+        "settingsFingerprint": "2f0ca07ef0cc15b72bf9aa5b247fb6f93ee5e8135f1bba2448baa6dd5a84eded",
+        "sourceSettingsFingerprints": [
+          "2f0ca07ef0cc15b72bf9aa5b247fb6f93ee5e8135f1bba2448baa6dd5a84eded"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 27.999287500000005,
+        "MinMilliseconds": 26.167,
+        "MaxMilliseconds": 31.542,
+        "P95Milliseconds": 29.871,
+        "MedianMilliseconds": 27.875500000000002,
+        "P50Milliseconds": 27.875500000000002,
+        "P99Milliseconds": 30.973
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.1423708333333336,
+        "MinMilliseconds": 1.575,
+        "MaxMilliseconds": 11.299,
+        "P95Milliseconds": 3.012,
+        "MedianMilliseconds": 1.9140000000000001,
+        "P50Milliseconds": 1.9140000000000001,
+        "P99Milliseconds": 5.892
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/GlassCorrection",
+          "Count": 240,
+          "AverageMilliseconds": 1.738474999999999,
+          "MinMilliseconds": 1.624,
+          "MaxMilliseconds": 3.124,
+          "P95Milliseconds": 2.041,
+          "MedianMilliseconds": 1.69,
+          "P50Milliseconds": 1.69,
+          "P99Milliseconds": 2.58
+        },
+        {
+          "Name": "Denoising/GlassTemporal",
+          "Count": 240,
+          "AverageMilliseconds": 1.3712125000000006,
+          "MinMilliseconds": 1.213,
+          "MaxMilliseconds": 2.502,
+          "P95Milliseconds": 1.797,
+          "MedianMilliseconds": 1.288,
+          "P50Milliseconds": 1.288,
+          "P99Milliseconds": 2.099
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 1.092325,
+          "MinMilliseconds": 0.978,
+          "MaxMilliseconds": 1.95,
+          "P95Milliseconds": 1.602,
+          "MedianMilliseconds": 0.9975,
+          "P50Milliseconds": 0.9975,
+          "P99Milliseconds": 1.773
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 0.8964666666666672,
+          "MinMilliseconds": 0.793,
+          "MaxMilliseconds": 2.039,
+          "P95Milliseconds": 1.557,
+          "MedianMilliseconds": 0.807,
+          "P50Milliseconds": 0.807,
+          "P99Milliseconds": 2.024
+        },
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 0.9563166666666667,
+          "MinMilliseconds": 0.901,
+          "MaxMilliseconds": 2.122,
+          "P95Milliseconds": 1.303,
+          "MedianMilliseconds": 0.915,
+          "P50Milliseconds": 0.915,
+          "P99Milliseconds": 1.676
+        },
+        {
+          "Name": "Denoising/GlassSpatial2",
+          "Count": 240,
+          "AverageMilliseconds": 0.7699374999999998,
+          "MinMilliseconds": 0.677,
+          "MaxMilliseconds": 1.94,
+          "P95Milliseconds": 1.165,
+          "MedianMilliseconds": 0.7224999999999999,
+          "P50Milliseconds": 0.7224999999999999,
+          "P99Milliseconds": 1.351
+        },
+        {
+          "Name": "Denoising/GlassPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.8034916666666665,
+          "MinMilliseconds": 0.759,
+          "MaxMilliseconds": 1.968,
+          "P95Milliseconds": 0.841,
+          "MedianMilliseconds": 0.772,
+          "P50Milliseconds": 0.772,
+          "P99Milliseconds": 1.513
+        },
+        {
+          "Name": "Denoising/GlassSpatial1",
+          "Count": 240,
+          "AverageMilliseconds": 0.6190458333333331,
+          "MinMilliseconds": 0.574,
+          "MaxMilliseconds": 1.234,
+          "P95Milliseconds": 0.642,
+          "MedianMilliseconds": 0.615,
+          "P50Milliseconds": 0.615,
+          "P99Milliseconds": 0.657
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.4503916666666672,
+          "MinMilliseconds": 0.421,
+          "MaxMilliseconds": 0.922,
+          "P95Milliseconds": 0.562,
+          "MedianMilliseconds": 0.427,
+          "P50Milliseconds": 0.427,
+          "P99Milliseconds": 0.803
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.4935666666666661,
+          "MinMilliseconds": 0.468,
+          "MaxMilliseconds": 1.042,
+          "P95Milliseconds": 0.499,
+          "MedianMilliseconds": 0.4805,
+          "P50Milliseconds": 0.4805,
+          "P99Milliseconds": 0.903
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 3.4449583333333327,
+          "MinMilliseconds": 3.166,
+          "MaxMilliseconds": 5.394,
+          "P95Milliseconds": 4.545,
+          "MedianMilliseconds": 3.2264999999999997,
+          "P50Milliseconds": 3.2264999999999997,
+          "P99Milliseconds": 4.673
+        },
+        {
+          "Name": "OpticalTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 2.2979375000000024,
+          "MinMilliseconds": 1.986,
+          "MaxMilliseconds": 3.425,
+          "P95Milliseconds": 3.332,
+          "MedianMilliseconds": 2.0780000000000003,
+          "P50Milliseconds": 2.0780000000000003,
+          "P99Milliseconds": 3.395
+        },
+        {
+          "Name": "OpticalCorrectionPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.7448833333333347,
+          "MinMilliseconds": 1.631,
+          "MaxMilliseconds": 3.126,
+          "P95Milliseconds": 2.044,
+          "MedianMilliseconds": 1.6965,
+          "P50Milliseconds": 1.6965,
+          "P99Milliseconds": 2.604
+        },
+        {
+          "Name": "OpticalSpatialPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.3894833333333325,
+          "MinMilliseconds": 1.271,
+          "MaxMilliseconds": 2.525,
+          "P95Milliseconds": 1.788,
+          "MedianMilliseconds": 1.341,
+          "P50Milliseconds": 1.341,
+          "P99Milliseconds": 1.954
+        },
+        {
+          "Name": "OpticalLayerClearPass",
+          "Count": 240,
+          "AverageMilliseconds": 0.2638083333333326,
+          "MinMilliseconds": 0.235,
+          "MaxMilliseconds": 0.87,
+          "P95Milliseconds": 0.34,
+          "MedianMilliseconds": 0.241,
+          "P50Milliseconds": 0.241,
+          "P99Milliseconds": 0.826
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": true,
+        "OpticalDenoisingAllocatedBytes": 535953472,
+        "OpticalDenoisingHistoryReuses": 81382,
+        "AreaDenoisingActive": false,
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 265940224,
+        "AreaDenoisingAllocatedBytes": 0
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-uniform-area",
+      "capturedAtUtc": "2026-09-14T06:33:03.3840397+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "d5cd122bf0ad3098548df33f7a77c269d405cde1c2db1578d060a0a14c5019c5",
+        "settingsFingerprint": "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e",
+        "sourceSettingsFingerprints": [
+          "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 27.9698541666667,
+        "MinMilliseconds": 22.754,
+        "MaxMilliseconds": 37.468,
+        "P95Milliseconds": 32.994,
+        "MedianMilliseconds": 27.596,
+        "P50Milliseconds": 27.596,
+        "P99Milliseconds": 34.965
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.4573833333333326,
+        "MinMilliseconds": 1.573,
+        "MaxMilliseconds": 11.256,
+        "P95Milliseconds": 3.818,
+        "MedianMilliseconds": 2.1879999999999997,
+        "P50Milliseconds": 2.1879999999999997,
+        "P99Milliseconds": 8.663
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 2.9661624999999985,
+          "MinMilliseconds": 2.328,
+          "MaxMilliseconds": 7.749,
+          "P95Milliseconds": 4.989,
+          "MedianMilliseconds": 2.4825,
+          "P50Milliseconds": 2.4825,
+          "P99Milliseconds": 5.966
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 1.3623041666666658,
+          "MinMilliseconds": 1.079,
+          "MaxMilliseconds": 4.512,
+          "P95Milliseconds": 2.377,
+          "MedianMilliseconds": 1.235,
+          "P50Milliseconds": 1.235,
+          "P99Milliseconds": 3.294
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 1.0992458333333353,
+          "MinMilliseconds": 0.899,
+          "MaxMilliseconds": 4.765,
+          "P95Milliseconds": 1.889,
+          "MedianMilliseconds": 0.931,
+          "P50Milliseconds": 0.931,
+          "P99Milliseconds": 2.702
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.6104583333333334,
+          "MinMilliseconds": 0.42,
+          "MaxMilliseconds": 2.438,
+          "P95Milliseconds": 1.34,
+          "MedianMilliseconds": 0.432,
+          "P50Milliseconds": 0.432,
+          "P99Milliseconds": 2.059
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.6094958333333336,
+          "MinMilliseconds": 0.479,
+          "MaxMilliseconds": 2.266,
+          "P95Milliseconds": 1.16,
+          "MedianMilliseconds": 0.514,
+          "P50Milliseconds": 0.514,
+          "P99Milliseconds": 1.642
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.19918750000000032,
+          "MinMilliseconds": 0.154,
+          "MaxMilliseconds": 1.471,
+          "P95Milliseconds": 0.54,
+          "MedianMilliseconds": 0.161,
+          "P50Milliseconds": 0.161,
+          "P99Milliseconds": 0.815
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage6",
+          "Count": 240,
+          "AverageMilliseconds": 0.15334166666666688,
+          "MinMilliseconds": 0.093,
+          "MaxMilliseconds": 1.943,
+          "P95Milliseconds": 0.521,
+          "MedianMilliseconds": 0.1,
+          "P50Milliseconds": 0.1,
+          "P99Milliseconds": 1.407
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.13996666666666646,
+          "MinMilliseconds": 0.103,
+          "MaxMilliseconds": 1.442,
+          "P95Milliseconds": 0.156,
+          "MedianMilliseconds": 0.1105,
+          "P50Milliseconds": 0.1105,
+          "P99Milliseconds": 0.764
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.14608333333333354,
+          "MinMilliseconds": 0.125,
+          "MaxMilliseconds": 0.723,
+          "P95Milliseconds": 0.154,
+          "MedianMilliseconds": 0.132,
+          "P50Milliseconds": 0.132,
+          "P99Milliseconds": 0.561
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.15302500000000008,
+          "MinMilliseconds": 0.117,
+          "MaxMilliseconds": 2.127,
+          "P95Milliseconds": 0.147,
+          "MedianMilliseconds": 0.125,
+          "P50Milliseconds": 0.125,
+          "P99Milliseconds": 0.882
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.13267083333333313,
+          "MinMilliseconds": 0.103,
+          "MaxMilliseconds": 1.564,
+          "P95Milliseconds": 0.132,
+          "MedianMilliseconds": 0.11,
+          "P50Milliseconds": 0.11,
+          "P99Milliseconds": 0.723
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.10645833333333346,
+          "MinMilliseconds": 0.089,
+          "MaxMilliseconds": 1.416,
+          "P95Milliseconds": 0.117,
+          "MedianMilliseconds": 0.095,
+          "P50Milliseconds": 0.095,
+          "P99Milliseconds": 0.319
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage6",
+          "Count": 240,
+          "AverageMilliseconds": 0.12010833333333347,
+          "MinMilliseconds": 0.092,
+          "MaxMilliseconds": 1.123,
+          "P95Milliseconds": 0.108,
+          "MedianMilliseconds": 0.1,
+          "P50Milliseconds": 0.1,
+          "P99Milliseconds": 0.72
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage6",
+          "Count": 240,
+          "AverageMilliseconds": 0.11648750000000005,
+          "MinMilliseconds": 0.092,
+          "MaxMilliseconds": 1.417,
+          "P95Milliseconds": 0.106,
+          "MedianMilliseconds": 0.099,
+          "P50Milliseconds": 0.099,
+          "P99Milliseconds": 0.524
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.09776250000000007,
+          "MinMilliseconds": 0.076,
+          "MaxMilliseconds": 0.864,
+          "P95Milliseconds": 0.099,
+          "MedianMilliseconds": 0.081,
+          "P50Milliseconds": 0.081,
+          "P99Milliseconds": 0.852
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.1102125000000001,
+          "MinMilliseconds": 0.074,
+          "MaxMilliseconds": 2.244,
+          "P95Milliseconds": 0.098,
+          "MedianMilliseconds": 0.081,
+          "P50Milliseconds": 0.081,
+          "P99Milliseconds": 0.887
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.09208333333333332,
+          "MinMilliseconds": 0.069,
+          "MaxMilliseconds": 1.225,
+          "P95Milliseconds": 0.094,
+          "MedianMilliseconds": 0.075,
+          "P50Milliseconds": 0.075,
+          "P99Milliseconds": 0.575
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.10042500000000018,
+          "MinMilliseconds": 0.077,
+          "MaxMilliseconds": 1.301,
+          "P95Milliseconds": 0.092,
+          "MedianMilliseconds": 0.082,
+          "P50Milliseconds": 0.082,
+          "P99Milliseconds": 0.762
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.09006666666666673,
+          "MinMilliseconds": 0.075,
+          "MaxMilliseconds": 0.714,
+          "P95Milliseconds": 0.092,
+          "MedianMilliseconds": 0.081,
+          "P50Milliseconds": 0.081,
+          "P99Milliseconds": 0.554
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.10310000000000002,
+          "MinMilliseconds": 0.075,
+          "MaxMilliseconds": 1.404,
+          "P95Milliseconds": 0.091,
+          "MedianMilliseconds": 0.081,
+          "P50Milliseconds": 0.081,
+          "P99Milliseconds": 0.851
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.0827875000000001,
+          "MinMilliseconds": 0.07,
+          "MaxMilliseconds": 0.717,
+          "P95Milliseconds": 0.09,
+          "MedianMilliseconds": 0.076,
+          "P50Milliseconds": 0.076,
+          "P99Milliseconds": 0.476
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.05029166666666671,
+          "MinMilliseconds": 0.035,
+          "MaxMilliseconds": 1.357,
+          "P95Milliseconds": 0.044,
+          "MedianMilliseconds": 0.04,
+          "P50Milliseconds": 0.04,
+          "P99Milliseconds": 0.463
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.04051666666666667,
+          "MinMilliseconds": 0.026,
+          "MaxMilliseconds": 0.658,
+          "P95Milliseconds": 0.036,
+          "MedianMilliseconds": 0.031,
+          "P50Milliseconds": 0.031,
+          "P99Milliseconds": 0.481
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 6.045154166666663,
+          "MinMilliseconds": 4.898,
+          "MaxMilliseconds": 11.499,
+          "P95Milliseconds": 8.738,
+          "MedianMilliseconds": 5.4625,
+          "P50Milliseconds": 5.4625,
+          "P99Milliseconds": 11.137
+        },
+        {
+          "Name": "AreaShadowDenoisePass",
+          "Count": 240,
+          "AverageMilliseconds": 2.0882791666666667,
+          "MinMilliseconds": 1.63,
+          "MaxMilliseconds": 5.542,
+          "P95Milliseconds": 3.589,
+          "MedianMilliseconds": 1.733,
+          "P50Milliseconds": 1.733,
+          "P99Milliseconds": 4.633
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": false,
+        "OpticalDenoisingAllocatedBytes": 0,
+        "OpticalDenoisingHistoryReuses": 0,
+        "AreaDenoisingActive": true,
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 265940224,
+        "AreaDenoisingAllocatedBytes": 100120512
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-uniform-area-repeat",
+      "capturedAtUtc": "2026-09-14T06:34:28.6346227+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "d5cd122bf0ad3098548df33f7a77c269d405cde1c2db1578d060a0a14c5019c5",
+        "settingsFingerprint": "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e",
+        "sourceSettingsFingerprints": [
+          "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 25.440479166666663,
+        "MinMilliseconds": 23.384,
+        "MaxMilliseconds": 28.631,
+        "P95Milliseconds": 26.877,
+        "MedianMilliseconds": 25.384500000000003,
+        "P50Milliseconds": 25.384500000000003,
+        "P99Milliseconds": 27.89
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.335612499999999,
+        "MinMilliseconds": 1.596,
+        "MaxMilliseconds": 14.086,
+        "P95Milliseconds": 3.121,
+        "MedianMilliseconds": 2.1305,
+        "P50Milliseconds": 2.1305,
+        "P99Milliseconds": 6.745
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 2.5727333333333307,
+          "MinMilliseconds": 2.389,
+          "MaxMilliseconds": 3.988,
+          "P95Milliseconds": 3.182,
+          "MedianMilliseconds": 2.518,
+          "P50Milliseconds": 2.518,
+          "P99Milliseconds": 3.774
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 1.3964999999999999,
+          "MinMilliseconds": 1.075,
+          "MaxMilliseconds": 2.901,
+          "P95Milliseconds": 1.976,
+          "MedianMilliseconds": 1.338,
+          "P50Milliseconds": 1.338,
+          "P99Milliseconds": 2.776
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 1.0425000000000006,
+          "MinMilliseconds": 0.919,
+          "MaxMilliseconds": 2.31,
+          "P95Milliseconds": 1.269,
+          "MedianMilliseconds": 1.035,
+          "P50Milliseconds": 1.035,
+          "P99Milliseconds": 1.815
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.501020833333333,
+          "MinMilliseconds": 0.421,
+          "MaxMilliseconds": 1.67,
+          "P95Milliseconds": 0.646,
+          "MedianMilliseconds": 0.491,
+          "P50Milliseconds": 0.491,
+          "P99Milliseconds": 1.156
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.22068333333333343,
+          "MinMilliseconds": 0.155,
+          "MaxMilliseconds": 0.614,
+          "P95Milliseconds": 0.598,
+          "MedianMilliseconds": 0.181,
+          "P50Milliseconds": 0.181,
+          "P99Milliseconds": 0.608
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.5326333333333341,
+          "MinMilliseconds": 0.504,
+          "MaxMilliseconds": 1.123,
+          "P95Milliseconds": 0.551,
+          "MedianMilliseconds": 0.519,
+          "P50Milliseconds": 0.519,
+          "P99Milliseconds": 0.86
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.1632416666666667,
+          "MinMilliseconds": 0.103,
+          "MaxMilliseconds": 1.67,
+          "P95Milliseconds": 0.532,
+          "MedianMilliseconds": 0.121,
+          "P50Milliseconds": 0.121,
+          "P99Milliseconds": 0.825
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.1573125,
+          "MinMilliseconds": 0.103,
+          "MaxMilliseconds": 1.105,
+          "P95Milliseconds": 0.531,
+          "MedianMilliseconds": 0.121,
+          "P50Milliseconds": 0.121,
+          "P99Milliseconds": 0.549
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.12789166666666663,
+          "MinMilliseconds": 0.09,
+          "MaxMilliseconds": 0.537,
+          "P95Milliseconds": 0.508,
+          "MedianMilliseconds": 0.105,
+          "P50Milliseconds": 0.105,
+          "P99Milliseconds": 0.529
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.16503333333333303,
+          "MinMilliseconds": 0.127,
+          "MaxMilliseconds": 0.922,
+          "P95Milliseconds": 0.415,
+          "MedianMilliseconds": 0.143,
+          "P50Milliseconds": 0.143,
+          "P99Milliseconds": 0.697
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage6",
+          "Count": 240,
+          "AverageMilliseconds": 0.12897500000000003,
+          "MinMilliseconds": 0.094,
+          "MaxMilliseconds": 0.524,
+          "P95Milliseconds": 0.398,
+          "MedianMilliseconds": 0.1,
+          "P50Milliseconds": 0.1,
+          "P99Milliseconds": 0.523
+        },
+        {
+          "Name": "Denoising/Shadow1/Stage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.11505416666666654,
+          "MinMilliseconds": 0.078,
+          "MaxMilliseconds": 0.854,
+          "P95Milliseconds": 0.385,
+          "MedianMilliseconds": 0.086,
+          "P50Milliseconds": 0.086,
+          "P99Milliseconds": 0.505
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.15798333333333325,
+          "MinMilliseconds": 0.12,
+          "MaxMilliseconds": 0.715,
+          "P95Milliseconds": 0.36,
+          "MedianMilliseconds": 0.136,
+          "P50Milliseconds": 0.136,
+          "P99Milliseconds": 0.557
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage6",
+          "Count": 240,
+          "AverageMilliseconds": 0.12394999999999999,
+          "MinMilliseconds": 0.096,
+          "MaxMilliseconds": 0.525,
+          "P95Milliseconds": 0.332,
+          "MedianMilliseconds": 0.103,
+          "P50Milliseconds": 0.103,
+          "P99Milliseconds": 0.516
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.10462499999999976,
+          "MinMilliseconds": 0.081,
+          "MaxMilliseconds": 0.51,
+          "P95Milliseconds": 0.116,
+          "MedianMilliseconds": 0.088,
+          "P50Milliseconds": 0.088,
+          "P99Milliseconds": 0.499
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.1023750000000001,
+          "MinMilliseconds": 0.076,
+          "MaxMilliseconds": 0.874,
+          "P95Milliseconds": 0.115,
+          "MedianMilliseconds": 0.089,
+          "P50Milliseconds": 0.089,
+          "P99Milliseconds": 0.527
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.10089166666666666,
+          "MinMilliseconds": 0.07,
+          "MaxMilliseconds": 1.039,
+          "P95Milliseconds": 0.113,
+          "MedianMilliseconds": 0.083,
+          "P50Milliseconds": 0.083,
+          "P99Milliseconds": 0.49
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.0954916666666666,
+          "MinMilliseconds": 0.075,
+          "MaxMilliseconds": 0.714,
+          "P95Milliseconds": 0.112,
+          "MedianMilliseconds": 0.088,
+          "P50Milliseconds": 0.088,
+          "P99Milliseconds": 0.371
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage6",
+          "Count": 240,
+          "AverageMilliseconds": 0.10994166666666699,
+          "MinMilliseconds": 0.096,
+          "MaxMilliseconds": 0.524,
+          "P95Milliseconds": 0.11,
+          "MedianMilliseconds": 0.102,
+          "P50Milliseconds": 0.102,
+          "P99Milliseconds": 0.401
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.09640416666666689,
+          "MinMilliseconds": 0.07,
+          "MaxMilliseconds": 1.075,
+          "P95Milliseconds": 0.11,
+          "MedianMilliseconds": 0.082,
+          "P50Milliseconds": 0.082,
+          "P99Milliseconds": 0.31
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.0968999999999999,
+          "MinMilliseconds": 0.078,
+          "MaxMilliseconds": 1.035,
+          "P95Milliseconds": 0.108,
+          "MedianMilliseconds": 0.086,
+          "P50Milliseconds": 0.086,
+          "P99Milliseconds": 0.311
+        },
+        {
+          "Name": "Denoising/Shadow2/Stage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.04825,
+          "MinMilliseconds": 0.035,
+          "MaxMilliseconds": 0.458,
+          "P95Milliseconds": 0.047,
+          "MedianMilliseconds": 0.041,
+          "P50Milliseconds": 0.041,
+          "P99Milliseconds": 0.33
+        },
+        {
+          "Name": "Denoising/Shadow0/Stage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.035233333333333346,
+          "MinMilliseconds": 0.026,
+          "MaxMilliseconds": 0.793,
+          "P95Milliseconds": 0.035,
+          "MedianMilliseconds": 0.031,
+          "P50Milliseconds": 0.031,
+          "P99Milliseconds": 0.038
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 5.551079166666667,
+          "MinMilliseconds": 4.942,
+          "MaxMilliseconds": 7.046,
+          "P95Milliseconds": 6.801,
+          "MedianMilliseconds": 5.4815000000000005,
+          "P50Milliseconds": 5.4815000000000005,
+          "P99Milliseconds": 6.988
+        },
+        {
+          "Name": "AreaShadowDenoisePass",
+          "Count": 240,
+          "AverageMilliseconds": 2.1933083333333347,
+          "MinMilliseconds": 1.644,
+          "MaxMilliseconds": 3.465,
+          "P95Milliseconds": 2.639,
+          "MedianMilliseconds": 2.2430000000000003,
+          "P50Milliseconds": 2.2430000000000003,
+          "P99Milliseconds": 3.221
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": false,
+        "OpticalDenoisingAllocatedBytes": 0,
+        "OpticalDenoisingHistoryReuses": 0,
+        "AreaDenoisingActive": true,
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 265940224,
+        "AreaDenoisingAllocatedBytes": 100120512
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-quick-glass",
+      "capturedAtUtc": "2026-09-14T06:39:50.7565591+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "9f2cbac486a1c8e2c623a4054d3656669686fa6f89492dfa69b2dfbdcefb774d",
+        "settingsFingerprint": "2f0ca07ef0cc15b72bf9aa5b247fb6f93ee5e8135f1bba2448baa6dd5a84eded",
+        "sourceSettingsFingerprints": [
+          "2f0ca07ef0cc15b72bf9aa5b247fb6f93ee5e8135f1bba2448baa6dd5a84eded"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 27.34101666666667,
+        "MinMilliseconds": 25.51,
+        "MaxMilliseconds": 30.218,
+        "P95Milliseconds": 29.203,
+        "MedianMilliseconds": 27.18,
+        "P50Milliseconds": 27.18,
+        "P99Milliseconds": 29.841
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.161958333333335,
+        "MinMilliseconds": 1.601,
+        "MaxMilliseconds": 14.404,
+        "P95Milliseconds": 2.976,
+        "MedianMilliseconds": 1.9005,
+        "P50Milliseconds": 1.9005,
+        "P99Milliseconds": 6.201
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/GlassCorrection",
+          "Count": 240,
+          "AverageMilliseconds": 1.5527583333333324,
+          "MinMilliseconds": 1.433,
+          "MaxMilliseconds": 2.856,
+          "P95Milliseconds": 1.995,
+          "MedianMilliseconds": 1.505,
+          "P50Milliseconds": 1.505,
+          "P99Milliseconds": 2.291
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 1.061579166666666,
+          "MinMilliseconds": 0.98,
+          "MaxMilliseconds": 1.821,
+          "P95Milliseconds": 1.587,
+          "MedianMilliseconds": 0.996,
+          "P50Milliseconds": 0.996,
+          "P99Milliseconds": 1.752
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 0.8963166666666669,
+          "MinMilliseconds": 0.795,
+          "MaxMilliseconds": 2.026,
+          "P95Milliseconds": 1.555,
+          "MedianMilliseconds": 0.811,
+          "P50Milliseconds": 0.811,
+          "P99Milliseconds": 1.604
+        },
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 0.964858333333333,
+          "MinMilliseconds": 0.903,
+          "MaxMilliseconds": 2.173,
+          "P95Milliseconds": 1.325,
+          "MedianMilliseconds": 0.917,
+          "P50Milliseconds": 0.917,
+          "P99Milliseconds": 1.666
+        },
+        {
+          "Name": "Denoising/GlassTemporal",
+          "Count": 240,
+          "AverageMilliseconds": 0.9934625000000009,
+          "MinMilliseconds": 0.919,
+          "MaxMilliseconds": 1.555,
+          "P95Milliseconds": 1.197,
+          "MedianMilliseconds": 0.968,
+          "P50Milliseconds": 0.968,
+          "P99Milliseconds": 1.481
+        },
+        {
+          "Name": "Denoising/GlassPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.7889333333333323,
+          "MinMilliseconds": 0.756,
+          "MaxMilliseconds": 1.552,
+          "P95Milliseconds": 0.833,
+          "MedianMilliseconds": 0.772,
+          "P50Milliseconds": 0.772,
+          "P99Milliseconds": 0.982
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.5232374999999998,
+          "MinMilliseconds": 0.467,
+          "MaxMilliseconds": 1.24,
+          "P95Milliseconds": 0.752,
+          "MedianMilliseconds": 0.484,
+          "P50Milliseconds": 0.484,
+          "P99Milliseconds": 1.223
+        },
+        {
+          "Name": "Denoising/GlassSpatial2",
+          "Count": 240,
+          "AverageMilliseconds": 0.6661750000000006,
+          "MinMilliseconds": 0.618,
+          "MaxMilliseconds": 1.334,
+          "P95Milliseconds": 0.679,
+          "MedianMilliseconds": 0.654,
+          "P50Milliseconds": 0.654,
+          "P99Milliseconds": 1.163
+        },
+        {
+          "Name": "Denoising/GlassSpatial1",
+          "Count": 240,
+          "AverageMilliseconds": 0.5732916666666659,
+          "MinMilliseconds": 0.532,
+          "MaxMilliseconds": 1.193,
+          "P95Milliseconds": 0.599,
+          "MedianMilliseconds": 0.564,
+          "P50Milliseconds": 0.564,
+          "P99Milliseconds": 0.933
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.4494625000000012,
+          "MinMilliseconds": 0.421,
+          "MaxMilliseconds": 1.328,
+          "P95Milliseconds": 0.572,
+          "MedianMilliseconds": 0.427,
+          "P50Milliseconds": 0.427,
+          "P99Milliseconds": 0.828
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 3.452308333333333,
+          "MinMilliseconds": 3.177,
+          "MaxMilliseconds": 4.752,
+          "P95Milliseconds": 4.532,
+          "MedianMilliseconds": 3.2355,
+          "P50Milliseconds": 3.2355,
+          "P99Milliseconds": 4.63
+        },
+        {
+          "Name": "OpticalTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.8821833333333322,
+          "MinMilliseconds": 1.688,
+          "MaxMilliseconds": 3.084,
+          "P95Milliseconds": 2.375,
+          "MedianMilliseconds": 1.759,
+          "P50Milliseconds": 1.759,
+          "P99Milliseconds": 2.984
+        },
+        {
+          "Name": "OpticalCorrectionPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.5593041666666652,
+          "MinMilliseconds": 1.44,
+          "MaxMilliseconds": 2.863,
+          "P95Milliseconds": 1.998,
+          "MedianMilliseconds": 1.5125,
+          "P50Milliseconds": 1.5125,
+          "P99Milliseconds": 2.301
+        },
+        {
+          "Name": "OpticalSpatialPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.2399125,
+          "MinMilliseconds": 1.168,
+          "MaxMilliseconds": 1.879,
+          "P95Milliseconds": 1.363,
+          "MedianMilliseconds": 1.22,
+          "P50Milliseconds": 1.22,
+          "P99Milliseconds": 1.832
+        },
+        {
+          "Name": "OpticalLayerClearPass",
+          "Count": 240,
+          "AverageMilliseconds": 0.25799583333333276,
+          "MinMilliseconds": 0.235,
+          "MaxMilliseconds": 1.007,
+          "P95Milliseconds": 0.323,
+          "MedianMilliseconds": 0.241,
+          "P50Milliseconds": 0.241,
+          "P99Milliseconds": 0.848
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": true,
+        "OpticalDenoisingAllocatedBytes": 535953472,
+        "OpticalDenoisingHistoryReuses": 81438,
+        "AreaDenoisingActive": false,
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 265940224,
+        "AreaDenoisingAllocatedBytes": 0
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-memory-area",
+      "capturedAtUtc": "2026-09-14T06:44:35.8130123+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "b8a0bc89e7b9527d078b9139a1ef45dc5cf3369134f2914bbf15982907002242",
+        "settingsFingerprint": "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e",
+        "sourceSettingsFingerprints": [
+          "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 22.054129166666666,
+        "MinMilliseconds": 20.535,
+        "MaxMilliseconds": 24.756,
+        "P95Milliseconds": 23.503,
+        "MedianMilliseconds": 21.9145,
+        "P50Milliseconds": 21.9145,
+        "P99Milliseconds": 24.014
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.271233333333333,
+        "MinMilliseconds": 1.51,
+        "MaxMilliseconds": 14.965,
+        "P95Milliseconds": 3.46,
+        "MedianMilliseconds": 1.9780000000000002,
+        "P50Milliseconds": 1.9780000000000002,
+        "P99Milliseconds": 6.6
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 0.8315041666666664,
+          "MinMilliseconds": 0.72,
+          "MaxMilliseconds": 1.389,
+          "P95Milliseconds": 1.25,
+          "MedianMilliseconds": 0.734,
+          "P50Milliseconds": 0.734,
+          "P99Milliseconds": 1.376
+        },
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 1.1824041666666665,
+          "MinMilliseconds": 1.141,
+          "MaxMilliseconds": 1.842,
+          "P95Milliseconds": 1.196,
+          "MedianMilliseconds": 1.169,
+          "P50Milliseconds": 1.169,
+          "P99Milliseconds": 1.624
+        },
+        {
+          "Name": "Denoising/ShadowStage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.4707000000000001,
+          "MinMilliseconds": 0.382,
+          "MaxMilliseconds": 0.884,
+          "P95Milliseconds": 0.825,
+          "MedianMilliseconds": 0.393,
+          "P50Milliseconds": 0.393,
+          "P99Milliseconds": 0.85
+        },
+        {
+          "Name": "Denoising/ShadowStage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.3233499999999998,
+          "MinMilliseconds": 0.239,
+          "MaxMilliseconds": 1.213,
+          "P95Milliseconds": 0.672,
+          "MedianMilliseconds": 0.246,
+          "P50Milliseconds": 0.246,
+          "P99Milliseconds": 0.709
+        },
+        {
+          "Name": "Denoising/ShadowStage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.31302083333333347,
+          "MinMilliseconds": 0.239,
+          "MaxMilliseconds": 0.868,
+          "P95Milliseconds": 0.663,
+          "MedianMilliseconds": 0.245,
+          "P50Milliseconds": 0.245,
+          "P99Milliseconds": 0.694
+        },
+        {
+          "Name": "Denoising/ShadowStage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.1722124999999998,
+          "MinMilliseconds": 0.14,
+          "MaxMilliseconds": 0.585,
+          "P95Milliseconds": 0.554,
+          "MedianMilliseconds": 0.142,
+          "P50Milliseconds": 0.142,
+          "P99Milliseconds": 0.571
+        },
+        {
+          "Name": "Denoising/ShadowPublish",
+          "Count": 240,
+          "AverageMilliseconds": 0.278783333333333,
+          "MinMilliseconds": 0.236,
+          "MaxMilliseconds": 0.691,
+          "P95Milliseconds": 0.54,
+          "MedianMilliseconds": 0.24,
+          "P50Milliseconds": 0.24,
+          "P99Milliseconds": 0.672
+        },
+        {
+          "Name": "Denoising/ShadowStage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.2594208333333334,
+          "MinMilliseconds": 0.22,
+          "MaxMilliseconds": 0.849,
+          "P95Milliseconds": 0.467,
+          "MedianMilliseconds": 0.23,
+          "P50Milliseconds": 0.23,
+          "P99Milliseconds": 0.679
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 0.3762250000000001,
+          "MinMilliseconds": 0.353,
+          "MaxMilliseconds": 1.01,
+          "P95Milliseconds": 0.374,
+          "MedianMilliseconds": 0.366,
+          "P50Milliseconds": 0.366,
+          "P99Milliseconds": 0.858
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.1962,
+          "MinMilliseconds": 0.168,
+          "MaxMilliseconds": 0.832,
+          "P95Milliseconds": 0.221,
+          "MedianMilliseconds": 0.1785,
+          "P50Milliseconds": 0.1785,
+          "P99Milliseconds": 0.423
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.17623333333333313,
+          "MinMilliseconds": 0.162,
+          "MaxMilliseconds": 0.847,
+          "P95Milliseconds": 0.187,
+          "MedianMilliseconds": 0.168,
+          "P50Milliseconds": 0.168,
+          "P99Milliseconds": 0.236
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 2.5931625,
+          "MinMilliseconds": 2.404,
+          "MaxMilliseconds": 3.574,
+          "P95Milliseconds": 3.092,
+          "MedianMilliseconds": 2.4825,
+          "P50Milliseconds": 2.4825,
+          "P99Milliseconds": 3.146
+        },
+        {
+          "Name": "AreaShadowDenoisePass",
+          "Count": 240,
+          "AverageMilliseconds": 1.8279583333333338,
+          "MinMilliseconds": 1.476,
+          "MaxMilliseconds": 2.463,
+          "P95Milliseconds": 2.061,
+          "MedianMilliseconds": 1.9125,
+          "P50Milliseconds": 1.9125,
+          "P99Milliseconds": 2.147
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": false,
+        "OpticalDenoisingAllocatedBytes": 0,
+        "OpticalDenoisingHistoryReuses": 0,
+        "AreaDenoisingActive": true,
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 191031424,
+        "AreaDenoisingAllocatedBytes": 100120512
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-final-area",
+      "capturedAtUtc": "2026-09-14T06:51:01.2394749+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "370029c5f0c87938d99b95ed1f87abb87717b54a7e8fd853390658c0bc7f1d75",
+        "settingsFingerprint": "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e",
+        "sourceSettingsFingerprints": [
+          "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 21.626591666666677,
+        "MinMilliseconds": 20.629,
+        "MaxMilliseconds": 24.627,
+        "P95Milliseconds": 22.855,
+        "MedianMilliseconds": 21.503999999999998,
+        "P50Milliseconds": 21.503999999999998,
+        "P99Milliseconds": 24.328
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.4618208333333333,
+        "MinMilliseconds": 1.607,
+        "MaxMilliseconds": 13.852,
+        "P95Milliseconds": 3.457,
+        "MedianMilliseconds": 2.215,
+        "P50Milliseconds": 2.215,
+        "P99Milliseconds": 6.853
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 1.2357333333333325,
+          "MinMilliseconds": 1.185,
+          "MaxMilliseconds": 2.473,
+          "P95Milliseconds": 1.233,
+          "MedianMilliseconds": 1.206,
+          "P50Milliseconds": 1.206,
+          "P99Milliseconds": 1.915
+        },
+        {
+          "Name": "Denoising/ShadowStage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.496875,
+          "MinMilliseconds": 0.382,
+          "MaxMilliseconds": 1.341,
+          "P95Milliseconds": 0.828,
+          "MedianMilliseconds": 0.395,
+          "P50Milliseconds": 0.395,
+          "P99Milliseconds": 1.24
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 0.7457499999999991,
+          "MinMilliseconds": 0.72,
+          "MaxMilliseconds": 1.98,
+          "P95Milliseconds": 0.741,
+          "MedianMilliseconds": 0.732,
+          "P50Milliseconds": 0.732,
+          "P99Milliseconds": 1.241
+        },
+        {
+          "Name": "Denoising/ShadowStage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.3327708333333331,
+          "MinMilliseconds": 0.24,
+          "MaxMilliseconds": 0.85,
+          "P95Milliseconds": 0.673,
+          "MedianMilliseconds": 0.247,
+          "P50Milliseconds": 0.247,
+          "P99Milliseconds": 0.717
+        },
+        {
+          "Name": "Denoising/ShadowStage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.3350708333333332,
+          "MinMilliseconds": 0.239,
+          "MaxMilliseconds": 1.809,
+          "P95Milliseconds": 0.672,
+          "MedianMilliseconds": 0.2445,
+          "P50Milliseconds": 0.2445,
+          "P99Milliseconds": 0.732
+        },
+        {
+          "Name": "Denoising/ShadowStage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.17250833333333312,
+          "MinMilliseconds": 0.14,
+          "MaxMilliseconds": 0.687,
+          "P95Milliseconds": 0.556,
+          "MedianMilliseconds": 0.142,
+          "P50Milliseconds": 0.142,
+          "P99Milliseconds": 0.579
+        },
+        {
+          "Name": "Denoising/ShadowPublish",
+          "Count": 240,
+          "AverageMilliseconds": 0.28975416666666637,
+          "MinMilliseconds": 0.234,
+          "MaxMilliseconds": 0.697,
+          "P95Milliseconds": 0.545,
+          "MedianMilliseconds": 0.241,
+          "P50Milliseconds": 0.241,
+          "P99Milliseconds": 0.672
+        },
+        {
+          "Name": "Denoising/ShadowStage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.24777500000000016,
+          "MinMilliseconds": 0.221,
+          "MaxMilliseconds": 0.657,
+          "P95Milliseconds": 0.453,
+          "MedianMilliseconds": 0.229,
+          "P50Milliseconds": 0.229,
+          "P99Milliseconds": 0.647
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 0.38045416666666637,
+          "MinMilliseconds": 0.366,
+          "MaxMilliseconds": 0.869,
+          "P95Milliseconds": 0.381,
+          "MedianMilliseconds": 0.376,
+          "P50Milliseconds": 0.376,
+          "P99Milliseconds": 0.61
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.1930333333333337,
+          "MinMilliseconds": 0.175,
+          "MaxMilliseconds": 0.251,
+          "P95Milliseconds": 0.216,
+          "MedianMilliseconds": 0.184,
+          "P50Milliseconds": 0.184,
+          "P99Milliseconds": 0.249
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.16893333333333307,
+          "MinMilliseconds": 0.156,
+          "MaxMilliseconds": 0.791,
+          "P95Milliseconds": 0.198,
+          "MedianMilliseconds": 0.159,
+          "P50Milliseconds": 0.159,
+          "P99Milliseconds": 0.379
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 2.557658333333334,
+          "MinMilliseconds": 2.463,
+          "MaxMilliseconds": 3.993,
+          "P95Milliseconds": 2.957,
+          "MedianMilliseconds": 2.509,
+          "P50Milliseconds": 2.509,
+          "P99Milliseconds": 3.768
+        },
+        {
+          "Name": "AreaShadowDenoisePass",
+          "Count": 240,
+          "AverageMilliseconds": 1.8846041666666666,
+          "MinMilliseconds": 1.48,
+          "MaxMilliseconds": 3.125,
+          "P95Milliseconds": 2.083,
+          "MedianMilliseconds": 1.9285,
+          "P50Milliseconds": 1.9285,
+          "P99Milliseconds": 2.363
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": false,
+        "OpticalDenoisingAllocatedBytes": 0,
+        "OpticalDenoisingHistoryReuses": 0,
+        "AreaDenoisingActive": true,
+        "DenoisingDispatchCounts": {
+          "AmdShadow": 16,
+          "AmdReflectionPrepare": 1,
+          "AmdReflection": 3
+        },
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 191031424,
+        "AreaDenoisingAllocatedBytes": 100120512
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-final-area-repeat",
+      "capturedAtUtc": "2026-09-14T06:57:17.4544359+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "370029c5f0c87938d99b95ed1f87abb87717b54a7e8fd853390658c0bc7f1d75",
+        "settingsFingerprint": "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e",
+        "sourceSettingsFingerprints": [
+          "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 21.598312500000013,
+        "MinMilliseconds": 20.597,
+        "MaxMilliseconds": 24.32,
+        "P95Milliseconds": 23.223,
+        "MedianMilliseconds": 21.464,
+        "P50Milliseconds": 21.464,
+        "P99Milliseconds": 24.173
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.1822083333333344,
+        "MinMilliseconds": 1.595,
+        "MaxMilliseconds": 8.962,
+        "P95Milliseconds": 2.59,
+        "MedianMilliseconds": 2.0875000000000004,
+        "P50Milliseconds": 2.0875000000000004,
+        "P99Milliseconds": 6.096
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 1.2279625000000005,
+          "MinMilliseconds": 1.178,
+          "MaxMilliseconds": 1.902,
+          "P95Milliseconds": 1.444,
+          "MedianMilliseconds": 1.207,
+          "P50Milliseconds": 1.207,
+          "P99Milliseconds": 1.684
+        },
+        {
+          "Name": "Denoising/ShadowStage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.5302583333333333,
+          "MinMilliseconds": 0.383,
+          "MaxMilliseconds": 1.802,
+          "P95Milliseconds": 0.863,
+          "MedianMilliseconds": 0.398,
+          "P50Milliseconds": 0.398,
+          "P99Milliseconds": 1.207
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 0.7512541666666667,
+          "MinMilliseconds": 0.715,
+          "MaxMilliseconds": 1.98,
+          "P95Milliseconds": 0.755,
+          "MedianMilliseconds": 0.733,
+          "P50Milliseconds": 0.733,
+          "P99Milliseconds": 1.34
+        },
+        {
+          "Name": "Denoising/ShadowStage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.33928333333333305,
+          "MinMilliseconds": 0.239,
+          "MaxMilliseconds": 1.801,
+          "P95Milliseconds": 0.691,
+          "MedianMilliseconds": 0.2475,
+          "P50Milliseconds": 0.2475,
+          "P99Milliseconds": 0.725
+        },
+        {
+          "Name": "Denoising/ShadowStage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.3250916666666669,
+          "MinMilliseconds": 0.239,
+          "MaxMilliseconds": 0.706,
+          "P95Milliseconds": 0.665,
+          "MedianMilliseconds": 0.247,
+          "P50Milliseconds": 0.247,
+          "P99Milliseconds": 0.699
+        },
+        {
+          "Name": "Denoising/ShadowStage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.1946416666666666,
+          "MinMilliseconds": 0.139,
+          "MaxMilliseconds": 1.082,
+          "P95Milliseconds": 0.565,
+          "MedianMilliseconds": 0.143,
+          "P50Milliseconds": 0.143,
+          "P99Milliseconds": 0.599
+        },
+        {
+          "Name": "Denoising/ShadowPublish",
+          "Count": 240,
+          "AverageMilliseconds": 0.27022083333333285,
+          "MinMilliseconds": 0.234,
+          "MaxMilliseconds": 0.684,
+          "P95Milliseconds": 0.532,
+          "MedianMilliseconds": 0.242,
+          "P50Milliseconds": 0.242,
+          "P99Milliseconds": 0.655
+        },
+        {
+          "Name": "Denoising/ShadowStage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.2640458333333335,
+          "MinMilliseconds": 0.22,
+          "MaxMilliseconds": 0.882,
+          "P95Milliseconds": 0.464,
+          "MedianMilliseconds": 0.231,
+          "P50Milliseconds": 0.231,
+          "P99Milliseconds": 0.676
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 0.3795916666666666,
+          "MinMilliseconds": 0.365,
+          "MaxMilliseconds": 0.838,
+          "P95Milliseconds": 0.394,
+          "MedianMilliseconds": 0.376,
+          "P50Milliseconds": 0.376,
+          "P99Milliseconds": 0.398
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.20230833333333356,
+          "MinMilliseconds": 0.175,
+          "MaxMilliseconds": 0.82,
+          "P95Milliseconds": 0.243,
+          "MedianMilliseconds": 0.1865,
+          "P50Milliseconds": 0.1865,
+          "P99Milliseconds": 0.425
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.1673041666666665,
+          "MinMilliseconds": 0.156,
+          "MaxMilliseconds": 0.42,
+          "P95Milliseconds": 0.195,
+          "MedianMilliseconds": 0.159,
+          "P50Milliseconds": 0.159,
+          "P99Milliseconds": 0.221
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 2.5638374999999987,
+          "MinMilliseconds": 2.449,
+          "MaxMilliseconds": 3.737,
+          "P95Milliseconds": 2.961,
+          "MedianMilliseconds": 2.51,
+          "P50Milliseconds": 2.51,
+          "P99Milliseconds": 3.294
+        },
+        {
+          "Name": "AreaShadowDenoisePass",
+          "Count": 240,
+          "AverageMilliseconds": 1.934270833333334,
+          "MinMilliseconds": 1.473,
+          "MaxMilliseconds": 3.104,
+          "P95Milliseconds": 2.201,
+          "MedianMilliseconds": 1.9405000000000001,
+          "P50Milliseconds": 1.9405000000000001,
+          "P99Milliseconds": 2.664
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": false,
+        "OpticalDenoisingAllocatedBytes": 0,
+        "OpticalDenoisingHistoryReuses": 0,
+        "AreaDenoisingActive": true,
+        "DenoisingDispatchCounts": {
+          "AmdShadow": 16,
+          "AmdReflectionPrepare": 1,
+          "AmdReflection": 3
+        },
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 191031424,
+        "AreaDenoisingAllocatedBytes": 100120512
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-final-glass",
+      "capturedAtUtc": "2026-09-14T06:51:57.8290056+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "370029c5f0c87938d99b95ed1f87abb87717b54a7e8fd853390658c0bc7f1d75",
+        "settingsFingerprint": "2f0ca07ef0cc15b72bf9aa5b247fb6f93ee5e8135f1bba2448baa6dd5a84eded",
+        "sourceSettingsFingerprints": [
+          "2f0ca07ef0cc15b72bf9aa5b247fb6f93ee5e8135f1bba2448baa6dd5a84eded"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 24.396329166666668,
+        "MinMilliseconds": 23.338,
+        "MaxMilliseconds": 28.887,
+        "P95Milliseconds": 27.042,
+        "MedianMilliseconds": 24.1725,
+        "P50Milliseconds": 24.1725,
+        "P99Milliseconds": 28.654
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.1171833333333336,
+        "MinMilliseconds": 1.51,
+        "MaxMilliseconds": 12.682,
+        "P95Milliseconds": 2.577,
+        "MedianMilliseconds": 1.8765,
+        "P50Milliseconds": 1.8765,
+        "P99Milliseconds": 10.489
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/GlassCorrection",
+          "Count": 240,
+          "AverageMilliseconds": 1.4692583333333349,
+          "MinMilliseconds": 1.371,
+          "MaxMilliseconds": 2.66,
+          "P95Milliseconds": 1.668,
+          "MedianMilliseconds": 1.442,
+          "P50Milliseconds": 1.442,
+          "P99Milliseconds": 2.05
+        },
+        {
+          "Name": "Denoising/GlassTemporal",
+          "Count": 240,
+          "AverageMilliseconds": 1.0134083333333326,
+          "MinMilliseconds": 0.937,
+          "MaxMilliseconds": 2.203,
+          "P95Milliseconds": 1.102,
+          "MedianMilliseconds": 0.995,
+          "P50Milliseconds": 0.995,
+          "P99Milliseconds": 1.594
+        },
+        {
+          "Name": "Denoising/GlassPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.7804708333333341,
+          "MinMilliseconds": 0.76,
+          "MaxMilliseconds": 1.357,
+          "P95Milliseconds": 0.823,
+          "MedianMilliseconds": 0.771,
+          "P50Milliseconds": 0.771,
+          "P99Milliseconds": 0.943
+        },
+        {
+          "Name": "Denoising/GlassSpatial2",
+          "Count": 240,
+          "AverageMilliseconds": 0.6681666666666672,
+          "MinMilliseconds": 0.634,
+          "MaxMilliseconds": 1.104,
+          "P95Milliseconds": 0.69,
+          "MedianMilliseconds": 0.6645000000000001,
+          "P50Milliseconds": 0.6645000000000001,
+          "P99Milliseconds": 0.785
+        },
+        {
+          "Name": "Denoising/GlassSpatial1",
+          "Count": 240,
+          "AverageMilliseconds": 0.5841999999999999,
+          "MinMilliseconds": 0.532,
+          "MaxMilliseconds": 1.221,
+          "P95Milliseconds": 0.605,
+          "MedianMilliseconds": 0.572,
+          "P50Milliseconds": 0.572,
+          "P99Milliseconds": 1.001
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.29642500000000005,
+          "MinMilliseconds": 0.279,
+          "MaxMilliseconds": 0.749,
+          "P95Milliseconds": 0.372,
+          "MedianMilliseconds": 0.283,
+          "P50Milliseconds": 0.283,
+          "P99Milliseconds": 0.693
+        },
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 0.35804166666666587,
+          "MinMilliseconds": 0.288,
+          "MaxMilliseconds": 1.576,
+          "P95Milliseconds": 0.364,
+          "MedianMilliseconds": 0.354,
+          "P50Milliseconds": 0.354,
+          "P99Milliseconds": 0.972
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 0.22617083333333335,
+          "MinMilliseconds": 0.198,
+          "MaxMilliseconds": 0.439,
+          "P95Milliseconds": 0.23,
+          "MedianMilliseconds": 0.228,
+          "P50Milliseconds": 0.228,
+          "P99Milliseconds": 0.235
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.16455833333333356,
+          "MinMilliseconds": 0.156,
+          "MaxMilliseconds": 0.671,
+          "P95Milliseconds": 0.197,
+          "MedianMilliseconds": 0.157,
+          "P50Milliseconds": 0.157,
+          "P99Milliseconds": 0.224
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 0.17309583333333312,
+          "MinMilliseconds": 0.154,
+          "MaxMilliseconds": 0.537,
+          "P95Milliseconds": 0.179,
+          "MedianMilliseconds": 0.175,
+          "P50Milliseconds": 0.175,
+          "P99Milliseconds": 0.18
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "OpticalTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.8452208333333329,
+          "MinMilliseconds": 1.7,
+          "MaxMilliseconds": 2.972,
+          "P95Milliseconds": 2.363,
+          "MedianMilliseconds": 1.7745,
+          "P50Milliseconds": 1.7745,
+          "P99Milliseconds": 2.787
+        },
+        {
+          "Name": "OpticalCorrectionPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.4762791666666675,
+          "MinMilliseconds": 1.379,
+          "MaxMilliseconds": 2.664,
+          "P95Milliseconds": 1.675,
+          "MedianMilliseconds": 1.449,
+          "P50Milliseconds": 1.449,
+          "P99Milliseconds": 2.056
+        },
+        {
+          "Name": "OpticalSpatialPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.2527500000000011,
+          "MinMilliseconds": 1.187,
+          "MaxMilliseconds": 1.91,
+          "P95Milliseconds": 1.298,
+          "MedianMilliseconds": 1.237,
+          "P50Milliseconds": 1.237,
+          "P99Milliseconds": 1.696
+        },
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.0560208333333327,
+          "MinMilliseconds": 0.933,
+          "MaxMilliseconds": 2.268,
+          "P95Milliseconds": 1.245,
+          "MedianMilliseconds": 1.038,
+          "P50Milliseconds": 1.038,
+          "P99Milliseconds": 1.663
+        },
+        {
+          "Name": "OpticalLayerClearPass",
+          "Count": 240,
+          "AverageMilliseconds": 0.2523874999999995,
+          "MinMilliseconds": 0.235,
+          "MaxMilliseconds": 0.498,
+          "P95Milliseconds": 0.335,
+          "MedianMilliseconds": 0.241,
+          "P50Milliseconds": 0.241,
+          "P99Milliseconds": 0.339
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": true,
+        "OpticalDenoisingAllocatedBytes": 535953472,
+        "OpticalDenoisingHistoryReuses": 81344,
+        "AreaDenoisingActive": false,
+        "DenoisingDispatchCounts": {
+          "AmdReflectionPrepare": 1,
+          "AmdReflection": 3,
+          "CompactGlass": 5
+        },
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 191031424,
+        "AreaDenoisingAllocatedBytes": 0
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-final-glass-repeat",
+      "capturedAtUtc": "2026-09-14T06:58:11.1498702+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "370029c5f0c87938d99b95ed1f87abb87717b54a7e8fd853390658c0bc7f1d75",
+        "settingsFingerprint": "2f0ca07ef0cc15b72bf9aa5b247fb6f93ee5e8135f1bba2448baa6dd5a84eded",
+        "sourceSettingsFingerprints": [
+          "2f0ca07ef0cc15b72bf9aa5b247fb6f93ee5e8135f1bba2448baa6dd5a84eded"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 24.299741666666666,
+        "MinMilliseconds": 23.2,
+        "MaxMilliseconds": 28.391,
+        "P95Milliseconds": 26.194,
+        "MedianMilliseconds": 24.106,
+        "P50Milliseconds": 24.106,
+        "P99Milliseconds": 27.32
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.0974958333333342,
+        "MinMilliseconds": 1.525,
+        "MaxMilliseconds": 10.509,
+        "P95Milliseconds": 2.841,
+        "MedianMilliseconds": 1.9385,
+        "P50Milliseconds": 1.9385,
+        "P99Milliseconds": 5.052
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/GlassCorrection",
+          "Count": 240,
+          "AverageMilliseconds": 1.4577208333333338,
+          "MinMilliseconds": 1.368,
+          "MaxMilliseconds": 2.623,
+          "P95Milliseconds": 1.711,
+          "MedianMilliseconds": 1.43,
+          "P50Milliseconds": 1.43,
+          "P99Milliseconds": 2.096
+        },
+        {
+          "Name": "Denoising/GlassTemporal",
+          "Count": 240,
+          "AverageMilliseconds": 1.009825,
+          "MinMilliseconds": 0.915,
+          "MaxMilliseconds": 1.586,
+          "P95Milliseconds": 1.081,
+          "MedianMilliseconds": 0.988,
+          "P50Milliseconds": 0.988,
+          "P99Milliseconds": 1.552
+        },
+        {
+          "Name": "Denoising/GlassPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.7967708333333339,
+          "MinMilliseconds": 0.76,
+          "MaxMilliseconds": 2.039,
+          "P95Milliseconds": 0.834,
+          "MedianMilliseconds": 0.772,
+          "P50Milliseconds": 0.772,
+          "P99Milliseconds": 1.357
+        },
+        {
+          "Name": "Denoising/GlassSpatial2",
+          "Count": 240,
+          "AverageMilliseconds": 0.659970833333334,
+          "MinMilliseconds": 0.607,
+          "MaxMilliseconds": 1.084,
+          "P95Milliseconds": 0.692,
+          "MedianMilliseconds": 0.658,
+          "P50Milliseconds": 0.658,
+          "P99Milliseconds": 0.851
+        },
+        {
+          "Name": "Denoising/GlassSpatial1",
+          "Count": 240,
+          "AverageMilliseconds": 0.5746708333333326,
+          "MinMilliseconds": 0.525,
+          "MaxMilliseconds": 1.167,
+          "P95Milliseconds": 0.598,
+          "MedianMilliseconds": 0.567,
+          "P50Milliseconds": 0.567,
+          "P99Milliseconds": 0.75
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.30645,
+          "MinMilliseconds": 0.278,
+          "MaxMilliseconds": 1.527,
+          "P95Milliseconds": 0.371,
+          "MedianMilliseconds": 0.283,
+          "P50Milliseconds": 0.283,
+          "P99Milliseconds": 1.49
+        },
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 0.34394583333333273,
+          "MinMilliseconds": 0.289,
+          "MaxMilliseconds": 0.948,
+          "P95Milliseconds": 0.363,
+          "MedianMilliseconds": 0.356,
+          "P50Milliseconds": 0.356,
+          "P99Milliseconds": 0.637
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 0.2308000000000001,
+          "MinMilliseconds": 0.18,
+          "MaxMilliseconds": 1.437,
+          "P95Milliseconds": 0.23,
+          "MedianMilliseconds": 0.228,
+          "P50Milliseconds": 0.228,
+          "P99Milliseconds": 0.489
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.16671666666666682,
+          "MinMilliseconds": 0.156,
+          "MaxMilliseconds": 0.685,
+          "P95Milliseconds": 0.222,
+          "MedianMilliseconds": 0.157,
+          "P50Milliseconds": 0.157,
+          "P99Milliseconds": 0.557
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 0.17155416666666634,
+          "MinMilliseconds": 0.137,
+          "MaxMilliseconds": 0.769,
+          "P95Milliseconds": 0.179,
+          "MedianMilliseconds": 0.175,
+          "P50Milliseconds": 0.175,
+          "P99Milliseconds": 0.182
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "OpticalTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.8468749999999994,
+          "MinMilliseconds": 1.681,
+          "MaxMilliseconds": 3.314,
+          "P95Milliseconds": 2.35,
+          "MedianMilliseconds": 1.7725,
+          "P50Milliseconds": 1.7725,
+          "P99Milliseconds": 2.783
+        },
+        {
+          "Name": "OpticalCorrectionPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.4646416666666684,
+          "MinMilliseconds": 1.375,
+          "MaxMilliseconds": 2.631,
+          "P95Milliseconds": 1.718,
+          "MedianMilliseconds": 1.437,
+          "P50Milliseconds": 1.437,
+          "P99Milliseconds": 2.103
+        },
+        {
+          "Name": "OpticalSpatialPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.2350000000000003,
+          "MinMilliseconds": 1.15,
+          "MaxMilliseconds": 1.836,
+          "P95Milliseconds": 1.284,
+          "MedianMilliseconds": 1.2295,
+          "P50Milliseconds": 1.2295,
+          "P99Milliseconds": 1.651
+        },
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 1.0550541666666673,
+          "MinMilliseconds": 0.893,
+          "MaxMilliseconds": 2.348,
+          "P95Milliseconds": 1.227,
+          "MedianMilliseconds": 1.035,
+          "P50Milliseconds": 1.035,
+          "P99Milliseconds": 2.246
+        },
+        {
+          "Name": "OpticalLayerClearPass",
+          "Count": 240,
+          "AverageMilliseconds": 0.2688291666666661,
+          "MinMilliseconds": 0.235,
+          "MaxMilliseconds": 1.49,
+          "P95Milliseconds": 0.338,
+          "MedianMilliseconds": 0.241,
+          "P50Milliseconds": 0.241,
+          "P99Milliseconds": 0.876
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": true,
+        "OpticalDenoisingAllocatedBytes": 535953472,
+        "OpticalDenoisingHistoryReuses": 81094,
+        "AreaDenoisingActive": false,
+        "DenoisingDispatchCounts": {
+          "AmdReflectionPrepare": 1,
+          "AmdReflection": 3,
+          "CompactGlass": 5
+        },
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 191031424,
+        "AreaDenoisingAllocatedBytes": 0
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-motion-reflections",
+      "capturedAtUtc": "2026-09-14T06:56:11.3670664+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "370029c5f0c87938d99b95ed1f87abb87717b54a7e8fd853390658c0bc7f1d75",
+        "settingsFingerprint": "7ac7d3a7e37fdc6b9913a87dcc909cb722a77231333c70c480963e3093fcf9e9",
+        "sourceSettingsFingerprints": [
+          "7ac7d3a7e37fdc6b9913a87dcc909cb722a77231333c70c480963e3093fcf9e9"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 4.8881,
+        "MinMilliseconds": 2.375,
+        "MaxMilliseconds": 8.737,
+        "P95Milliseconds": 7.619,
+        "MedianMilliseconds": 4.858499999999999,
+        "P50Milliseconds": 4.858499999999999,
+        "P99Milliseconds": 8.026
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 3.7056749999999985,
+        "MinMilliseconds": 2.975,
+        "MaxMilliseconds": 14.762,
+        "P95Milliseconds": 5.026,
+        "MedianMilliseconds": 3.426,
+        "P50Milliseconds": 3.426,
+        "P99Milliseconds": 8.188
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 0.23400833333333343,
+          "MinMilliseconds": 0.056,
+          "MaxMilliseconds": 0.835,
+          "P95Milliseconds": 0.502,
+          "MedianMilliseconds": 0.2195,
+          "P50Milliseconds": 0.2195,
+          "P99Milliseconds": 0.726
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.25997916666666676,
+          "MinMilliseconds": 0.233,
+          "MaxMilliseconds": 0.857,
+          "P95Milliseconds": 0.325,
+          "MedianMilliseconds": 0.252,
+          "P50Milliseconds": 0.252,
+          "P99Milliseconds": 0.637
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 0.17109166666666661,
+          "MinMilliseconds": 0.048,
+          "MaxMilliseconds": 1.423,
+          "P95Milliseconds": 0.292,
+          "MedianMilliseconds": 0.184,
+          "P50Milliseconds": 0.184,
+          "P99Milliseconds": 0.561
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.17144999999999952,
+          "MinMilliseconds": 0.154,
+          "MaxMilliseconds": 0.567,
+          "P95Milliseconds": 0.221,
+          "MedianMilliseconds": 0.156,
+          "P50Milliseconds": 0.156,
+          "P99Milliseconds": 0.557
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 0.12869999999999995,
+          "MinMilliseconds": 0.038,
+          "MaxMilliseconds": 0.899,
+          "P95Milliseconds": 0.221,
+          "MedianMilliseconds": 0.123,
+          "P50Milliseconds": 0.123,
+          "P99Milliseconds": 0.464
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 0.7960500000000007,
+          "MinMilliseconds": 0.405,
+          "MaxMilliseconds": 1.842,
+          "P95Milliseconds": 1.273,
+          "MedianMilliseconds": 0.855,
+          "P50Milliseconds": 0.855,
+          "P99Milliseconds": 1.744
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": false,
+        "OpticalDenoisingAllocatedBytes": 0,
+        "OpticalDenoisingHistoryReuses": 0,
+        "AreaDenoisingActive": false,
+        "DenoisingDispatchCounts": {
+          "AmdReflectionPrepare": 1,
+          "AmdReflection": 3
+        },
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 191031424,
+        "AreaDenoisingAllocatedBytes": 0
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    },
+    {
+      "name": "opt-verified-area",
+      "capturedAtUtc": "2026-09-14T07:02:09.2303335+00:00",
+      "producer": {
+        "schema": "material-gi-producer-identity/v1",
+        "buildCommit": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+        "shaderFingerprint": "370029c5f0c87938d99b95ed1f87abb87717b54a7e8fd853390658c0bc7f1d75",
+        "settingsFingerprint": "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e",
+        "sourceSettingsFingerprints": [
+          "628cac3ce14cdf15858f8ae99e0ae5da2cfaefa272a888bdedbe6a020774b04e"
+        ],
+        "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "driverVersion": "610.248.0",
+        "qualityTier": "Development"
+      },
+      "gpuFrame": {
+        "Name": "GPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 21.56309166666666,
+        "MinMilliseconds": 20.657,
+        "MaxMilliseconds": 24.699,
+        "P95Milliseconds": 23.073,
+        "MedianMilliseconds": 21.433500000000002,
+        "P50Milliseconds": 21.433500000000002,
+        "P99Milliseconds": 24.463
+      },
+      "cpuFrame": {
+        "Name": "CPU frame",
+        "Count": 240,
+        "AverageMilliseconds": 2.1311083333333336,
+        "MinMilliseconds": 1.482,
+        "MaxMilliseconds": 6.573,
+        "P95Milliseconds": 2.819,
+        "MedianMilliseconds": 2.015,
+        "P50Milliseconds": 2.015,
+        "P99Milliseconds": 4.916
+      },
+      "denoisingStages": [
+        {
+          "Name": "Denoising/ReflectionReproject",
+          "Count": 240,
+          "AverageMilliseconds": 1.2394583333333336,
+          "MinMilliseconds": 1.18,
+          "MaxMilliseconds": 2.459,
+          "P95Milliseconds": 1.447,
+          "MedianMilliseconds": 1.204,
+          "P50Milliseconds": 1.204,
+          "P99Milliseconds": 2.319
+        },
+        {
+          "Name": "Denoising/ShadowStage1",
+          "Count": 240,
+          "AverageMilliseconds": 0.5277375000000002,
+          "MinMilliseconds": 0.382,
+          "MaxMilliseconds": 0.924,
+          "P95Milliseconds": 0.838,
+          "MedianMilliseconds": 0.396,
+          "P50Milliseconds": 0.396,
+          "P99Milliseconds": 0.885
+        },
+        {
+          "Name": "Denoising/ReflectionResolve",
+          "Count": 240,
+          "AverageMilliseconds": 0.7439416666666657,
+          "MinMilliseconds": 0.717,
+          "MaxMilliseconds": 1.416,
+          "P95Milliseconds": 0.75,
+          "MedianMilliseconds": 0.731,
+          "P50Milliseconds": 0.731,
+          "P99Milliseconds": 1.263
+        },
+        {
+          "Name": "Denoising/ShadowStage3",
+          "Count": 240,
+          "AverageMilliseconds": 0.3281791666666666,
+          "MinMilliseconds": 0.24,
+          "MaxMilliseconds": 0.786,
+          "P95Milliseconds": 0.683,
+          "MedianMilliseconds": 0.247,
+          "P50Milliseconds": 0.247,
+          "P99Milliseconds": 0.706
+        },
+        {
+          "Name": "Denoising/ShadowStage5",
+          "Count": 240,
+          "AverageMilliseconds": 0.3165291666666666,
+          "MinMilliseconds": 0.239,
+          "MaxMilliseconds": 1.669,
+          "P95Milliseconds": 0.651,
+          "MedianMilliseconds": 0.246,
+          "P50Milliseconds": 0.246,
+          "P99Milliseconds": 0.706
+        },
+        {
+          "Name": "Denoising/ShadowStage4",
+          "Count": 240,
+          "AverageMilliseconds": 0.1978208333333332,
+          "MinMilliseconds": 0.14,
+          "MaxMilliseconds": 0.672,
+          "P95Milliseconds": 0.562,
+          "MedianMilliseconds": 0.142,
+          "P50Milliseconds": 0.142,
+          "P99Milliseconds": 0.592
+        },
+        {
+          "Name": "Denoising/ShadowPublish",
+          "Count": 240,
+          "AverageMilliseconds": 0.26859166666666606,
+          "MinMilliseconds": 0.234,
+          "MaxMilliseconds": 1.073,
+          "P95Milliseconds": 0.53,
+          "MedianMilliseconds": 0.241,
+          "P50Milliseconds": 0.241,
+          "P99Milliseconds": 0.662
+        },
+        {
+          "Name": "Denoising/ShadowStage0",
+          "Count": 240,
+          "AverageMilliseconds": 0.28118750000000026,
+          "MinMilliseconds": 0.221,
+          "MaxMilliseconds": 1.819,
+          "P95Milliseconds": 0.472,
+          "MedianMilliseconds": 0.23,
+          "P50Milliseconds": 0.23,
+          "P99Milliseconds": 0.752
+        },
+        {
+          "Name": "Denoising/ReflectionPrefilter",
+          "Count": 240,
+          "AverageMilliseconds": 0.3804208333333333,
+          "MinMilliseconds": 0.365,
+          "MaxMilliseconds": 1.014,
+          "P95Milliseconds": 0.392,
+          "MedianMilliseconds": 0.3755,
+          "P50Milliseconds": 0.3755,
+          "P99Milliseconds": 0.398
+        },
+        {
+          "Name": "Denoising/ReflectionPrepare",
+          "Count": 240,
+          "AverageMilliseconds": 0.2034375000000002,
+          "MinMilliseconds": 0.175,
+          "MaxMilliseconds": 0.852,
+          "P95Milliseconds": 0.242,
+          "MedianMilliseconds": 0.186,
+          "P50Milliseconds": 0.186,
+          "P99Milliseconds": 0.629
+        },
+        {
+          "Name": "Denoising/ReflectionClear",
+          "Count": 240,
+          "AverageMilliseconds": 0.17572499999999977,
+          "MinMilliseconds": 0.156,
+          "MaxMilliseconds": 1.394,
+          "P95Milliseconds": 0.213,
+          "MedianMilliseconds": 0.159,
+          "P50Milliseconds": 0.159,
+          "P99Milliseconds": 0.603
+        }
+      ],
+      "relevantParentPasses": [
+        {
+          "Name": "HybridReflectionTemporalPass",
+          "Count": 240,
+          "AverageMilliseconds": 2.569995833333333,
+          "MinMilliseconds": 2.451,
+          "MaxMilliseconds": 4.007,
+          "P95Milliseconds": 3.029,
+          "MedianMilliseconds": 2.509,
+          "P50Milliseconds": 2.509,
+          "P99Milliseconds": 3.692
+        },
+        {
+          "Name": "AreaShadowDenoisePass",
+          "Count": 240,
+          "AverageMilliseconds": 1.9311708333333335,
+          "MinMilliseconds": 1.483,
+          "MaxMilliseconds": 3.38,
+          "P95Milliseconds": 2.173,
+          "MedianMilliseconds": 1.929,
+          "P50Milliseconds": 1.929,
+          "P99Milliseconds": 2.59
+        }
+      ],
+      "diagnostics": {
+        "EffectiveReflectionImplementation": 2,
+        "OpticalDenoisingActive": false,
+        "OpticalDenoisingAllocatedBytes": 0,
+        "OpticalDenoisingHistoryReuses": 0,
+        "AreaDenoisingActive": true,
+        "DenoisingDispatchCounts": {
+          "AmdShadow": 16,
+          "AmdReflectionPrepare": 1,
+          "AmdReflection": 3
+        },
+        "AmdReflectionDenoisingActive": true,
+        "AmdReflectionDenoisingAllocatedBytes": 191031424,
+        "AreaDenoisingAllocatedBytes": 100120512
+      },
+      "warmup": 120,
+      "measured": 240,
+      "settlingTimedOut": false
+    }
+  ],
+  "validation": [
+    {
+      "name": "opt-final-area-validation",
+      "status": "passed",
+      "validationWarnings": 0,
+      "validationErrors": 0,
+      "dispatchCounts": {
+        "AmdShadow": 16,
+        "AmdReflectionPrepare": 1,
+        "AmdReflection": 3
+      }
+    },
+    {
+      "name": "opt-existing-validation",
+      "status": "passed",
+      "validationWarnings": 0,
+      "validationErrors": 0,
+      "dispatchCounts": {
+        "ExistingReflection": 3,
+        "ExistingGlass": 4
+      }
+    },
+    {
+      "name": "opt-off-validation",
+      "status": "passed",
+      "validationWarnings": 0,
+      "validationErrors": 0,
+      "dispatchCounts": {
+        "ReflectionCopy": 1
+      }
+    },
+    {
+      "name": "opt-glass-weighted-resize",
+      "status": "Three resize operations passed; capture exported; process stopped during stalled shutdown; final health report unavailable",
+      "dispatchCounts": {
+        "AmdReflectionPrepare": 1,
+        "AmdReflection": 3,
+        "CompactGlass": 5
+      },
+      "transparency": "WeightedBlendedOit",
+      "capturedFragments": 82284,
+      "historyReuses": 35071,
+      "overflowPixels": 3577,
+      "validationMessagesInLog": 0
+    }
+  ],
+  "imageComparison": {
+    "area": {
+      "full_image_mean_absolute_display_error": 7.93630981199064e-05,
+      "roi": [
+        846,
+        448,
+        1075,
+        700
+      ],
+      "roi_mean_absolute_display_error": 0.00026536572901843903,
+      "note": "Approximate tone-mapped display comparison, not a ground-truth or temporal-quality gate."
+    },
+    "glass": {
+      "full_image_mean_absolute_display_error": 0.0013202715242475592,
+      "roi": [
+        0,
+        700,
+        1920,
+        1080
+      ],
+      "roi_mean_absolute_display_error": 0.003721453603371173,
+      "note": "Approximate tone-mapped display comparison, not a ground-truth or temporal-quality gate."
+    }
+  },
+  "tests": {
+    "passed": 76,
+    "failed": 0,
+    "skipped": 0,
+    "spirvModulesValidated": 16
+  },
+  "retention": {
+    "inspectedBy": "tools/prune-local-artifacts.ps1",
+    "freeGiB": 250.37,
+    "olderPayloadGiB": 0.16,
+    "applied": false,
+    "reason": "Only older candidates belong to another reflection investigation; retained because ongoing reference ownership was not established."
+  }
+}

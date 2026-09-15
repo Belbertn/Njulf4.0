@@ -16,11 +16,15 @@ void OpticalCompactPreparePixel(ivec2 p) { if(!OcInside(p))return;
   uint r=OcRecord(p,l),s=l==0u?first:second;
   OpticalStore(b,r+30u,s==OPTICAL_INVALID?0u:1u); if(s==OPTICAL_INVALID)continue;
   for(uint f=0u;f<8u;f++)OpticalStore(b,r+f,OpticalWord(src,s+f));
-  for(uint lobe=0u;lobe<2u;lobe++)OcStoreRadiance(b,r,8u+lobe*2u,vec4(OpticalVec(src,s+12u+lobe*4u),OpticalFloat(src,s+15u+lobe*4u)));
+  for(uint lobe=0u;lobe<2u;lobe++) {
+   vec4 raw=vec4(OpticalVec(src,s+12u+lobe*4u),OpticalFloat(src,s+15u+lobe*4u));
+   OcStoreRadiance(b,r,8u+lobe*2u,raw);OcStoreRadiance(b,r,24u+lobe*2u,raw);
+  }
   OpticalStore(b,r+14u,OpticalWord(src,s+30u)); OpticalStore(b,r+15u,OpticalWord(src,s+33u));
   OpticalStore(b,r+16u,OpticalWord(src,s+28u)); OpticalStore(b,r+17u,OpticalWord(src,s+29u));
   OpticalStore(b,r+22u,packHalf2x16(vec2(OpticalFloat(src,s+34u),OpticalFloat(src,s+35u))));
   OpticalStore(b,r+23u,s); OpticalStore(b,r+28u,OpticalWord(src,s+11u));
+  OpticalStore(b,r+31u,uint(q.y)*OpticalWord(src,1u)+uint(q.x));
  }
 }
 

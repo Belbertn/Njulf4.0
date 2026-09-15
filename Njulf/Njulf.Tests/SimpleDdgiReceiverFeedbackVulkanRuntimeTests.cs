@@ -554,7 +554,7 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
         string shaderProject = ReadRepoText(
             "Njulf.Shaders",
             "Njulf.Shaders.csproj");
-        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string shader = ForwardShaderSource.Read();
         string surfaceProducer = ReadRepoText(
             "Njulf.Shaders",
             "ddgi_receiver_feedback_surface_producer.glsl");
@@ -669,9 +669,7 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
         string shaderProject = ReadRepoText(
             "Njulf.Shaders",
             "Njulf.Shaders.csproj");
-        string forwardShader = ReadRepoText(
-            "Njulf.Shaders",
-            "forward.frag");
+        string forwardShader = ForwardShaderSource.Read();
         string forwardReceiverGather = ReadRepoText(
             "Njulf.Shaders",
             "forward_ddgi_receiver_gather.glsl");
@@ -801,9 +799,7 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
         string surfaceProducer = ReadRepoText(
             "Njulf.Shaders",
             "ddgi_receiver_feedback_surface_producer.glsl");
-        string forwardShader = ReadRepoText(
-            "Njulf.Shaders",
-            "forward.frag");
+        string forwardShader = ForwardShaderSource.Read();
         string foliageShader = ReadRepoText(
             "Njulf.Shaders",
             "foliage_forward.frag");

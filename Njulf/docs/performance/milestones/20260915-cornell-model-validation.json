@@ -1,0 +1,37 @@
+[
+  {
+    "report": "artifacts/cornell-model-health.json",
+    "status": "passed",
+    "validationWarnings": 0,
+    "validationErrors": 0,
+    "giWarnings": 0,
+    "giErrors": 0,
+    "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "driver": "610.248.0"
+  },
+  {
+    "report": "artifacts/cornell-model-reload-health.json",
+    "status": "failed",
+    "validationWarnings": 0,
+    "validationErrors": 0,
+    "giWarnings": 1,
+    "giErrors": 0,
+    "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "driver": "610.248.0",
+    "failure": "Smoke mode 'SceneReload' closed after 5/120 required rendered frames.",
+    "operations": [
+      {
+        "Name": "scene-reload",
+        "Status": "passed",
+        "FrameIndex": 2,
+        "Detail": "reload=1/2, postReloadFrameObserved=true"
+      },
+      {
+        "Name": "scene-reload",
+        "Status": "passed",
+        "FrameIndex": 4,
+        "Detail": "reload=2/2, postReloadFrameObserved=true"
+      }
+    ]
+  }
+]

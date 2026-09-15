@@ -1464,6 +1464,10 @@ internal sealed class HelloGame : Game
 
     private void ApplyOpticalDenoisingOverride(RenderSettings settings)
     {
+        if (_smokeOptions.AmdHalfResolutionOverride is { } half)
+            settings.Reflections.AmdHalfResolution = half;
+        if (_smokeOptions.OpticalReducedResolutionShadingOverride is { } reduced)
+            settings.OpticalDenoising.ReducedResolutionShading = reduced;
         if (_smokeOptions.ReflectionDenoiserOverride is { } denoiser)
             settings.Reflections.Denoiser = Enum.Parse<ReflectionDenoiser>(denoiser, true);
         if (_smokeOptions.AreaDenoisingOverride is { } area)
@@ -1955,6 +1959,7 @@ internal sealed class HelloGame : Game
             ? _smokeOptions.Benchmark.TrajectoryBistroVariant
             : _smokeOptions.BenchmarkQualitySequence.TrajectoryBistroVariant;
         bool hasAuthoredCamera =
+            trajectory == SampleBenchmarkTrajectoryKind.OpticalMotion ||
             trajectory == SampleBenchmarkTrajectoryKind.ReflectionLod ||
             SampleBenchmarkTrajectory.RequiresSponza(trajectory) ||
             SampleBenchmarkTrajectory.RequiresBistro(trajectory);
@@ -2704,7 +2709,7 @@ internal sealed class HelloGame : Game
                 meshManager,
                 materialManager,
                 LightingMode,
-                _sampleStressSceneResources);
+                _sampleStressSceneResources) { Content = Content };
             builder.Apply(SamplePerformanceScenario.GiCornellRoom);
             return Finish(new Model { Name = "GI Test Scene" });
         }
@@ -2865,6 +2870,13 @@ internal sealed class HelloGame : Game
         {
             SampleVfxShowcaseScene.ConfigureRenderSettings(settings);
         }
+        else if (_sceneKind == SampleSceneKind.LivingRoom)
+        {
+            SampleBistroGlobalIlluminationProfile.Configure(settings);
+            // An enclosed room needs sky visibility for environment fallback.
+            settings.GlobalIllumination.FarFieldSkyVisibilityEnabled = true;
+            settings.Particles.Enabled = false;
+        }
         else if (_sceneKind == SampleSceneKind.Bistro)
         {
             SampleBistroGlobalIlluminationProfile.Configure(settings);
@@ -2999,7 +3011,7 @@ internal sealed class HelloGame : Game
             meshManager,
             materialManager,
             LightingMode,
-            _sampleStressSceneResources));
+            _sampleStressSceneResources) { Content = Content });
     }
 
     private void CycleScene(VulkanRenderer renderer)
@@ -4993,6 +5005,11 @@ internal sealed class HelloGame : Game
         camera.Yaw = yaw;
         camera.Pitch = pitch;
         camera.FarPlane = farPlane;
+        if (sceneKind == SampleSceneKind.LivingRoom)
+        {
+            camera.FieldOfView = 1.02477894f;
+            camera.NearPlane = 0.01f;
+        }
         camera.Update();
     }
 
@@ -5035,6 +5052,8 @@ internal sealed class HelloGame : Game
         {
             SampleSceneKind.GlobalIlluminationTest => (new CoreVector3(0f, 1.7f, 1.15f), 0f, -0.08f, 80f),
             SampleSceneKind.ReflectionLod => (new CoreVector3(0f, 2.15f, 6f), 0f, -0.08f, 120f),
+            SampleSceneKind.LivingRoom =>
+                (new CoreVector3(5.1051844f, 0.73106575f, -2.3178906f), -1.83818f, -0.0744758f, 100f),
             SampleSceneKind.Bistro =>
                 (new CoreVector3(-16.003326f, 2.5132222f, 1.2387409f), 1.6121571f, 0.0660575f, 500f),
             SampleSceneKind.MaterialShowcase => (new CoreVector3(0f, 2.15f, 9.0f), 0f, -0.17f, 120f),
@@ -5055,6 +5074,7 @@ internal sealed class HelloGame : Game
             SampleSceneKind.GlobalIlluminationTest => "GI Test Scene",
             SampleSceneKind.ReflectionLod => "Reflection LOD Qualification",
             SampleSceneKind.Bistro => "Bistro",
+            SampleSceneKind.LivingRoom => "Living Room",
             SampleSceneKind.MaterialShowcase => "Material Showcase",
             SampleSceneKind.AnalyticalAreaLights => "Analytical Area Light Room",
             SampleSceneKind.FoliageShowcase => "Foliage Showcase",
@@ -5073,6 +5093,7 @@ internal sealed class HelloGame : Game
         {
             SampleSceneKind.SponzaPlaza => SponzaAssetManifest,
             SampleSceneKind.Bistro => SampleAssetManifest.Bistro,
+            SampleSceneKind.LivingRoom => SampleAssetManifest.LivingRoom,
             _ => null
         };
 

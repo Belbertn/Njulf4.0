@@ -264,7 +264,7 @@ public sealed class ForwardPlusPassTests
     public void ForwardMaterial_ColdDiagnosticMetadataIsDemandLoaded()
     {
         string common = ReadRepoText("Njulf.Shaders", "common.glsl");
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         int readStart = common.IndexOf(
             "GPUMaterialData ReadForwardMaterial(",
             StringComparison.Ordinal);

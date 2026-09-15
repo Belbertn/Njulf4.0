@@ -48,8 +48,13 @@ internal sealed unsafe class AreaRayShadowPass : RenderPassBase
     private ulong _nextAllocationRetryFrame;
     private AmdShadowDenoiser? _denoiser;
 
-    public void RecordDenoising(CommandBuffer cmd, int frameIndex, SceneRenderingData scene) =>
-        _denoiser?.Record(cmd, frameIndex, scene);
+    public void RecordDenoising(CommandBuffer cmd, int frameIndex, SceneRenderingData scene, Njulf.Rendering.Debug.GpuTimestampRecorder? timestamps = null)
+    {
+        if (_denoiser == null) return;
+        _denoiser.DenoisingTimestamps = timestamps;
+        try { _denoiser.Record(cmd, frameIndex, scene); }
+        finally { _denoiser.DenoisingTimestamps = null; }
+    }
 
     public AreaRayShadowPass(
         VulkanContext context,

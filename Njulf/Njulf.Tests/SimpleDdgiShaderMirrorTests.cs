@@ -724,7 +724,7 @@ namespace Njulf.Tests
             string receiverSurface = ReadRepoText(
                 "Njulf.Shaders",
                 "ddgi_receiver_surface.glsl");
-            string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string forward = ForwardShaderSource.Read();
             string receiverGather = ReadRepoText(
                 "Njulf.Shaders",
                 "forward_ddgi_receiver_gather.glsl");
@@ -1410,7 +1410,7 @@ namespace Njulf.Tests
             string commitLocal = ReadRepoText(
                 "Njulf.Shaders",
                 "ddgi_simple_schedule_commit_local.glsl");
-            string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string forward = ForwardShaderSource.Read();
 
             Assert.Multiple(() =>
             {
@@ -1615,7 +1615,7 @@ namespace Njulf.Tests
         public void RadiometricOwnership_UsesAvailabilityWithoutDirectionalLatticeAttenuation()
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
-            string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string forward = ForwardShaderSource.Read();
 
             Assert.Multiple(() =>
             {
@@ -1835,7 +1835,7 @@ namespace Njulf.Tests
         [Test]
         public void SourceCacheRadianceDiagnostic_IsNotCompiledIntoReceiverFragmentShader()
         {
-            string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string forward = ForwardShaderSource.Read();
 
             Assert.Multiple(() =>
             {
@@ -1944,7 +1944,7 @@ namespace Njulf.Tests
             string blend = ReadRepoText("Njulf.Shaders", "ddgi_simple_blend.comp");
             string relocate = ReadRepoText("Njulf.Shaders", "ddgi_simple_relocate_classify.comp");
             string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
-            string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string forward = ForwardShaderSource.Read();
             string receiverGather = ReadRepoText(
                 "Njulf.Shaders",
                 "forward_ddgi_receiver_gather.glsl");

@@ -62,6 +62,12 @@ $shaderFiles = @($allShaderFiles | Where-Object {
 })
 
 $algorithmicAtomicCounts = @{
+    # Transparent optical export reserves bounded fragment/pixel slots and
+    # records overflow. These sites already existed in the starting renderer;
+    # all 25 refreshed transparent counts were reproduced from that source.
+    # Optimized non-ray programs inline the same bounded operations at several
+    # call sites. Keep exact compiled counts; do not exempt those programs.
+    # Evidence: docs/performance/milestones/20260914-reduced-optics-validation.json.
     # Lock-free, bounded receiver demand, exact gather attribution, and one
     # accumulated B1 interpolation-mass add per optimized gather site.
     # Transparent scene reflections retain four sparse source-estimate atomics
@@ -72,7 +78,7 @@ $algorithmicAtomicCounts = @{
     # mapping and attribute that event through one bounded streaming-feedback
     # add. Transparent ray-query programs preserve seven outlined copies of
     # that guarded lookup; non-ray programs retain one optimized copy.
-    'forward.frag.spv' = 27
+    'forward.frag.spv' = 92
     'forward_opaque_ddgi.frag.spv' = 14
     # Planar captures retain the canonical exact DDGI gather. Late depth
     # testing changes coverage ownership, not its bounded scheduling atomics.
@@ -117,7 +123,7 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_opaque_simple_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_opaque_simple_full_input_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
-    'forward_weighted_oit.frag.spv' = 27
+    'forward_weighted_oit.frag.spv' = 92
     # Surface-aware cache programs retain the canonical exact gather behind a
     # fail-closed rejection branch. Seven bounded B1 ownership operations own
     # dense/rejected samples; the compact path adds exactly two list atomics
@@ -182,37 +188,37 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_full_input_ddgi_cache_legacy.frag.spv' = 7
     # The transparent compatibility artifact retains its 12 reflection-source
     # operations plus the same 14 exact rejection-path receiver operations.
-    'forward_transparent_ddgi_cache_required.frag.spv' = 27
+    'forward_transparent_ddgi_cache_required.frag.spv' = 87
     # The directional-only ThinGlass program touches only the four continuous
     # tetrahedral owners. Its bounded atomics are the sparse receiver-demand
     # and contribution handshake; diffuse visibility/recovery sites are absent.
-    'forward_transparent_thin_glass.frag.spv' = 17
+    'forward_transparent_thin_glass.frag.spv' = 24
     # The sorted ray ThinGlass specialization retains bounded reflection-task
     # admission and its directional DDGI receiver handshake.
-    'forward_transparent_thin_glass_ray.frag.spv' = 16
+    'forward_transparent_thin_glass_ray.frag.spv' = 20
     # Normal ray-query transparent variants contain both bounded optical-task
     # admission and the DDGI gather used to shade a committed reflection hit.
     # Their production compile deliberately preserves function boundaries to
     # avoid glslang's exhaustive-inlining ID overflow, so shared atomic sites
     # appear once in the module rather than once per inlined call path.
-    'forward_transparent_ray.frag.spv' = 17
-    'forward_weighted_oit_ray.frag.spv' = 17
+    'forward_transparent_ray.frag.spv' = 21
+    'forward_weighted_oit_ray.frag.spv' = 21
     # Partitioned transparent programs preserve the same functional sparse
     # DDGI/reflection accounting as their universal siblings.  The ray-query
     # programs keep only the outlined optical-task/hit-gather operations.
-    'forward_transparent_ordinary.frag.spv' = 27
-    'forward_transparent_thick.frag.spv' = 27
-    'forward_transparent_decal_cache_required.frag.spv' = 27
-    'forward_weighted_oit_ordinary.frag.spv' = 27
-    'forward_weighted_oit_thick.frag.spv' = 27
-    'forward_weighted_oit_decal.frag.spv' = 27
-    'forward_weighted_oit_decal_cache_required.frag.spv' = 27
-    'forward_transparent_ordinary_ray.frag.spv' = 17
-    'forward_transparent_thick_ray.frag.spv' = 17
-    'forward_transparent_decal_ray.frag.spv' = 17
-    'forward_weighted_oit_ordinary_ray.frag.spv' = 17
-    'forward_weighted_oit_thick_ray.frag.spv' = 17
-    'forward_weighted_oit_decal_ray.frag.spv' = 17
+    'forward_transparent_ordinary.frag.spv' = 91
+    'forward_transparent_thick.frag.spv' = 91
+    'forward_transparent_decal_cache_required.frag.spv' = 82
+    'forward_weighted_oit_ordinary.frag.spv' = 91
+    'forward_weighted_oit_thick.frag.spv' = 91
+    'forward_weighted_oit_decal.frag.spv' = 87
+    'forward_weighted_oit_decal_cache_required.frag.spv' = 82
+    'forward_transparent_ordinary_ray.frag.spv' = 21
+    'forward_transparent_thick_ray.frag.spv' = 21
+    'forward_transparent_decal_ray.frag.spv' = 21
+    'forward_weighted_oit_ordinary_ray.frag.spv' = 21
+    'forward_weighted_oit_thick_ray.frag.spv' = 21
+    'forward_weighted_oit_decal_ray.frag.spv' = 21
     'fog.comp.spv' = 14
     'particle.vert.spv' = 14
     'foliage_grass.mesh.spv' = 14
@@ -234,15 +240,15 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_ddgi_b1_provenance.frag.spv' = 9
     'forward_opaque_simple_full_input_ddgi_b1.frag.spv' = 9
     'forward_opaque_simple_full_input_ddgi_b1_provenance.frag.spv' = 9
-    'forward_transparent_ddgi_b1.frag.spv' = 16
+    'forward_transparent_ddgi_b1.frag.spv' = 20
     # ThinGlass omits one ordinary transparent reflection-owner site.
-    'forward_transparent_thin_glass_ddgi_b1.frag.spv' = 15
-    'forward_weighted_oit_ddgi_b1.frag.spv' = 16
+    'forward_transparent_thin_glass_ddgi_b1.frag.spv' = 19
+    'forward_weighted_oit_ddgi_b1.frag.spv' = 20
     # glslc outlines the shared receiver/hit-gather machinery in the combined
     # ray+B1 programs, so their static SPIR-V instruction count is lower than
     # the non-ray B1 siblings while preserving the bounded runtime operations.
-    'forward_transparent_ray_ddgi_b1.frag.spv' = 20
-    'forward_weighted_oit_ray_ddgi_b1.frag.spv' = 20
+    'forward_transparent_ray_ddgi_b1.frag.spv' = 24
+    'forward_weighted_oit_ray_ddgi_b1.frag.spv' = 24
     'foliage_forward_ddgi_b1.frag.spv' = 9
     'foliage_forward_ddgi_b1_provenance.frag.spv' = 9
     'fog_b1.comp.spv' = 9

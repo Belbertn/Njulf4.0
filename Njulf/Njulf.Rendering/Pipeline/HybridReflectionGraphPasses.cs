@@ -32,6 +32,13 @@ internal abstract class HybridReflectionGraphPass : RenderPassBase
     // dedicated queue-family ownership audit.
     public override bool SupportsAsyncCompute => false;
 
+    public override void Execute(CommandBuffer cmd, int frame, SceneRenderingData scene, Njulf.Rendering.Debug.GpuTimestampRecorder? timestamps)
+    {
+        Runtime.DenoisingTimestamps = timestamps;
+        try { Execute(cmd, frame, scene); }
+        finally { Runtime.DenoisingTimestamps = null; }
+    }
+
     public override string AsyncComputeReason =>
         "Hybrid reflection shares SceneColor and history descriptors with adjacent graphics passes.";
 

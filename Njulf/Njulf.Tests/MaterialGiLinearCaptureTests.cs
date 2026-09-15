@@ -526,7 +526,7 @@ public sealed class MaterialGiLinearCaptureTests
     [Test]
     public void CaptureShaderModes_AreLateDirectSignalBranchesAndNormalRenderingRemainsUntouched()
     {
-        string shader = ReadRepoFile("Njulf.Shaders", "forward.frag");
+        string shader = ForwardShaderSource.Read();
         string settings = ReadRepoFile("Njulf.Rendering", "Data", "RenderSettings.cs");
         string targets = ReadRepoFile("Njulf.Rendering", "Resources", "RenderTargetManager.cs");
 

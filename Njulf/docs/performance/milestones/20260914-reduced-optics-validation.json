@@ -1,0 +1,210 @@
+{
+  "date": "2026-09-14",
+  "revision": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+  "dirty_at_start": true,
+  "hardware": "NVIDIA GeForce RTX 3060 Laptop GPU; Vulkan 1.4.341; driver 610.248.0",
+  "tests": {
+    "focused": {
+      "passed": 83,
+      "failed": []
+    },
+    "contracts": {
+      "passed": 351,
+      "failed": [
+        "HybridReceiverCache_UsesCompactProducerOnlyForEligibleSurfacePath",
+        "ShaderContract_PreservesBaselineAndSparseArtifacts",
+        "ReflectionCapture_RebindsMeshDescriptorsAfterSkyboxLayout",
+        "DirectionalShadowCasterDiagnostics_RuntimeToggleRecreatesFoliageShadowVariants",
+        "RayQueryBuildContract_AvoidsGlslangIdOverflowForAllVariants",
+        "VulkanRuntime_ResetHeadersUseSingleOrderedTransferWrites",
+        "ResidentSourceRefresh_UsesCompleteSequenceAndExactWorkCounters",
+        "CaptureShaderModes_AreLateDirectSignalBranchesAndNormalRenderingRemainsUntouched",
+        "ExactReceiverPublication_DefersCacheSpecializationsWithoutRenderTimeCreation",
+        "CommonSurfaceCoverageGate_IsStrictAndQualificationOnly"
+      ]
+    },
+    "baseline_contracts": {
+      "passed": 0,
+      "failed": [
+        "CaptureShaderModes_AreLateDirectSignalBranchesAndNormalRenderingRemainsUntouched",
+        "ShaderContract_PreservesBaselineAndSparseArtifacts",
+        "CommonSurfaceCoverageGate_IsStrictAndQualificationOnly",
+        "ExactReceiverPublication_DefersCacheSpecializationsWithoutRenderTimeCreation",
+        "ReflectionCapture_RebindsMeshDescriptorsAfterSkyboxLayout",
+        "VulkanRuntime_ResetHeadersUseSingleOrderedTransferWrites",
+        "HybridReceiverCache_UsesCompactProducerOnlyForEligibleSurfacePath",
+        "RayQueryBuildContract_AvoidsGlslangIdOverflowForAllVariants",
+        "DirectionalShadowCasterDiagnostics_RuntimeToggleRecreatesFoliageShadowVariants",
+        "ResidentSourceRefresh_UsesCompleteSequenceAndExactWorkCounters"
+      ]
+    },
+    "source_revision": "9cc0c406779c4e818b6e8c30b0f22da1916f2ead",
+    "dirty_baseline_patch": "artifacts/reduced-optics-20260914/start.patch",
+    "spirv_modules_validated": 15,
+    "hardware": "NVIDIA GeForce RTX 3060 Laptop GPU; Vulkan 1.4.341; driver 610.248.0"
+  },
+  "rejected_combined_glass": {
+    "frame": {
+      "Name": "GPU frame",
+      "Count": 240,
+      "AverageMilliseconds": 77.78038749999999,
+      "MinMilliseconds": 73.349,
+      "MaxMilliseconds": 84.376,
+      "P95Milliseconds": 81.971,
+      "MedianMilliseconds": 77.37549999999999,
+      "P50Milliseconds": 77.37549999999999,
+      "P99Milliseconds": 83.57
+    },
+    "stages": [
+      {
+        "Name": "Denoising/GlassShading",
+        "Count": 240,
+        "AverageMilliseconds": 60.83756249999998,
+        "MinMilliseconds": 56.342,
+        "MaxMilliseconds": 68.498,
+        "P95Milliseconds": 65.605,
+        "MedianMilliseconds": 60.8445,
+        "P50Milliseconds": 60.8445,
+        "P99Milliseconds": 66.644
+      },
+      {
+        "Name": "Denoising/GlassCorrection",
+        "Count": 240,
+        "AverageMilliseconds": 1.4101041666666678,
+        "MinMilliseconds": 1.245,
+        "MaxMilliseconds": 2.832,
+        "P95Milliseconds": 2.711,
+        "MedianMilliseconds": 1.305,
+        "P50Milliseconds": 1.305,
+        "P99Milliseconds": 2.783
+      },
+      {
+        "Name": "Denoising/GlassPrepare",
+        "Count": 240,
+        "AverageMilliseconds": 0.8325166666666667,
+        "MinMilliseconds": 0.756,
+        "MaxMilliseconds": 2.231,
+        "P95Milliseconds": 1.069,
+        "MedianMilliseconds": 0.769,
+        "P50Milliseconds": 0.769,
+        "P99Milliseconds": 2.227
+      },
+      {
+        "Name": "Denoising/GlassTemporal",
+        "Count": 240,
+        "AverageMilliseconds": 0.7445875,
+        "MinMilliseconds": 0.678,
+        "MaxMilliseconds": 2.209,
+        "P95Milliseconds": 0.948,
+        "MedianMilliseconds": 0.712,
+        "P50Milliseconds": 0.712,
+        "P99Milliseconds": 1.948
+      },
+      {
+        "Name": "Denoising/GlassSpatial2",
+        "Count": 240,
+        "AverageMilliseconds": 0.6734250000000003,
+        "MinMilliseconds": 0.604,
+        "MaxMilliseconds": 2.129,
+        "P95Milliseconds": 0.859,
+        "MedianMilliseconds": 0.6345000000000001,
+        "P50Milliseconds": 0.6345000000000001,
+        "P99Milliseconds": 2.097
+      },
+      {
+        "Name": "Denoising/GlassSpatial1",
+        "Count": 240,
+        "AverageMilliseconds": 0.6078708333333334,
+        "MinMilliseconds": 0.525,
+        "MaxMilliseconds": 2.196,
+        "P95Milliseconds": 0.594,
+        "MedianMilliseconds": 0.557,
+        "P50Milliseconds": 0.557,
+        "P99Milliseconds": 2.034
+      },
+      {
+        "Name": "Denoising/ReflectionReproject",
+        "Count": 240,
+        "AverageMilliseconds": 0.3612249999999999,
+        "MinMilliseconds": 0.2,
+        "MaxMilliseconds": 1.873,
+        "P95Milliseconds": 0.38,
+        "MedianMilliseconds": 0.358,
+        "P50Milliseconds": 0.358,
+        "P99Milliseconds": 1.673
+      },
+      {
+        "Name": "Denoising/ReflectionClear",
+        "Count": 240,
+        "AverageMilliseconds": 0.16221666666666698,
+        "MinMilliseconds": 0.1,
+        "MaxMilliseconds": 1.628,
+        "P95Milliseconds": 0.236,
+        "MedianMilliseconds": 0.165,
+        "P50Milliseconds": 0.165,
+        "P99Milliseconds": 1.563
+      },
+      {
+        "Name": "Denoising/ReflectionReconstruct",
+        "Count": 240,
+        "AverageMilliseconds": 0.24112499999999956,
+        "MinMilliseconds": 0.201,
+        "MaxMilliseconds": 1.686,
+        "P95Milliseconds": 0.224,
+        "MedianMilliseconds": 0.219,
+        "P50Milliseconds": 0.219,
+        "P99Milliseconds": 0.923
+      },
+      {
+        "Name": "Denoising/ReflectionPrepare",
+        "Count": 240,
+        "AverageMilliseconds": 0.11457916666666658,
+        "MinMilliseconds": 0.106,
+        "MaxMilliseconds": 0.371,
+        "P95Milliseconds": 0.121,
+        "MedianMilliseconds": 0.113,
+        "P50Milliseconds": 0.113,
+        "P99Milliseconds": 0.127
+      },
+      {
+        "Name": "Denoising/ReflectionResolve",
+        "Count": 240,
+        "AverageMilliseconds": 0.058262499999999884,
+        "MinMilliseconds": 0.029,
+        "MaxMilliseconds": 0.317,
+        "P95Milliseconds": 0.063,
+        "MedianMilliseconds": 0.0595,
+        "P50Milliseconds": 0.0595,
+        "P99Milliseconds": 0.065
+      },
+      {
+        "Name": "Denoising/ReflectionPrefilter",
+        "Count": 240,
+        "AverageMilliseconds": 0.053995833333333326,
+        "MinMilliseconds": 0.03,
+        "MaxMilliseconds": 0.062,
+        "P95Milliseconds": 0.059,
+        "MedianMilliseconds": 0.056,
+        "P50Milliseconds": 0.056,
+        "P99Milliseconds": 0.061
+      }
+    ],
+    "reason": "Glass compute shading alone averaged 60.84 ms; reject. Background pipeline loading also invalidated this timing capture contract.",
+    "contract_mismatches": [
+      "Loaded shader identity changed during the measurement window.",
+      "Build configuration 'Development; validation=Off; framework=.NETCoreApp,Version=v10.0' is not a production configuration.",
+      "Frame 8 changed capture loaded shaders."
+    ]
+  },
+  "validation_smoke": {
+    "status": "passed",
+    "vulkan_warnings": 0,
+    "vulkan_errors": 0,
+    "cold_first_scene_seconds": 532.736
+  },
+  "baseline_contract_reproduction": "HEAD plus starting dirty patch, candidate test assembly with identical failed source-contract checks; all 10 remaining failures reproduced.",
+  "artifact_cleanup": {
+    "review": "5731 older payloads, 15.93 GiB; 249.44 GiB free; no scan failures. No old campaign payloads removed.",
+    "baseline_copy": "Automatic approval review rejected recursive removal with reason blocked by policy. Temporary source copy and hard-linked test binaries remain under artifacts/reduced-optics-20260914/baseline-contracts."
+  }
+}

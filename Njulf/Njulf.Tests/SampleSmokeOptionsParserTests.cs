@@ -896,12 +896,11 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
-    public void BistroFollowsSponzaAndLoadsTheAlignedInteriorWithAssimp()
+    public void BistroFollowsSponzaAndLoadsOnlyTheExteriorWithAssimp()
     {
         SampleSceneKind[] scenes = Enum.GetValues<SampleSceneKind>();
         int sponzaIndex = Array.IndexOf(scenes, SampleSceneKind.SponzaPlaza);
         SampleAssetManifest manifest = SampleAssetManifest.Bistro;
-        SampleAssetReference interior = manifest.AddendumModelAssets.Single();
         SampleAssetReference[] assets = manifest.EnumerateAssets().ToArray();
 
         Assert.Multiple(() =>
@@ -912,19 +911,11 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(
                 manifest.ModelAsset.AssimpMaterialTextureConvention,
                 Is.EqualTo(AssimpMaterialTextureConvention.AmazonBistro));
-            Assert.That(manifest.AddendumModelAssets, Has.Count.EqualTo(1));
-            Assert.That(
-                interior.Path,
-                Is.EqualTo("Assets/Bistro_v5_2/BistroInterior.fbx"));
-            Assert.That(interior.ExpectedBackend, Is.EqualTo(ModelImportBackend.Assimp));
-            Assert.That(
-                interior.AssimpMaterialTextureConvention,
-                Is.EqualTo(AssimpMaterialTextureConvention.AmazonBistro));
+            Assert.That(manifest.AddendumModelAssets, Is.Empty);
             Assert.That(manifest.ModelAsset.LoadTier,
                 Is.EqualTo(SampleAssetLoadTier.Critical));
-            Assert.That(interior.LoadTier,
-                Is.EqualTo(SampleAssetLoadTier.Deferred));
-            Assert.That(assets, Has.Length.EqualTo(2));
+            Assert.That(manifest.HasDeferredAssets, Is.False);
+            Assert.That(assets, Has.Length.EqualTo(1));
             Assert.That(assets,
                 Has.All.Matches<SampleAssetReference>(asset =>
                     asset.RequireCooked &&

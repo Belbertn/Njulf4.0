@@ -8,14 +8,16 @@ layout(push_constant) uniform Dispatch { uint count; } dispatch;
 uint TestOffset(uint b) { return b==0u?0u:inputData.Words[b==1u?10u:11u]; }
 uint OpticalWord(uint b,uint w) { return inputData.Words[TestOffset(b)+w]; }
 void OpticalStore(uint b,uint w,uint v) { outputData.Words[TestOffset(b)+w]=v; }
-void OpticalAddHistoryReuse(uint b) { atomicAdd(outputData.Words[7u],1u); }
+void OpticalPublishHistoryReuses(uint b,uint count) { atomicAdd(outputData.Words[7u],count); }
+#include "../../../Njulf.Shaders/optical_compact_reuse.glsl"
+#define OpticalAddHistoryReuse OpticalCountGroupReuse
 struct CompactTestPush { uint Current;uint Previous;uint Step;uint Reset;uint Weighted;uint Bypass;uint Padding0;uint Padding1; };
 CompactTestPush pc;
 #include "../../../Njulf.Shaders/optical_compact.glsl"
 #include "../../../Njulf.Shaders/optical_compact_prepare_kernel.glsl"
 #include "../../../Njulf.Shaders/optical_compact_temporal_kernel.glsl"
 #include "../../../Njulf.Shaders/optical_compact_spatial_kernel.glsl"
-void main() {
+void FilterPixel() {
  uint index=gl_GlobalInvocationID.x;if(index>=dispatch.count)return;
  pc=CompactTestPush(1u,2u,inputData.Words[9u],inputData.Words[12u],0u,0u,0u,0u);
  ivec2 p=ivec2(index%OcWidth(),index/OcWidth());
@@ -23,4 +25,10 @@ void main() {
  if(inputData.Words[8u]==0u)OpticalCompactPreparePixel(p);
  else if(inputData.Words[8u]==1u)OpticalCompactTemporalPixel(p);
  else OpticalCompactSpatialPixel(p);
+}
+
+void main() {
+ OpticalBeginHistoryReuses();
+ FilterPixel();
+ OpticalEndHistoryReuses(0u);
 }

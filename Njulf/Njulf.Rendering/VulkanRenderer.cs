@@ -4741,6 +4741,7 @@ namespace Njulf.Rendering
 
             SetViewportAndScissor(_currentCommandBuffer);
 
+            sceneData.DenoisingDispatchCounts.Clear();
             _productionPipelines.OpticalDenoising?.Prepare(sceneData);
 
             // Execute render graph
@@ -8708,6 +8709,7 @@ namespace Njulf.Rendering
                     "HybridReflectionDdgiBasePass");
             sceneData.GpuHybridReflectionResolveMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("HybridReflectionResolvePass");
+            sceneData.DenoisingStageMicroseconds = timings.Passes.Where(p => p.Name.StartsWith("Denoising/", StringComparison.Ordinal)).ToDictionary(p => p.Name, p => p.GpuAvailable ? p.GpuMicroseconds : 0L);
             sceneData.GpuHybridReflectionTemporalMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("HybridReflectionTemporalPass");
             sceneData.GpuOpticalLayerClearMicroseconds = timings.GetGpuMicrosecondsOrZero("OpticalLayerClearPass");
@@ -10760,6 +10762,7 @@ namespace Njulf.Rendering
             SceneRenderingData sceneData,
             in TransparentReflectionGpuCounters counters)
         {
+            sceneData.ThickTransmissionRequestedTasks = counters.ThickTransmissionRequests;
             sceneData.TransparentReflectionRayRequestCount =
                 counters.RayRequests;
             sceneData.TransparentReflectionEstimatedSsrHitCount =

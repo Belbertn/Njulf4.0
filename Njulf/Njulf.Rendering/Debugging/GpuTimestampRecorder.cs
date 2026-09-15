@@ -193,7 +193,11 @@ namespace Njulf.Rendering.Debug
                 ? _computePassQueryCounts[frameIndex]
                 : _graphicsPassQueryCounts[frameIndex];
             if (passQueryIndex >= MaxPassesPerFrame)
+            {
+                // Keep nesting balanced when a diagnostic frame exhausts its query budget.
+                _activePassQueries[frameIndex].Add(-1);
                 return;
+            }
 
             _admittedSimpleDdgiTimingPasses[frameIndex] |= simpleDdgiPass;
 
@@ -232,8 +236,10 @@ namespace Njulf.Rendering.Debug
                 return;
 
             int stackIndex = _activePassQueries[frameIndex].Count - 1;
-            PassQuery passQuery = _passQueries[frameIndex][_activePassQueries[frameIndex][stackIndex]];
+            int queryIndex = _activePassQueries[frameIndex][stackIndex];
             _activePassQueries[frameIndex].RemoveAt(stackIndex);
+            if (queryIndex < 0) return;
+            PassQuery passQuery = _passQueries[frameIndex][queryIndex];
             QueryPool queryPool = passQuery.Queue == TimestampQueue.Compute ? _computeQueryPools[frameIndex] : _graphicsQueryPools[frameIndex];
             _context.Api.CmdWriteTimestamp2(commandBuffer, PipelineStageFlags2.BottomOfPipeBit, queryPool, passQuery.EndQuery);
         }

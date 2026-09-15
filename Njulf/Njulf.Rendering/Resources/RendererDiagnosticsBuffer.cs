@@ -452,6 +452,7 @@ namespace Njulf.Rendering.Resources
                     EstimatedEnvironmentFallbacks:
                         counters[TransparentReflectionCounterBase + 7])
                 {
+                    ThickTransmissionRequests = counters[ThickTransmissionTaskCounter],
                     ExactSsrEligible =
                         counters[TransparentReflectionCounterBase + 8],
                     ExactSsrAdmitted =

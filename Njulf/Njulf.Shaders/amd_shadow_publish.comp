@@ -9,16 +9,20 @@ void main() {
  ivec2 p=ivec2(gl_GlobalInvocationID.xy);if(any(greaterThanEqual(p,AdNativeSize())))return;
  float depth=texelFetch(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],p,0).r;
  vec2 pos=(vec2(p)+.5)*.5-.5;ivec2 base=ivec2(floor(pos));vec2 f=fract(pos);
+ uint pixel=uint(p.y*AdNativeSize().x+p.x),raw=ReadStorageWordUniform(ad.Source,pixel);
+ for(uint slot=0u;slot<ad.Slot;slot++) {
  float sum=0,weights=0,bestDistance=1e30,best=1.0;
  for(int y=0;y<2;y++)for(int x=0;x<2;x++) {
   ivec2 q=clamp(base+ivec2(x,y),ivec2(0),BufferDimensions()-1);
-  float delta=abs(LoadDepth(q)-depth),v=uintBitsToFloat(AdRead(ad.Current,q,7u));
+  float delta=abs(LoadDepth(q)-depth),v=uintBitsToFloat(AdRead(ad.Current+slot,q,7u));
   if(isnan(v)||isinf(v))continue;
   if(delta<bestDistance){bestDistance=delta;best=v;}
   float w=(x==0?1-f.x:f.x)*(y==0?1-f.y:f.y)*exp(-delta/max(abs(depth)*.005,1e-7));
   sum+=v*w;weights+=w;
  }
  float visibility=weights>1e-5?sum/weights:best;
- uint pixel=uint(p.y*AdNativeSize().x+p.x),raw=ReadStorageWord(ad.Source,pixel),shift=ad.Slot*8u;
- WriteStorageWord(ad.Source,pixel,(raw&~(255u<<shift))|(uint(round(clamp(visibility,0,1)*255))<<shift));
+ uint shift=slot*8u;
+ raw=(raw&~(255u<<shift))|(uint(round(clamp(visibility,0,1)*255))<<shift);
+ }
+ WriteStorageWordUniform(ad.Source,pixel,raw);
 }

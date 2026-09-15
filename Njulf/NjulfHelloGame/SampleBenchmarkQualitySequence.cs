@@ -94,7 +94,7 @@ public static class SampleBenchmarkQualityCheckpointCatalog
     public static IReadOnlyList<int> GetCheckpointIndices(
         SampleBenchmarkTrajectoryKind trajectory) => trajectory switch
         {
-            SampleBenchmarkTrajectoryKind.ReflectionLod => ReflectionLod,
+            SampleBenchmarkTrajectoryKind.ReflectionLod or SampleBenchmarkTrajectoryKind.OpticalMotion => ReflectionLod,
             SampleBenchmarkTrajectoryKind.BistroLoop => Bistro,
             SampleBenchmarkTrajectoryKind.SponzaHorizontal => SponzaHorizontal,
             SampleBenchmarkTrajectoryKind.SponzaVertical => SponzaVertical,

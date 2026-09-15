@@ -1133,7 +1133,7 @@ public sealed class HybridReflectionContractsTests
     [Test]
     public void HybridReceiverShader_SpecializesOnlyRejectedForwardDebugViews()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag")
+        string forward = ForwardShaderSource.Read()
             .ReplaceLineEndings("\n");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline",
             "ForwardPlusPass.cs").ReplaceLineEndings("\n");
@@ -1188,7 +1188,7 @@ public sealed class HybridReflectionContractsTests
     [Test]
     public void HybridReceiverCacheSplit_StaticBentNormalModeMatchesAdmission()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag")
+        string forward = ForwardShaderSource.Read()
             .ReplaceLineEndings("\n");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline",
             "ForwardPlusPass.cs").ReplaceLineEndings("\n");
@@ -1237,7 +1237,7 @@ public sealed class HybridReflectionContractsTests
     [Test]
     public void HybridForwardDdgiPermutation_KeepsDiffuseAndVisibilityOnly()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag")
+        string forward = ForwardShaderSource.Read()
             .ReplaceLineEndings("\n");
         string gather = ReadRepoText(
                 "Njulf.Shaders", "forward_ddgi_receiver_gather.glsl")
@@ -1433,7 +1433,7 @@ public sealed class HybridReflectionContractsTests
             "hybrid_reflection_compute.glsl");
         string payload = ReadRepoText("Njulf.Shaders",
             "hybrid_reflection_payload.glsl");
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         string common = ReadRepoText("Njulf.Shaders", "common.glsl");
         string runtime = ReadRepoText("Njulf.Rendering", "Pipeline",
             "HybridReflectionVulkanRuntime.cs");

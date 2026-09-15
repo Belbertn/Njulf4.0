@@ -9,7 +9,7 @@ public sealed class NormalMapFilteringShaderContractTests
     [Test]
     public void ResolveNormal_UsesConservativeExplicitFootprint()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag")
+        string forward = ForwardShaderSource.Read()
             .ReplaceLineEndings("\n");
         int resolveStart = forward.IndexOf(
             "vec3 ResolveNormal(",

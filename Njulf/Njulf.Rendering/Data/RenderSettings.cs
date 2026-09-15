@@ -811,6 +811,7 @@ namespace Njulf.Rendering.Data
                         Enabled = settings.OpticalDenoising.Enabled,
                         BypassFilter = settings.OpticalDenoising.BypassFilter,
                         CompactLayers = settings.OpticalDenoising.CompactLayers,
+                        ReducedResolutionShading = settings.OpticalDenoising.ReducedResolutionShading,
                         LayerLimit = settings.OpticalDenoising.LayerLimit,
                         MemoryBudgetMiB = settings.OpticalDenoising.MemoryBudgetMiB
                     },
@@ -870,6 +871,7 @@ namespace Njulf.Rendering.Data
                     settings.OpticalDenoising.Enabled = optical.Enabled;
                     settings.OpticalDenoising.BypassFilter = optical.BypassFilter;
                     settings.OpticalDenoising.CompactLayers = optical.CompactLayers;
+                    settings.OpticalDenoising.ReducedResolutionShading = optical.ReducedResolutionShading;
                     settings.OpticalDenoising.LayerLimit = optical.LayerLimit;
                     settings.OpticalDenoising.MemoryBudgetMiB = optical.MemoryBudgetMiB;
                 }
@@ -1260,7 +1262,8 @@ namespace Njulf.Rendering.Data
             public float RayQueryPixelBudgetFraction { get; init; } = 0.0078125f;
             public int RayQueryHitLightLimit { get; init; } = 2;
             public int TemporalHistoryLength { get; init; } = 16;
-            public ReflectionDenoiser Denoiser { get; init; } = ReflectionDenoiser.Existing;
+            public ReflectionDenoiser Denoiser { get; init; } = ReflectionDenoiser.Amd;
+            public bool AmdHalfResolution { get; init; } = true;
             public int SpatialFilterPassCount { get; init; } = 2;
 
             public static ReflectionSettingsFile FromSettings(ReflectionSettings settings) => new()
@@ -1287,6 +1290,7 @@ namespace Njulf.Rendering.Data
                 RayQueryHitLightLimit = settings.RayQueryHitLightLimit,
                 TemporalHistoryLength = settings.TemporalHistoryLength,
                 Denoiser = settings.Denoiser,
+                AmdHalfResolution = settings.AmdHalfResolution,
                 SpatialFilterPassCount = settings.SpatialFilterPassCount
             };
 
@@ -1317,6 +1321,7 @@ namespace Njulf.Rendering.Data
                 settings.RayQueryHitLightLimit = RayQueryHitLightLimit;
                 settings.TemporalHistoryLength = TemporalHistoryLength;
                 settings.Denoiser = Denoiser;
+                settings.AmdHalfResolution = AmdHalfResolution;
                 settings.SpatialFilterPassCount = SpatialFilterPassCount;
             }
         }

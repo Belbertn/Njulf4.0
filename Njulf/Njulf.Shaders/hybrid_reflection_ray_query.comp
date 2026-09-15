@@ -484,7 +484,7 @@ void main()
         {
             if (HybridTaskReserved != 0u)
                 WriteStorageWord(HybridTaskReserved,
-                    128u + (uint(coordinate.y) * pc.ScreenWidth + uint(coordinate.x)) * 16u,
+                    ReadStorageWord(HybridTaskReserved, 50u) + (uint(coordinate.y) * pc.ScreenWidth + uint(coordinate.x)),
                     floatBitsToUint(hit.Distance));
             float auxiliary = imageLoad(
                 HybridRawRadiance, coordinate).a;

@@ -26,11 +26,18 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
     private readonly RenderTargetManager _targets;
     private readonly RenderSettings _settings;
     private readonly GiPipelineCacheService? _cache;
+    internal Njulf.Rendering.Debug.GpuTimestampRecorder? DenoisingTimestamps { get; set; }
+    private int _timingFrame;
+    private SceneRenderingData? _dispatchScene;
     private readonly BufferHandle[] _layers = [BufferHandle.Invalid, BufferHandle.Invalid];
     private readonly BufferHandle[] _compact = [BufferHandle.Invalid, BufferHandle.Invalid];
     private ulong _compactBytes;
     private bool _compactEnabled;
     private VkPipeline _compactPrepare, _compactTemporal, _compactSpatial, _compactCorrect;
+    private VkPipeline _compactShade, _compactTransmission;
+    private PipelineLayout _shadeLayout;
+    private bool _shadeWithRays, _deferredShading, _shadeFailed;
+    internal RaySceneDescriptorBank? RaySceneDescriptors { get; init; }
     private readonly BufferHandle[] _readback = [BufferHandle.Invalid, BufferHandle.Invalid];
     private readonly bool[] _submitted = new bool[2];
     private DescriptorSetLayout _outputLayout;
@@ -59,13 +66,14 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
     }
 
     public BufferHandle GetLayerBuffer(int frameIndex) => _layers[frameIndex % 2];
-    public ulong AllocatedBytes => (_bytes + _compactBytes) * 2 + (_readback[0].IsValid ? 64UL : 0UL);
+    public ulong AllocatedBytes => (_bytes + _compactBytes) * 2 + (_readback[0].IsValid ? 96UL : 0UL);
     public string FailureDetail => _failure;
 
     public bool Prepare(SceneRenderingData scene)
     {
         _active = false;
         scene.OpticalDenoisingActive = false;
+        scene.OpticalReducedResolutionShadingActive = false;
         scene.OpticalDenoisingAllocatedBytes = AllocatedBytes;
         if (!_settings.OpticalDenoising.Enabled ||
             !RenderFeatureIsolationPolicy.AllowsReflections(scene.ActiveFeatureIsolation) ||
@@ -75,8 +83,22 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
             return false;
         }
         EnsureResources();
-        _active = _layers[0].IsValid && _correct.Handle != 0 && string.IsNullOrEmpty(_failure);
+        _active = _layers[0].IsValid && (_compactEnabled ? _compactCorrect.Handle : _correct.Handle) != 0 && string.IsNullOrEmpty(_failure);
+        _deferredShading = !_shadeFailed && _active && _compactEnabled && _settings.OpticalDenoising.ReducedResolutionShading &&
+            !_settings.OpticalDenoising.BypassFilter && scene.TransparencyDebugView == 0 && scene.DebugViewMode == 0;
+        if (_deferredShading && (_compactShade.Handle == 0 || (_shadeWithRays && _compactTransmission.Handle == 0)))
+        {
+            try { CreateShadingPipeline(); }
+            catch (Exception exception)
+            {
+                // Do not suppress native shading until a usable compute pipeline exists.
+                _deferredShading = false;
+                _shadeFailed = true;
+                Console.Error.WriteLine($"Deferred optical shading unavailable; using native shading: {exception.Message}");
+            }
+        }
         scene.OpticalDenoisingAllocatedBytes = AllocatedBytes;
+        scene.OpticalReducedResolutionShadingActive = _deferredShading;
         return _active;
     }
 
@@ -91,6 +113,7 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
         _width = extent.Width; _height = extent.Height; _budget = _settings.OpticalDenoising.MemoryBudgetMiB;
         _compactEnabled = _settings.OpticalDenoising.CompactLayers;
         _failure = string.Empty;
+        _shadeFailed = false;
         try
         {
             // Reserve the tiny readback allocations inside the same budget.
@@ -107,18 +130,24 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
                 _layers[i] = _buffers.CreateBuffer(_bytes,
                     BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit | BufferUsageFlags.TransferSrcBit,
                     MemoryUsage.AutoPreferDevice, debugName: $"Optical layers/history {i}", category: MemoryBudgetCategory.RenderTargets);
-                _readback[i] = _buffers.CreateBuffer(32, BufferUsageFlags.TransferDstBit,
+                _readback[i] = _buffers.CreateBuffer(48, BufferUsageFlags.TransferDstBit,
                     MemoryUsage.AutoPreferHost, AllocationCreateFlags.MappedBit | AllocationCreateFlags.HostAccessRandomBit,
                     debugName: $"Optical counters {i}", category: MemoryBudgetCategory.DiagnosticsAndDebug);
                 _heap.RegisterStorageBuffer(BindlessIndex.OpticalLayerBufferBase + i, _buffers.GetBuffer(_layers[i]), 0, _bytes);
                 if (_compactEnabled)
                 {
-                    _compact[i] = _buffers.CreateBuffer(_compactBytes, BufferUsageFlags.StorageBufferBit,
+                    _compact[i] = _buffers.CreateBuffer(_compactBytes, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
                         MemoryUsage.AutoPreferDevice, debugName: $"Compact optical layers {i}", category: MemoryBudgetCategory.RenderTargets);
                     _heap.RegisterStorageBuffer(BindlessIndex.OpticalCompactBufferBase + i, _buffers.GetBuffer(_compact[i]), 0, _compactBytes);
                 }
             }
             if (_layout.Handle == 0) CreatePipelines();
+            if (!_compactEnabled && _correct.Handle == 0)
+            {
+                _temporal = CreatePipeline("optical_temporal.comp.spv");
+                _spatial = CreatePipeline("optical_spatial.comp.spv");
+                _correct = CreatePipeline("optical_correct.comp.spv");
+            }
             if (_compactEnabled && _compactPrepare.Handle == 0)
             {
                 _compactPrepare = CreatePipeline("optical_compact_prepare.comp.spv");
@@ -142,17 +171,26 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
         // Export is legal only after this frame's clear has actually been recorded.
         scene.OpticalDenoisingActive = true;
         int bank = frameIndex % 2;
+        // Descriptor layout availability does not imply a live scene TLAS during
+        // startup/scene transitions. Decide before export suppresses native shading.
+        // Retry each frame rather than latching a temporary readiness failure.
+        if (_deferredShading && _shadeWithRays &&
+            !(RaySceneDescriptors?.TryUpdate(bank, out _) ?? false))
+            _deferredShading = false;
+        scene.OpticalReducedResolutionShadingActive = _deferredShading;
         if (_submitted[bank])
         {
-            _buffers.InvalidateBuffer(_readback[bank], 0, 32);
+            _buffers.InvalidateBuffer(_readback[bank], 0, 48);
             uint* counters = (uint*)_buffers.GetMappedPointer(_readback[bank]);
             scene.OpticalDenoisingCapturedFragments = Math.Min(counters[5], _capacity);
             scene.OpticalDenoisingOverflowPixels = counters[6];
             scene.OpticalDenoisingHistoryReuses = counters[7];
+            scene.OpticalShadingReflectionRequests = counters[9];
+            scene.OpticalShadingTransmissionTasks = counters[10];
         }
         int signature = HashCode.Combine(scene.TransparencyMode, _settings.OpticalDenoising.LayerLimit,
             _settings.OpticalDenoising.BypassFilter, _settings.Reflections.Mode,
-            _settings.Transparency.ThickTransmissionMode, scene.GiTransportMaterialRevision);
+            _settings.Transparency.ThickTransmissionMode, scene.GiTransportMaterialRevision, _deferredShading);
         _reset = !_historyValid || _previousBank == bank || _sceneRevision != scene.SceneContentRevision ||
             _materialRevision != scene.GiTransportMaterialRevision || _cutSerial != scene.CaptureCameraCutSerial ||
             scene.HiZPolicyCameraCut != 0 || signature != _historySettings ||
@@ -168,12 +206,20 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
         header[0] = 1; header[1] = _width; header[2] = _height; header[3] = _capacity;
         header[4] = _compactEnabled ? 8u : (uint)_settings.OpticalDenoising.LayerLimit;
         header[13] = _compactEnabled ? 8u : 0u;
+        header[14] = _deferredShading ? 1u : 0u;
         header[8] = _settings.OpticalDenoising.BypassFilter ? 0u : ++_samplingFrame;
         _context.Api.CmdUpdateBuffer(cmd, _buffers.GetBuffer(_layers[bank]), 0, 64, header);
         Matrix4x4 previous = _previousViewProjection;
         _context.Api.CmdUpdateBuffer(cmd, _buffers.GetBuffer(_layers[bank]), 64, 64, &previous);
+        if (_deferredShading)
+        {
+            GPUForwardPushConstants shading = TransparentForwardPushConstants.Create(scene, _settings.Transparency);
+            shading.MeshletDrawBufferBaseIndex = BindlessIndex.TransparentMeshletDrawBufferBase;
+            _context.Api.CmdUpdateBuffer(cmd, _buffers.GetBuffer(_compact[bank]), 0,
+                (uint)Marshal.SizeOf<GPUForwardPushConstants>(), &shading);
+        }
         Barrier(cmd, PipelineStageFlags2.TransferBit, AccessFlags2.TransferWriteBit,
-            PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
         _previousViewProjection = scene.ViewProjectionMatrix;
         _sceneRevision = scene.SceneContentRevision; _materialRevision = scene.GiTransportMaterialRevision;
         _cutSerial = scene.CaptureCameraCutSerial; _historySettings = signature;
@@ -184,6 +230,7 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
     public void Record(CommandBuffer cmd, int frameIndex, SceneRenderingData scene, int stage)
     {
         if (!_active) return;
+        _timingFrame = frameIndex; _dispatchScene = scene;
         if (stage is 1 or 2 && _settings.OpticalDenoising.BypassFilter) return;
         int bank = frameIndex % 2;
         Barrier(cmd, PipelineStageFlags2.AllCommandsBit, AccessFlags2.MemoryWriteBit,
@@ -209,6 +256,13 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
                 Dispatch(cmd, _compactPrepare, push, true);
                 Barrier(cmd, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageWriteBit,
                     PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+                if (_deferredShading)
+                {
+                    RecordShading(cmd, bank, push);
+                    Barrier(cmd, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageWriteBit,
+                        PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+                    _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _layout, 0, 1, &storage, 0, null);
+                }
             }
             Dispatch(cmd, _compactEnabled ? _compactTemporal : _temporal, push, _compactEnabled);
         }
@@ -230,7 +284,7 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
             _targets.WeightedOitAccumulation.TransitionToShaderRead(cmd);
             Barrier(cmd, PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
                 AccessFlags2.ShaderStorageWriteBit, PipelineStageFlags2.TransferBit, AccessFlags2.TransferReadBit);
-            var copy = new BufferCopy { Size = 32 };
+            var copy = new BufferCopy { Size = 48 };
             _context.Api.CmdCopyBuffer(cmd, _buffers.GetBuffer(_layers[bank]), _buffers.GetBuffer(_readback[bank]), 1, &copy);
             _submitted[bank] = true; _historyValid = !_settings.OpticalDenoising.BypassFilter; _previousBank = bank;
         }
@@ -238,11 +292,61 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
 
     private void Dispatch(CommandBuffer cmd, VkPipeline pipeline, uint* push, bool halfResolution = false)
     {
+        _dispatchScene?.RecordDenoisingDispatch(_compactEnabled ? "CompactGlass" : "ExistingGlass");
+        string name = pipeline.Handle == _compactPrepare.Handle ? "GlassPrepare" : pipeline.Handle == _compactTemporal.Handle || pipeline.Handle == _temporal.Handle ? "GlassTemporal" : pipeline.Handle == _compactSpatial.Handle || pipeline.Handle == _spatial.Handle ? "GlassSpatial" + push[2] : "GlassCorrection";
+        DenoisingTimestamps?.BeginPass(cmd, _timingFrame, "Denoising/" + name);
         _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, pipeline);
         _context.Api.CmdPushConstants(cmd, _layout, ShaderStageFlags.ComputeBit, 0, 32, push);
         uint width = halfResolution ? (_width + 1) / 2 : _width;
         uint height = halfResolution ? (_height + 1) / 2 : _height;
         _context.Api.CmdDispatch(cmd, (width + 7) / 8, (height + 7) / 8, 1);
+        DenoisingTimestamps?.EndPass(cmd, _timingFrame);
+    }
+
+    private void CreateShadingPipeline()
+    {
+        _shadeWithRays = _context.RayQuerySupported && RaySceneDescriptors is { IsAvailable: true };
+        if (_shadeLayout.Handle == 0)
+        {
+            var layouts = stackalloc DescriptorSetLayout[3];
+            layouts[0] = _heap.StorageBufferSetLayout;
+            layouts[1] = _heap.TextureSamplerSetLayout;
+            if (_shadeWithRays) layouts[2] = RaySceneDescriptors!.Layout;
+            var range = new PushConstantRange { StageFlags = ShaderStageFlags.ComputeBit, Size = 32 };
+            var info = new PipelineLayoutCreateInfo
+            {
+                SType = StructureType.PipelineLayoutCreateInfo, SetLayoutCount = _shadeWithRays ? 3u : 2u,
+                PSetLayouts = layouts, PushConstantRangeCount = 1, PPushConstantRanges = &range
+            };
+            Check(_context.Api.CreatePipelineLayout(_context.Device, &info, null, out _shadeLayout), "create optical shading layout");
+        }
+        if (_compactShade.Handle == 0)
+            _compactShade = CreatePipeline(_shadeWithRays ? "optical_compact_shade.comp.spv" : "optical_compact_shade_ssr.comp.spv", _shadeLayout);
+        if (_shadeWithRays && _compactTransmission.Handle == 0)
+            _compactTransmission = CreatePipeline("optical_compact_transmission.comp.spv", _shadeLayout);
+    }
+
+    private void RecordShading(CommandBuffer cmd, int bank, uint* push)
+    {
+        DenoisingTimestamps?.BeginPass(cmd, _timingFrame, "Denoising/GlassReflectionShading");
+        _dispatchScene?.RecordDenoisingDispatch("CompactGlassShading");
+        var sets = stackalloc DescriptorSet[2] { _heap.StorageBufferSet, _heap.TextureSamplerSet };
+        _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _compactShade);
+        _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _shadeLayout, 0, 2, sets, 0, null);
+        if (_shadeWithRays) RaySceneDescriptors!.Bind(cmd, PipelineBindPoint.Compute, _shadeLayout, bank);
+        _context.Api.CmdPushConstants(cmd, _shadeLayout, ShaderStageFlags.ComputeBit, 0, 32, push);
+        _context.Api.CmdDispatch(cmd, ((_width + 1) / 2 + 7) / 8, ((_height + 1) / 2 + 7) / 8, 2);
+        DenoisingTimestamps?.EndPass(cmd, _timingFrame);
+        if (_shadeWithRays)
+        {
+            Barrier(cmd, PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+            DenoisingTimestamps?.BeginPass(cmd, _timingFrame, "Denoising/GlassTransmissionShading");
+            _dispatchScene?.RecordDenoisingDispatch("CompactGlassShading");
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _compactTransmission);
+            _context.Api.CmdDispatch(cmd, ((_width + 1) / 2 + 7) / 8, ((_height + 1) / 2 + 7) / 8, 2);
+            DenoisingTimestamps?.EndPass(cmd, _timingFrame);
+        }
     }
 
     private void CreatePipelines()
@@ -257,12 +361,10 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
         var layoutInfo = new PipelineLayoutCreateInfo
         { SType = StructureType.PipelineLayoutCreateInfo, SetLayoutCount = 2, PSetLayouts = layouts, PushConstantRangeCount = 1, PPushConstantRanges = &range };
         Check(_context.Api.CreatePipelineLayout(_context.Device, &layoutInfo, null, out _layout), "create optical pipeline layout");
-        _temporal = CreatePipeline("optical_temporal.comp.spv");
-        _spatial = CreatePipeline("optical_spatial.comp.spv");
-        _correct = CreatePipeline("optical_correct.comp.spv");
+
     }
 
-    private VkPipeline CreatePipeline(string shader)
+    private VkPipeline CreatePipeline(string shader, PipelineLayout pipelineLayout = default)
     {
         ShaderModule module = ShaderModuleLoader.Load(_context, shader);
         nint entry = SilkMarshal.StringToPtr("main");
@@ -270,7 +372,7 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
         {
             var info = new ComputePipelineCreateInfo
             {
-                SType = StructureType.ComputePipelineCreateInfo, Layout = _layout, BasePipelineIndex = -1,
+                SType = StructureType.ComputePipelineCreateInfo, Layout = pipelineLayout.Handle != 0 ? pipelineLayout : _layout, BasePipelineIndex = -1,
                 Stage = new PipelineShaderStageCreateInfo { SType = StructureType.PipelineShaderStageCreateInfo,
                     Stage = ShaderStageFlags.ComputeBit, Module = module, PName = (byte*)entry }
             };
@@ -332,10 +434,11 @@ internal sealed unsafe class OpticalDenoisingRuntime : IDisposable
         if (_disposed) return;
         _disposed = true;
         DestroyBuffers();
-        foreach (VkPipeline pipeline in new[] { _temporal, _spatial, _correct, _compactPrepare, _compactTemporal, _compactSpatial, _compactCorrect })
+        foreach (VkPipeline pipeline in new[] { _temporal, _spatial, _correct, _compactPrepare, _compactTemporal, _compactSpatial, _compactCorrect, _compactShade, _compactTransmission })
             if (pipeline.Handle != 0) _context.Api.DestroyPipeline(_context.Device, pipeline, null);
         if (_pool.Handle != 0) _context.Api.DestroyDescriptorPool(_context.Device, _pool, null);
         if (_layout.Handle != 0) _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
+        if (_shadeLayout.Handle != 0) _context.Api.DestroyPipelineLayout(_context.Device, _shadeLayout, null);
         if (_outputLayout.Handle != 0) _context.Api.DestroyDescriptorSetLayout(_context.Device, _outputLayout, null);
     }
 }
@@ -354,6 +457,12 @@ internal sealed class OpticalDenoisingPass : RenderPassBase
     public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData) => _runtime.Active;
     public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
     { if (_stage == 0) _runtime.Begin(cmd, frameIndex, sceneData); else _runtime.Record(cmd, frameIndex, sceneData, _stage); }
+    public override void Execute(CommandBuffer cmd, int frame, SceneRenderingData scene, Njulf.Rendering.Debug.GpuTimestampRecorder? timestamps)
+    {
+        _runtime.DenoisingTimestamps = timestamps;
+        try { Execute(cmd, frame, scene); }
+        finally { _runtime.DenoisingTimestamps = null; }
+    }
     public override void OnSwapchainRecreated() { if (_stage == 0) _runtime.OnTargetsRecreated(); }
     public override void Cleanup() { if (_stage == 0) _runtime.Dispose(); }
 }

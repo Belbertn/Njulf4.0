@@ -583,7 +583,7 @@ void HybridTraceLobe(
     {
         if (lobeId == 0u && HybridTaskReserved != 0u)
             WriteStorageWord(HybridTaskReserved,
-                128u + (uint(pixel.y) * pc.ScreenWidth + uint(pixel.x)) * 16u,
+                ReadStorageWord(HybridTaskReserved, 50u) + (uint(pixel.y) * pc.ScreenWidth + uint(pixel.x)),
                 floatBitsToUint(trace.HitDistance));
         HybridStoreLobe(pixel, lobeId,
             vec4(trace.Radiance, trace.Confidence),

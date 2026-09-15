@@ -102,9 +102,13 @@ internal sealed unsafe class AmdShadowDenoiser : IDisposable
         return Active;
     }
 
+    internal Njulf.Rendering.Debug.GpuTimestampRecorder? DenoisingTimestamps { get; set; }
+    private int _timingFrame;
+    private SceneRenderingData? _dispatchScene;
     public void Record(CommandBuffer cmd, int frameIndex, SceneRenderingData scene)
     {
         if (!Active) return;
+        _timingFrame = frameIndex; _dispatchScene = scene;
         _targets.SceneDepth.TransitionToDepthReadOnly(cmd);
         _targets.MotionVectors.TransitionToShaderRead(cmd);
         int bank = frameIndex % 2;
@@ -118,12 +122,14 @@ internal sealed unsafe class AmdShadowDenoiser : IDisposable
         *(Matrix4x4*)(header + 32) = scene.InverseViewProjectionMatrix * _previousVp;
         *(Vector4*)(header + 48) = new Vector4(scene.CameraPosition, 1);
         header[52] = _nativeWidth; header[53] = _nativeHeight;
-        uint* push = stackalloc uint[8];
+        uint* pushes = stackalloc uint[4 * 8];
+        Barrier(cmd);
         Span<uint> nextIds = stackalloc uint[4];
         Span<int> nextSignatures = stackalloc int[4];
         nextIds.Clear(); nextSignatures.Clear();
         for (int slot = 0; slot < scene.AreaShadowSelectedCount; slot++)
         {
+            uint* push = pushes + slot * 8;
             SelectedLocalShadow selected = scene.AreaShadowLights[slot];
             int signature = HashCode.Combine(selected.Light.Position, selected.Light.Direction,
                 selected.Light.Up, selected.Light.Size, selected.Light.Type, selected.Light.Range);
@@ -135,17 +141,25 @@ internal sealed unsafe class AmdShadowDenoiser : IDisposable
             push[1] = (uint)(BindlessIndex.AmdShadowBufferBase + (1 - bank) * 4 + previousSlot);
             push[2] = (uint)(BindlessIndex.AreaRayShadowMaskBufferBase + frameIndex);
             push[3] = _width; push[4] = _height; push[5] = (uint)slot; push[6] = lightReset ? 1u : 0u;
-            Barrier(cmd);
             _context.Api.CmdUpdateBuffer(cmd, _buffers.GetBuffer(_states[index]), 0, 256, header);
-            Barrier(cmd);
-            Dispatch(cmd, 0, push, 0);
-            Dispatch(cmd, 1, push, 1);
-            Dispatch(cmd, 2, push, 3);
-            Dispatch(cmd, 2, push, 4);
-            Dispatch(cmd, 2, push, 5);
-            Dispatch(cmd, 3, push, 6);
             nextIds[slot] = selected.StableIdentity; nextSignatures[slot] = signature;
         }
+        // Independent light buffers can run together. Only stage boundaries need visibility.
+        ReadOnlySpan<int> stages = [0, 1, 3, 4, 5];
+        foreach (int stage in stages)
+        {
+            Barrier(cmd);
+            DenoisingTimestamps?.BeginPass(cmd, _timingFrame, $"Denoising/ShadowStage{stage}");
+            for (int slot = 0; slot < scene.AreaShadowSelectedCount; slot++)
+                Dispatch(cmd, stage < 2 ? stage : 2, pushes + slot * 8, (uint)stage);
+            DenoisingTimestamps?.EndPass(cmd, _timingFrame);
+        }
+        Barrier(cmd);
+        // Publish all visibility bytes in one owner invocation per native pixel.
+        pushes[5] = (uint)scene.AreaShadowSelectedCount;
+        DenoisingTimestamps?.BeginPass(cmd, _timingFrame, "Denoising/ShadowPublish");
+        Dispatch(cmd, 3, pushes, 6);
+        DenoisingTimestamps?.EndPass(cmd, _timingFrame);
         nextIds.CopyTo(_identities); nextSignatures.CopyTo(_signatures);
         _previousVp = scene.ViewProjectionMatrix; _previousBank = bank;
         _serial = scene.DdgiFrameSerial; _cut = scene.CaptureCameraCutSerial;
@@ -154,7 +168,7 @@ internal sealed unsafe class AmdShadowDenoiser : IDisposable
 
     private void Dispatch(CommandBuffer cmd, int pipelineIndex, uint* push, uint stage)
     {
-        Barrier(cmd);
+        _dispatchScene?.RecordDenoisingDispatch("AmdShadow");
         var pipeline = _pipelines[pipelineIndex]!;
         DescriptorSet* sets = stackalloc DescriptorSet[2] { _heap.StorageBufferSet, _heap.TextureSamplerSet };
         _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, pipeline.Pipeline);
@@ -169,8 +183,8 @@ internal sealed unsafe class AmdShadowDenoiser : IDisposable
     private void Barrier(CommandBuffer cmd)
     {
         var barrier = new MemoryBarrier2 { SType = StructureType.MemoryBarrier2,
-            SrcStageMask = PipelineStageFlags2.AllCommandsBit, SrcAccessMask = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit,
-            DstStageMask = PipelineStageFlags2.AllCommandsBit, DstAccessMask = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit };
+            SrcStageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit, SrcAccessMask = AccessFlags2.ShaderReadBit | AccessFlags2.ShaderWriteBit | AccessFlags2.TransferWriteBit,
+            DstStageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit | PipelineStageFlags2.FragmentShaderBit, DstAccessMask = AccessFlags2.ShaderReadBit | AccessFlags2.ShaderWriteBit | AccessFlags2.TransferWriteBit };
         var info = new DependencyInfo { SType = StructureType.DependencyInfo, MemoryBarrierCount = 1, PMemoryBarriers = &barrier };
         _context.Api.CmdPipelineBarrier2(cmd, &info);
     }
@@ -197,5 +211,6 @@ internal sealed class AreaShadowDenoisePass : RenderPassBase
     public override void Initialize() { }
     public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData) =>
         _source.RecordDenoising(cmd, frameIndex, sceneData);
+    public override void Execute(CommandBuffer cmd, int frame, SceneRenderingData scene, Njulf.Rendering.Debug.GpuTimestampRecorder? timestamps) => _source.RecordDenoising(cmd, frame, scene, timestamps);
     public override void Cleanup() { }
 }

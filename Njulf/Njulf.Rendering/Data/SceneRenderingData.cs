@@ -254,6 +254,10 @@ namespace Njulf.Rendering.Data
         public uint OpticalDenoisingCapturedFragments { get; set; }
         public uint OpticalDenoisingOverflowPixels { get; set; }
         public uint OpticalDenoisingHistoryReuses { get; set; }
+        public bool OpticalReducedResolutionShadingActive { get; set; }
+        public uint OpticalShadingReflectionRequests { get; set; }
+        public uint OpticalShadingTransmissionTasks { get; set; }
+        public uint ThickTransmissionRequestedTasks { get; set; }
         public bool TransparentPassEnabled { get; set; } = true;
         public TransparencyMode TransparencyMode { get; set; } = TransparencyMode.SortedAlphaBlend;
         public TransparencyDebugView TransparencyDebugView { get; set; } = TransparencyDebugView.None;
@@ -536,7 +540,18 @@ namespace Njulf.Rendering.Data
         public long GpuAreaRayShadowMicroseconds { get; set; }
         public long GpuAreaShadowDenoiseMicroseconds { get; set; }
         public bool AreaDenoisingActive { get; set; }
+        public System.Collections.Generic.IReadOnlyDictionary<string, long> DenoisingStageMicroseconds { get; set; } = new System.Collections.Generic.Dictionary<string, long>();
+        public System.Collections.Generic.Dictionary<string, int> DenoisingDispatchCounts { get; } = new();
+        internal void RecordDenoisingDispatch(string backend)
+        {
+            DenoisingDispatchCounts.TryGetValue(backend, out int count);
+            DenoisingDispatchCounts[backend] = count + 1;
+        }
         public bool AmdReflectionDenoisingActive { get; set; }
+        public bool AmdReflectionDenoisingHalfResolution { get; set; }
+        public uint AmdReflectionFilterWidth { get; set; }
+        public uint AmdReflectionFilterHeight { get; set; }
+        public uint AmdReflectionDispatchedPixels { get; set; }
         public ulong AmdReflectionDenoisingAllocatedBytes { get; set; }
         public ulong AreaDenoisingAllocatedBytes { get; set; }
         public long GpuDirectionalShadowTemporalMicroseconds { get; set; }
@@ -2116,6 +2131,8 @@ namespace Njulf.Rendering.Data
             OpticalDenoisingCapturedFragments = 0;
             OpticalDenoisingOverflowPixels = 0;
             OpticalDenoisingHistoryReuses = 0;
+            OpticalReducedResolutionShadingActive = false;
+            OpticalShadingReflectionRequests = OpticalShadingTransmissionTasks = 0;
             TransparentPassEnabled = true;
             TransparencyMode = TransparencyMode.SortedAlphaBlend;
             TransparencyDebugView = TransparencyDebugView.None;
@@ -2905,6 +2922,8 @@ namespace Njulf.Rendering.Data
             GpuAutomaticPlanarCaptureMicroseconds = 0;
             HybridReflectionPassEnabled = false;
             AmdReflectionDenoisingActive = false;
+            AmdReflectionDenoisingHalfResolution = false;
+            AmdReflectionFilterWidth = AmdReflectionFilterHeight = AmdReflectionDispatchedPixels = 0;
             HybridReflectionWidth = 0;
             HybridReflectionHeight = 0;
             HybridReflectionRayQueryCapacity = 0;

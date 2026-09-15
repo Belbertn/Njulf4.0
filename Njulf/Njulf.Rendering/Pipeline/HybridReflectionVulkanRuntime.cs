@@ -431,10 +431,6 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
                 "hybrid_reflection_ddgi_exact_miss.comp.spv");
             _resolvePipeline = CreatePipeline(
                 "hybrid_reflection_resolve.comp.spv");
-            _temporalPipeline = CreatePipeline(
-                "hybrid_reflection_temporal.comp.spv");
-            _spatialPipeline = CreatePipeline(
-                "hybrid_reflection_spatial.comp.spv");
             _compositePipeline = CreatePipeline(
                 "hybrid_reflection_composite.comp.spv");
             _opaqueSceneColorSnapshotPipeline = CreatePipeline(
@@ -508,7 +504,9 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
         try
         {
             EnsureResources();
-            PrepareAmdResources();
+            if (_preparedFrameSerial != sceneData.DdgiFrameSerial ||
+                _preparedTemporalSample != sceneData.TemporalSampleIndex)
+                PrepareAmdResources();
         }
         catch (Exception exception)
         {
@@ -530,7 +528,8 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
         sceneData.AmdReflectionDenoisingActive = _amdActive;
         sceneData.AmdReflectionDenoisingAllocatedBytes =
             (_amdStates[0].IsValid ? _bufferManager.GetBufferSize(_amdStates[0]) : 0UL) +
-            (_amdStates[1].IsValid ? _bufferManager.GetBufferSize(_amdStates[1]) : 0UL);
+            (_amdStates[1].IsValid ? _bufferManager.GetBufferSize(_amdStates[1]) : 0UL) +
+            (_amdReadback[0].IsValid ? 4UL : 0UL) + (_amdReadback[1].IsValid ? 4UL : 0UL);
 
         if (_preparedFrameSerial != sceneData.DdgiFrameSerial ||
             _preparedTemporalSample != sceneData.TemporalSampleIndex)
@@ -979,6 +978,8 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
             _historyValid = true;
             return;
         }
+        sceneData.RecordDenoisingDispatch("ExistingReflection");
+        DenoisingTimestamps?.BeginPass(commandBuffer, bank, "Denoising/LegacyReflectionTemporal");
         BindPipelineAndDescriptors(commandBuffer, _temporalPipeline, bank,
             bindRayScene: false);
         var push = new GPUHybridReflectionTemporalPushConstants
@@ -1006,6 +1007,7 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
         DispatchActiveTilesOrScreen(commandBuffer, bank, useActiveTileList);
         PublishComputeWrites(commandBuffer);
         _historyValid = true;
+        DenoisingTimestamps?.EndPass(commandBuffer, bank);
     }
 
     public void RecordSpatial(
@@ -1027,6 +1029,8 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
         HistoryTarget(1 - bank).TransitionToStorageReadWrite(commandBuffer);
         for (int iteration = 0; iteration < passCount; iteration++)
         {
+            sceneData.RecordDenoisingDispatch("ExistingReflection");
+            DenoisingTimestamps?.BeginPass(commandBuffer, bank, $"Denoising/LegacyReflectionSpatial{iteration}");
             BindPipelineAndDescriptors(commandBuffer, _spatialPipeline, bank,
                 bindRayScene: false);
             var push = new GPUHybridReflectionSpatialPushConstants
@@ -1051,6 +1055,7 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
                 bank,
                 push.UseActiveTileList != 0u);
             PublishComputeWrites(commandBuffer);
+            DenoisingTimestamps?.EndPass(commandBuffer, bank);
         }
     }
 
@@ -1606,7 +1611,7 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
 
     private int ResolveSpatialPassCount(SceneRenderingData sceneData)
     {
-        if (_amdActive || _settings.Reflections.Denoiser == ReflectionDenoiser.Off) return 0;
+        if (_effectiveDenoiser != ReflectionDenoiser.Existing) return 0;
         int configured = _settings.Reflections.SpatialFilterPassCount;
         return sceneData.EffectiveReflectionImplementation ==
             ReflectionImplementationMode.Adaptive
@@ -1648,12 +1653,12 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
 
     private void CreateLocalSetLayout()
     {
-        var bindings = stackalloc DescriptorSetLayoutBinding[18];
-        for (uint binding = 0u; binding < 18u; binding++)
+        var bindings = stackalloc DescriptorSetLayoutBinding[20];
+        for (uint binding = 0u; binding < 20u; binding++)
         {
             DescriptorType type = binding switch
             {
-                0u or 11u or 12u => DescriptorType.CombinedImageSampler,
+                0u or 11u or 12u or 18u or 19u => DescriptorType.CombinedImageSampler,
                 13u or 14u or 15u or 17u =>
                     DescriptorType.StorageBuffer,
                 _ => DescriptorType.StorageImage
@@ -1669,7 +1674,7 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
         var info = new DescriptorSetLayoutCreateInfo
         {
             SType = StructureType.DescriptorSetLayoutCreateInfo,
-            BindingCount = 18u,
+            BindingCount = 20u,
             PBindings = bindings
         };
         Result result = _context.Api.CreateDescriptorSetLayout(
@@ -1889,7 +1894,7 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
             new DescriptorPoolSize
             {
                 Type = DescriptorType.CombinedImageSampler,
-                DescriptorCount = 6u
+                DescriptorCount = 10u
             },
             new DescriptorPoolSize
             {
@@ -2077,9 +2082,9 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
 
     private void WriteDescriptorSets()
     {
-        var imageInfos = stackalloc DescriptorImageInfo[14];
+        var imageInfos = stackalloc DescriptorImageInfo[16];
         var bufferInfos = stackalloc DescriptorBufferInfo[4];
-        var writes = stackalloc WriteDescriptorSet[18];
+        var writes = stackalloc WriteDescriptorSet[20];
         for (int bank = 0; bank < RenderingConstants.FramesInFlight; bank++)
         {
             RenderTarget[] imageTargets =
@@ -2189,8 +2194,25 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
                 DescriptorType = DescriptorType.StorageBuffer,
                 PBufferInfo = &bufferInfos[3]
             };
+            // Sampled aliases retain GENERAL: no image copy or additional history allocation.
+            for (int sample = 0; sample < 2; sample++)
+            {
+                imageInfos[14 + sample] = new DescriptorImageInfo
+                {
+                    Sampler = _bindlessHeap.ScreenSampler,
+                    ImageView = (sample == 0 ? HistoryTarget(1 - bank) : MomentsTarget(1 - bank)).View,
+                    ImageLayout = ImageLayout.General
+                };
+                writes[18 + sample] = new WriteDescriptorSet
+                {
+                    SType = StructureType.WriteDescriptorSet, DstSet = _descriptorSets[bank],
+                    DstBinding = (uint)(18 + sample), DescriptorCount = 1,
+                    DescriptorType = DescriptorType.CombinedImageSampler,
+                    PImageInfo = &imageInfos[14 + sample]
+                };
+            }
             _context.Api.UpdateDescriptorSets(
-                _context.Device, 18u, writes, 0u, null);
+                _context.Device, 20u, writes, 0u, null);
         }
     }
 
@@ -2460,6 +2482,9 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
     private void DestroyBuffers()
     {
         DestroyBufferArray(_amdStates);
+        DestroyBufferArray(_amdReadback);
+        Array.Clear(_amdSubmitted);
+        _amdLastDispatchedPixels = 0;
         _amdActive = false;
         DestroyBufferArray(_taskBuffers);
         DestroyBufferArray(_counterBuffers);

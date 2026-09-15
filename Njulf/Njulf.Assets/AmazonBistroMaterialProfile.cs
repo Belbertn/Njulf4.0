@@ -12,7 +12,7 @@ namespace Njulf.Assets;
 /// </summary>
 internal static class AmazonBistroMaterialProfile
 {
-    internal const string ProfileRevision = "amazon-bistro-material-profile/v4";
+    internal const string ProfileRevision = "amazon-bistro-material-profile/v5";
 
     public static bool Apply(string modelPath, ModelMaterial material)
     {
@@ -36,6 +36,28 @@ internal static class AmazonBistroMaterialProfile
 
         if (!TryResolveThinGlassProfile(identity, out ThinGlassProfile profile))
             return false;
+
+        if (Path.GetFileName(modelPath).Equals("BistroExterior.fbx", StringComparison.OrdinalIgnoreCase) &&
+            Path.GetFileNameWithoutExtension(identity).Equals(
+                "MASTER_Glass_Exterior_BaseColor", StringComparison.OrdinalIgnoreCase))
+        {
+            // The exterior-only scene has no cafe interior behind these panes.
+            // A black opaque dielectric hides that void while retaining glass Fresnel reflections.
+            material.Albedo = new Vector4(0f, 0f, 0f, 1f);
+            material.Emissive = Vector4.Zero;
+            material.IsThinGlass = false;
+            material.AlphaMode = ModelAlphaMode.Opaque;
+            material.DoubleSided = true;
+            material.Metallic = 0f;
+            material.Roughness = profile.Roughness;
+            material.TransmissionFactor = 0f;
+            material.GiTransmissionPolicy = ModelGiTransmissionPolicy.None;
+            material.Ior = profile.Ior;
+            material.SpecularFactor = 1f;
+            material.FeatureFlags &= ~ModelMaterialFeatureBits.Transmission;
+            material.FeatureFlags |= ModelMaterialFeatureBits.Ior;
+            return true;
+        }
 
         material.IsThinGlass = true;
         material.AlphaMode = ModelAlphaMode.Blend;

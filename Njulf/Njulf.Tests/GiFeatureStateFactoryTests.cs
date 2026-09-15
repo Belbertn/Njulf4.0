@@ -490,6 +490,11 @@ public sealed class GiFeatureStateFactoryTests
             });
         ResolvedGiSettingsMetadata changedRuntimeTelemetry = ResolvedGiSettingsMetadataFactory.Create(diagnostics with
         {
+            HybridReflectionSsrHitCount = 123,
+            HybridReflectionRayQueryCount = 57,
+            HybridReflectionRayQueryOverflowCount = 2,
+            HybridReflectionProbeFallbackCount = 31,
+            HybridReflectionEnvironmentFallbackCount = 19,
             SimpleDdgiTransportSourceRefreshFrames = 99,
             SimpleDdgiTransportSourceRefreshTargetProbeCount = 77,
             SimpleDdgiTransportSourceRefreshCapacityShortfall = 3,

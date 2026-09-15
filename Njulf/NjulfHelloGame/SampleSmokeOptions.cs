@@ -103,6 +103,8 @@ public sealed record SampleSmokeOptions(
     public bool OpenEditorOnStartup { get; init; }
     public string? OpticalDenoisingMode { get; init; }
     public string? ReflectionDenoiserOverride { get; init; }
+    public bool? AmdHalfResolutionOverride { get; init; }
+    public bool? OpticalReducedResolutionShadingOverride { get; init; }
     public bool? AreaDenoisingOverride { get; init; }
 
     public bool Enabled =>

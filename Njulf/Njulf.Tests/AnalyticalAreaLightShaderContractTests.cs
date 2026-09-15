@@ -9,7 +9,7 @@ public sealed class AnalyticalAreaLightShaderContractTests
     [Test]
     public void ForwardRasterPath_UsesLtcAndScheduledAreaVisibility()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         string ltc = ReadRepoText("Njulf.Shaders", "area_lighting.glsl");
 
         Assert.Multiple(() =>

@@ -6,6 +6,9 @@ float opticalReflectionObserved = 1.0, opticalTransmissionObserved = 1.0;
 float opticalReflectionDistance = 0.0, opticalTransmissionDistance = 0.0;
 uint opticalReflectionSource = 0u, opticalTransmissionSource = 0u;
 bool opticalExported = false;
+uint opticalTraceFlags = 0u;
+vec3 opticalReflectionDirection = vec3(0.0);
+float opticalSchedulingRoughness = 1.0;
 #if FORWARD_TRANSPARENT_REFLECTIONS_ACTIVE && !defined(NJULF_VISIBILITY_COMPUTE) && !defined(NJULF_AUTOMATIC_PLANAR_CAPTURE)
 #define OPTICAL_FORWARD_ACTIVE 1
 layout(location=9) flat in uint opticalDrawOrdinal;
@@ -20,6 +23,7 @@ layout(set=0,binding=0) restrict buffer OpticalExportStorage { uint Words[]; } O
 #undef OPTICAL_EXPORT_ONLY
 bool OpticalExportEnabled() { return (pc.Push.DiagnosticFlags & ((1u<<16u)|(1u<<31u))) == (1u<<16u); }
 uint OpticalForwardBuffer() { return uint(OPTICAL_LAYER_BUFFER_BASE_INDEX)+pc.Push.CurrentFrameIndex; }
+bool OpticalDeferredShading() { return OpticalExportEnabled() && OpticalWord(OpticalForwardBuffer(),14u)!=0u; }
 void OpticalInvalidatePixel()
 {
     if (!OpticalExportEnabled()) return;
@@ -75,8 +79,19 @@ void OpticalExport(GPUMaterialData material, vec3 geometricNormal, vec3 normal, 
     vec2 uv=clip.xy/max(clip.w,1e-8)*.5+.5;
     if (clip.w<=0.0 || obj.SkinningEnabled!=0) uv=vec2(-10.0);
     OpticalStore(b,r+34u,floatBitsToUint(uv.x)); OpticalStore(b,r+35u,floatBitsToUint(uv.y));
+    if(OpticalWord(b,14u)!=0u) {
+        // Compact mode does not use native records for temporal/spatial output.
+        // These words carry the evaluated surface inputs for deferred tracing.
+        OpticalStore(b,r+36u,fragMaterialIndex); OpticalStore(b,r+37u,fragObjectIndex);
+        OpticalStore(b,r+38u,opticalTraceFlags); OpticalStore(b,r+39u,floatBitsToUint(opticalSchedulingRoughness));
+        OpticalStoreVec(b,r+40u,opticalReflectionDirection);
+        OpticalStoreVec(b,r+44u,dot(opticalScatterNormal,opticalScatterNormal)>0.0?opticalScatterNormal:normal);
+        OpticalStoreVec(b,r+48u,dFdx(fragWorldPosition));OpticalStoreVec(b,r+51u,dFdy(fragWorldPosition));
+        OpticalStore(b,r+54u,floatBitsToUint(abs(dFdx(gl_FragCoord.z))+abs(dFdy(gl_FragCoord.z))));
+    }
 }
 #undef BindlessStorageBuffers
 #else
 #define OPTICAL_FORWARD_ACTIVE 0
+bool OpticalDeferredShading() { return false; }
 #endif

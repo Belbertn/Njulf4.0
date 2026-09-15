@@ -159,3 +159,14 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Cornell Box — Benedikt Bitterli (CC0 / public domain).
+Converted glTF from https://github.com/ErfanMo77/gltf-research-scenes
+See Assets/CornellBox/LICENSE.txt and README.md for provenance.
+
+Living Room / The Grey & White Room
+Original author: Wig42; source collection: Benedikt Bitterli Rendering Resources.
+glTF conversion: ErfanMo77/gltf-research-scenes, revision f61371ee556a5e1f0e5c697bcbdfb95ca756bcfd.
+Source: https://github.com/ErfanMo77/gltf-research-scenes/tree/f61371ee556a5e1f0e5c697bcbdfb95ca756bcfd/scenes/living-room
+License: CC BY 3.0, https://creativecommons.org/licenses/by/3.0/
+See Assets/LivingRoom/LICENSE.txt and README.md for attribution and integration details.

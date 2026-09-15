@@ -1,0 +1,14 @@
+{
+  "status": "passed",
+  "scene": "LivingRoom",
+  "requestedFrames": 120,
+  "validationWarnings": 0,
+  "validationErrors": 0,
+  "giWarnings": 0,
+  "giErrors": 0,
+  "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+  "driver": "610.248.0",
+  "model": "living_room_extended",
+  "objects": 65,
+  "fileTextures": 4
+}

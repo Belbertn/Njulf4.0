@@ -1,5 +1,13 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #include "optical_compact.glsl"
+void OpticalPublishHistoryReuses(uint b,uint count) { atomicAdd(BindlessStorageBuffers[b].Words[7u],count); }
+#include "optical_compact_reuse.glsl"
+#define OpticalAddHistoryReuse OpticalCountGroupReuse
 #include "optical_compact_temporal_kernel.glsl"
-void main() { OpticalCompactTemporalPixel(ivec2(gl_GlobalInvocationID.xy)); }
+#undef OpticalAddHistoryReuse
+void main() {
+ OpticalBeginHistoryReuses();
+ OpticalCompactTemporalPixel(ivec2(gl_GlobalInvocationID.xy));
+ OpticalEndHistoryReuses(pc.Padding0);
+}

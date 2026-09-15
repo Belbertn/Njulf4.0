@@ -55,7 +55,7 @@ public sealed class CompactOpticalGpuTests
         data[8]=stage;data[9]=step;data[12]=reset;
         uint[] output=_gpu!.RunCompute(data,data.Length,HalfPixels);
         int current=checked((int)data[10]);
-        Array.Copy(output,current,data,current,CompactWords);return data;
+        Array.Copy(output,current,data,current,CompactWords);data[7]=output[7];return data;
     }
     [Test]public void SelectionKeepsNearestTwoRegardlessOfExportOrder()
     {
@@ -117,4 +117,80 @@ public sealed class CompactOpticalGpuTests
         Run(data,0);Run(data,1,reset:1);
         for(int p=0;p<HalfPixels;p++)Assert.That(H(data[Current+64+p*64+8]),Is.EqualTo(2));
     }
+    [Test] public void WorkgroupReuseCounterCountsBothLobesAndSkipsEmptyLanes()
+    {
+        var data=Run(Scene(),0);Run(data,1,reset:1);
+        Assert.That(data[7],Is.Zero);
+        Array.Copy(data,Current,data,Previous,CompactWords);
+        // Leave a partial workgroup of valid pixels; all lanes must still reach the barriers.
+        const int activePixels=37;
+        for(int p=activePixels;p<HalfPixels;p++)for(int l=0;l<2;l++)data[Current+64+p*64+l*32+30]=0;
+        Run(data,1);
+        Assert.That(data[7],Is.EqualTo(activePixels*2*2));
+    }
+
+    [Test] public void DeferredTemporalBoundsUseTracedObservationsRatherThanRenderedFallback()
+    {
+        var data=Run(Scene(),0);data[14]=1;
+        Array.Copy(data,Current,data,Previous,CompactWords);
+        for(int p=0;p<HalfPixels;p++)for(int l=0;l<2;l++)
+        {
+            int r=Current+64+p*64+l*32,old=Previous+64+p*64+l*32;
+            for(int lobe=0;lobe<2;lobe++)
+            {
+                data[r+24+lobe*2]=data[r+8+lobe*2];data[r+25+lobe*2]=data[r+9+lobe*2];
+                data[old+8+lobe*2]=Pack(40,40);data[old+9+lobe*2]=Pack(40,16);
+                data[old+12+lobe]=Pack(40,1600);
+            }
+        }
+        for(int p=0;p<Pixels;p++)for(int l=0;l<4;l++)foreach(int f in new[]{12,13,14,16,17,18})
+            data[Prefix+(p*4+l)*64+f]=F(1000);
+        Run(data,1);
+        for(int p=0;p<HalfPixels;p++)for(int l=0;l<2;l++)
+            Assert.That(H(data[Current+64+p*64+l*32+8]),Is.EqualTo((l+1)*2).Within(.005));
+    }
+
+    [TestCase(true,0f)]
+    [TestCase(false,2f)]
+    public void DeferredBlackObservationIsDistinctFromAnUntracedLobe(bool observed,float expected)
+    {
+        var data=Run(Scene(),0);data[14]=1;
+        Array.Copy(data,Current,data,Previous,CompactWords);
+        for(int p=0;p<HalfPixels;p++)
+        {
+            int r=Current+64+p*64,old=Previous+64+p*64;
+            data[old+9]=Pack(2,8);data[old+12]=Pack(2,4);
+            data[r+8]=data[r+24]=Pack(0,0);data[r+9]=data[r+25]=Pack(0,observed?1:0);
+        }
+        Run(data,1);
+        for(int p=0;p<HalfPixels;p++)Assert.That(H(data[Current+64+p*64+8]),Is.EqualTo(expected).Within(.005));
+    }
+
+    [TestCase(1,1)]
+    [TestCase(15,13)]
+    public void OddSizedSelectionUsesCoveredNativePixels(int width,int height)
+    {
+        var original=Scene();var data=new uint[original.Length];Array.Copy(original,data,64);
+        data[1]=(uint)width;data[2]=(uint)height;
+        int prefix=64+width*height*5;
+        for(int p=0;p<width*height;p++)
+        {
+            data[64+p*5]=4;
+            for(int l=0;l<4;l++)
+            {
+                data[64+p*5+1+l]=(uint)(p*4+l);
+                Array.Copy(original,Prefix+(p*4+l)*64,data,prefix+(p*4+l)*64,64);
+            }
+        }
+        Run(data,0);
+        int cells=((width+1)/2)*((height+1)/2);
+        for(int p=0;p<cells;p++)
+        {
+            int r=Current+64+p*64;
+            Assert.That(data[r+30],Is.EqualTo(1));
+            Assert.That(data[r+31],Is.LessThan((uint)(width*height)));
+        }
+        Assert.That(data[Current+64+(cells-1)*64+31],Is.EqualTo(width*height-1));
+    }
+
 }

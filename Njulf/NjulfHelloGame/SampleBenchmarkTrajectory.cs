@@ -27,7 +27,8 @@ public enum SampleBenchmarkTrajectoryKind : byte
     BistroFoliageIncident,
     ReflectionLod,
     SponzaHiZIncident,
-    SponzaVerticalRefresh
+    SponzaVerticalRefresh,
+    OpticalMotion
 }
 
 public sealed record SampleBenchmarkCameraPose(
@@ -69,6 +70,7 @@ public static class SampleBenchmarkTrajectory
         return normalized switch
         {
             "reflection-lod" => SampleBenchmarkTrajectoryKind.ReflectionLod,
+            "optical-motion" => SampleBenchmarkTrajectoryKind.OpticalMotion,
             StationaryName => SampleBenchmarkTrajectoryKind.Stationary,
             BistroPresentationName =>
                 SampleBenchmarkTrajectoryKind.BistroPresentation,
@@ -89,7 +91,7 @@ public static class SampleBenchmarkTrajectory
             SponzaVerticalRefreshName => SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh,
             _ => throw new ArgumentException(
                 $"Unknown benchmark trajectory '{value}'. Valid values: " +
-                $"{StationaryName}, reflection-lod, {BistroPresentationName}, " +
+                $"{StationaryName}, reflection-lod, optical-motion, {BistroPresentationName}, " +
                 $"{BistroSnapshotIncidentName}, {BistroFoliageIncidentName}, " +
                 $"{BistroLoopName}, " +
                 $"{SponzaLowName}, {SponzaHighName}, {SponzaHiZIncidentName}, " +
@@ -103,6 +105,7 @@ public static class SampleBenchmarkTrajectory
     public static string GetName(SampleBenchmarkTrajectoryKind kind) => kind switch
     {
         SampleBenchmarkTrajectoryKind.ReflectionLod => "reflection-lod",
+        SampleBenchmarkTrajectoryKind.OpticalMotion => "optical-motion",
         SampleBenchmarkTrajectoryKind.Stationary => StationaryName,
         SampleBenchmarkTrajectoryKind.BistroPresentation => BistroPresentationName,
         SampleBenchmarkTrajectoryKind.BistroSnapshotIncident =>
@@ -124,6 +127,7 @@ public static class SampleBenchmarkTrajectory
     };
 
     public static bool IsMoving(SampleBenchmarkTrajectoryKind kind) => kind is
+        SampleBenchmarkTrajectoryKind.OpticalMotion or
         SampleBenchmarkTrajectoryKind.ReflectionLod or
         SampleBenchmarkTrajectoryKind.BistroLoop or
         SampleBenchmarkTrajectoryKind.SponzaHorizontal or
@@ -150,6 +154,7 @@ public static class SampleBenchmarkTrajectory
 
     public static int GetFrameCount(SampleBenchmarkTrajectoryKind kind) => kind switch
     {
+        SampleBenchmarkTrajectoryKind.OpticalMotion => 240,
         SampleBenchmarkTrajectoryKind.ReflectionLod => 240,
         SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh => 240,
         SampleBenchmarkTrajectoryKind.BistroLoop =>
@@ -217,6 +222,7 @@ public static class SampleBenchmarkTrajectory
     {
         string contractFingerprint = kind switch
         {
+            SampleBenchmarkTrajectoryKind.OpticalMotion => "optical-motion/v1|showcase|lateral=1.2|depth=.6|240",
             SampleBenchmarkTrajectoryKind.ReflectionLod => "reflection-lod-near-far/v1|6..22|240",
             SampleBenchmarkTrajectoryKind.SponzaVerticalRefresh =>
                 "sponza-vertical-refresh/v1|2..32|rise=90|hold=150|look-down=20260908-061619",
@@ -300,6 +306,15 @@ public static class SampleBenchmarkTrajectory
     {
         if (kind == SampleBenchmarkTrajectoryKind.Stationary)
             return null;
+
+        if (kind == SampleBenchmarkTrajectoryKind.OpticalMotion)
+        {
+            float phase = MathF.Tau * ValidateFrameIndex(kind, trajectoryFrameIndex) / 240;
+            return new("optical-motion",
+                new(-1.0603592f + 1.2f * MathF.Sin(phase), 1.71337f,
+                    6.446394f - .6f * (1 - MathF.Cos(phase))),
+                .043464772f, .38022974f, MathF.PI / 3.2f, .05f, 120);
+        }
 
         if (kind == SampleBenchmarkTrajectoryKind.ReflectionLod)
         {

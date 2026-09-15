@@ -1,0 +1,50 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#include "amd_reflection_callbacks.glsl"
+#include "amd_reflection_native.glsl"
+layout(local_size_x=8,local_size_y=8) in;
+void main() {
+ ivec2 p=ivec2(gl_GlobalInvocationID.xy);if(!ArNativeInside(p))return;
+ uvec4 payload=texelFetch(HybridReceiverPayload,p,0);
+ if(!HybridReflectionPayloadValid(payload)) {
+  imageStore(HybridHistoryCurrent,p,vec4(0));imageStore(HybridMomentsCurrent,p,vec4(0));imageStore(HybridMetadataCurrent,p,uvec4(0));return;
+ }
+ uint meta=imageLoad(HybridRawMetadata,p).x;vec4 raw=imageLoad(HybridRawRadiance,p),result=raw;
+ uint source=HybridMetadataSource(meta),reason=HybridMetadataReason(meta),age=1u;
+ float variance=0;bool sparse=HybridReflectionMissingObservation(reason);
+ {
+  vec2 pos=(vec2(p)+.5)*vec2(ar.Width,ar.Height)/vec2(ArNativeSize())-.5;
+  ivec2 base=ivec2(round(pos));vec4 sum=vec4(0);float weights=0,best=0;
+  // Adaptive tracing can leave an entire 2x2 filter neighborhood unobserved.
+  // Search far enough to reconstruct a quarter-rate observation, while every
+  // tap still rejects foreign depth, normal, roughness and receiver identity.
+  // Important mirrors retain their existing native ray sampling rate. They
+  // still use AMD's denoising; use a tighter reconstruction footprint rather
+  // than a separate, noisier temporal-only denoiser.
+  int radius=ArProtected(payload)?1:2;
+  for(int y=-radius;y<=radius;y++)for(int x=-radius;x<=radius;x++) {
+   ivec2 q=base+ivec2(x,y);vec2 delta=vec2(q)-pos;
+   float w=ArGuideWeight(p,payload,q)*exp(-dot(delta,delta)*.65);
+   if(w<=0)continue;vec4 v=ArReducedHistory(ar.Current,q);if(v.a<=0)continue;
+   sum+=v*w;weights+=w;variance+=uintBitsToFloat(ArExtra(ar.Current,q,9u))*w;
+   if(w>best){best=w;source=ArRead(ar.Current,q,5u);age=uint(max(ArFloat(ar.Current,q,6u),1.0));}
+  }
+  if(weights>1e-6){result=sum/weights;variance/=weights;}
+  else if(sparse) {vec4 previous;uvec2 m;if(ArNativeHistory(p,payload,meta,previous,m)){result=previous;source=HybridHistoryMetadataSource(m);age=HybridHistoryMetadataSparseState(m)!=0u?min(31u,HybridHistoryMetadataAge(m)+1u):1u;}}
+ }
+ if(!HybridFinite(result))result=HybridFinite(raw)?raw:vec4(0);
+ uint sparseState=reason==HYBRID_REFLECTION_REASON_RESOLUTION_SKIP?HYBRID_REFLECTION_HISTORY_SPARSE_RESOLUTION:
+  reason==HYBRID_REFLECTION_REASON_RAY_BUDGET?HYBRID_REFLECTION_HISTORY_SPARSE_RAY_BUDGET:HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
+ if(sparseState!=HYBRID_REFLECTION_HISTORY_SPARSE_NONE) {
+  vec2 previousUv=(vec2(p)+.5)/vec2(ArNativeSize())-texelFetch(HybridMotionVectors,p,0).xy;
+  ivec2 q=ivec2(floor(previousUv*vec2(ArNativeSize())));
+  uvec2 m=ar.Reset==0u&&ArNativeInside(q)?imageLoad(HybridMetadataPrevious,q).xy:uvec2(0);
+  age=HybridHistoryMetadataValid(m)&&HybridHistoryMetadataIdentity(m)==HybridReceiverIdentity(payload)&&
+      HybridHistoryMetadataSparseState(m)!=0u?min(31u,HybridHistoryMetadataAge(m)+1u):1u;
+ }
+ imageStore(HybridHistoryCurrent,p,vec4(clamp(result.rgb,vec3(0),vec3(65504)),clamp(result.a,0,1)));
+ imageStore(HybridMomentsCurrent,p,vec4(HybridFinite(variance)?max(variance,0):0));
+ imageStore(HybridMetadataCurrent,p,uvec4(HybridPackHistoryMetadata(HybridReceiverIdentity(payload),texelFetch(HybridSceneDepth,p,0).r,
+  HybridReflectionTraceNormal(payload),source,age,sparseState,true),0,0));
+}

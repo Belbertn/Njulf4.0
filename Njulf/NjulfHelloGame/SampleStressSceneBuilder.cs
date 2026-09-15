@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Assets;
 using Njulf.Core.Foliage;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
@@ -38,6 +39,7 @@ internal sealed class SampleStressSceneBuilder
     private readonly SampleLightingMode _normalLightingMode;
     private readonly SampleStressSceneResourceCache _resourceCache;
     private readonly List<RenderObject> _objects = new();
+    internal IContentManager? Content { get; init; }
     private readonly List<StaticInstanceBatch> _staticBatches = new();
     private readonly List<FoliagePatch> _foliagePatches = new();
     private readonly List<FoliagePrototype> _foliagePrototypes = new();
@@ -100,7 +102,7 @@ internal sealed class SampleStressSceneBuilder
                     "The manual reflection-probe lifecycle scenario is retired; " +
                     "use ReflectionHeavy or Bistro HybridRayQueryAb coverage."),
             SamplePerformanceScenario.GiSimpleDdgiFurnace => BuildGiSimpleDdgiFurnace(),
-            SamplePerformanceScenario.GiCornellRoom => BuildGiCornellRoom(),
+            SamplePerformanceScenario.GiCornellRoom => BuildImportedCornellRoom(),
             SamplePerformanceScenario.GiQualityInterior => BuildGiQualityInterior(),
             SamplePerformanceScenario.GiThinWallLeakTest => BuildGiThinWallLeakTest(),
             SamplePerformanceScenario.GiMovingPointLight => BuildGiMovingPointLight(),
@@ -662,6 +664,42 @@ internal sealed class SampleStressSceneBuilder
             ReflectionProbeCount = 0,
             Notes = "Reflective material pressure through SSR, ray-query recovery, and environment fallback"
         };
+    }
+
+    private SamplePerformanceScenarioSummary BuildImportedCornellRoom()
+    {
+        const string modelPath = "Assets/CornellBox/cornell_box_core.gltf";
+        Model model = Content?.Load<Model>(modelPath)
+            ?? throw new InvalidOperationException("The Cornell scene requires a content manager.");
+        HideBaseRenderObjects();
+        new Njulf.Assets.Scenes.SceneLightStore(_scene).Clear();
+
+        // Preserve the authored proportions; place the four-metre room around
+        // the existing Cornell camera and GI coverage.
+        var placement = new ModelPlacement(model);
+        placement.Root.LocalMatrix = CoreMatrix4x4.CreateScale(2f) *
+            CoreMatrix4x4.CreateTranslation(new CoreVector3(0f, 0f, -5.5f));
+        for (int i = 0; i < model.RenderObjects.Count; i++)
+        {
+            RenderObject renderObject = placement.CreateRenderObjectInstance(i);
+            _objects.Add(renderObject);
+            _scene.Add(renderObject);
+        }
+
+        // Keep direct-light support alongside the model's authored emissive panel.
+        SampleLighting.Add(_scene, new Light
+        {
+            Type = LightType.Point,
+            Position = new Vector3(0f, 3.35f, -5.4f),
+            Color = new Vector3(1f, 0.92f, 0.78f),
+            Intensity = CornellPointLightIntensity,
+            Range = 7f,
+            CastsShadows = true,
+            ShadowStrength = 0.9f,
+            ShadowPriority = 10
+        });
+        return ValidationSummary(SamplePerformanceScenario.GiCornellRoom,
+            "Benedikt Bitterli Cornell Box glTF scene");
     }
 
     private SamplePerformanceScenarioSummary BuildGiCornellRoom(bool includePointLight = true)

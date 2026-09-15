@@ -265,7 +265,7 @@ public sealed class TransparentPipelinePartitioningTests
     [Test]
     public void ShaderContract_TransparentReflectionUsesDedicatedTlasMask()
     {
-        string fragment = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string fragment = ForwardShaderSource.Read();
         int candidateStart = fragment.IndexOf(
             "bool ForwardTransparentReflectionCandidatePasses",
             StringComparison.Ordinal);
@@ -407,7 +407,7 @@ public sealed class TransparentPipelinePartitioningTests
         string common = ReadRepoText("Njulf.Shaders", "common.glsl");
         string task = ReadRepoText("Njulf.Shaders", "forward.task");
         string mesh = ReadRepoText("Njulf.Shaders", "forward.mesh");
-        string fragment = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string fragment = ForwardShaderSource.Read();
         string project = ReadRepoText(
             "Njulf.Shaders",
             "Njulf.Shaders.csproj");

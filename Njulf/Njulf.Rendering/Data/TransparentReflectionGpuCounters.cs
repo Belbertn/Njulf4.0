@@ -15,6 +15,7 @@ public readonly record struct TransparentReflectionGpuCounters(
     uint EstimatedProbeFallbacks,
     uint EstimatedEnvironmentFallbacks)
 {
+    public uint ThickTransmissionRequests { get; init; }
     public uint ExactSsrEligible { get; init; }
     public uint ExactSsrAdmitted { get; init; }
     public uint ExactSsrReservedSamples { get; init; }

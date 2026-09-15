@@ -5,6 +5,7 @@ public enum SampleSceneKind
     GlobalIlluminationTest,
     SponzaPlaza,
     Bistro,
+    LivingRoom,
     MaterialShowcase,
     AnalyticalAreaLights,
     FoliageShowcase,

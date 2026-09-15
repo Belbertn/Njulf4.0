@@ -10,6 +10,7 @@ public sealed class SampleBenchmarkTrajectoryTests
 {
     [TestCase("stationary", SampleBenchmarkTrajectoryKind.Stationary, 1, false)]
     [TestCase("reflection-lod", SampleBenchmarkTrajectoryKind.ReflectionLod, 240, true)]
+    [TestCase("optical-motion", SampleBenchmarkTrajectoryKind.OpticalMotion, 240, true)]
     [TestCase("bistro-presentation", SampleBenchmarkTrajectoryKind.BistroPresentation, 1, false)]
     [TestCase("bistro-snapshot-incident", SampleBenchmarkTrajectoryKind.BistroSnapshotIncident, 1, false)]
     [TestCase("bistro-foliage-incident", SampleBenchmarkTrajectoryKind.BistroFoliageIncident, 1, false)]

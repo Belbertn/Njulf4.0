@@ -103,7 +103,7 @@ public sealed class SimpleDdgiMaskedFeedbackCompactionTests
     [Test]
     public void ShaderContract_OverflowExecutesInlineExactFallback()
     {
-        string forward = ReadShader("forward.frag");
+        string forward = ForwardShaderSource.Read();
         string abi = ReadShader("ddgi_masked_feedback_compaction_abi.glsl");
         string compact = ReadShader("ddgi_masked_feedback_compact.comp");
 
@@ -132,7 +132,7 @@ public sealed class SimpleDdgiMaskedFeedbackCompactionTests
     {
         string surface = ReadShader(
             "ddgi_receiver_feedback_surface_producer.glsl");
-        string forward = ReadShader("forward.frag");
+        string forward = ForwardShaderSource.Read();
         string compact = ReadShader("ddgi_masked_feedback_compact.comp");
 
         Assert.Multiple(() =>

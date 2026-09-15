@@ -27,6 +27,7 @@ public sealed record SampleBenchmarkReport(
     IReadOnlyList<BudgetMetric> BudgetMetrics,
     [property: JsonRequired] RendererDiagnostics LastDiagnostics)
 {
+    public IReadOnlyList<SampleBenchmarkTimingStats> DenoisingStages { get; init; } = Array.Empty<SampleBenchmarkTimingStats>();
     [JsonRequired]
     public string Schema { get; init; } =
         MaterialGiReleaseEvidenceContract.BenchmarkProducerSchema;
@@ -199,6 +200,7 @@ public sealed record SampleBenchmarkDdgiTransientEvidence(
         MaterialGiReleaseEvidenceContract
             .BenchmarkDdgiTransientEvidenceSchema;
 
+    public IReadOnlyList<SampleBenchmarkTimingStats> DenoisingStages { get; init; } = Array.Empty<SampleBenchmarkTimingStats>();
     [JsonRequired]
     public string Schema { get; init; } = CurrentSchema;
 
@@ -591,6 +593,7 @@ public sealed record SampleReflectionProbeCaptureEvidence(
     public const string CurrentSchema =
         "njulf-benchmark-reflection-probe-capture-evidence/v1";
 
+    public IReadOnlyList<SampleBenchmarkTimingStats> DenoisingStages { get; init; } = Array.Empty<SampleBenchmarkTimingStats>();
     [JsonRequired]
     public string Schema { get; init; } = CurrentSchema;
     [JsonRequired]

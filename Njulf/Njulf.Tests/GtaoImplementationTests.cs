@@ -238,8 +238,7 @@ public sealed class GtaoImplementationTests
             "gtao_temporal.comp"));
         string spatial = File.ReadAllText(Path.Combine(shaderDirectory,
             "gtao_spatial.comp"));
-        string forward = File.ReadAllText(Path.Combine(shaderDirectory,
-            "forward.frag")).ReplaceLineEndings("\n");
+        string forward = ForwardShaderSource.Read().ReplaceLineEndings("\n");
         string passes = File.ReadAllText(Path.Combine(renderingDirectory,
             "Pipeline", "GtaoPasses.cs"));
         string ssao = File.ReadAllText(Path.Combine(renderingDirectory,

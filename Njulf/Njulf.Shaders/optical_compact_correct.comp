@@ -7,6 +7,8 @@ bool OcNativeMatch(uint native,uint s) {
  uint a=pc.Padding0,b=pc.Current;
  if(!OcValid(b,s) || OpticalWord(a,native)!=OpticalWord(b,s) || OpticalWord(a,native+1u)!=OpticalWord(b,s+1u) || OpticalWord(a,native+33u)!=OpticalWord(b,s+15u))return false;
  vec3 n=OpticalNormal(OpticalWord(a,native+2u));
+ float roughness=OpticalFloat(a,native+7u);
+ if(dot(OpticalNormal(OpticalWord(a,native+3u)),OpticalNormal(OpticalWord(b,s+3u)))<mix(.995,.9,roughness))return false;
  return dot(n,OpticalNormal(OpticalWord(b,s+2u)))>.95 && abs(OpticalFloat(a,native+7u)-OpticalFloat(b,s+7u))<.1 &&
   abs(dot(n,OpticalVec(a,native+4u)-OpticalVec(b,s+4u)))<max(.003,OpticalFloat(a,native+11u)*.003);
 }
@@ -14,6 +16,15 @@ void main() {
  ivec2 p=ivec2(gl_GlobalInvocationID.xy);uint src=pc.Padding0;
  if(pc.Bypass!=0u || !OpticalPixelValid(src,p) || OpticalCount(src,p)==0u)return;
  vec3 correction=vec3(0);
+ // Cache composition inputs once per pixel, preserving the original front-to-back product order.
+ uint count=OpticalCount(src,p);float alpha[8];uvec2 order[8];float compositionWeights[8];
+ for(uint l=0u;l<count;l++) { uint r=OpticalRecord(src,p,l);alpha[l]=OpticalFloat(src,r+23u);order[l]=uvec2(OpticalWord(src,r+31u),OpticalWord(src,r+32u)); }
+ for(uint l=0u;l<count;l++) {
+  float w=alpha[l];
+  if(pc.Weighted!=0u) w=OpticalCompositionWeight(src,OpticalRecord(src,p,l),p,true);
+  else for(uint front=0u;front<count;front++) if(order[front].x>order[l].x || (order[front].x==order[l].x && order[front].y>order[l].y))w*=1.0-alpha[front];
+  compositionWeights[l]=w;
+ }
  vec2 samplePosition=(vec2(p)+.5)*.5-.5;ivec2 base=ivec2(floor(samplePosition));vec2 f=fract(samplePosition);
  for(uint layer=0u;layer<OpticalCount(src,p);layer++) {
   uint r=OpticalRecord(src,p,layer); vec3 sums[2]=vec3[2](vec3(0),vec3(0));vec2 weights=vec2(0);
@@ -27,15 +38,17 @@ void main() {
   // Deeper/nonrepresented layers get a small geometry-aware spatial estimate.
   // Their contribution still uses their own material and composition weights.
   if(any(lessThanEqual(weights,vec2(0)))) {
+   uint fallbackNeighbors[9];uint neighbor=0u;
+   for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++)fallbackNeighbors[neighbor++]=OpticalMatch(src,r,src,p+ivec2(x,y)*2,false);
    for(uint lobe=0u;lobe<2u;lobe++)if(weights[lobe]<=0.0) {
-    for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++) {
-     uint s=OpticalMatch(src,r,src,p+ivec2(x,y)*2,false);
+    for(uint n=0u;n<9u;n++) {
+     uint s=fallbackNeighbors[n];
      if(s==OPTICAL_INVALID || OpticalFloat(src,s+15u+lobe*4u)<=0.0 || !OpticalSourceCompatible(src,r,src,s,lobe))continue;
      sums[lobe]+=OpticalVec(src,s+12u+lobe*4u);weights[lobe]+=1.0;
     }
    }
   }
-  float composition=OpticalCompositionWeight(src,r,p,pc.Weighted!=0u);
+  float composition=compositionWeights[layer];
   for(uint lobe=0u;lobe<2u;lobe++)if(weights[lobe]>0.0)
    correction+=(sums[lobe]/weights[lobe]-OpticalVec(src,r+12u+lobe*4u))*OpticalVec(src,r+20u+lobe*4u)*composition;
  }

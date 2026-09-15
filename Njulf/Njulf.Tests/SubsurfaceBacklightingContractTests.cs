@@ -183,7 +183,7 @@ public sealed class SubsurfaceBacklightingContractTests
         string shared = ReadRepoText(
             "Njulf.Shaders",
             "gi_material_transport.glsl");
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         string budget = ExtractFunction(
             shared,
             "vec3 EvaluateGiSubsurfaceDiffuseBudget(");
@@ -210,7 +210,7 @@ public sealed class SubsurfaceBacklightingContractTests
     [Test]
     public void DirectShaderContract_RoutesSupportedLightsAndKeepsAreaFrontOnly()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         string accumulate = ExtractFunction(
             forward,
             "void AccumulateLight(");
@@ -259,7 +259,7 @@ public sealed class SubsurfaceBacklightingContractTests
     [Test]
     public void DirectShaderContract_SplitsBeforeTraceAndForwardMrtC5Publication()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         int split = forward.IndexOf(
             "vec3 originalDirectDiffuseSource = directDiffuseSource;",
             StringComparison.Ordinal);
@@ -298,7 +298,7 @@ public sealed class SubsurfaceBacklightingContractTests
     [Test]
     public void IndirectShaderContract_SplitsBeforeFinalDiagnosticsWithoutExtraGather()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         string receiverCache = ReadRepoText(
             "Njulf.Shaders",
             "forward_ddgi_receiver_cache.glsl");
@@ -360,16 +360,16 @@ public sealed class SubsurfaceBacklightingContractTests
             Assert.That(shaderProject,
                 Does.Contain("<AdditionalCompileOptions>%(ReceiverFeedbackGraphicsShaderVariant.AdditionalCompileOptions)</AdditionalCompileOptions>"));
             Assert.That(atomicVerification,
-                Does.Contain("'forward_transparent_ray.frag.spv' = 17"));
+                Does.Contain("'forward_transparent_ray.frag.spv' = 21"));
             Assert.That(atomicVerification,
-                Does.Contain("'forward_weighted_oit_ray.frag.spv' = 17"));
+                Does.Contain("'forward_weighted_oit_ray.frag.spv' = 21"));
         });
     }
 
     [Test]
     public void LegacyViewDependentWrap_IsAbsent()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
 
         Assert.Multiple(() =>
         {

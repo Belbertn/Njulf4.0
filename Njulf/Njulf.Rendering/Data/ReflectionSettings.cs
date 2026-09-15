@@ -72,7 +72,9 @@ namespace Njulf.Rendering.Data
 
     public sealed class ReflectionSettings
     {
-        public ReflectionDenoiser Denoiser { get; set; } = ReflectionDenoiser.Existing;
+        public ReflectionDenoiser Denoiser { get; set; } = ReflectionDenoiser.Amd;
+        /// <summary>Half-width/half-height AMD filtering; select native resolution for finer reflection detail.</summary>
+        public bool AmdHalfResolution { get; set; } = true;
         private float _captureLodTargetPixelError = 1f;
 
         /// <summary>Select capture mesh LOD using error measured in capture pixels.</summary>

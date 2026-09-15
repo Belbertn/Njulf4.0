@@ -1007,7 +1007,7 @@ internal sealed class ProductionPipelineOwner
 
         OpticalDenoising = new OpticalDenoisingRuntime(_dependencies.Context, _dependencies.BindlessHeap,
             _dependencies.BufferManager, _dependencies.RenderTargets!, _dependencies.Settings,
-            _dependencies.GiPipelineCacheService);
+            _dependencies.GiPipelineCacheService) { RaySceneDescriptors = _dependencies.RaySceneDescriptorBank };
         AddPassInstance(_passOwnership.Track(new OpticalDenoisingPass("OpticalLayerClearPass", 0,
             _dependencies.Context, _dependencies.Swapchain, _dependencies.BindlessHeap, OpticalDenoising)));
         var transparentForwardPass = _passOwnership.Track(new TransparentForwardPass(

@@ -791,6 +791,10 @@ namespace Njulf.Rendering.Data
         public uint OpticalDenoisingCapturedFragments { get; init; }
         public uint OpticalDenoisingOverflowPixels { get; init; }
         public uint OpticalDenoisingHistoryReuses { get; init; }
+        public bool OpticalReducedResolutionShadingActive { get; init; }
+        public uint OpticalShadingReflectionRequests { get; init; }
+        public uint OpticalShadingTransmissionTasks { get; init; }
+        public uint ThickTransmissionRequestedTasks { get; init; }
         public long GpuOpticalLayerClearMicroseconds { get; init; }
         public long GpuOpticalTemporalMicroseconds { get; init; }
         public long GpuOpticalSpatialMicroseconds { get; init; }
@@ -1381,7 +1385,13 @@ namespace Njulf.Rendering.Data
         public long GpuAreaRayShadowMicroseconds { get; init; }
         public long GpuAreaShadowDenoiseMicroseconds { get; init; }
         public bool AreaDenoisingActive { get; init; }
+        public System.Collections.Generic.IReadOnlyDictionary<string, long> DenoisingStageMicroseconds { get; init; } = new System.Collections.Generic.Dictionary<string, long>();
+        public System.Collections.Generic.IReadOnlyDictionary<string, int> DenoisingDispatchCounts { get; init; } = new System.Collections.Generic.Dictionary<string, int>();
         public bool AmdReflectionDenoisingActive { get; init; }
+        public bool AmdReflectionDenoisingHalfResolution { get; init; }
+        public uint AmdReflectionFilterWidth { get; init; }
+        public uint AmdReflectionFilterHeight { get; init; }
+        public uint AmdReflectionDispatchedPixels { get; init; }
         public ulong AmdReflectionDenoisingAllocatedBytes { get; init; }
         public ulong AreaDenoisingAllocatedBytes { get; init; }
         public long GpuDirectionalShadowTemporalMicroseconds { get; init; }

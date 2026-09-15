@@ -83,7 +83,7 @@ public sealed class DirectionalRayShadowShaderContractTests
     [Test]
     public void CascadedSampling_SharesGatherPathAndAdaptiveRadius()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         string resolve = ReadRepoText(
             "Njulf.Shaders", "directional_csm_resolve.comp");
         string common = ReadRepoText("Njulf.Shaders", "common.glsl");
@@ -107,7 +107,7 @@ public sealed class DirectionalRayShadowShaderContractTests
     [Test]
     public void ForwardUsesMaskOnlyForOpaqueDepthOwnerAndRetainsLayeredCsmFallback()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
 
         Assert.Multiple(() =>
         {

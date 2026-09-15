@@ -24,6 +24,8 @@ public static class SampleSmokeOptionsParser
         "--transparency-mode",
         "--optical-denoising",
         "--reflection-denoiser",
+        "--amd-reflection-resolution",
+        "--optical-shading-resolution",
         "--area-denoising",
         "--health-report",
         "--baseline-snapshot-dir",
@@ -170,6 +172,7 @@ public static class SampleSmokeOptionsParser
             : ParseBool(vSyncEnvironment, "NJULF_VSYNC");
         string? opticalDenoisingMode = null;
         string? reflectionDenoiser = null;
+        bool? amdHalfResolution = null, opticalReducedResolutionShading = null;
         bool? areaDenoising = null;
         TransparencyMode transparencyMode = ParseTransparencyMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE"));
         string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
@@ -653,6 +656,14 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--area-denoising":
                     areaDenoising = ParseBool(value, optionName);
+                    break;
+                case "--amd-reflection-resolution":
+                case "--optical-shading-resolution":
+                    string resolution = value.Trim().ToLowerInvariant();
+                    if (resolution is not ("full" or "half"))
+                        throw new ArgumentException($"{optionName} accepts full or half.");
+                    if (optionName == "--amd-reflection-resolution") amdHalfResolution = resolution == "half";
+                    else opticalReducedResolutionShading = resolution == "half";
                     break;
                 case "--transparency-mode":
                     transparencyMode = ParseTransparencyMode(value);
@@ -1873,6 +1884,12 @@ public static class SampleSmokeOptionsParser
                 enableBenchmarkQualitySequence
                     ? benchmarkQualitySequenceTrajectory
                     : benchmarkTrajectory;
+            if (controlledTrajectory == SampleBenchmarkTrajectoryKind.OpticalMotion)
+            {
+                if (sceneSpecified && sceneKind != SampleSceneKind.MaterialShowcase)
+                    throw new ArgumentException("The optical-motion trajectory requires the MaterialShowcase scene.");
+                sceneKind = SampleSceneKind.MaterialShowcase;
+            }
             if (controlledTrajectory == SampleBenchmarkTrajectoryKind.ReflectionLod)
             {
                 if (sceneSpecified && sceneKind != SampleSceneKind.ReflectionLod)
@@ -2486,7 +2503,9 @@ public static class SampleSmokeOptionsParser
             vSyncOverride,
             performanceOptimizationsEnabledOverride,
             performanceOptimizationMaskOverride) { OpticalDenoisingMode = opticalDenoisingMode,
-                ReflectionDenoiserOverride = reflectionDenoiser, AreaDenoisingOverride = areaDenoising };
+                ReflectionDenoiserOverride = reflectionDenoiser, AreaDenoisingOverride = areaDenoising,
+                AmdHalfResolutionOverride = amdHalfResolution,
+                OpticalReducedResolutionShadingOverride = opticalReducedResolutionShading };
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)

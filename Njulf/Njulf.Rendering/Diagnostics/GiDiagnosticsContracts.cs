@@ -2480,16 +2480,13 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.ReflectionFallbackDetail);
             AddSetting(settings, "lighting.reflection.rayCapacity",
                 diagnostics.HybridReflectionRayQueryCapacity);
-            AddSetting(settings, "lighting.reflection.ssrHits",
-                diagnostics.HybridReflectionSsrHitCount);
-            AddSetting(settings, "lighting.reflection.rayQueries",
-                diagnostics.HybridReflectionRayQueryCount);
-            AddSetting(settings, "lighting.reflection.rayOverflows",
-                diagnostics.HybridReflectionRayQueryOverflowCount);
-            AddSetting(settings, "lighting.reflection.probeFallbacks",
-                diagnostics.HybridReflectionProbeFallbackCount);
-            AddSetting(settings, "lighting.reflection.environmentFallbacks",
-                diagnostics.HybridReflectionEnvironmentFallbackCount);
+            // Stochastic hit/query counts are frame measurements, not settings.
+            // They remain available in RendererDiagnostics without invalidating
+            // otherwise identical capture configurations on every frame.
+            AddSetting(settings, "lighting.reflection.amdHalfResolution",
+                diagnostics.AmdReflectionDenoisingHalfResolution ? 1 : 0);
+            AddSetting(settings, "lighting.optical.reducedShading",
+                diagnostics.OpticalReducedResolutionShadingActive ? 1 : 0);
         }
 
         private static void AddLayoutSettings(List<string> settings, SimpleDdgiLayoutTelemetry layout)

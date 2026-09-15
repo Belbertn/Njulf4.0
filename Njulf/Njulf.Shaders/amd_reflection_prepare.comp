@@ -4,12 +4,22 @@
 #include "amd_reflection_callbacks.glsl"
 #include "hybrid_reflection_sparse.glsl"
 layout(local_size_x=8,local_size_y=8) in;
+#include "amd_reflection_prepare_reduced.glsl"
 void main() {
+ if(ArReduced()){ArPrepareReduced();return;}
  ivec2 p=ivec2(gl_GlobalInvocationID.xy);if(!ArInside(p))return;
  uvec4 payload=texelFetch(HybridReceiverPayload,p,0);
+ // Receiver-free tiles are omitted by the existing classifier. Initialize the halo
+ // they expose to adjacent active tiles, and invalidate all persistent geometry.
+ if(!HybridReflectionPayloadValid(payload)) {
+  for(uint field=1u;field<5u;field++)ArWrite(p,field,0u);
+  ArStoreRgb(p,10u,vec3(0));ArStore(p,12u,0.0);
+ }
  vec4 raw=imageLoad(HybridRawRadiance,p);uint meta=imageLoad(HybridRawMetadata,p).x;
  uint reason=HybridMetadataReason(meta),identity=HybridReceiverIdentity(payload);
- if(HybridReflectionPayloadValid(payload) && HybridReflectionMissingObservation(reason)) {
+ // Classification already validated this same-pixel history carry.
+ if(ar.Reset==0u && HybridReflectionClassifiedReuse(meta)) ArStore(p,0u,ArFloat(ar.Previous,p,0u));
+ if(HybridReflectionPayloadValid(payload) && HybridReflectionMissingObservation(reason) && !HybridReflectionClassifiedReuse(meta)) {
   vec2 uv=(vec2(p)+.5)*InverseRenderSize(),motion=texelFetch(HybridMotionVectors,p,0).xy;
   vec2 previousUv=uv-motion;ivec2 q=ivec2(floor(previousUv*vec2(RenderSize())));
   vec3 normal=FFX_DNSR_Reflections_LoadWorldSpaceNormal(p);

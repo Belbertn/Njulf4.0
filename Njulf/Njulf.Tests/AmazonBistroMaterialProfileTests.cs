@@ -10,6 +10,31 @@ public sealed class AmazonBistroMaterialProfileTests
 {
     private const uint FoliageFeature = 1u << 22;
 
+    [Test]
+    public void Apply_ExteriorWindowsHideMissingInteriorAndRetainGlassReflection()
+    {
+        ModelMaterial material = CreateMaterial("MASTER_Glass_Exterior_BaseColor.dds");
+        AmazonBistroMaterialProfile.Apply("BistroInterior.fbx", material);
+
+        bool applied = AmazonBistroMaterialProfile.Apply("BistroExterior.fbx", material);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(applied, Is.True);
+            Assert.That(material.Albedo, Is.EqualTo(new Vector4(0f, 0f, 0f, 1f)));
+            Assert.That(material.AlphaMode, Is.EqualTo(ModelAlphaMode.Opaque));
+            Assert.That(material.IsThinGlass, Is.False);
+            Assert.That(material.TransmissionFactor, Is.Zero);
+            Assert.That(material.GiTransmissionPolicy, Is.EqualTo(ModelGiTransmissionPolicy.None));
+            Assert.That(material.FeatureFlags & ModelMaterialFeatureBits.Transmission, Is.Zero);
+            Assert.That(material.Metallic, Is.Zero);
+            Assert.That(material.Roughness, Is.EqualTo(0.08f));
+            Assert.That(material.Ior, Is.EqualTo(1.52f));
+            Assert.That(material.SpecularFactor, Is.EqualTo(1f));
+            Assert.That(material.FeatureFlags & ModelMaterialFeatureBits.Ior, Is.Not.Zero);
+        });
+    }
+
     [TestCase("MASTER_Glass_Exterior_BaseColor.dds", 0.94f, 0.08f)]
     [TestCase("TransparentGlass_BaseColor.dds", 0.96f, 0.05f)]
     [TestCase("Vespa_Headlight_BaseColor.dds", 0.94f, 0.12f)]

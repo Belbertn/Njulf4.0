@@ -1941,7 +1941,7 @@ internal static class SharpGltfModelMeshConverter
     private static CoreVector3 NormalizeOrDefault(CoreVector3 value)
     {
         float lengthSquared = value.LengthSquared();
-        return lengthSquared <= float.Epsilon
+        return !float.IsFinite(lengthSquared) || lengthSquared <= float.Epsilon
             ? CoreVector3.Zero
             : value / (float)Math.Sqrt(lengthSquared);
     }

@@ -73,7 +73,7 @@ public sealed class ForwardNearFieldDirectSourceContractTests
     [Test]
     public void DedicatedOpaqueVariantsPreserveSourceOwnershipAndFailClosedBoundaries()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         string shaderProject = ReadRepoText("Njulf.Shaders", "Njulf.Shaders.csproj");
         string meshPipeline = ReadRepoText(
             "Njulf.Rendering", "Pipeline", "PipelineObjects", "MeshPipeline.cs");
@@ -204,7 +204,7 @@ public sealed class ForwardNearFieldDirectSourceContractTests
     [Test]
     public void CacheRequiredHybridVariants_LockExclusiveOpaqueGiOwnership()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         string receiverGather = ReadRepoText(
             "Njulf.Shaders", "forward_ddgi_receiver_gather.glsl");
         string shaderProject = ReadRepoText(
@@ -271,7 +271,7 @@ public sealed class ForwardNearFieldDirectSourceContractTests
     [Test]
     public void CombinedC4C5Variant_UsesFrozenFourAttachmentAbiAndEveryOpaqueFamily()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forward = ForwardShaderSource.Read();
         string shaderProject = ReadRepoText(
             "Njulf.Shaders", "Njulf.Shaders.csproj");
         string meshPipeline = ReadRepoText(

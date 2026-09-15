@@ -9,17 +9,30 @@
 #endif
 #include "ThirdParty/FidelityFX/ffx_core.h"
 layout(push_constant) uniform AmdReflectionPush { uint Current; uint Previous; uint Width; uint Height; uint Reset; uint Stage; } ar;
+layout(set=3,binding=18) uniform sampler2D ArHistoryRadiance;
+layout(set=3,binding=19) uniform sampler2D ArHistoryVariance;
 ivec2 ArDispatchPixel;
+bool ArReduced() { return (ar.Stage&512u)!=0u; }
+uint ArHeader(uint field) { return ReadStorageWordUniform(ar.Current,field); }
+uvec2 ArNativeSize() { return ArReduced()?uvec2(ArHeader(48u),ArHeader(49u)):uvec2(ar.Width,ar.Height); }
+bool ArNativeInside(ivec2 p) { return all(greaterThanEqual(p,ivec2(0))) && all(lessThan(p,ivec2(ArNativeSize()))); }
 bool ArInside(ivec2 p) { return all(greaterThanEqual(p,ivec2(0))) && all(lessThan(p,ivec2(ar.Width,ar.Height))); }
 ivec2 ArClamp(ivec2 p) { return clamp(p,ivec2(0),ivec2(ar.Width,ar.Height)-1); }
-uint ArAddress(ivec2 p,uint field) { p=ArClamp(p); return 128u+(uint(p.y)*ar.Width+uint(p.x))*16u+field; }
-uint ArRead(uint b,ivec2 p,uint f) { return ReadStorageWord(b,ArAddress(p,f)); }
+uint ArPhysicalAddress(ivec2 p,uint field) { p=ArClamp(p); return 128u+field*ar.Width*ar.Height+uint(p.y)*ar.Width+uint(p.x); }
+uint ArAddress(ivec2 p,uint field) { return ArPhysicalAddress(p,field+(ArReduced() && field>=7u?5u:0u)); }
+uint ArExtra(uint b,ivec2 p,uint field) { return ReadStorageWordUniform(b,ArPhysicalAddress(p,field)); }
+void ArStoreExtra(ivec2 p,uint field,uint value) { if(ArInside(p))WriteStorageWordUniform(ar.Current,ArPhysicalAddress(p,field),value); }
+vec4 ArReducedHistory(uint b,ivec2 p) { return vec4(unpackHalf2x16(ArExtra(b,p,7u)),unpackHalf2x16(ArExtra(b,p,8u))); }
+ivec2 ArNativePixel(ivec2 p) { if(!ArReduced())return ArClamp(p);uint index=ArExtra(ar.Current,p,10u);return ivec2(index%ArNativeSize().x,index/ArNativeSize().x); }
+// Bank zero owns scratch; only the seven persistent guide planes alternate.
+uint ArBuffer(uint b,uint f) { return f<7u?b:min(ar.Current,ar.Previous); }
+uint ArRead(uint b,ivec2 p,uint f) { return ReadStorageWordUniform(ArBuffer(b,f),ArAddress(p,f)); }
 float ArFloat(uint b,ivec2 p,uint f) { return uintBitsToFloat(ArRead(b,p,f)); }
-void ArWrite(ivec2 p,uint f,uint v) { if(ArInside(p)) WriteStorageWord(ar.Current,ArAddress(p,f),v); }
+void ArWrite(ivec2 p,uint f,uint v) { if(ArInside(p)) WriteStorageWordUniform(ArBuffer(ar.Current,f),ArAddress(p,f),v); }
 void ArStore(ivec2 p,uint f,float v) { ArWrite(p,f,floatBitsToUint(v)); }
 vec3 ArRgb(uint b,ivec2 p,uint f) { return vec3(unpackHalf2x16(ArRead(b,p,f)),unpackHalf2x16(ArRead(b,p,f+1u)).x); }
 void ArStoreRgb(ivec2 p,uint f,vec3 v) { v=clamp(v,vec3(0),vec3(65504)); ArWrite(p,f,packHalf2x16(v.xy)); ArWrite(p,f+1u,packHalf2x16(vec2(v.z,0))); }
-mat4 ArMatrix(uint f) { return mat4(ReadStorageVec4(ar.Current,f),ReadStorageVec4(ar.Current,f+4u),ReadStorageVec4(ar.Current,f+8u),ReadStorageVec4(ar.Current,f+12u)); }
+mat4 ArMatrix(uint f) { return mat4(ReadStorageVec4Uniform(ar.Current,f),ReadStorageVec4Uniform(ar.Current,f+4u),ReadStorageVec4Uniform(ar.Current,f+8u),ReadStorageVec4Uniform(ar.Current,f+12u)); }
 mat4 ArFlip() { mat4 m=mat4(1); m[1][1]=-1; return m; }
 mat4 InvProjection() { return ArMatrix(0u)*ArFlip(); }
 mat4 InvView() { return ArMatrix(16u); }
@@ -28,17 +41,28 @@ uvec2 RenderSize() { return uvec2(ar.Width,ar.Height); }
 vec2 InverseRenderSize() { return 1.0/vec2(RenderSize()); }
 float TemporalStabilityFactor() { return 0.95; }
 float RoughnessThreshold() { return 1.0; }
-uint GetDenoiserTile(uint group) { uvec2 p=uvec2(group%((ar.Width+7u)/8u),group/((ar.Width+7u)/8u))*8u; return p.x|(p.y<<16u); }
-vec3 FFX_DNSR_Reflections_LoadWorldSpaceNormal(ivec2 p) { return HybridReflectionTraceNormal(texelFetch(HybridReceiverPayload,ArClamp(p),0)); }
+bool ArUsesTileList() { return (ar.Stage&256u)!=0u; }
+uint ArGroupIndex() { return ArUsesTileList()?gl_WorkGroupID.x:gl_WorkGroupID.y*((ar.Width+7u)/8u)+gl_WorkGroupID.x; }
+uvec2 ArTileOrigin(uint group) {
+ if(ArReduced()) {uint packed=ReadStorageWordUniform(ar.Current,ArHeader(51u)+group);return uvec2(packed&65535u,packed>>16u);}
+ return (ArUsesTileList()?HybridTiles[group].xy:uvec2(group%((ar.Width+7u)/8u),group/((ar.Width+7u)/8u)))*8u;
+}
+uint GetDenoiserTile(uint group) { uvec2 p=ArTileOrigin(group); return p.x|(p.y<<16u); }
+vec3 FFX_DNSR_Reflections_LoadWorldSpaceNormal(ivec2 p) { return ArReduced()?NjulfHybridReflectionOctDecode(ArRead(ar.Current,p,1u)):HybridReflectionTraceNormal(texelFetch(HybridReceiverPayload,ArClamp(p),0)); }
 vec3 FFX_DENOISER_LoadWorldSpaceNormal(ivec2 p) { return FFX_DNSR_Reflections_LoadWorldSpaceNormal(p); }
-float FFX_DNSR_Reflections_LoadRoughness(ivec2 p) { uvec4 payload=texelFetch(HybridReceiverPayload,ArClamp(p),0); float r=HybridReflectionPayloadPhysicalRoughness(payload); return HybridReflectionPayloadValid(payload)?r*r:1.0; }
-float FFX_DENOISER_LoadDepth(ivec2 p,int mip) { return texelFetch(HybridSceneDepth,ArClamp(p),0).x; }
+float FFX_DNSR_Reflections_LoadRoughness(ivec2 p) { if(ArReduced())return ArFloat(ar.Current,p,2u);uvec4 payload=texelFetch(HybridReceiverPayload,ArClamp(p),0); float r=HybridReflectionPayloadPhysicalRoughness(payload); return HybridReflectionPayloadValid(payload)?r*r:1.0; }
+float FFX_DENOISER_LoadDepth(ivec2 p,int mip) { return ArReduced()?ArFloat(ar.Current,p,4u):texelFetch(HybridSceneDepth,ArClamp(p),0).x; }
 float FFX_DNSR_Reflections_LoadDepth(ivec2 p) { return FFX_DENOISER_LoadDepth(p,0); }
-vec2 FFX_DNSR_Reflections_LoadMotionVector(ivec2 p) { return -texelFetch(HybridMotionVectors,ArClamp(p),0).xy; }
+vec2 FFX_DNSR_Reflections_LoadMotionVector(ivec2 p) {
+ ivec2 native=ArNativePixel(p);vec2 motion=-texelFetch(HybridMotionVectors,native,0).xy;
+ // AMD adds this displacement to the filter-pixel center. Account for the
+ // selected native representative, including odd-sized render targets.
+ return motion+(ArReduced()?(vec2(native)+.5)/vec2(ArNativeSize())-(vec2(ArClamp(p))+.5)/vec2(ar.Width,ar.Height):vec2(0));
+}
 float FFX_DNSR_Reflections_LoadRayLength(ivec2 p) { return ArFloat(ar.Current,p,0u); }
-vec3 FFX_DNSR_Reflections_LoadRadiance(ivec2 p) { return ar.Stage==3u?ArRgb(ar.Current,p,10u):ArRgb(ar.Current,p,13u); }
+vec3 FFX_DNSR_Reflections_LoadRadiance(ivec2 p) { return (ar.Stage&255u)==3u?ArRgb(ar.Current,p,10u):ArRgb(ar.Current,p,13u); }
 vec3 LoadRadiance(ivec3 p) { return FFX_DNSR_Reflections_LoadRadiance(p.xy); }
-float FFX_DNSR_Reflections_LoadVariance(ivec2 p) { return ArFloat(ar.Current,p,ar.Stage==3u?12u:7u); }
+float FFX_DNSR_Reflections_LoadVariance(ivec2 p) { return ArFloat(ar.Current,p,(ar.Stage&255u)==3u?12u:7u); }
 float LoadVariance(ivec3 p) { return FFX_DNSR_Reflections_LoadVariance(p.xy); }
 float FFX_DNSR_Reflections_LoadNumSamples(ivec2 p) { return ArFloat(ar.Current,p,6u); }
 vec3 FFX_DNSR_Reflections_LoadRadianceReprojected(ivec2 p) { return ArRgb(ar.Current,p,8u); }
@@ -46,36 +70,62 @@ void FFX_DNSR_Reflections_StoreVariance(ivec2 p,float v) { ArStore(p,7u,v); }
 void FFX_DNSR_Reflections_StoreNumSamples(ivec2 p,float v) { ArStore(p,6u,ar.Reset!=0u?1.0:min(v,32.0)); }
 void FFX_DNSR_Reflections_StoreRadianceReprojected(ivec2 p,vec3 v) { ArStoreRgb(p,8u,ar.Reset!=0u?ArRgb(ar.Current,p,13u):v); }
 void FFX_DNSR_Reflections_StorePrefilteredReflections(ivec2 p,vec3 v,float variance) { ArStoreRgb(p,10u,v); ArStore(p,12u,variance); }
-vec3 FFX_DNSR_Reflections_LoadRadianceHistory(ivec2 p) { return ar.Reset!=0u?vec3(0):imageLoad(HybridHistoryPrevious,ArClamp(p)).rgb; }
+vec3 FFX_DNSR_Reflections_LoadRadianceHistory(ivec2 p) { return ar.Reset!=0u?vec3(0):ArReduced()?ArReducedHistory(ar.Previous,p).rgb:imageLoad(HybridHistoryPrevious,ArClamp(p)).rgb; }
 vec3 FFX_DNSR_Reflections_LoadWorldSpaceNormalHistory(ivec2 p) { return ar.Reset!=0u?vec3(0):NjulfHybridReflectionOctDecode(ArRead(ar.Previous,p,1u)); }
 float FFX_DNSR_Reflections_LoadDepthHistory(ivec2 p) { return ar.Reset!=0u?0.0:ArFloat(ar.Previous,p,4u); }
-// AMD's history samplers require bilinear filtering. Private SSBO guides and
-// storage-image history use the same four taps and texel-centre convention.
+// Geometry and identity rejection stay explicit; radiance and variance use hardware bilinear.
 vec3 ArHistory(ivec2 p,int kind) {
  if(ar.Reset!=0u) return vec3(0);
  if(kind==0) return FFX_DNSR_Reflections_LoadRadianceHistory(p);
- if(kind==1) return vec3(imageLoad(HybridMomentsPrevious,ArClamp(p)).x);
+ if(kind==1) return vec3(ArReduced()?uintBitsToFloat(ArExtra(ar.Previous,p,9u)):imageLoad(HybridMomentsPrevious,ArClamp(p)).x);
  if(kind==2) {
-  uint identity=HybridReceiverIdentity(texelFetch(HybridReceiverPayload,ArClamp(ArDispatchPixel),0));
+  uint identity=ArReduced()?ArRead(ar.Current,ArDispatchPixel,3u):HybridReceiverIdentity(texelFetch(HybridReceiverPayload,ArClamp(ArDispatchPixel),0));
   uint source=HybridMetadataSource(ArRead(ar.Current,ArDispatchPixel,15u));
   return identity==ArRead(ar.Previous,p,3u) && source==ArRead(ar.Previous,p,5u)?vec3(ArFloat(ar.Previous,p,6u)):vec3(0);
  }
  if(kind==3) return FFX_DNSR_Reflections_LoadWorldSpaceNormalHistory(p);
  return vec3(ArFloat(ar.Previous,p,kind==4?2u:4u));
 }
-vec3 ArSample(vec2 uv,int kind) { vec2 pos=uv*vec2(RenderSize())-0.5; ivec2 p=ivec2(floor(pos)); vec2 f=fract(pos); return mix(mix(ArHistory(p,kind),ArHistory(p+ivec2(1,0),kind),f.x),mix(ArHistory(p+ivec2(0,1),kind),ArHistory(p+1,kind),f.x),f.y); }
-vec3 FFX_DNSR_Reflections_SampleRadianceHistory(vec2 uv) { return ArSample(uv,0); }
-float FFX_DNSR_Reflections_SampleVarianceHistory(vec2 uv) { return ArSample(uv,1).x; }
+vec3 ArSample(vec2 uv,int kind) {
+ vec2 pos=uv*vec2(RenderSize())-.5;ivec2 p=ivec2(floor(pos));vec2 f=fract(pos);
+ if(!ArReduced())return mix(mix(ArHistory(p,kind),ArHistory(p+ivec2(1,0),kind),f.x),mix(ArHistory(p+ivec2(0,1),kind),ArHistory(p+1,kind),f.x),f.y);
+ // Reject foreign surfaces before interpolation, including radiance taps.
+ vec3 sum=vec3(0);float weights=0;
+ uint identity=ArRead(ar.Current,ArDispatchPixel,3u),source=ArRead(ar.Current,ArDispatchPixel,5u);
+ vec3 normal=NjulfHybridReflectionOctDecode(ArRead(ar.Current,ArDispatchPixel,1u));
+ for(int y=0;y<2;y++)for(int x=0;x<2;x++) {
+  ivec2 q=p+ivec2(x,y);
+  // Source changes reset sample age, as in the native AMD path. They must
+  // not turn otherwise compatible radiance history into a black sample.
+  if(!ArInside(q)||ArRead(ar.Previous,q,3u)!=identity||ArRead(ar.Previous,q,5u)==0u||
+     (kind==2&&ArRead(ar.Previous,q,5u)!=source)||
+     dot(normal,NjulfHybridReflectionOctDecode(ArRead(ar.Previous,q,1u)))<.9||
+     abs(ArFloat(ar.Current,ArDispatchPixel,2u)-ArFloat(ar.Previous,q,2u))>.1)continue;
+  float w=(x==0?1-f.x:f.x)*(y==0?1-f.y:f.y);
+  sum+=ArHistory(q,kind)*w;weights+=w;
+ }
+ return weights>1e-6?sum/weights:kind==0?ArRgb(ar.Current,ArDispatchPixel,13u):vec3(0);
+}
+vec3 FFX_DNSR_Reflections_SampleRadianceHistory(vec2 uv) { return ar.Reset!=0u?vec3(0):ArReduced()?ArSample(uv,0):textureLod(ArHistoryRadiance,uv,0).rgb; }
+float FFX_DNSR_Reflections_SampleVarianceHistory(vec2 uv) { return ar.Reset!=0u?0.0:ArReduced()?ArSample(uv,1).x:textureLod(ArHistoryVariance,uv,0).x; }
 float FFX_DNSR_Reflections_SampleNumSamplesHistory(vec2 uv) { return ArSample(uv,2).x; }
 vec3 FFX_DNSR_Reflections_SampleWorldSpaceNormalHistory(vec2 uv) { return ArSample(uv,3); }
 float FFX_DNSR_Reflections_SampleRoughnessHistory(vec2 uv) { return ArSample(uv,4).x; }
 float FFX_DNSR_Reflections_SampleDepthHistory(vec2 uv) { return ArSample(uv,5).x; }
-uint ArAverageAddress(ivec2 p) { ivec2 size=ivec2((RenderSize()+7u)/8u); p=clamp(p,ivec2(0),size-1); return 128u+ar.Width*ar.Height*16u+uint(p.y*size.x+p.x)*2u; }
-void FFX_DNSR_Reflections_StoreAverageRadiance(ivec2 p,vec3 v) { uint a=ArAverageAddress(p); WriteStorageWord(ar.Current,a,packHalf2x16(v.xy)); WriteStorageWord(ar.Current,a+1u,packHalf2x16(vec2(v.z,0))); }
-vec3 ArAverage(ivec2 p) { uint a=ArAverageAddress(p); return vec3(unpackHalf2x16(ReadStorageWord(ar.Current,a)),unpackHalf2x16(ReadStorageWord(ar.Current,a+1u)).x); }
+uint ArAverageAddress(ivec2 p) { ivec2 size=ivec2((RenderSize()+7u)/8u); p=clamp(p,ivec2(0),size-1); return 128u+ar.Width*ar.Height*(ArReduced()?21u:16u)+uint(p.y*size.x+p.x)*2u; }
+void FFX_DNSR_Reflections_StoreAverageRadiance(ivec2 p,vec3 v) { uint a=ArAverageAddress(p); WriteStorageWordUniform(min(ar.Current,ar.Previous),a,packHalf2x16(v.xy)); WriteStorageWordUniform(min(ar.Current,ar.Previous),a+1u,packHalf2x16(vec2(v.z,0))); }
+vec3 ArAverage(ivec2 p) { uint a=ArAverageAddress(p); return vec3(unpackHalf2x16(ReadStorageWordUniform(min(ar.Current,ar.Previous),a)),unpackHalf2x16(ReadStorageWordUniform(min(ar.Current,ar.Previous),a+1u)).x); }
 vec3 FFX_DNSR_Reflections_SampleAverageRadiance(vec2 uv) { vec2 pos=uv*vec2((RenderSize()+7u)/8u)-0.5; ivec2 p=ivec2(floor(pos)); vec2 f=fract(pos); return mix(mix(ArAverage(p),ArAverage(p+ivec2(1,0)),f.x),mix(ArAverage(p+ivec2(0,1)),ArAverage(p+1),f.x),f.y); }
 void FFX_DNSR_Reflections_StoreTemporalAccumulation(ivec2 p,vec3 v,float variance) {
  if(!ArInside(p)) return;
+ if(ArReduced()) {
+  vec4 raw=vec4(ArRgb(ar.Current,p,13u),unpackHalf2x16(ArRead(ar.Current,p,14u)).y);
+  if(!HybridFinite(v))v=raw.rgb;
+  vec4 value=ArRead(ar.Current,p,5u)!=0u?vec4(clamp(v,vec3(0),vec3(65504)),raw.a):vec4(0);
+  ArStoreExtra(p,7u,packHalf2x16(value.xy));ArStoreExtra(p,8u,packHalf2x16(value.zw));
+  ArStoreExtra(p,9u,floatBitsToUint(HybridFinite(variance)?max(variance,0):0));
+  return;
+ }
  uvec4 payload=texelFetch(HybridReceiverPayload,p,0);
  bool valid=HybridReflectionPayloadValid(payload);
  vec4 raw=vec4(ArRgb(ar.Current,p,13u),unpackHalf2x16(ArRead(ar.Current,p,14u)).y);

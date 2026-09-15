@@ -281,7 +281,7 @@ public sealed class SimpleDdgiProbePagingShaderContractTests
                 "paging.residencyMode == SIMPLE_DDGI_RESIDENCY_MODE_SHADOW"));
             Assert.That(shared, Does.Contain(
                 "SimpleDdgiStampOpaqueGatherDemand"));
-            Assert.That(ReadRepoText("Njulf.Shaders", "forward.frag"),
+            Assert.That(ForwardShaderSource.Read(),
                 Does.Contain("SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (((uint(gl_FragCoord.x) & 7u) == 0u)"));
             Assert.That(ReadRepoText("Njulf.Shaders", "fog.comp"),
                 Does.Contain("SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (gl_LocalInvocationIndex == 0u)"));
@@ -295,13 +295,13 @@ public sealed class SimpleDdgiProbePagingShaderContractTests
                 "#if SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT != 0"));
             Assert.That(shared, Does.Contain(
                 "SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET"));
-            Assert.That(ReadRepoText("Njulf.Shaders", "forward.frag"),
+            Assert.That(ForwardShaderSource.Read(),
                 Does.Contain("The generic forward artifact is the sorted-transparent pipeline."));
-            Assert.That(ReadRepoText("Njulf.Shaders", "forward.frag"),
+            Assert.That(ForwardShaderSource.Read(),
                 Does.Contain("SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 0u"));
-            Assert.That(ReadRepoText("Njulf.Shaders", "forward.frag"),
+            Assert.That(ForwardShaderSource.Read(),
                 Does.Contain("SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 1"));
-            Assert.That(ReadRepoText("Njulf.Shaders", "forward.frag"),
+            Assert.That(ForwardShaderSource.Read(),
                 Does.Contain("SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 0"));
             Assert.That(shared, Does.Contain(
                 "A compact publication miss is the authoritative point"));

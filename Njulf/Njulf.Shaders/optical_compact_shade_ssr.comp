@@ -1,0 +1,6 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#define DIRECTIONAL_TRANSPARENT_RAY_QUERY 0
+#define OPTICAL_SHADE_REFLECTION 1
+#define OPTICAL_SHADE_TRANSMISSION 0
+#include "optical_compact_shade.glsl"

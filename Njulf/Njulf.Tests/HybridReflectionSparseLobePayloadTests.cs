@@ -169,7 +169,7 @@ public sealed class HybridReflectionSparseLobePayloadTests
     [Test]
     public void RuntimeContract_ClearsPublishesAndReadsTheExactSidecar()
     {
-        string forward = ReadRepoText("Njulf.Shaders", "forward.frag")
+        string forward = ForwardShaderSource.Read()
             .ReplaceLineEndings("\n");
         string ssr = ReadRepoText(
                 "Njulf.Shaders", "hybrid_reflection_ssr.comp")

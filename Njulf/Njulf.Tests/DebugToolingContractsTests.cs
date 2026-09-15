@@ -304,7 +304,7 @@ namespace Njulf.Tests
         [Test]
         public void CommonSurfaceCoverageGate_IsStrictAndQualificationOnly()
         {
-            string fragment = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string fragment = ForwardShaderSource.Read();
             string simpleMesh = ReadRepoText(
                 "Njulf.Shaders",
                 "forward_simple.mesh");
@@ -939,7 +939,7 @@ namespace Njulf.Tests
         [Test]
         public void DirectionalDdgiReflectionDebugViews_ExposeLobeAndNormalizedOwnership()
         {
-            string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string shader = ForwardShaderSource.Read();
             string controller = ReadRepoText(
                 "NjulfHelloGame",
                 "SampleInputController.cs");
@@ -1002,7 +1002,7 @@ namespace Njulf.Tests
         [Test]
         public void ReflectionSpecular_UsesProbeMipRangeAndAntialiasesCapturedHighlights()
         {
-            string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string shader = ForwardShaderSource.Read();
             string prefilter = ReadRepoText(
                 "Njulf.Shaders",
                 "reflection_probe_prefilter.comp");
@@ -1054,7 +1054,7 @@ namespace Njulf.Tests
         [Test]
         public void DdgiReceiverDebugViews_DoNotPresentHealthyCandidateRejectionsOrIdleUpdatesAsFailures()
         {
-            string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string shader = ForwardShaderSource.Read();
 
             Assert.Multiple(() =>
             {
@@ -1074,7 +1074,7 @@ namespace Njulf.Tests
         [Test]
         public void ForwardDebugViews_PreserveGeometryDecalCoverage()
         {
-            string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string shader = ForwardShaderSource.Read();
             string normalized = shader.Replace("\r\n", "\n");
             int genericMain = normalized.IndexOf(
                 "#else\nvoid main()",

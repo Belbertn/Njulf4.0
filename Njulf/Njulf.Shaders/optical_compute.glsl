@@ -2,7 +2,9 @@
 #ifndef OPTICAL_STORAGE_DEFINED
 layout(set=0,binding=0) buffer OpticalStorage { uint Words[]; } BindlessStorageBuffers[];
 #endif
+#define nonuniformEXT(index) (index)
 #include "optical_layers.glsl"
+#undef nonuniformEXT
 #ifndef OPTICAL_STORAGE_DEFINED
 layout(push_constant) uniform OpticalPush
 {

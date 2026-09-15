@@ -1291,6 +1291,7 @@ public sealed class SampleBenchmarkAnalyzer
             DdgiAuditIdleGpuFrameMilliseconds = BuildAuditFrameStats(auditActive: false),
             AccuracyOracleResults = SampleGiAccuracyOracleEvaluator.Evaluate(scenario, _samples),
             CaptureContract = captureContract,
+            DenoisingStages = BuildTimingStats(_samples.SelectMany(d => d.DenoisingStageMicroseconds.Keys).Distinct().Select(name => new TimingSelector(name, d => d.DenoisingStageMicroseconds.TryGetValue(name, out long value) ? value : 0)).ToArray(), requireGpuTiming: true),
             GpuIndependentPassSumMilliseconds = gpuPassSum,
             GpuUnexplainedMilliseconds = gpuUnexplained,
             SimpleDdgiTransportBlendMilliseconds = simpleDdgiTransportBlend,

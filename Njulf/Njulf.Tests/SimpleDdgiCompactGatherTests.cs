@@ -89,7 +89,7 @@ public sealed class SimpleDdgiCompactGatherTests
         ];
         foreach (string shader in computeStateKernels)
         {
-            string source = ReadRepoText("Njulf.Shaders", shader);
+            string source = shader == "forward.frag" ? ForwardShaderSource.Read() : ReadRepoText("Njulf.Shaders", shader);
             Assert.That(
                 source,
                 Does.Contain("#define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1"),
@@ -106,7 +106,7 @@ public sealed class SimpleDdgiCompactGatherTests
         ];
         foreach (string shader in receiverShaders)
         {
-            string source = ReadRepoText("Njulf.Shaders", shader);
+            string source = shader == "forward.frag" ? ForwardShaderSource.Read() : ReadRepoText("Njulf.Shaders", shader);
             Assert.That(
                 source,
                 Does.Not.Contain("SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE"),

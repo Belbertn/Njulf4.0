@@ -189,6 +189,11 @@ public sealed class BistroCookedReflectionIntegrationTests
         ModelMaterial[] thinGlass = materials.Materials
             .Where(material => material.IsThinGlass)
             .ToArray();
+        ModelMaterial[] windows = materials.Materials
+            .Where(material =>
+                (material.AlbedoTexturePath ?? material.BaseColorTexture?.Source?.FilePath ?? string.Empty)
+                    .Contains("MASTER_Glass_Exterior_BaseColor", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
 
         Assert.Multiple(() =>
         {
@@ -200,7 +205,18 @@ public sealed class BistroCookedReflectionIntegrationTests
                 Is.EqualTo(expectedImportContract));
             Assert.That(manifest.ImportSettingsHash,
                 Is.EqualTo(expectedImportContract));
-            Assert.That(thinGlass, Has.Length.EqualTo(5));
+            Assert.That(windows, Is.Not.Empty);
+            Assert.That(thinGlass.Length + windows.Length, Is.EqualTo(5));
+            Assert.That(windows.All(material =>
+                material.AlphaMode == ModelAlphaMode.Opaque &&
+                !material.IsThinGlass &&
+                material.TransmissionFactor == 0f &&
+                material.Albedo == new Njulf.Core.Math.Vector4(0f, 0f, 0f, 1f) &&
+                material.Metallic == 0f &&
+                material.Roughness == 0.08f &&
+                material.Ior == 1.52f &&
+                material.SpecularFactor == 1f), Is.True,
+                "Cafe windows must hide the absent interior and retain smooth dielectric reflections.");
             Assert.That(thinGlass.Any(material =>
                 (material.AlbedoTexturePath ?? material.BaseColorTexture?.Source?.FilePath ?? string.Empty)
                     .Contains("Vespa_Headlight", StringComparison.OrdinalIgnoreCase)), Is.True,
@@ -216,11 +232,6 @@ public sealed class BistroCookedReflectionIntegrationTests
                     material.GiTransmissionPolicy ==
                     ModelGiTransmissionPolicy.ThinSurface),
                 Is.True);
-            Assert.That(thinGlass.Any(material =>
-                    material.Roughness <= 0.08f + 1.0e-6f &&
-                    material.TransmissionFactor >= 0.94f - 1.0e-6f),
-                Is.True,
-                "The clear Bistro glass profile must remain a sharp dielectric.");
         });
     }
 

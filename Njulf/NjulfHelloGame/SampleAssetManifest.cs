@@ -99,18 +99,7 @@ internal sealed record SampleAssetManifest(
             ModelImportBackend.Assimp,
             AssimpMaterialTextureConvention.AmazonBistro,
             RequireCooked: true),
-        // The exterior and interior FBXs share the same authored coordinate
-        // system, so the loader's common model world places the interior in
-        // the cafe without an additional offset, rotation, or scale.
-        new[]
-        {
-            new SampleAssetReference(
-                "Assets/Bistro_v5_2/BistroInterior.fbx",
-                ModelImportBackend.Assimp,
-                AssimpMaterialTextureConvention.AmazonBistro,
-                SampleAssetLoadTier.Deferred,
-                RequireCooked: true)
-        },
+        Array.Empty<SampleAssetReference>(),
         Array.Empty<SampleAssetReference>(),
         1.0f,
         CoreVector3.Zero,
@@ -119,6 +108,19 @@ internal sealed record SampleAssetManifest(
         // The FBX contains a second, unshadowed directional light whose color
         // already has a very large source intensity baked into it. Combining it
         // with the sample's shadow-casting sun erases every cast shadow.
+        EnableImportedModelLights: false);
+
+    public static SampleAssetManifest LivingRoom { get; } = new(
+        new SampleAssetReference(
+            "Assets/LivingRoom/living_room_extended.gltf",
+            ModelImportBackend.SharpGltf,
+            RequireCooked: true),
+        Array.Empty<SampleAssetReference>(),
+        Array.Empty<SampleAssetReference>(),
+        1.0f,
+        CoreVector3.Zero,
+        0.0f,
+        new Color(0.02f, 0.02f, 0.025f, 1f),
         EnableImportedModelLights: false);
 
     public CoreMatrix4x4 CreateModelWorld(float rotation)

@@ -278,7 +278,10 @@ foreach ($moduleName in $receiverModuleNames) {
         32
     } elseif (
         $transparentReflectionTelemetryModuleNames -contains $moduleName) {
-        27
+        # Includes bounded optical export and its inlined invalidation paths.
+        # Both universal variants reproduce these counts in the starting
+        # renderer; see the reduced-optics milestone's baseline SPIR-V audit.
+        92
     } else {
         14
     }
@@ -290,8 +293,10 @@ foreach ($moduleName in $receiverModuleNames) {
     if ($functionalAtomicOrs -ne $expectedAtomicOrs) {
         $violations.Add("${moduleName}: found $functionalAtomicOrs OpAtomicOr instruction(s), expected $expectedAtomicOrs")
     }
-    if ($functionalAtomicExchanges -ne 3) {
-        $violations.Add("${moduleName}: found $functionalAtomicExchanges OpAtomicExchange instruction(s), expected 3")
+    $expectedAtomicExchanges = if (
+        $transparentReflectionTelemetryModuleNames -contains $moduleName) { 65 } else { 3 }
+    if ($functionalAtomicExchanges -ne $expectedAtomicExchanges) {
+        $violations.Add("${moduleName}: found $functionalAtomicExchanges OpAtomicExchange instruction(s), expected $expectedAtomicExchanges")
     }
     if ($functionalAtomicCompareExchanges -ne 3) {
         $violations.Add("${moduleName}: found $functionalAtomicCompareExchanges OpAtomicCompareExchange instruction(s), expected 3")
