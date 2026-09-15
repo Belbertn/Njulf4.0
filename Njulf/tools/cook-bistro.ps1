@@ -33,19 +33,17 @@ $bistroRoot = Join-Path $solutionRoot (
     "NjulfHelloGame/Assets/Bistro_v5_2")
 $cookedRoot = Join-Path $solutionRoot "NjulfHelloGame/Cooked"
 $bistroSources = @(
-    (Join-Path $bistroRoot "BistroExterior.fbx"),
-    (Join-Path $bistroRoot "BistroInterior.fbx")
+    (Join-Path $bistroRoot "BistroExterior.fbx")
 )
 $cookedModels = @(
-    (Join-Path $cookedRoot "win-x64/models/BistroExterior.njmodel"),
-    (Join-Path $cookedRoot "win-x64/models/BistroInterior.njmodel")
+    (Join-Path $cookedRoot "win-x64/models/BistroExterior.njmodel")
 )
 $testFilter =
-    "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.BothBistroCooks_ResolveUnderExactRuntimeImportContracts|" +
-    "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.BothBistroCooks_PersistOnlyReviewedAutomaticPlanarReceiver|" +
+    "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.ExteriorCook_ResolvesUnderExactRuntimeImportContracts|" +
+    "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.ExteriorCook_PersistsOnlyReviewedAutomaticPlanarReceiver|" +
     "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.ExteriorCook_PreservesThinGlassAndImportSemantics|" +
-    "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.BothBistroCooks_PreserveMaskedFoliageAndCoverageSemantics|" +
-    "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.BothBistroCooks_PreserveCompressedMaterialTextureBindings"
+    "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.ExteriorCook_PreservesMaskedFoliageAndCoverageSemantics|" +
+    "FullyQualifiedName=Njulf.Tests.BistroCookedReflectionIntegrationTests.ExteriorCook_PreservesCompressedMaterialTextureBindings"
 
 function Assert-File {
     param(

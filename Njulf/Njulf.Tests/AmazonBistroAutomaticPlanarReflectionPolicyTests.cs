@@ -29,7 +29,7 @@ public sealed class AmazonBistroAutomaticPlanarReflectionPolicyTests
                 wrongMaterial);
         bool wrongAssetApplied =
             AmazonBistroAutomaticPlanarReflectionPolicy.Apply(
-                @"C:\content\BistroInterior.fbx",
+                @"C:\content\OtherModel.fbx",
                 wrongAsset);
         bool sponzaApplied =
             AmazonBistroAutomaticPlanarReflectionPolicy.Apply(

@@ -81,8 +81,7 @@ internal static class AmazonBistroMaterialProfile
     private static bool IsBistroAsset(string modelPath)
     {
         string fileName = Path.GetFileName(modelPath);
-        return fileName.Equals("BistroExterior.fbx", StringComparison.OrdinalIgnoreCase) ||
-               fileName.Equals("BistroInterior.fbx", StringComparison.OrdinalIgnoreCase);
+        return fileName.Equals("BistroExterior.fbx", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryResolveBaseTextureIdentity(

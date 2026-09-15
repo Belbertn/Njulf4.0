@@ -11,7 +11,6 @@ public sealed class SponzaCookedIntegrationTests
     [TestCase("NewSponza_Main_glTF_003")]
     [TestCase("NewSponza_Curtains_glTF")]
     [TestCase("BistroExterior")]
-    [TestCase("BistroInterior")]
     [Explicit("Requires local sample cooked packages.")]
     public void SampleCookContainsEditableHierarchy(string name)
     {

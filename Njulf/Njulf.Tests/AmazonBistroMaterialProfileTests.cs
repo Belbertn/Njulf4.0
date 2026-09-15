@@ -14,7 +14,9 @@ public sealed class AmazonBistroMaterialProfileTests
     public void Apply_ExteriorWindowsHideMissingInteriorAndRetainGlassReflection()
     {
         ModelMaterial material = CreateMaterial("MASTER_Glass_Exterior_BaseColor.dds");
-        AmazonBistroMaterialProfile.Apply("BistroInterior.fbx", material);
+        material.IsThinGlass = true;
+        material.AlphaMode = ModelAlphaMode.Blend;
+        material.TransmissionFactor = 0.94f;
 
         bool applied = AmazonBistroMaterialProfile.Apply("BistroExterior.fbx", material);
 
@@ -35,7 +37,6 @@ public sealed class AmazonBistroMaterialProfileTests
         });
     }
 
-    [TestCase("MASTER_Glass_Exterior_BaseColor.dds", 0.94f, 0.08f)]
     [TestCase("TransparentGlass_BaseColor.dds", 0.96f, 0.05f)]
     [TestCase("Vespa_Headlight_BaseColor.dds", 0.94f, 0.12f)]
     [TestCase("MASTER_Glass_Dirty_BaseColor.dds", 0.78f, 0.28f)]
@@ -50,7 +51,7 @@ public sealed class AmazonBistroMaterialProfileTests
         ModelMaterial material = CreateMaterial(textureName);
 
         bool applied = AmazonBistroMaterialProfile.Apply(
-            @"C:\content\BistroInterior.fbx",
+            @"C:\content\BistroExterior.fbx",
             material);
 
         Assert.Multiple(() =>

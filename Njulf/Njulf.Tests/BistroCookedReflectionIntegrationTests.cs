@@ -11,8 +11,8 @@ public sealed class BistroCookedReflectionIntegrationTests
     private const uint FoliageFeature = 1u << 22;
 
     [Test]
-    [Explicit("Requires both local Amazon Bistro source assets and their win-x64 cooks.")]
-    public void BothBistroCooks_ResolveUnderExactRuntimeImportContracts()
+    [Explicit("Requires the local Amazon Bistro source asset and its win-x64 cook.")]
+    public void ExteriorCook_ResolvesUnderExactRuntimeImportContracts()
     {
         string root = FindRepositoryRoot();
         string contentRoot = Path.Combine(root, "NjulfHelloGame");
@@ -62,8 +62,8 @@ public sealed class BistroCookedReflectionIntegrationTests
     }
 
     [Test]
-    [Explicit("Requires both local Amazon Bistro source assets and their win-x64 cooks.")]
-    public void BothBistroCooks_PersistOnlyReviewedAutomaticPlanarReceiver()
+    [Explicit("Requires the local Amazon Bistro source asset and its win-x64 cook.")]
+    public void ExteriorCook_PersistsOnlyReviewedAutomaticPlanarReceiver()
     {
         string root = FindRepositoryRoot();
         string contentRoot = Path.Combine(root, "NjulfHelloGame");
@@ -114,9 +114,7 @@ public sealed class BistroCookedReflectionIntegrationTests
                 .Select(static material => material.Name)
                 .Order()
                 .ToArray();
-            string[] expected = sourceName == "BistroExterior"
-                ? ["Pavement_Ground_Wet"]
-                : [];
+            string[] expected = ["Pavement_Ground_Wet"];
             string materialNames = string.Join(
                 ", ",
                 materials.Materials
@@ -236,8 +234,8 @@ public sealed class BistroCookedReflectionIntegrationTests
     }
 
     [Test]
-    [Explicit("Requires both local Amazon Bistro source assets and their win-x64 cooks.")]
-    public void BothBistroCooks_PreserveCompressedMaterialTextureBindings()
+    [Explicit("Requires the local Amazon Bistro source asset and its win-x64 cook.")]
+    public void ExteriorCook_PreservesCompressedMaterialTextureBindings()
     {
         string root = FindRepositoryRoot();
         string contentRoot = Path.Combine(root, "NjulfHelloGame");
@@ -295,8 +293,8 @@ public sealed class BistroCookedReflectionIntegrationTests
     }
 
     [Test]
-    [Explicit("Requires both local Amazon Bistro source assets and their win-x64 cooks.")]
-    public void BothBistroCooks_PreserveMaskedFoliageAndCoverageSemantics()
+    [Explicit("Requires the local Amazon Bistro source asset and its win-x64 cook.")]
+    public void ExteriorCook_PreservesMaskedFoliageAndCoverageSemantics()
     {
         string[] expectedFoliage =
         [
@@ -305,16 +303,14 @@ public sealed class BistroCookedReflectionIntegrationTests
             "Foliage_Ivy_leaf_a_BaseColor",
             "Foliage_Leaves_BaseColor",
             "Foliage_Linde_Tree_Large_Green_Leaves_BaseColor",
-            "Foliage_Linde_Tree_Large_Orange_Leaves_BaseColor",
-            "Plants_plants_BaseColor"
+            "Foliage_Linde_Tree_Large_Orange_Leaves_BaseColor"
         ];
         string[] opaqueControls =
         [
             "Foliage_Ivy_branches_BaseColor",
             "Foliage_Linde_Tree_Large_Trunk_BaseColor",
             "Foliage_Trunk_BaseColor",
-            "Foliage_Paris_Flowers_BaseColor",
-            "Plants_Metal_Base_01_BaseColor"
+            "Foliage_Paris_Flowers_BaseColor"
         ];
 
         IReadOnlyList<CookedBaseColorMaterial> entries =

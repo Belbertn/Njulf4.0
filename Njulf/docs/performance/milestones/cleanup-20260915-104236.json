@@ -1,0 +1,79 @@
+{
+    "DateUtc":  "2026-09-15T08:42:36.9171754Z",
+    "Applied":  true,
+    "KeepDays":  2,
+    "TotalBytes":  44823345694,
+    "TotalFiles":  9051,
+    "FreeBytesBefore":  226055274496,
+    "FreeBytesAfter":  249192099840,
+    "Groups":  [
+                   {
+                       "Path":  "artifacts/reduced-optics-20260914",
+                       "Files":  8606,
+                       "Bytes":  41571585406
+                   },
+                   {
+                       "Path":  "artifacts/optical-denoising-20260914",
+                       "Files":  93,
+                       "Bytes":  1480563769
+                   },
+                   {
+                       "Path":  ".codex-tmp/audio-tools",
+                       "Files":  5,
+                       "Bytes":  597202343
+                   },
+                   {
+                       "Path":  ".codex-tmp/sphere-lighting",
+                       "Files":  153,
+                       "Bytes":  372905744
+                   },
+                   {
+                       "Path":  "artifacts/audio-content-publish",
+                       "Files":  26,
+                       "Bytes":  298080276
+                   },
+                   {
+                       "Path":  "artifacts/audio-publish",
+                       "Files":  24,
+                       "Bytes":  298000308
+                   },
+                   {
+                       "Path":  "artifacts/reflection-grid-20260914",
+                       "Files":  104,
+                       "Bytes":  171326592
+                   },
+                   {
+                       "Path":  ".codex-tmp/jitter-integration",
+                       "Files":  26,
+                       "Bytes":  27604688
+                   },
+                   {
+                       "Path":  "artifacts/transmission-artifacts-20260913",
+                       "Files":  4,
+                       "Bytes":  4749627
+                   },
+                   {
+                       "Path":  "artifacts/gi-box-invalidation-20260913",
+                       "Files":  7,
+                       "Bytes":  1025265
+                   },
+                   {
+                       "Path":  ".tmp/physics-conveniences",
+                       "Files":  1,
+                       "Bytes":  172098
+                   },
+                   {
+                       "Path":  "artifacts/api-conveniences",
+                       "Files":  1,
+                       "Bytes":  128028
+                   },
+                   {
+                       "Path":  "artifacts/onboarding",
+                       "Files":  1,
+                       "Bytes":  1550
+                   }
+               ],
+    "Failures":  [
+
+                 ]
+}
