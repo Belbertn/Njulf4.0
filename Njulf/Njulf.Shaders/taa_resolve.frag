@@ -53,10 +53,11 @@ vec3 SampleCurrent(vec2 uv)
 void main()
 {
     vec2 px = pc.InvSourceDimensions;
-    vec3 current = SampleCurrent(inUv);
+    vec2 sampleUv = inUv + pc.TaaCurrentJitterUv;
+    vec3 current = SampleCurrent(sampleUv);
     vec2 rawVelocity = textureLod(
         BindlessTextures[nonuniformEXT(MOTION_VECTOR_TEXTURE_INDEX)],
-        inUv,
+        sampleUv,
         0.0).rg;
     bool velocityFinite = !any(isnan(rawVelocity)) && !any(isinf(rawVelocity));
     if (!velocityFinite)
@@ -81,7 +82,7 @@ void main()
         for (int x = -1; x <= 1; x++)
         {
             vec3 sampleYCoCg = RgbToYCoCg(
-                SampleCurrent(inUv + vec2(float(x), float(y)) * px));
+                SampleCurrent(sampleUv + vec2(float(x), float(y)) * px));
             neighborhoodMinimum = min(neighborhoodMinimum, sampleYCoCg);
             neighborhoodMaximum = max(neighborhoodMaximum, sampleYCoCg);
             firstMoment += sampleYCoCg;
@@ -108,7 +109,7 @@ void main()
 
     float currentDepth = textureLod(
         BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
-        inUv,
+        sampleUv,
         0.0).r;
     float previousDepth = historySample.a;
     float depthGradient = abs(dFdx(currentDepth)) + abs(dFdy(currentDepth));
