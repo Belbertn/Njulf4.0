@@ -3828,7 +3828,9 @@ namespace Njulf.Rendering.Data
         public float TaaFeedbackMax;
         public float TaaVelocityRejectionScale;
         public uint TaaHistoryValid;
-        public uint TaaJitterPadding;
+        // Reuse the alignment word so the following vec2 fields retain
+        // their std430 offsets without enlarging the push-constant range.
+        public uint SmaaPredicationEnabled;
         public Vector2 TaaCurrentJitterUv;
         public Vector2 TaaPreviousJitterUv;
     }

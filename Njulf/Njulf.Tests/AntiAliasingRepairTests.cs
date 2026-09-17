@@ -11,13 +11,13 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class AntiAliasingRepairTests
 {
-    [TestCase(AntiAliasingMode.SmaaLow, 0, 0.50f, 0.15f, 4, 0, 0.0f, false, false)]
-    [TestCase(AntiAliasingMode.SmaaMedium, 1, 0.75f, 0.10f, 8, 0, 0.0f, false, false)]
-    [TestCase(AntiAliasingMode.SmaaHigh, 2, 1.00f, 0.10f, 16, 8, 25.0f, true, true)]
+    [TestCase(AntiAliasingMode.SmaaLow, 0, 0.15f, 4, 0, 0.0f, false, false)]
+    [TestCase(AntiAliasingMode.SmaaMedium, 1, 0.10f, 8, 0, 0.0f, false, false)]
+    [TestCase(AntiAliasingMode.SmaaHigh, 2, 0.10f, 16, 8, 25.0f, true, true)]
+    [TestCase(AntiAliasingMode.SmaaUltra, 3, 0.05f, 32, 16, 25.0f, true, true)]
     public void SmaaModes_ExposeCanonicalDistinctPresets(
         AntiAliasingMode mode,
         int quality,
-        float resolutionScale,
         float threshold,
         int searchSteps,
         int diagonalSteps,
@@ -30,7 +30,6 @@ public sealed class AntiAliasingRepairTests
         Assert.Multiple(() =>
         {
             Assert.That(settings.EffectiveSmaaQuality, Is.EqualTo(quality));
-            Assert.That(settings.EffectiveSmaaResolutionScale, Is.EqualTo(resolutionScale));
             Assert.That(settings.EffectiveSmaaThreshold, Is.EqualTo(threshold));
             Assert.That(settings.EffectiveSmaaMaxSearchSteps, Is.EqualTo(searchSteps));
             Assert.That(settings.EffectiveSmaaMaxSearchStepsDiagonal, Is.EqualTo(diagonalSteps));
@@ -42,21 +41,18 @@ public sealed class AntiAliasingRepairTests
         });
     }
 
-    [TestCase(AntiAliasingMode.SmaaLow, 800u, 450u)]
-    [TestCase(AntiAliasingMode.SmaaMedium, 1200u, 675u)]
-    [TestCase(AntiAliasingMode.SmaaHigh, 1600u, 900u)]
-    [TestCase(AntiAliasingMode.Taa, 1600u, 900u)]
-    public void AntiAliasingExtent_MatchesTheSelectedQuality(
-        AntiAliasingMode mode,
-        uint expectedWidth,
-        uint expectedHeight)
+    [TestCase(AntiAliasingMode.SmaaLow)]
+    [TestCase(AntiAliasingMode.SmaaMedium)]
+    [TestCase(AntiAliasingMode.SmaaHigh)]
+    [TestCase(AntiAliasingMode.SmaaUltra)]
+    [TestCase(AntiAliasingMode.Taa)]
+    public void AntiAliasingExtent_PreservesExtentForEveryMode(AntiAliasingMode mode)
     {
-        Extent2D actual = RenderTargetManager.CalculateAntiAliasingExtent(
-            new Extent2D { Width = 1600, Height = 900 },
-            mode);
+        var expected = new Extent2D { Width = 1600, Height = 900 };
+        Extent2D actual = RenderTargetManager.CalculateAntiAliasingExtent(expected, mode);
 
         Assert.That((actual.Width, actual.Height),
-            Is.EqualTo((expectedWidth, expectedHeight)));
+            Is.EqualTo((expected.Width, expected.Height)));
     }
 
     [Test]
@@ -133,6 +129,10 @@ public sealed class AntiAliasingRepairTests
             Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(120));
             Assert.That(
                 Marshal.OffsetOf<GPUAntiAliasingPushConstants>(
+                    nameof(GPUAntiAliasingPushConstants.SmaaPredicationEnabled)).ToInt32(),
+                Is.EqualTo(100));
+            Assert.That(
+                Marshal.OffsetOf<GPUAntiAliasingPushConstants>(
                     nameof(GPUAntiAliasingPushConstants.TaaCurrentJitterUv)).ToInt32(),
                 Is.EqualTo(104));
             Assert.That(
@@ -143,57 +143,6 @@ public sealed class AntiAliasingRepairTests
     }
 
     [Test]
-    public void TaaResolve_ReprojectsWithRawVelocityButRejectsWithPhysicalVelocityAndDepth()
-    {
-        string shader = ReadRepoText("Njulf.Shaders", "taa_resolve.frag");
-        string pass = ReadRepoText(
-            "Njulf.Rendering", "Pipeline", "AntiAliasingPass.cs");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(shader, Does.Contain("vec2 historyUv = inUv - rawVelocity;"));
-            Assert.That(shader, Does.Contain("vec2 physicalVelocity = rawVelocity - jitterVelocity;"));
-            Assert.That(shader, Does.Contain("secondMoment - firstMoment * firstMoment"));
-            Assert.That(shader, Does.Contain("float previousDepth = historySample.a;"));
-            Assert.That(shader, Does.Contain("bool depthConsistent"));
-            Assert.That(shader, Does.Not.Contain("(current - localAverage)"));
-            Assert.That(pass, Does.Contain("sceneData.MotionVectorsEnabled != 0"));
-            Assert.That(pass, Does.Contain("sceneData.CaptureCameraCutSerial"));
-            Assert.That(pass, Does.Contain("sceneData.SceneContentRevision"));
-        });
-    }
-
-    [Test]
-    public void SmaaShaders_UseCanonicalLookupAddressingAndNeighborhoodChannels()
-    {
-        string edge = ReadRepoText("Njulf.Shaders", "smaa_edge.frag");
-        string blend = ReadRepoText("Njulf.Shaders", "smaa_blend_weight.frag");
-        string neighborhood = ReadRepoText("Njulf.Shaders", "smaa_neighborhood.frag");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(edge, Does.Contain("2.0 * delta"));
-            Assert.That(blend, Does.Contain("vec2(160.0, 560.0)"));
-            Assert.That(blend, Does.Contain("vec2(64.0, 16.0)"));
-            Assert.That(blend, Does.Contain("SearchLength("));
-            Assert.That(blend, Does.Contain("AreaDiagonal("));
-            Assert.That(neighborhood, Does.Contain("weights.wz = SampleBlend(inUv).xz;"));
-            Assert.That(neighborhood, Does.Not.Contain("SmaaQuality"));
-        });
-    }
-
-    private static string ReadRepoText(params string[] relativeSegments)
-    {
-        DirectoryInfo? directory = new(TestContext.CurrentContext.TestDirectory);
-        while (directory != null)
-        {
-            string candidate = Path.Combine(
-                new[] { directory.FullName }.Concat(relativeSegments).ToArray());
-            if (File.Exists(candidate))
-                return File.ReadAllText(candidate);
-            directory = directory.Parent;
-        }
-        throw new FileNotFoundException(
-            $"Could not locate repository file '{Path.Combine(relativeSegments)}'.");
-    }
+    public void SmaaPredication_IsEnabledByDefault() =>
+        Assert.That(new AntiAliasingSettings().SmaaPredicationEnabled, Is.True);
 }

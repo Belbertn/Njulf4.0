@@ -1689,6 +1689,21 @@ public sealed class SampleSmokeOptionsParserTests
         });
     }
 
+    [TestCase("ambient-occlusion-disabled")]
+    [TestCase("bent-normals-disabled")]
+    [TestCase("anti-aliasing-disabled")]
+    [TestCase("auto-exposure-disabled")]
+    public void TemporalIsolationVariantDoesNotEnableBenchmarkMode(string variant)
+    {
+        var options = SampleSmokeOptionsParser.Parse(
+            ["--sponza-temporal-capture-dir", Path.GetTempPath(),
+             "--sponza-temporal-variant", variant]);
+        Assert.That(options.SponzaTemporalCaptureVariant, Is.EqualTo(variant));
+        Assert.That(options.Benchmark.Enabled, Is.False);
+        Assert.Throws<ArgumentException>(() => SampleSmokeOptionsParser.Parse(
+            ["--sponza-temporal-variant", variant]));
+    }
+
     [Test]
     public void SponzaTemporalModesRejectCompetingRendererOptions()
     {

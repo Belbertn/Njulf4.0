@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "kind": "Fullscreen",
+  "shader": "smaa_reference_edge.frag.spv",
+  "resources": [
+    {
+      "name": "SourceColor",
+      "binding": 0,
+      "kind": "SampledTexture2D"
+    }
+  ]
+}

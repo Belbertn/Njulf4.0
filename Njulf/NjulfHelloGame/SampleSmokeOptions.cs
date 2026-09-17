@@ -101,6 +101,7 @@ public sealed record SampleSmokeOptions(
     /// It is host state, not a command-line smoke-test input.
     /// </summary>
     public bool OpenEditorOnStartup { get; init; }
+    public string SponzaTemporalCaptureVariant { get; init; } = SampleBenchmarkCaptureVariant.Baseline;
     public string? OpticalDenoisingMode { get; init; }
     public string? ReflectionDenoiserOverride { get; init; }
     public bool? AmdHalfResolutionOverride { get; init; }

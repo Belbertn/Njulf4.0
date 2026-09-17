@@ -19,7 +19,8 @@ public enum SampleSponzaTemporalCaptureStage : byte
     Horizontal = 1,
     Vertical = 2,
     Drain = 3,
-    Complete = 4
+    Complete = 4,
+    Stationary = 5
 }
 
 public sealed record SampleSponzaTemporalCaptureInstruction(
@@ -66,6 +67,14 @@ public sealed class SampleSponzaTemporalCaptureSequence
                 string.Empty,
                 "warmup",
                 false),
+            SampleSponzaTemporalCaptureStage.Stationary => new(
+                _stage,
+                _stageFrameIndex,
+                SampleSponzaTemporalCaptureContract.StationaryFrameCount,
+                _contract.LowBookmark,
+                SampleSponzaTemporalCaptureContract.StationaryRoute,
+                "stationary",
+                true),
             SampleSponzaTemporalCaptureStage.Horizontal => new(
                 _stage,
                 _stageFrameIndex,
@@ -115,6 +124,8 @@ public sealed class SampleSponzaTemporalCaptureSequence
         _stage = _stage switch
         {
             SampleSponzaTemporalCaptureStage.Warmup =>
+                SampleSponzaTemporalCaptureStage.Stationary,
+            SampleSponzaTemporalCaptureStage.Stationary =>
                 SampleSponzaTemporalCaptureStage.Horizontal,
             SampleSponzaTemporalCaptureStage.Horizontal =>
                 SampleSponzaTemporalCaptureStage.Vertical,
@@ -156,6 +167,8 @@ public sealed class SampleSponzaTemporalCaptureSequence
     {
         SampleSponzaTemporalCaptureStage.Warmup =>
             SampleSponzaTemporalCaptureContract.WarmupFrameCount,
+        SampleSponzaTemporalCaptureStage.Stationary =>
+            SampleSponzaTemporalCaptureContract.StationaryFrameCount,
         SampleSponzaTemporalCaptureStage.Horizontal =>
             _contract.MotionTraversalFrameCount,
         SampleSponzaTemporalCaptureStage.Vertical =>
@@ -167,15 +180,17 @@ public sealed class SampleSponzaTemporalCaptureSequence
 
 public static class SampleSponzaTemporalCaptureContract
 {
-    public const string SchemaVersion = "sponza-temporal-capture-contract/v2";
-    public const string RunSchemaVersion = "sponza-temporal-capture-run/v2";
+    public const string SchemaVersion = "sponza-temporal-capture-contract/v3";
+    public const string RunSchemaVersion = "sponza-temporal-capture-run/v3";
+    public const string StationaryRoute = "stationary";
+    public const int StationaryFrameCount = 330;
     public const string HorizontalRoute = "world-x";
     public const string VerticalRoute = "vertical";
     public const int Width = 1600;
     public const int Height = 900;
     public const int FramesPerSecond = 60;
     public const int WarmupFrameCount = 2048;
-    public const int ExpectedFrameCount = 1260;
+    public const int ExpectedFrameCount = StationaryFrameCount + 1260;
     public const string ContractFileName = "sponza-temporal-contract.json";
     public const string RunFileName = "sponza-temporal-run.json";
 
@@ -199,6 +214,7 @@ public static class SampleSponzaTemporalCaptureContract
 
     public static int GetRouteFrameCount(string route) => route switch
     {
+        StationaryRoute => StationaryFrameCount,
         HorizontalRoute =>
             SampleSponzaGiCaptureContract.Default.MotionTraversalFrameCount,
         VerticalRoute =>
@@ -230,6 +246,12 @@ public static class SampleSponzaTemporalCaptureContract
             settingsFingerprint,
             routes = new object[]
             {
+                new
+                {
+                    name = StationaryRoute,
+                    frameCount = StationaryFrameCount,
+                    phases = new[] { "stationary" }
+                },
                 new
                 {
                     name = HorizontalRoute,
@@ -275,7 +297,7 @@ public static class SampleSponzaTemporalCaptureContract
 
     private static void ValidateRoute(string route)
     {
-        if (route is not (HorizontalRoute or VerticalRoute))
+        if (route is not (StationaryRoute or HorizontalRoute or VerticalRoute))
         {
             throw new ArgumentException(
                 $"Unknown Sponza temporal route '{route}'.", nameof(route));
@@ -362,6 +384,7 @@ public sealed record SampleSponzaTemporalRunManifest
         SampleSponzaTemporalCaptureContract.Fingerprint;
 
     public string SettingsFingerprint { get; init; } = string.Empty;
+    public string CaptureVariant { get; init; } = SampleBenchmarkCaptureVariant.Baseline;
     public int Width { get; init; } = SampleSponzaTemporalCaptureContract.Width;
     public int Height { get; init; } = SampleSponzaTemporalCaptureContract.Height;
 
@@ -403,6 +426,7 @@ public sealed class SampleSponzaTemporalCaptureRunner
     private readonly SampleSponzaTemporalCaptureSequence _sequence = new();
     private readonly List<SampleSponzaTemporalFrameArtifact> _frames = [];
     private readonly string _settingsFingerprint;
+    private readonly string _captureVariant;
     private readonly int _completedAtStart;
     private SampleSponzaGiTemporalTrace _routeTrace = new();
     private SampleSponzaTemporalCaptureInstruction? _preparedInstruction;
@@ -415,7 +439,8 @@ public sealed class SampleSponzaTemporalCaptureRunner
         Scene scene,
         string outputDirectory,
         Func<(int Width, int Height)> viewportSize,
-        Action exit)
+        Action exit,
+        string captureVariant = SampleBenchmarkCaptureVariant.Baseline)
     {
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
@@ -429,6 +454,9 @@ public sealed class SampleSponzaTemporalCaptureRunner
         EnsureEmptyOutputDirectory(_outputDirectory);
         Directory.CreateDirectory(_outputDirectory);
         ConfigureRenderer(scene);
+        _captureVariant = SampleBenchmarkCaptureVariant.Normalize(captureVariant);
+        if (_captureVariant != SampleBenchmarkCaptureVariant.Baseline)
+            SampleBenchmarkCaptureVariant.Apply(_renderer.Settings, _captureVariant);
         _settingsFingerprint =
             SampleRenderSettingsFingerprint.Capture(_renderer.Settings);
         _completedAtStart =
@@ -657,10 +685,12 @@ public sealed class SampleSponzaTemporalCaptureRunner
             DdgiFarRebaseState = diagnostics.SimpleDdgiFarRebaseState
         });
 
-        SampleSponzaGiCaptureStage traceStage =
-            instruction.Stage == SampleSponzaTemporalCaptureStage.Horizontal
-                ? SampleSponzaGiCaptureStage.MotionTraversal
-                : SampleSponzaGiCaptureStage.VerticalTraversal;
+        SampleSponzaGiCaptureStage traceStage = instruction.Stage switch
+        {
+            SampleSponzaTemporalCaptureStage.Horizontal => SampleSponzaGiCaptureStage.MotionTraversal,
+            SampleSponzaTemporalCaptureStage.Vertical => SampleSponzaGiCaptureStage.VerticalTraversal,
+            _ => SampleSponzaGiCaptureStage.Warmup
+        };
         _routeTrace.Record(
             new SampleSponzaGiCaptureInstruction(
                 traceStage,
@@ -768,6 +798,7 @@ public sealed class SampleSponzaTemporalCaptureRunner
     {
         Status = status,
         SettingsFingerprint = _settingsFingerprint,
+        CaptureVariant = _captureVariant,
         ScreenshotCompletedCountAtStart = _completedAtStart,
         ScreenshotCompletedCountAtEnd =
             diagnostics.ScreenshotCompletedCount,

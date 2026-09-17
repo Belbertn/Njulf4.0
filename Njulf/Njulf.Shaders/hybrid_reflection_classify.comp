@@ -4,6 +4,7 @@
 
 #include "common.glsl"
 #include "hybrid_reflection_compute.glsl"
+#include "hybrid_reflection_sparse.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -116,12 +117,7 @@ void main()
             HybridHistoryMetadataSource(previousMetadata);
         float depthTolerance = max(0.0005, abs(currentDepth) * 0.002);
         bool canReuse = pc.HistoryValid != 0u &&
-            // A sparse observation is not converged lighting. Freezing it
-            // here bypasses both new samples and temporal/spatial denoising.
-            // Stochastic geometric sources must keep accumulating even when
-            // their receiver and camera have not moved.
-            previousSource != HYBRID_REFLECTION_SOURCE_SSR &&
-            previousSource != HYBRID_REFLECTION_SOURCE_RAY_QUERY &&
+            HybridReflectionCanCacheSource(previousSource) &&
             HybridHistoryMetadataSparseState(previousMetadata) ==
                 HYBRID_REFLECTION_HISTORY_SPARSE_NONE &&
             HybridHistoryMetadataAge(previousMetadata) >= 8u &&

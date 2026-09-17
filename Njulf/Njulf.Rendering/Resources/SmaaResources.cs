@@ -26,11 +26,6 @@ namespace Njulf.Rendering.Resources
                 TextureFilterMode.Linear,
                 TextureMipFilterMode.Nearest,
                 1.0f);
-            var pointClamp = linearClamp with
-            {
-                MinFilter = TextureFilterMode.Nearest,
-                MagFilter = TextureFilterMode.Nearest
-            };
 
             try
             {
@@ -55,7 +50,7 @@ namespace Njulf.Rendering.Resources
                     Format.R8Unorm,
                     bindlessIndex: BindlessIndex.SmaaSearchTexture,
                     bindlessHeap: bindlessHeap,
-                    samplerDescription: pointClamp,
+                    samplerDescription: linearClamp,
                     debugName: "SMAA Canonical Search Texture");
                 _textureManager.UploadTextureData(
                     _searchTexture,

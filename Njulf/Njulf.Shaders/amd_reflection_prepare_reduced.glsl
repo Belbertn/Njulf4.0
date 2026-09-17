@@ -23,11 +23,11 @@ void ArPrepareReduced() {
        dot(HybridReflectionTraceNormal(other),HybridReflectionTraceNormal(surface))>.95&&
        abs(texelFetch(HybridSceneDepth,q,0).r-texelFetch(HybridSceneDepth,chosen,0).r)<.0005&&
        abs(HybridReflectionPayloadPhysicalRoughness(other)-HybridReflectionPayloadPhysicalRoughness(surface))<.1&&
-       !HybridReflectionMissingObservation(HybridMetadataReason(meta))&&HybridMetadataValid(meta))chosen=q;
+       HybridReflectionTemporalSparseState(meta)==HYBRID_REFLECTION_HISTORY_SPARSE_NONE&&HybridMetadataValid(meta))chosen=q;
    }
    uvec4 payload=texelFetch(HybridReceiverPayload,chosen,0);uint meta=imageLoad(HybridRawMetadata,chosen).x;
    vec4 raw=imageLoad(HybridRawRadiance,chosen);
-   bool observed=!HybridReflectionMissingObservation(HybridMetadataReason(meta));
+   bool observed=HybridReflectionTemporalSparseState(meta)==HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
    float hit=uintBitsToFloat(ReadStorageWordUniform(ar.Current,ArHeader(50u)+uint(chosen.y)*ArNativeSize().x+uint(chosen.x)));
    if(!observed) {
     // AMD expects a reconstructed signal at its filter resolution. A 2x2
@@ -39,7 +39,7 @@ void ArPrepareReduced() {
     for(int y=-2;y<=2;y++)for(int x=-2;x<=2;x++) {
      ivec2 q=chosen+ivec2(x,y);if(!ArNativeInside(q))continue;
      uint m=imageLoad(HybridRawMetadata,q).x;
-     if(!HybridMetadataValid(m)||HybridReflectionMissingObservation(HybridMetadataReason(m)))continue;
+     if(!HybridMetadataValid(m)||HybridReflectionTemporalSparseState(m)!=HYBRID_REFLECTION_HISTORY_SPARSE_NONE)continue;
      uvec4 other=texelFetch(HybridReceiverPayload,q,0);
      if(!HybridReflectionPayloadValid(other)||HybridReceiverIdentity(other)!=HybridReceiverIdentity(payload)||
         dot(HybridReflectionTraceNormal(other),HybridReflectionTraceNormal(payload))<.9||

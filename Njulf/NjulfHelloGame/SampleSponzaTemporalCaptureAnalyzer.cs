@@ -141,9 +141,10 @@ public static class SampleSponzaTemporalCaptureAnalyzer
         Directory.CreateDirectory(temporaryDirectory);
         try
         {
-            var routeReviews = new List<SampleSponzaTemporalRouteReview>(2);
+            var routeReviews = new List<SampleSponzaTemporalRouteReview>(3);
             foreach (string route in new[]
                      {
+                         SampleSponzaTemporalCaptureContract.StationaryRoute,
                          SampleSponzaTemporalCaptureContract.HorizontalRoute,
                          SampleSponzaTemporalCaptureContract.VerticalRoute
                      })
@@ -598,6 +599,7 @@ public static class SampleSponzaTemporalCaptureAnalyzer
         int ordinal = 0;
         foreach (string route in new[]
                  {
+                     SampleSponzaTemporalCaptureContract.StationaryRoute,
                      SampleSponzaTemporalCaptureContract.HorizontalRoute,
                      SampleSponzaTemporalCaptureContract.VerticalRoute
                  })
@@ -662,15 +664,16 @@ public static class SampleSponzaTemporalCaptureAnalyzer
         }
     }
 
-    private static void ValidateExpectedCamera(
+    internal static void ValidateExpectedCamera(
         SampleSponzaTemporalFrameArtifact frame)
     {
         SampleSponzaGiCaptureContract contract =
             SampleSponzaGiCaptureContract.Default;
         SampleSponzaGiCameraBookmark expected = frame.Route switch
         {
+            SampleSponzaTemporalCaptureContract.StationaryRoute => contract.LowBookmark,
             SampleSponzaTemporalCaptureContract.HorizontalRoute =>
-                contract.SampleMotionTraversalFrame(frame.RouteFrameIndex),
+                contract.SampleWorldXMotionTraversalFrame(frame.RouteFrameIndex),
             SampleSponzaTemporalCaptureContract.VerticalRoute =>
                 contract.SampleVerticalTraversalFrame(frame.RouteFrameIndex),
             _ => throw new InvalidDataException(

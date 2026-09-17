@@ -1,0 +1,17 @@
+{
+  "DateUtc": "2026-09-15T16:39:38.0477632Z",
+  "Applied": true,
+  "KeepDays": 2,
+  "TotalBytes": 39080212,
+  "TotalFiles": 246.0,
+  "FreeBytesBefore": 211225460736,
+  "FreeBytesAfter": 211265077248,
+  "Groups": [
+    {
+      "Path": "artifacts/aa-fix-20260915",
+      "Files": 246,
+      "Bytes": 39080212
+    }
+  ],
+  "Failures": []
+}

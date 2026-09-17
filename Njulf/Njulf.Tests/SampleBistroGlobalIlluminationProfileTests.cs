@@ -11,14 +11,14 @@ namespace Njulf.Tests;
 public sealed class SampleBistroGlobalIlluminationProfileTests
 {
     [Test]
-    public void TextureBudget_DefaultsTo512ButPreservesExplicitOverrides()
+    public void TextureBudget_DefaultsTo1024ButPreservesExplicitOverrides()
     {
         Assert.Multiple(() =>
         {
             Assert.That(
                 SampleBistroGlobalIlluminationProfile
                     .DefaultImportedTextureDimension,
-                Is.EqualTo(512u));
+                Is.EqualTo(1024u));
             Assert.That(
                 SampleBistroGlobalIlluminationProfile
                     .ShouldApplyDefaultImportedTextureBudget(null, null),

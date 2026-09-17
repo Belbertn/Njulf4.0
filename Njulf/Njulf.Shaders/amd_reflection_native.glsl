@@ -16,7 +16,7 @@ bool ArNativeHistory(ivec2 p,uvec4 payload,uint rawMeta,out vec4 value,out uvec2
  if(clip.w<=0)return false;
  float expectedDepth=clip.z/clip.w,tolerance=max(.0005,abs(expectedDepth)*.002);
  vec3 normal=HybridReflectionTraceNormal(payload);uint identity=HybridReceiverIdentity(payload);
- bool missing=HybridReflectionMissingObservation(HybridMetadataReason(rawMeta));
+ bool missing=HybridReflectionTemporalSparseState(rawMeta)!=HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
  uint source=HybridMetadataSource(rawMeta);
  vec2 pos=previousUv*dimensions-.5,f=fract(pos);ivec2 base=ivec2(floor(pos));float weight=0,best=0;
  for(int y=0;y<2;y++)for(int x=0;x<2;x++) {

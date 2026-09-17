@@ -1,0 +1,766 @@
+{
+  "schema": "aa-ao-texture-repair/v1",
+  "date": "2026-09-15",
+  "baseRevision": "b92d1f0e7a4aa80f72a53052d2466291c5bed647",
+  "baseline": "Original uncommitted AA/AO/texture changes",
+  "acceptedCapture": "sponza-fresh-observations",
+  "metric": "Mean absolute RGB change between consecutive stationary frames in 8-bit sRGB code units; percentile uses floor((N-1)*p)",
+  "regions": {
+    "arch": [
+      635,
+      300,
+      990,
+      420
+    ],
+    "left_gold_trim": [
+      250,
+      475,
+      350,
+      810
+    ],
+    "floor": [
+      570,
+      725,
+      1030,
+      890
+    ],
+    "right_gold_trim": [
+      1280,
+      480,
+      1390,
+      815
+    ],
+    "full": [
+      0,
+      0,
+      1600,
+      900
+    ]
+  },
+  "captures": [
+    {
+      "run": "sponza-before-03",
+      "metrics": {
+        "arch": {
+          "frames": 329,
+          "mean": 0.192861019545167,
+          "p95": 0.5816431924882629,
+          "p99": 0.6293114241001565
+        },
+        "left_gold_trim": {
+          "frames": 329,
+          "mean": 0.15368624960304858,
+          "p95": 0.573452736318408,
+          "p99": 0.5764179104477613
+        },
+        "floor": {
+          "frames": 329,
+          "mean": 0.15891518595496393,
+          "p95": 0.528449714536671,
+          "p99": 0.5285726833552921
+        },
+        "right_gold_trim": {
+          "frames": 329,
+          "mean": 0.10658355088332859,
+          "p95": 0.23317051108095885,
+          "p99": 0.2370239710538218
+        },
+        "full": {
+          "frames": 329,
+          "mean": 0.12079034813689069,
+          "p95": 0.2831101851851852,
+          "p99": 0.3195574074074074
+        }
+      }
+    },
+    {
+      "run": "sponza-after",
+      "metrics": {
+        "arch": {
+          "frames": 329,
+          "mean": 0.19691351418201883,
+          "p95": 0.6061345852895149,
+          "p99": 0.6671205007824725
+        },
+        "left_gold_trim": {
+          "frames": 329,
+          "mean": 0.15151349634804698,
+          "p95": 0.5746766169154228,
+          "p99": 0.5769353233830846
+        },
+        "floor": {
+          "frames": 329,
+          "mean": 0.1508611955420466,
+          "p95": 0.530983750548968,
+          "p99": 0.5310144927536232
+        },
+        "right_gold_trim": {
+          "frames": 329,
+          "mean": 0.11766516959276566,
+          "p95": 0.3588059701492537,
+          "p99": 0.36459520578923565
+        },
+        "full": {
+          "frames": 329,
+          "mean": 0.11890559003152087,
+          "p95": 0.31160787037037035,
+          "p99": 0.3608354166666667
+        }
+      }
+    },
+    {
+      "run": "sponza-fixed-exposure",
+      "metrics": {
+        "arch": {
+          "frames": 329,
+          "mean": 0.11580559004143061,
+          "p95": 0.37016431924882626,
+          "p99": 0.4015962441314554
+        },
+        "left_gold_trim": {
+          "frames": 329,
+          "mean": 0.06697814876982866,
+          "p95": 0.24917412935323383,
+          "p99": 0.2504875621890547
+        },
+        "floor": {
+          "frames": 329,
+          "mean": 0.08052299124454536,
+          "p95": 0.28329380764163375,
+          "p99": 0.283324549846289
+        },
+        "right_gold_trim": {
+          "frames": 329,
+          "mean": 0.05389622762121968,
+          "p95": 0.16289461781999096,
+          "p99": 0.16503844414292176
+        },
+        "full": {
+          "frames": 329,
+          "mean": 0.06299781464595294,
+          "p95": 0.15692430555555556,
+          "p99": 0.1856550925925926
+        }
+      }
+    },
+    {
+      "run": "sponza-no-reflections",
+      "metrics": {
+        "arch": {
+          "frames": 329,
+          "mean": 0.008928821153873596,
+          "p95": 0.009827856025039125,
+          "p99": 0.009827856025039125
+        },
+        "left_gold_trim": {
+          "frames": 329,
+          "mean": 0.006588576872476523,
+          "p95": 0.006905472636815921,
+          "p99": 0.006905472636815921
+        },
+        "floor": {
+          "frames": 329,
+          "mean": 0.0005443759652825332,
+          "p95": 0.0005841018884497146,
+          "p99": 0.0005841018884497146
+        },
+        "right_gold_trim": {
+          "frames": 329,
+          "mean": 0.005597489204983648,
+          "p95": 0.006078697421981004,
+          "p99": 0.006078697421981004
+        },
+        "full": {
+          "frames": 329,
+          "mean": 0.007171244934143871,
+          "p95": 0.007336574074074074,
+          "p99": 0.007337037037037037
+        }
+      }
+    },
+    {
+      "run": "sponza-reflection-fix",
+      "metrics": {
+        "arch": {
+          "frames": 329,
+          "mean": 0.19700420014174885,
+          "p95": 0.60622848200313,
+          "p99": 0.6673630672926448
+        },
+        "left_gold_trim": {
+          "frames": 329,
+          "mean": 0.15149792073069304,
+          "p95": 0.5740696517412935,
+          "p99": 0.5759502487562189
+        },
+        "floor": {
+          "frames": 329,
+          "mean": 0.15089476768477694,
+          "p95": 0.5311901624945103,
+          "p99": 0.5312736056214317
+        },
+        "right_gold_trim": {
+          "frames": 329,
+          "mean": 0.11768315097625989,
+          "p95": 0.3585074626865672,
+          "p99": 0.3638082315694256
+        },
+        "full": {
+          "frames": 329,
+          "mean": 0.11888110224586287,
+          "p95": 0.3114474537037037,
+          "p99": 0.3607738425925926
+        }
+      }
+    },
+    {
+      "run": "sponza-amd-fix",
+      "metrics": {
+        "arch": {
+          "frames": 329,
+          "mean": 0.007895220019882892,
+          "p95": 0.008129890453834115,
+          "p99": 0.00835680751173709
+        },
+        "left_gold_trim": {
+          "frames": 329,
+          "mean": 0.007110133224455232,
+          "p95": 0.0074726368159203985,
+          "p99": 0.007492537313432836
+        },
+        "floor": {
+          "frames": 329,
+          "mean": 0.00044309888898233025,
+          "p95": 0.000562143170838823,
+          "p99": 0.000562143170838823
+        },
+        "right_gold_trim": {
+          "frames": 329,
+          "mean": 0.00584826626744696,
+          "p95": 0.0061601085481682505,
+          "p99": 0.006187245590230665
+        },
+        "full": {
+          "frames": 329,
+          "mean": 0.00707446315996848,
+          "p95": 0.007204398148148147,
+          "p99": 0.007225
+        }
+      }
+    },
+    {
+      "run": "sponza-final",
+      "metrics": {
+        "arch": {
+          "frames": 329,
+          "mean": 0.008902492972016497,
+          "p95": 0.009874804381846635,
+          "p99": 0.00988262910798122
+        },
+        "left_gold_trim": {
+          "frames": 329,
+          "mean": 0.007496287559164663,
+          "p95": 0.008059701492537314,
+          "p99": 0.008059701492537314
+        },
+        "floor": {
+          "frames": 329,
+          "mean": 0.0005251537443951875,
+          "p95": 0.0006368028107158543,
+          "p99": 0.0006368028107158543
+        },
+        "right_gold_trim": {
+          "frames": 329,
+          "mean": 0.00576454560576504,
+          "p95": 0.006114880144730891,
+          "p99": 0.006114880144730891
+        },
+        "full": {
+          "frames": 329,
+          "mean": 0.0072731326691433075,
+          "p95": 0.007399537037037038,
+          "p99": 0.007425000000000001
+        }
+      }
+    },
+    {
+      "run": "sponza-fresh-observations",
+      "metrics": {
+        "arch": {
+          "frames": 329,
+          "mean": 0.00853102063920164,
+          "p95": 0.008904538341158058,
+          "p99": 0.008935837245696401
+        },
+        "left_gold_trim": {
+          "frames": 329,
+          "mean": 0.007436283627455428,
+          "p95": 0.008039800995024876,
+          "p99": 0.008139303482587065
+        },
+        "floor": {
+          "frames": 329,
+          "mean": 0.0005386626940743499,
+          "p95": 0.0006016688625384278,
+          "p99": 0.0006368028107158543
+        },
+        "right_gold_trim": {
+          "frames": 329,
+          "mean": 0.005930062316216651,
+          "p95": 0.006223428312980552,
+          "p99": 0.006223428312980552
+        },
+        "full": {
+          "frames": 329,
+          "mean": 0.00728881571541146,
+          "p95": 0.007403472222222222,
+          "p99": 0.007439351851851852
+        }
+      }
+    }
+  ],
+  "cost": {
+    "method": "One sequential baseline/candidate pair per scene, 120 warmup + settling + 240 measured frames, 1920x1080, DdgiHigh, SMAA High, full-resolution AO, 1024px texture import limit, stress budget, validation off, uncapped, shared cache directories. HDR readback follows measurement.",
+    "limitations": "Short local cost comparison, no confidence interval or release qualification. Memory is the final measured snapshot, not a startup/whole-run peak. GPU distributions do not meet 16.667 ms.",
+    "results": [
+      {
+        "scene": "SponzaPlaza",
+        "baseline": {
+          "cpu": {
+            "Name": "CPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 3.259774999999999,
+            "MinMilliseconds": 2.28,
+            "MaxMilliseconds": 90.617,
+            "P95Milliseconds": 4.018,
+            "MedianMilliseconds": 2.646,
+            "P50Milliseconds": 2.646,
+            "P99Milliseconds": 11.44
+          },
+          "gpu": {
+            "Name": "GPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 31.731270833333358,
+            "MinMilliseconds": 29.101,
+            "MaxMilliseconds": 34.417,
+            "P95Milliseconds": 33.818,
+            "MedianMilliseconds": 31.6845,
+            "P50Milliseconds": 31.6845,
+            "P99Milliseconds": 34.319
+          },
+          "validGpuSamples": 240,
+          "additionalSettlingFrames": 194,
+          "settlingTimedOut": false,
+          "comparable": true,
+          "productionTiming": true,
+          "producerIdentity": {
+            "schema": "material-gi-producer-identity/v1",
+            "buildCommit": "b92d1f0e7a4aa80f72a53052d2466291c5bed647",
+            "shaderFingerprint": "7062eb5cc2c923b7dfd341440dcc4ef2feb09cbc52d141bcd84a166e04ecd8a6",
+            "settingsFingerprint": "8043b57b90b5d239fb28f1e59e1a75f1247f099f514ea1bfc3835c145201e854",
+            "sourceSettingsFingerprints": [
+              "8043b57b90b5d239fb28f1e59e1a75f1247f099f514ea1bfc3835c145201e854"
+            ],
+            "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+            "driverVersion": "610.248.0",
+            "qualityTier": "StressUnlimited"
+          },
+          "memorySnapshot": {
+            "ActualGpuMemoryUsageBytes": 4124209152,
+            "TrackedGpuMemoryBytes": 3170107451,
+            "EstimatedTextureBytes": 114715404,
+            "AmdReflectionDenoisingAllocatedBytes": 85149192,
+            "AntiAliasingRenderTargetBytes": 37324800
+          },
+          "width": 1920,
+          "height": 1080,
+          "aoScale": 1,
+          "aaMode": 4,
+          "findings": [
+            {
+              "Category": "likely-bound",
+              "Subject": "ForwardPlusPass",
+              "Detail": "GPU dominated this sample set; pass p95=11.788ms avg=10.793ms."
+            }
+          ]
+        },
+        "candidate": {
+          "cpu": {
+            "Name": "CPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 2.715295833333334,
+            "MinMilliseconds": 2.237,
+            "MaxMilliseconds": 10.711,
+            "P95Milliseconds": 3.27,
+            "MedianMilliseconds": 2.5175,
+            "P50Milliseconds": 2.5175,
+            "P99Milliseconds": 7.961
+          },
+          "gpu": {
+            "Name": "GPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 31.963300000000018,
+            "MinMilliseconds": 30.714,
+            "MaxMilliseconds": 35.429,
+            "P95Milliseconds": 33.546,
+            "MedianMilliseconds": 31.7675,
+            "P50Milliseconds": 31.7675,
+            "P99Milliseconds": 34.86
+          },
+          "validGpuSamples": 240,
+          "additionalSettlingFrames": 195,
+          "settlingTimedOut": false,
+          "comparable": true,
+          "productionTiming": true,
+          "producerIdentity": {
+            "schema": "material-gi-producer-identity/v1",
+            "buildCommit": "b92d1f0e7a4aa80f72a53052d2466291c5bed647",
+            "shaderFingerprint": "e95634f8f2fcc862c26cf0ba23d0bce3fb9bb66197a16db20785140fc34b3691",
+            "settingsFingerprint": "8043b57b90b5d239fb28f1e59e1a75f1247f099f514ea1bfc3835c145201e854",
+            "sourceSettingsFingerprints": [
+              "8043b57b90b5d239fb28f1e59e1a75f1247f099f514ea1bfc3835c145201e854"
+            ],
+            "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+            "driverVersion": "610.248.0",
+            "qualityTier": "StressUnlimited"
+          },
+          "memorySnapshot": {
+            "ActualGpuMemoryUsageBytes": 4124209152,
+            "TrackedGpuMemoryBytes": 3170107451,
+            "EstimatedTextureBytes": 114715404,
+            "AmdReflectionDenoisingAllocatedBytes": 85149192,
+            "AntiAliasingRenderTargetBytes": 37324800
+          },
+          "width": 1920,
+          "height": 1080,
+          "aoScale": 1,
+          "aaMode": 4,
+          "findings": [
+            {
+              "Category": "likely-bound",
+              "Subject": "ForwardPlusPass",
+              "Detail": "GPU dominated this sample set; pass p95=11.701ms avg=10.840ms."
+            }
+          ]
+        },
+        "settingsMatch": true,
+        "gpuDeltaMs": {
+          "AverageMilliseconds": 0.23202916666665985,
+          "P95Milliseconds": -0.27199999999999847,
+          "P99Milliseconds": 0.5409999999999968
+        },
+        "gpuDeltaPercent": {
+          "AverageMilliseconds": 0.7312318749708391,
+          "P95Milliseconds": -0.8043053994913896,
+          "P99Milliseconds": 1.576386258340845
+        }
+      },
+      {
+        "scene": "Bistro",
+        "baseline": {
+          "cpu": {
+            "Name": "CPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 5.115879166666664,
+            "MinMilliseconds": 4.151,
+            "MaxMilliseconds": 19.253,
+            "P95Milliseconds": 7.152,
+            "MedianMilliseconds": 4.6875,
+            "P50Milliseconds": 4.6875,
+            "P99Milliseconds": 12.71
+          },
+          "gpu": {
+            "Name": "GPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 33.01607083333331,
+            "MinMilliseconds": 31.239,
+            "MaxMilliseconds": 35.704,
+            "P95Milliseconds": 35.434,
+            "MedianMilliseconds": 32.777,
+            "P50Milliseconds": 32.777,
+            "P99Milliseconds": 35.687
+          },
+          "validGpuSamples": 240,
+          "additionalSettlingFrames": 271,
+          "settlingTimedOut": false,
+          "comparable": true,
+          "productionTiming": true,
+          "producerIdentity": {
+            "schema": "material-gi-producer-identity/v1",
+            "buildCommit": "b92d1f0e7a4aa80f72a53052d2466291c5bed647",
+            "shaderFingerprint": "7062eb5cc2c923b7dfd341440dcc4ef2feb09cbc52d141bcd84a166e04ecd8a6",
+            "settingsFingerprint": "31e9d51ba6495209f3bda129f9ec7f190414a96f5dd647db68ad584552fe2990",
+            "sourceSettingsFingerprints": [
+              "31e9d51ba6495209f3bda129f9ec7f190414a96f5dd647db68ad584552fe2990"
+            ],
+            "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+            "driverVersion": "610.248.0",
+            "qualityTier": "StressUnlimited"
+          },
+          "memorySnapshot": {
+            "ActualGpuMemoryUsageBytes": 4199706624,
+            "TrackedGpuMemoryBytes": 3222856075,
+            "EstimatedTextureBytes": 316146364,
+            "AmdReflectionDenoisingAllocatedBytes": 85149192,
+            "AntiAliasingRenderTargetBytes": 37324800
+          },
+          "width": 1920,
+          "height": 1080,
+          "aoScale": 1,
+          "aaMode": 4,
+          "findings": [
+            {
+              "Category": "likely-bound",
+              "Subject": "ForwardPlusPass",
+              "Detail": "GPU dominated this sample set; pass p95=14.178ms avg=12.364ms."
+            }
+          ]
+        },
+        "candidate": {
+          "cpu": {
+            "Name": "CPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 4.7575875000000005,
+            "MinMilliseconds": 4.018,
+            "MaxMilliseconds": 12.276,
+            "P95Milliseconds": 5.71,
+            "MedianMilliseconds": 4.5649999999999995,
+            "P50Milliseconds": 4.5649999999999995,
+            "P99Milliseconds": 7.941
+          },
+          "gpu": {
+            "Name": "GPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 32.99623749999999,
+            "MinMilliseconds": 31.901,
+            "MaxMilliseconds": 36.298,
+            "P95Milliseconds": 35.298,
+            "MedianMilliseconds": 32.697500000000005,
+            "P50Milliseconds": 32.697500000000005,
+            "P99Milliseconds": 35.717
+          },
+          "validGpuSamples": 240,
+          "additionalSettlingFrames": 271,
+          "settlingTimedOut": false,
+          "comparable": true,
+          "productionTiming": true,
+          "producerIdentity": {
+            "schema": "material-gi-producer-identity/v1",
+            "buildCommit": "b92d1f0e7a4aa80f72a53052d2466291c5bed647",
+            "shaderFingerprint": "e95634f8f2fcc862c26cf0ba23d0bce3fb9bb66197a16db20785140fc34b3691",
+            "settingsFingerprint": "31e9d51ba6495209f3bda129f9ec7f190414a96f5dd647db68ad584552fe2990",
+            "sourceSettingsFingerprints": [
+              "31e9d51ba6495209f3bda129f9ec7f190414a96f5dd647db68ad584552fe2990"
+            ],
+            "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+            "driverVersion": "610.248.0",
+            "qualityTier": "StressUnlimited"
+          },
+          "memorySnapshot": {
+            "ActualGpuMemoryUsageBytes": 4199706624,
+            "TrackedGpuMemoryBytes": 3222856075,
+            "EstimatedTextureBytes": 316146364,
+            "AmdReflectionDenoisingAllocatedBytes": 85149192,
+            "AntiAliasingRenderTargetBytes": 37324800
+          },
+          "width": 1920,
+          "height": 1080,
+          "aoScale": 1,
+          "aaMode": 4,
+          "findings": [
+            {
+              "Category": "likely-bound",
+              "Subject": "ForwardPlusPass",
+              "Detail": "GPU dominated this sample set; pass p95=14.273ms avg=12.445ms."
+            }
+          ]
+        },
+        "settingsMatch": true,
+        "gpuDeltaMs": {
+          "AverageMilliseconds": -0.019833333333316716,
+          "P95Milliseconds": -0.13599999999999568,
+          "P99Milliseconds": 0.030000000000001137
+        },
+        "gpuDeltaPercent": {
+          "AverageMilliseconds": -0.06007175545944543,
+          "P95Milliseconds": -0.3838121578145115,
+          "P99Milliseconds": 0.08406422506794797
+        }
+      },
+      {
+        "scene": "LivingRoom",
+        "baseline": {
+          "cpu": {
+            "Name": "CPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 2.2072875000000005,
+            "MinMilliseconds": 1.572,
+            "MaxMilliseconds": 13.673,
+            "P95Milliseconds": 2.781,
+            "MedianMilliseconds": 1.9415,
+            "P50Milliseconds": 1.9415,
+            "P99Milliseconds": 10.733
+          },
+          "gpu": {
+            "Name": "GPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 37.75982916666667,
+            "MinMilliseconds": 36.642,
+            "MaxMilliseconds": 41.619,
+            "P95Milliseconds": 39.611,
+            "MedianMilliseconds": 37.538,
+            "P50Milliseconds": 37.538,
+            "P99Milliseconds": 40.248
+          },
+          "validGpuSamples": 240,
+          "additionalSettlingFrames": 321,
+          "settlingTimedOut": false,
+          "comparable": true,
+          "productionTiming": true,
+          "producerIdentity": {
+            "schema": "material-gi-producer-identity/v1",
+            "buildCommit": "b92d1f0e7a4aa80f72a53052d2466291c5bed647",
+            "shaderFingerprint": "7062eb5cc2c923b7dfd341440dcc4ef2feb09cbc52d141bcd84a166e04ecd8a6",
+            "settingsFingerprint": "efd408a4b67b852134229a741812321dabbbc4d38e63717322612cf8ec86c618",
+            "sourceSettingsFingerprints": [
+              "efd408a4b67b852134229a741812321dabbbc4d38e63717322612cf8ec86c618"
+            ],
+            "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+            "driverVersion": "610.248.0",
+            "qualityTier": "StressUnlimited"
+          },
+          "memorySnapshot": {
+            "ActualGpuMemoryUsageBytes": 3046273024,
+            "TrackedGpuMemoryBytes": 1848573771,
+            "EstimatedTextureBytes": 4629116,
+            "AmdReflectionDenoisingAllocatedBytes": 85149192,
+            "AntiAliasingRenderTargetBytes": 37324800
+          },
+          "width": 1920,
+          "height": 1080,
+          "aoScale": 1,
+          "aaMode": 4,
+          "findings": [
+            {
+              "Category": "likely-bound",
+              "Subject": "ForwardPlusPass",
+              "Detail": "GPU dominated this sample set; pass p95=16.861ms avg=16.104ms."
+            }
+          ]
+        },
+        "candidate": {
+          "cpu": {
+            "Name": "CPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 2.1030833333333327,
+            "MinMilliseconds": 1.577,
+            "MaxMilliseconds": 12.977,
+            "P95Milliseconds": 2.808,
+            "MedianMilliseconds": 1.8915,
+            "P50Milliseconds": 1.8915,
+            "P99Milliseconds": 5.873
+          },
+          "gpu": {
+            "Name": "GPU frame",
+            "Count": 240,
+            "AverageMilliseconds": 37.34227500000004,
+            "MinMilliseconds": 36.068,
+            "MaxMilliseconds": 39.923,
+            "P95Milliseconds": 39.001,
+            "MedianMilliseconds": 37.141,
+            "P50Milliseconds": 37.141,
+            "P99Milliseconds": 39.427
+          },
+          "validGpuSamples": 240,
+          "additionalSettlingFrames": 321,
+          "settlingTimedOut": false,
+          "comparable": true,
+          "productionTiming": true,
+          "producerIdentity": {
+            "schema": "material-gi-producer-identity/v1",
+            "buildCommit": "b92d1f0e7a4aa80f72a53052d2466291c5bed647",
+            "shaderFingerprint": "e95634f8f2fcc862c26cf0ba23d0bce3fb9bb66197a16db20785140fc34b3691",
+            "settingsFingerprint": "efd408a4b67b852134229a741812321dabbbc4d38e63717322612cf8ec86c618",
+            "sourceSettingsFingerprints": [
+              "efd408a4b67b852134229a741812321dabbbc4d38e63717322612cf8ec86c618"
+            ],
+            "gpuName": "NVIDIA GeForce RTX 3060 Laptop GPU",
+            "driverVersion": "610.248.0",
+            "qualityTier": "StressUnlimited"
+          },
+          "memorySnapshot": {
+            "ActualGpuMemoryUsageBytes": 3046273024,
+            "TrackedGpuMemoryBytes": 1848573771,
+            "EstimatedTextureBytes": 4629116,
+            "AmdReflectionDenoisingAllocatedBytes": 85149192,
+            "AntiAliasingRenderTargetBytes": 37324800
+          },
+          "width": 1920,
+          "height": 1080,
+          "aoScale": 1,
+          "aaMode": 4,
+          "findings": [
+            {
+              "Category": "likely-bound",
+              "Subject": "ForwardPlusPass",
+              "Detail": "GPU dominated this sample set; pass p95=16.810ms avg=16.071ms."
+            }
+          ]
+        },
+        "settingsMatch": true,
+        "gpuDeltaMs": {
+          "AverageMilliseconds": -0.41755416666662626,
+          "P95Milliseconds": -0.6099999999999994,
+          "P99Milliseconds": -0.820999999999998
+        },
+        "gpuDeltaPercent": {
+          "AverageMilliseconds": -1.1058158256585293,
+          "P95Milliseconds": -1.5399762692181462,
+          "P99Milliseconds": -2.0398529119459274
+        }
+      }
+    ]
+  },
+  "cleanup": {
+    "DateUtc": "2026-09-15T16:38:23.1375854Z",
+    "Reason": "Superseded capture payloads; retained frame 100 and first ranked-change sheet per route, all compact evidence, original baseline and accepted full capture.",
+    "Runs": [
+      {
+        "Run": "sponza-before-02",
+        "RemovedPngFiles": 1587,
+        "RemovedBytes": 4516754724.0
+      },
+      {
+        "Run": "sponza-after",
+        "RemovedPngFiles": 1629,
+        "RemovedBytes": 4588401094.0
+      },
+      {
+        "Run": "sponza-fixed-exposure",
+        "RemovedPngFiles": 1629,
+        "RemovedBytes": 4065226751.0
+      },
+      {
+        "Run": "sponza-no-reflections",
+        "RemovedPngFiles": 1629,
+        "RemovedBytes": 4330353452.0
+      },
+      {
+        "Run": "sponza-reflection-fix",
+        "RemovedPngFiles": 1629,
+        "RemovedBytes": 4590112545.0
+      },
+      {
+        "Run": "sponza-amd-fix",
+        "RemovedPngFiles": 1629,
+        "RemovedBytes": 4757181756.0
+      },
+      {
+        "Run": "sponza-final",
+        "RemovedPngFiles": 1629,
+        "RemovedBytes": 4593918585.0
+      }
+    ],
+    "FreeBytes": 211225464832
+  }
+}

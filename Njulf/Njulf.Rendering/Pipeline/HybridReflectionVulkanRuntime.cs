@@ -673,7 +673,12 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
             QuarterResolutionRoughness = reflection
                 .SsrQuarterResolutionRoughness,
             MaximumReuseMotionPixels = 0.25f,
-            HistoryValid = sceneData.HybridReflectionHistoryValid != 0
+            // AMD history is a spatially filtered estimate, not a cached
+            // analytic observation. Reusing it as raw input can freeze early
+            // reconstruction errors and feed filtered energy back into the
+            // denoiser. Keep fresh observations until a separate raw-source
+            // cache exists; AMD's own temporal history remains enabled.
+            HistoryValid = !_amdActive && sceneData.HybridReflectionHistoryValid != 0
                 ? 1u
                 : 0u,
             SourceInvalidations = (uint)_currentSourceInvalidations

@@ -586,7 +586,7 @@ Simple-DDGI debug shortcut cycle order includes `DdgiProbeResidency`, `DdgiResid
 | `FxaaContrastThreshold` | FXAA absolute contrast threshold. |
 | `FxaaRelativeThreshold` | FXAA relative contrast threshold. |
 | `FxaaSubpixelBlending` | FXAA subpixel blending amount. |
-| `SmaaPredicationEnabled` | Enables SMAA predication. |
+| `SmaaPredicationEnabled` | Enables depth-guided SMAA color-edge thresholds (enabled by default). |
 | `JitterEnabled` | Enables camera jitter for temporal AA. |
 | `JitterSampleCount` | Jitter pattern sample count. |
 | `TaaFeedbackMin` | Minimum TAA feedback. |
@@ -609,7 +609,17 @@ AA modes:
 - `SmaaLow`
 - `SmaaMedium`
 - `SmaaHigh`
+- `SmaaUltra`
 - `Taa`
+
+All SMAA presets use native-resolution color, edge, and blend-weight targets.
+Low/Medium/High/Ultra use thresholds 0.15/0.10/0.10/0.05 and horizontal/vertical
+search limits 4/8/16/32. High and Ultra enable diagonal searches (8/16 steps)
+and corner detection. DdgiHigh selects SMAA High; Ultra selects SMAA Ultra.
+
+The tone-mapped intermediate and custom post-effect inputs remain linear.
+SMAA detects edges in sRGB-encoded color but blends linear color; presentation
+encodes exactly once, either in the shader for UNORM or through an sRGB attachment.
 
 AA debug views:
 
@@ -1105,3 +1115,18 @@ Control-modified chords are also used by the sample:
 | `Ctrl+Keypad9` (`Ctrl+Num9`) | Traverse the catalogued debug-overlay cycle forward. |
 | `Ctrl+Shift+Keypad9` (`Ctrl+Shift+Num9`) | Traverse the same debug-overlay cycle in reverse. |
 | `Ctrl+Left` / `Ctrl+Right` | Select previous/next debug object. |
+
+## Sponza temporal capture
+
+Run `NjulfHelloGame --sponza-temporal-capture-dir <directory>` to capture the
+Sponza quality profile after 2048 warmup frames: 330 stationary frames, 300
+world-X traversal frames, and 960 vertical traversal frames. The v3 manifest
+records the settings, shaders, camera samples, and completed screenshots.
+The generated review sheets rank image changes; camera motion is not
+reprojected, so those rankings are advisory rather than a quality pass/fail.
+
+Use `--sponza-temporal-variant <name>` for one diagnostic comparison, such as
+`reflections-disabled`, `decals-disabled`, `ambient-occlusion-disabled`,
+`bent-normals-disabled`, `anti-aliasing-disabled`, or `auto-exposure-disabled`.
+The default is `baseline`. These switches require a capture directory and do
+not enable benchmark mode. Keep variants separate from production timing runs.

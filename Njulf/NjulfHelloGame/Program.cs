@@ -666,11 +666,11 @@ internal sealed class HelloGame : Game
             _smokeOptions.AdvancedGiRuntimeEvidenceBundlePath;
         options.AdvancedGiStartupProfilePath =
             _smokeOptions.AdvancedGiStartupProfilePath;
-        // Bistro is reachable through the runtime scene switcher even
-        // when Cornell/GI was the startup scene. Texture admission is a
-        // renderer-creation policy, so waiting until Bistro becomes the
-        // active scene is too late: the transition would otherwise upload
-        // the uncapped cooked mip chains.
+        // Bistro, Living Room, and Sponza are reachable through the runtime
+        // scene switcher even when another scene was the startup scene.
+        // Texture admission is a renderer-creation policy, so waiting until a
+        // scene becomes active is too late: the transition would otherwise
+        // upload the uncapped cooked mip chains.
         if (SampleBistroGlobalIlluminationProfile
                 .ShouldApplyDefaultImportedTextureBudget(
                     Environment.GetEnvironmentVariable(
@@ -1004,7 +1004,8 @@ internal sealed class HelloGame : Game
                     camera, Scene,
                     _smokeOptions.SponzaTemporalCaptureDirectory,
                     () => (WindowWidth, WindowHeight),
-                    Exit);
+                    Exit,
+                    _smokeOptions.SponzaTemporalCaptureVariant);
         }
         else if (!string.IsNullOrWhiteSpace(_smokeOptions.SponzaGiCaptureDirectory))
         {
@@ -1713,9 +1714,6 @@ internal sealed class HelloGame : Game
                     ? _bistroQualityRuntimeController?.LastAppliedState
                     : null);
         }
-        _sponzaTemporalCaptureRunner?.PrepareFrame(
-            WindowWidth,
-            WindowHeight);
         _volumetricTemporalCaptureRunner?.PrepareFrame();
     }
 
@@ -2048,11 +2046,15 @@ internal sealed class HelloGame : Game
         else
             _editorHost?.ClearRenderer((VulkanRenderer)Renderer);
 #endif
+        // Updates can run more than once between draws. Prepare a capture only
+        // when its matching render is about to be submitted.
+        _sponzaTemporalCaptureRunner?.PrepareFrame(
+            WindowWidth,
+            WindowHeight);
+        _sponzaTemporalFrameAwaitingPresent = _sponzaTemporalCaptureRunner != null;
         Renderer.DrawScene(Scene, Camera);
         if (Renderer is VulkanRenderer temporalCaptureRenderer)
         {
-            _sponzaTemporalCaptureRunner?.OnFrameRendered(
-                temporalCaptureRenderer.LastDiagnostics);
             _volumetricTemporalCaptureRunner?.OnFrameRendered(
                 temporalCaptureRenderer.LastDiagnostics);
         }
@@ -2117,8 +2119,17 @@ internal sealed class HelloGame : Game
         _drawnFrames++;
     }
 
+    private bool _sponzaTemporalFrameAwaitingPresent;
+
     protected override void OnFramePresented()
     {
+        // EndFrame publishes the diagnostics for the image just submitted.
+        // Loading presents have no capture instruction to retire.
+        if (_sponzaTemporalFrameAwaitingPresent && Renderer is VulkanRenderer captureRenderer)
+        {
+            _sponzaTemporalFrameAwaitingPresent = false;
+            _sponzaTemporalCaptureRunner?.OnFrameRendered(captureRenderer.LastDiagnostics);
+        }
         if (_startupVisualCaptureAwaitingPresent)
         {
             _startupVisualCandidatePresentMicroseconds =

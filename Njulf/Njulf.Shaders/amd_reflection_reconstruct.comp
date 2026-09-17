@@ -11,8 +11,19 @@ void main() {
   imageStore(HybridHistoryCurrent,p,vec4(0));imageStore(HybridMomentsCurrent,p,vec4(0));imageStore(HybridMetadataCurrent,p,uvec4(0));return;
  }
  uint meta=imageLoad(HybridRawMetadata,p).x;vec4 raw=imageLoad(HybridRawRadiance,p),result=raw;
- uint source=HybridMetadataSource(meta),reason=HybridMetadataReason(meta),age=1u;
- float variance=0;bool sparse=HybridReflectionMissingObservation(reason);
+ // Classification already validated this native receiver and copied its
+ // fully filtered analytic result. Do not denoise that result a second time
+ // or turn the cache hit into a sparse hole that restarts convergence.
+ if(ar.Reset==0u && HybridReflectionClassifiedReuse(meta)) {
+  imageStore(HybridHistoryCurrent,p,raw);
+  imageStore(HybridMomentsCurrent,p,imageLoad(HybridMomentsPrevious,p));
+  imageStore(HybridMetadataCurrent,p,uvec4(HybridPackHistoryMetadata(HybridReceiverIdentity(payload),
+   texelFetch(HybridSceneDepth,p,0).r,HybridReflectionTraceNormal(payload),HybridMetadataSource(meta),
+   HybridMetadataAge(meta),HYBRID_REFLECTION_HISTORY_SPARSE_NONE,true),0,0));
+  return;
+ }
+ uint source=HybridMetadataSource(meta),age=1u;
+ float variance=0;bool sparse=HybridReflectionTemporalSparseState(meta)!=HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
  {
   vec2 pos=(vec2(p)+.5)*vec2(ar.Width,ar.Height)/vec2(ArNativeSize())-.5;
   ivec2 base=ivec2(round(pos));vec4 sum=vec4(0);float weights=0,best=0;
@@ -34,8 +45,7 @@ void main() {
   else if(sparse) {vec4 previous;uvec2 m;if(ArNativeHistory(p,payload,meta,previous,m)){result=previous;source=HybridHistoryMetadataSource(m);age=HybridHistoryMetadataSparseState(m)!=0u?min(31u,HybridHistoryMetadataAge(m)+1u):1u;}}
  }
  if(!HybridFinite(result))result=HybridFinite(raw)?raw:vec4(0);
- uint sparseState=reason==HYBRID_REFLECTION_REASON_RESOLUTION_SKIP?HYBRID_REFLECTION_HISTORY_SPARSE_RESOLUTION:
-  reason==HYBRID_REFLECTION_REASON_RAY_BUDGET?HYBRID_REFLECTION_HISTORY_SPARSE_RAY_BUDGET:HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
+ uint sparseState=HybridReflectionTemporalSparseState(meta);
  if(sparseState!=HYBRID_REFLECTION_HISTORY_SPARSE_NONE) {
   vec2 previousUv=(vec2(p)+.5)/vec2(ArNativeSize())-texelFetch(HybridMotionVectors,p,0).xy;
   ivec2 q=ivec2(floor(previousUv*vec2(ArNativeSize())));

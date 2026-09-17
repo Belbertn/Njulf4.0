@@ -1147,7 +1147,8 @@ internal sealed class SampleInputController
                 AntiAliasingMode.Fxaa => AntiAliasingMode.SmaaLow,
                 AntiAliasingMode.SmaaLow => AntiAliasingMode.SmaaMedium,
                 AntiAliasingMode.SmaaMedium => AntiAliasingMode.SmaaHigh,
-                AntiAliasingMode.SmaaHigh => AntiAliasingMode.Taa,
+                AntiAliasingMode.SmaaHigh => AntiAliasingMode.SmaaUltra,
+                AntiAliasingMode.SmaaUltra => AntiAliasingMode.Taa,
                 _ => AntiAliasingMode.None
             };
             PrintAntiAliasingSettings("AA mode");
@@ -3488,7 +3489,7 @@ internal sealed class SampleInputController
         Console.WriteLine(
             $"{prefix}: mode={aa.Mode}, effective={aa.EffectiveMode}, debug={aa.DebugView}, " +
             $"fxaaSubpixel={aa.FxaaSubpixelBlending:F2}, smaaQuality={aa.EffectiveSmaaQuality}, " +
-            $"smaaScale={aa.EffectiveSmaaResolutionScale:F2}, smaaThreshold={aa.EffectiveSmaaThreshold:F3}, " +
+            $"smaaThreshold={aa.EffectiveSmaaThreshold:F3}, " +
             $"smaaSearch={aa.EffectiveSmaaMaxSearchSteps}/{aa.EffectiveSmaaMaxSearchStepsDiagonal}, " +
             $"smaaCorner={aa.EffectiveSmaaCornerRounding:F0}, " +
             $"jitter={(aa.JitterEnabled ? "on" : "off")}");

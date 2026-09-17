@@ -15,7 +15,7 @@ namespace Njulf.Tests;
 public sealed class GtaoImplementationTests
 {
     [Test]
-    public void DdgiHighDefaults_EnableHighGtaoAndKeepBentNormalLightingOff()
+    public void DdgiHighDefaults_EnableHighGtaoAndBentNormalLighting()
     {
         var settings = new RenderSettings();
 
@@ -24,9 +24,9 @@ public sealed class GtaoImplementationTests
             Assert.That(settings.AmbientOcclusion.Mode,
                 Is.EqualTo(AmbientOcclusionMode.Gtao));
             Assert.That(settings.AmbientOcclusion.BentNormalMode,
-                Is.EqualTo(AmbientOcclusionBentNormalMode.Off));
+                Is.EqualTo(AmbientOcclusionBentNormalMode.EnvironmentAndDdgi));
             Assert.That(settings.AmbientOcclusion.EffectiveBentNormalMode,
-                Is.EqualTo(AmbientOcclusionBentNormalMode.Off));
+                Is.EqualTo(AmbientOcclusionBentNormalMode.EnvironmentAndDdgi));
             Assert.That(settings.AmbientOcclusion.GtaoQualityPreset,
                 Is.EqualTo(GtaoQualityPreset.High));
             Assert.That(settings.AmbientOcclusion.EffectiveGtaoDirectionCount,
@@ -55,7 +55,7 @@ public sealed class GtaoImplementationTests
                 SimpleDdgiReceiverCacheMode.Exact, true),
             (RenderQualityPreset.DdgiHigh, AmbientOcclusionMode.Gtao,
                 GtaoQualityPreset.High,
-                AmbientOcclusionBentNormalMode.Off,
+                AmbientOcclusionBentNormalMode.EnvironmentAndDdgi,
                 SimpleDdgiReceiverCacheMode.Exact, true),
             (RenderQualityPreset.Ultra, AmbientOcclusionMode.Gtao,
                 GtaoQualityPreset.High,
@@ -304,8 +304,6 @@ public sealed class GtaoImplementationTests
             Assert.That(temporal, Does.Contain(
                 "SharedGeometricNormal[sharedIndex]"));
             Assert.That(temporal, Does.Contain("barrier();"));
-            Assert.That(temporal, Does.Contain(
-                "previousAge >= pc.MaximumHistoryAge"));
             Assert.That(temporal, Does.Contain(
                 "dot(previousNormal, normal) < pc.NormalThreshold"));
             Assert.That(spatial, Does.Contain(

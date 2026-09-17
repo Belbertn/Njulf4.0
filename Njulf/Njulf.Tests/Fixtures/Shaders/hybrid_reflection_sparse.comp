@@ -52,6 +52,18 @@ void main()
 {
     uint index = gl_GlobalInvocationID.x;
     if (index >= dispatch.count) return;
+    if (inputData.Words[0u] == 5u)
+    {
+        outputData.Words[index] = HybridReflectionCanCacheSource(index) ? 1u : 0u;
+        return;
+    }
+    if (inputData.Words[0u] == 4u)
+    {
+        uint raw = HybridPackMetadata(HYBRID_REFLECTION_SOURCE_DDGI, 1.0,
+            inputData.Words[1u], inputData.Words[2u] + index, inputData.Words[3u] != 0u);
+        outputData.Words[index] = HybridReflectionTemporalSparseState(raw);
+        return;
+    }
     if (inputData.Words[0u] == 3u)
     {
         vec4 carried = HybridReflectionCarryObservation(

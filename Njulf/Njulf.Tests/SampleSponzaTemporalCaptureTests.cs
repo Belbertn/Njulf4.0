@@ -11,7 +11,37 @@ namespace Njulf.Tests;
 public sealed class SampleSponzaTemporalCaptureTests
 {
     [Test]
-    public void SequenceEmitsLockedWarmupAndBothCompleteRoutes()
+    public void HorizontalCameraValidationAcceptsWorldXAndRejectsWorldZ()
+    {
+        var contract = SampleSponzaGiCaptureContract.Default;
+        var camera = contract.SampleWorldXMotionTraversalFrame(60);
+        var frame = new SampleSponzaTemporalFrameArtifact
+        {
+            Route = SampleSponzaTemporalCaptureContract.HorizontalRoute,
+            RouteFrameIndex = 60,
+            CameraPositionX = camera.Position.X,
+            CameraPositionY = camera.Position.Y,
+            CameraPositionZ = camera.Position.Z,
+            CameraYaw = camera.Yaw,
+            CameraPitch = camera.Pitch,
+            CameraFieldOfView = camera.FieldOfView,
+            CameraNearPlane = camera.NearPlane,
+            CameraFarPlane = camera.FarPlane,
+            ViewHash = "test-view",
+            ProjectionHash = "test-projection"
+        };
+        Assert.DoesNotThrow(() => SampleSponzaTemporalCaptureAnalyzer.ValidateExpectedCamera(frame));
+        var wrongCamera = contract.SampleWorldZMotionTraversalFrame(60);
+        Assert.Throws<InvalidDataException>(() =>
+            SampleSponzaTemporalCaptureAnalyzer.ValidateExpectedCamera(frame with
+            {
+                CameraPositionX = wrongCamera.Position.X,
+                CameraPositionZ = wrongCamera.Position.Z
+            }));
+    }
+
+    [Test]
+    public void SequenceEmitsWarmupStationaryHistoryCyclesAndBothMovingRoutes()
     {
         var sequence = new SampleSponzaTemporalCaptureSequence();
         int capturedFrames = 0;
@@ -30,6 +60,18 @@ public sealed class SampleSponzaTemporalCaptureTests
                 Assert.That(instruction.StageFrameIndex, Is.EqualTo(frame));
                 Assert.That(instruction.CaptureFrame, Is.False);
             });
+            sequence.AdvanceAfterRenderedFrame(screenshotsComplete: false);
+        }
+
+        for (int frame = 0; frame < 330; frame++)
+        {
+            var instruction = sequence.CurrentInstruction;
+            Assert.That(instruction.Stage, Is.EqualTo(SampleSponzaTemporalCaptureStage.Stationary));
+            Assert.That(instruction.StageFrameIndex, Is.EqualTo(frame));
+            Assert.That(instruction.Route, Is.EqualTo("stationary"));
+            Assert.That(instruction.CaptureFrame, Is.True);
+            AssertCameraEqual(SampleSponzaGiCaptureContract.Default.LowBookmark, instruction.Camera);
+            capturedFrames++;
             sequence.AdvanceAfterRenderedFrame(screenshotsComplete: false);
         }
 
@@ -52,6 +94,9 @@ public sealed class SampleSponzaTemporalCaptureTests
                         : frame < 180 ? "hold" : "return"));
             });
             horizontalLast = instruction.Camera;
+            AssertCameraEqual(
+                SampleSponzaGiCaptureContract.Default.SampleWorldXMotionTraversalFrame(frame),
+                instruction.Camera);
             capturedFrames++;
             sequence.AdvanceAfterRenderedFrame(screenshotsComplete: false);
         }
@@ -83,7 +128,7 @@ public sealed class SampleSponzaTemporalCaptureTests
         }
 
         AssertCameraEqual(contract.HighBookmark, verticalLast!);
-        Assert.That(capturedFrames, Is.EqualTo(1260));
+        Assert.That(capturedFrames, Is.EqualTo(1590));
         Assert.That(
             sequence.CurrentInstruction.Stage,
             Is.EqualTo(SampleSponzaTemporalCaptureStage.Drain));

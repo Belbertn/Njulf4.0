@@ -34,7 +34,6 @@ const uint GTAO_REJECTION_EMPTY_MISMATCH = 3u;
 const uint GTAO_REJECTION_DEPTH = 4u;
 const uint GTAO_REJECTION_NORMAL = 5u;
 const uint GTAO_REJECTION_NONFINITE = 6u;
-const uint GTAO_REJECTION_AGE = 7u;
 
 const int GTAO_TEMPORAL_GROUP_SIZE = 8;
 const int GTAO_TEMPORAL_HALO = 2;
@@ -277,11 +276,6 @@ void main()
             acceptHistory = false;
             rejection = GTAO_REJECTION_NONFINITE;
         }
-        else if (previousAge >= pc.MaximumHistoryAge)
-        {
-            acceptHistory = false;
-            rejection = GTAO_REJECTION_AGE;
-        }
     }
 
     float minimumVisibility;
@@ -306,6 +300,9 @@ void main()
     float visibility = mix(current.z, previous.z, historyWeight);
     float confidence = mix(current.w,
         max(current.w, previous.w * 0.98), historyWeight);
+    // Age tracks a bounded confidence history, not an expiration deadline.
+    // Periodically discarding valid history exposes the rotating raw samples
+    // as synchronized AO and bent-normal lighting flashes.
     uint age = acceptHistory
         ? min(previousAge + 1u, pc.MaximumHistoryAge)
         : 0u;

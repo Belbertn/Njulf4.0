@@ -67,6 +67,30 @@ public sealed class HybridReflectionSparseGpuTests
 
     private static uint F(float value) => BitConverter.SingleToUInt32Bits(value);
 
+    [Test]
+    public void OnlyGenerationTrackedAnalyticSourcesCanFreezeTheirObservations()
+    {
+        uint[] result = _gpu!.RunCompute([5u, 0, 0, 0, 0, 0, 0, 0], 7, 7);
+        // None, SSR, rays, and evolving DDGI cannot be cached as static light.
+        // Local probes, environment, and planar captures invalidate by generation.
+        Assert.That(result, Is.EqualTo(new uint[] { 0, 0, 0, 0, 1, 1, 1 }));
+    }
+
+    [Test]
+    public void ValidatedAnalyticCacheHitsRemainObservedAcrossReuseAges()
+    {
+        // Resolution-skip reason is shared by missing rays and classified
+        // cache hits. Only a valid, nonzero-age hit is a retained observation.
+        const uint resolutionSkip = 4u;
+        uint[] states = _gpu!.RunCompute([4u, resolutionSkip, 0u, 1u, 0, 0, 0, 0], 32, 32);
+        Assert.That(states[0], Is.EqualTo(1u));
+        Assert.That(states.Skip(1), Is.All.EqualTo(0u));
+        uint[] invalid = _gpu.RunCompute([4u, resolutionSkip, 8u, 0u, 0, 0, 0, 0], 1, 1);
+        Assert.That(invalid[0], Is.EqualTo(1u));
+        uint[] budget = _gpu.RunCompute([4u, 6u, 8u, 1u, 0, 0, 0, 0], 1, 1);
+        Assert.That(budget[0], Is.EqualTo(2u));
+    }
+
     [TestCase(0f)]
     [TestCase(4f)]
     public void ReprojectionUncertaintyChangesConfidenceWithoutChangingObservedEnergy(float radiance)

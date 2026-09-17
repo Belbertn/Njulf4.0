@@ -11,5 +11,6 @@ namespace Njulf.Graphics;
         SmaaLow = 2,
         SmaaMedium = 3,
         SmaaHigh = 4,
-        Taa = 5
+        Taa = 5,
+        SmaaUltra = 6
     }

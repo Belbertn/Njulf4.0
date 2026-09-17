@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "kind": "Fullscreen",
+  "shader": "smaa_reference_neighborhood.frag.spv",
+  "resources": [
+    {
+      "name": "SourceColor",
+      "binding": 0,
+      "kind": "SampledTexture2D"
+    },
+    {
+      "name": "Blend",
+      "binding": 1,
+      "kind": "SampledTexture2D"
+    }
+  ]
+}

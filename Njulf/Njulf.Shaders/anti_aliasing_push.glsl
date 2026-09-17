@@ -26,7 +26,7 @@ layout(push_constant) uniform AntiAliasingPushBlock
     float TaaFeedbackMax;
     float TaaVelocityRejectionScale;
     uint TaaHistoryValid;
-    uint TaaJitterPadding;
+    uint SmaaPredicationEnabled;
     vec2 TaaCurrentJitterUv;
     vec2 TaaPreviousJitterUv;
 } pc;

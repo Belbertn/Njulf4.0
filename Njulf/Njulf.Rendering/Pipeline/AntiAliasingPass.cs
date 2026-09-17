@@ -441,6 +441,7 @@ namespace Njulf.Rendering.Pipeline
                 SmaaMaxSearchSteps = (uint)_settings.AntiAliasing.EffectiveSmaaMaxSearchSteps,
                 SmaaMaxSearchStepsDiagonal = (uint)_settings.AntiAliasing.EffectiveSmaaMaxSearchStepsDiagonal,
                 SmaaCornerRounding = _settings.AntiAliasing.EffectiveSmaaCornerRounding,
+                SmaaPredicationEnabled = _settings.AntiAliasing.SmaaPredicationEnabled ? 1u : 0u,
                 DebugView = (uint)_settings.AntiAliasing.DebugView,
                 OutputToSrgb = IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u,
                 SmaaQuality = (uint)_settings.AntiAliasing.EffectiveSmaaQuality,

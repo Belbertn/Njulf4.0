@@ -222,7 +222,7 @@ namespace Njulf.Rendering.Data
             set => _fxaaSubpixelBlending = Clamp(value, 0.0f, 1.0f);
         }
 
-        public bool SmaaPredicationEnabled { get; set; }
+        public bool SmaaPredicationEnabled { get; set; } = true;
         public bool JitterEnabled { get; set; } = true;
 
         public int JitterSampleCount
@@ -259,7 +259,6 @@ namespace Njulf.Rendering.Data
         public AntiAliasingMode EffectiveMode => Mode;
         public int EffectiveSmaaSpatialSampleCount => IsSmaaMode(EffectiveMode) ? 1 : 0;
         public bool EffectiveSmaaUsesSpatialMultisampling => false;
-        public float EffectiveSmaaResolutionScale => GetSmaaPreset(EffectiveMode).ResolutionScale;
         public float EffectiveSmaaThreshold => GetSmaaPreset(EffectiveMode).Threshold;
         public int EffectiveSmaaMaxSearchSteps => GetSmaaPreset(EffectiveMode).MaxSearchSteps;
         public int EffectiveSmaaMaxSearchStepsDiagonal => GetSmaaPreset(EffectiveMode).MaxSearchStepsDiagonal;
@@ -272,20 +271,19 @@ namespace Njulf.Rendering.Data
         {
             return mode is AntiAliasingMode.SmaaLow or
                 AntiAliasingMode.SmaaMedium or
-                AntiAliasingMode.SmaaHigh;
+                AntiAliasingMode.SmaaHigh or
+                AntiAliasingMode.SmaaUltra;
         }
-
-        public static float GetSmaaResolutionScale(AntiAliasingMode mode) =>
-            GetSmaaPreset(mode).ResolutionScale;
 
         private static SmaaPreset GetSmaaPreset(AntiAliasingMode mode)
         {
             return mode switch
             {
-                AntiAliasingMode.SmaaLow => new SmaaPreset(0, 0.50f, 0.15f, 4, 0, 0.0f),
-                AntiAliasingMode.SmaaMedium => new SmaaPreset(1, 0.75f, 0.10f, 8, 0, 0.0f),
-                AntiAliasingMode.SmaaHigh => new SmaaPreset(2, 1.00f, 0.10f, 16, 8, 25.0f),
-                _ => new SmaaPreset(0, 1.00f, 0.0f, 0, 0, 0.0f)
+                AntiAliasingMode.SmaaLow => new SmaaPreset(0, 0.15f, 4, 0, 0.0f),
+                AntiAliasingMode.SmaaMedium => new SmaaPreset(1, 0.10f, 8, 0, 0.0f),
+                AntiAliasingMode.SmaaHigh => new SmaaPreset(2, 0.10f, 16, 8, 25.0f),
+                AntiAliasingMode.SmaaUltra => new SmaaPreset(3, 0.05f, 32, 16, 25.0f),
+                _ => new SmaaPreset(0, 0.0f, 0, 0, 0.0f)
             };
         }
 
@@ -293,14 +291,12 @@ namespace Njulf.Rendering.Data
         {
             public SmaaPreset(
                 int quality,
-                float resolutionScale,
                 float threshold,
                 int maxSearchSteps,
                 int maxSearchStepsDiagonal,
                 float cornerRounding)
             {
                 Quality = quality;
-                ResolutionScale = resolutionScale;
                 Threshold = threshold;
                 MaxSearchSteps = maxSearchSteps;
                 MaxSearchStepsDiagonal = maxSearchStepsDiagonal;
@@ -308,7 +304,6 @@ namespace Njulf.Rendering.Data
             }
 
             public int Quality { get; }
-            public float ResolutionScale { get; }
             public float Threshold { get; }
             public int MaxSearchSteps { get; }
             public int MaxSearchStepsDiagonal { get; }

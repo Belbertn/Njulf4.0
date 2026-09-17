@@ -33,6 +33,7 @@ public static class SampleSmokeOptionsParser
         "--sponza-gi-capture-mode",
         "--sponza-fixture-mode",
         "--sponza-temporal-capture-dir",
+        "--sponza-temporal-variant",
         "--analyze-sponza-temporal-capture-dir",
         "--volumetric-temporal-capture-dir",
         "--analyze-volumetric-temporal-capture-dir",
@@ -183,6 +184,7 @@ public static class SampleSmokeOptionsParser
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
                     "NJULF_SPONZA_TEMPORAL_CAPTURE_DIR"));
+        string sponzaTemporalCaptureVariant = SampleBenchmarkCaptureVariant.Baseline;
         string? sponzaTemporalAnalyzeDirectory =
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
@@ -687,6 +689,10 @@ public static class SampleSmokeOptionsParser
                 case "--sponza-temporal-capture-dir":
                     sponzaTemporalCaptureDirectory =
                         RequirePath(value, optionName);
+                    break;
+                case "--sponza-temporal-variant":
+                    sponzaTemporalCaptureVariant = SampleBenchmarkCaptureVariant.Normalize(
+                        RequireNonEmptyValue(value, optionName));
                     break;
                 case "--analyze-sponza-temporal-capture-dir":
                     sponzaTemporalAnalyzeDirectory =
@@ -1519,6 +1525,10 @@ public static class SampleSmokeOptionsParser
                     benchmarkQualitySequenceTrajectory),
                 qualitySequence: true);
         }
+
+        if (sponzaTemporalCaptureVariant != SampleBenchmarkCaptureVariant.Baseline &&
+            string.IsNullOrWhiteSpace(sponzaTemporalCaptureDirectory))
+            throw new ArgumentException("--sponza-temporal-variant requires --sponza-temporal-capture-dir.");
 
         int standaloneCaptureModeCount =
             (!string.IsNullOrWhiteSpace(materialGiCaptureDirectory) ? 1 : 0) +
@@ -2503,6 +2513,7 @@ public static class SampleSmokeOptionsParser
             vSyncOverride,
             performanceOptimizationsEnabledOverride,
             performanceOptimizationMaskOverride) { OpticalDenoisingMode = opticalDenoisingMode,
+                SponzaTemporalCaptureVariant = sponzaTemporalCaptureVariant,
                 ReflectionDenoiserOverride = reflectionDenoiser, AreaDenoisingOverride = areaDenoising,
                 AmdHalfResolutionOverride = amdHalfResolution,
                 OpticalReducedResolutionShadingOverride = opticalReducedResolutionShading };

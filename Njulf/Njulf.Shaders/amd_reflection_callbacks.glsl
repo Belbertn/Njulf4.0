@@ -2,6 +2,7 @@
 #define NJULF_AMD_REFLECTION_CALLBACKS
 #include "common.glsl"
 #include "hybrid_reflection_compute.glsl"
+#include "hybrid_reflection_sparse.glsl"
 #define FFX_GPU 1
 #define FFX_GLSL 1
 #ifndef FFX_HALF
@@ -130,19 +131,20 @@ void FFX_DNSR_Reflections_StoreTemporalAccumulation(ivec2 p,vec3 v,float varianc
  bool valid=HybridReflectionPayloadValid(payload);
  vec4 raw=vec4(ArRgb(ar.Current,p,13u),unpackHalf2x16(ArRead(ar.Current,p,14u)).y);
  if(!HybridFinite(v)) v=raw.rgb;
+ bool classifiedReuse=ar.Reset==0u && HybridReflectionClassifiedReuse(ArRead(ar.Current,p,15u));
+ if(classifiedReuse) {v=raw.rgb;variance=imageLoad(HybridMomentsPrevious,p).r;}
  imageStore(HybridHistoryCurrent,p,valid?vec4(max(v,vec3(0)),raw.a):vec4(0));
  imageStore(HybridMomentsCurrent,p,vec4(valid && HybridFinite(variance)?variance:0));
  vec3 normal=FFX_DNSR_Reflections_LoadWorldSpaceNormal(p);
  float depth=FFX_DNSR_Reflections_LoadDepth(p);
  uint source=HybridMetadataSource(ArRead(ar.Current,p,15u));
- uint reason=HybridMetadataReason(ArRead(ar.Current,p,15u));
- uint sparseState=reason==HYBRID_REFLECTION_REASON_RESOLUTION_SKIP?HYBRID_REFLECTION_HISTORY_SPARSE_RESOLUTION:
-     reason==HYBRID_REFLECTION_REASON_RAY_BUDGET?HYBRID_REFLECTION_HISTORY_SPARSE_RAY_BUDGET:HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
+ uint sparseState=HybridReflectionTemporalSparseState(ArRead(ar.Current,p,15u));
  vec2 previousUv=(vec2(p)+.5)*InverseRenderSize()-texelFetch(HybridMotionVectors,p,0).xy;
  ivec2 previousPixel=ivec2(floor(previousUv*vec2(RenderSize())));
  uvec2 previousMeta=ar.Reset==0u && ArInside(previousPixel)?imageLoad(HybridMetadataPrevious,previousPixel).xy:uvec2(0);
  bool previousSparse=HybridHistoryMetadataSparseState(previousMeta)!=HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
- uint age=sparseState!=HYBRID_REFLECTION_HISTORY_SPARSE_NONE?(previousSparse?min(HybridHistoryMetadataAge(previousMeta)+1u,31u):1u):
+ uint age=classifiedReuse?HybridHistoryMetadataAge(previousMeta):
+     sparseState!=HYBRID_REFLECTION_HISTORY_SPARSE_NONE?(previousSparse?min(HybridHistoryMetadataAge(previousMeta)+1u,31u):1u):
      previousSparse?1u:uint(FFX_DNSR_Reflections_LoadNumSamples(p));
  imageStore(HybridMetadataCurrent,p,uvec4(HybridPackHistoryMetadata(HybridReceiverIdentity(payload),depth,normal,source,age,sparseState,valid),0,0));
  ArWrite(p,1u,packSnorm2x16(NjulfHybridReflectionOctEncode(normal)));

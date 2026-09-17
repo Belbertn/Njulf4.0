@@ -119,9 +119,21 @@ vec2 AreaDiagonal(vec2 distanceValue, vec2 crossingEdges)
         0.0).rg;
 }
 
-vec2 SearchDiagonal(vec2 uv, vec2 direction, out vec2 terminalEdges)
+vec2 DecodeDiagBilinearAccess(vec2 edges)
 {
-    terminalEdges = vec2(0.0);
+    edges.r *= abs(5.0 * edges.r - 5.0 * 0.75);
+    return round(edges);
+}
+
+vec4 DecodeDiagBilinearAccess(vec4 edges)
+{
+    edges.rb *= abs(5.0 * edges.rb - 5.0 * 0.75);
+    return round(edges);
+}
+
+vec2 SearchDiagonal1(vec2 uv, vec2 direction, out vec2 endEdges)
+{
+    endEdges = vec2(0.0);
     float distanceValue = -1.0;
     float continuation = 1.0;
     int maxSteps = int(clamp(pc.SmaaMaxSearchStepsDiagonal, 1u, 16u));
@@ -131,8 +143,27 @@ vec2 SearchDiagonal(vec2 uv, vec2 direction, out vec2 terminalEdges)
             break;
         uv += direction * pc.InvSourceDimensions;
         distanceValue += 1.0;
-        terminalEdges = SampleEdges(uv);
-        continuation = dot(terminalEdges, vec2(0.5));
+        endEdges = SampleEdges(uv);
+        continuation = dot(endEdges, vec2(0.5));
+    }
+    return vec2(distanceValue, continuation);
+}
+
+vec2 SearchDiagonal2(vec2 uv, vec2 direction, out vec2 endEdges)
+{
+    endEdges = vec2(0.0);
+    uv.x += 0.25 * pc.InvSourceDimensions.x;
+    float distanceValue = -1.0;
+    float continuation = 1.0;
+    int maxSteps = int(clamp(pc.SmaaMaxSearchStepsDiagonal, 1u, 16u));
+    for (int i = 0; i < 16; i++)
+    {
+        if (i >= maxSteps || distanceValue >= float(maxSteps - 1) || continuation <= 0.9)
+            break;
+        uv += direction * pc.InvSourceDimensions;
+        distanceValue += 1.0;
+        endEdges = DecodeDiagBilinearAccess(SampleEdges(uv));
+        continuation = dot(endEdges, vec2(0.5));
     }
     return vec2(distanceValue, continuation);
 }
@@ -142,32 +173,49 @@ vec2 CalculateDiagonalWeights(vec2 edges)
     if (pc.SmaaDiagonalEnabled == 0u || pc.SmaaMaxSearchStepsDiagonal == 0u)
         return vec2(0.0);
 
-    vec2 terminalA = vec2(0.0);
-    vec2 terminalB = vec2(0.0);
-    vec2 left = edges.r > 0.0
-        ? SearchDiagonal(inUv, vec2(-1.0, 1.0), terminalA)
-        : vec2(0.0);
-    vec2 right = SearchDiagonal(inUv, vec2(1.0, -1.0), terminalB);
+    vec2 endEdges;
+    vec2 left = vec2(0.0);
+    if (edges.r > 0.0)
+    {
+        left = SearchDiagonal1(inUv, vec2(-1.0, 1.0), endEdges);
+        left.x += float(endEdges.y > 0.9);
+    }
+    vec2 right = SearchDiagonal1(inUv, vec2(1.0, -1.0), endEdges);
     vec2 weights = vec2(0.0);
     if (left.x + right.x > 2.0)
     {
-        vec2 crossing = clamp(vec2(
-            2.0 * terminalA.r + terminalA.g,
-            2.0 * terminalB.r + terminalB.g), vec2(0.0), vec2(3.0));
+        vec4 coordinates = inUv.xyxy +
+            vec4(-left.x + 0.25, left.x, right.x, -right.x - 0.25) *
+            pc.InvSourceDimensions.xyxy;
+        vec4 crossingEdges;
+        crossingEdges.xy = SampleEdgesOffset(coordinates.xy, ivec2(-1, 0));
+        crossingEdges.zw = SampleEdgesOffset(coordinates.zw, ivec2(1, 0));
+        crossingEdges.yxwz = DecodeDiagBilinearAccess(crossingEdges);
+        vec2 crossing = 2.0 * crossingEdges.xz + crossingEdges.yw;
+        crossing = mix(crossing, vec2(0.0),
+            step(vec2(0.9), vec2(left.y, right.y)));
         weights += AreaDiagonal(max(vec2(left.x, right.x), vec2(0.0)), crossing);
     }
 
-    vec2 terminalC = vec2(0.0);
-    vec2 terminalD = vec2(0.0);
-    vec2 upper = SearchDiagonal(inUv, vec2(-1.0, -1.0), terminalC);
-    vec2 lower = SampleEdgesOffset(inUv, ivec2(1, 0)).r > 0.0
-        ? SearchDiagonal(inUv, vec2(1.0, 1.0), terminalD)
-        : vec2(0.0);
+    vec2 upper = SearchDiagonal2(inUv, vec2(-1.0, -1.0), endEdges);
+    vec2 lower = vec2(0.0);
+    if (SampleEdgesOffset(inUv, ivec2(1, 0)).r > 0.0)
+    {
+        lower = SearchDiagonal2(inUv, vec2(1.0, 1.0), endEdges);
+        lower.x += float(endEdges.y > 0.9);
+    }
     if (upper.x + lower.x > 2.0)
     {
-        vec2 crossing = clamp(vec2(
-            2.0 * terminalC.g + terminalC.r,
-            2.0 * terminalD.g + terminalD.r), vec2(0.0), vec2(3.0));
+        vec4 coordinates = inUv.xyxy +
+            vec4(-upper.x, -upper.x, lower.x, lower.x) *
+            pc.InvSourceDimensions.xyxy;
+        vec4 crossingEdges;
+        crossingEdges.x = SampleEdgesOffset(coordinates.xy, ivec2(-1, 0)).g;
+        crossingEdges.y = SampleEdgesOffset(coordinates.xy, ivec2(0, -1)).r;
+        crossingEdges.zw = SampleEdgesOffset(coordinates.zw, ivec2(1, 0)).gr;
+        vec2 crossing = 2.0 * crossingEdges.xz + crossingEdges.yw;
+        crossing = mix(crossing, vec2(0.0),
+            step(vec2(0.9), vec2(upper.y, lower.y)));
         weights += AreaDiagonal(max(vec2(upper.x, lower.x), vec2(0.0)), crossing).gr;
     }
     return weights;
@@ -227,6 +275,7 @@ void main()
             vec2 distances = abs(round(pc.SourceDimensions.xx * coordinates.xz - pixelCoordinate.xx));
             float crossing2 = SampleEdgesOffset(coordinates.zy, ivec2(1, 0)).r;
             weights.rg = Area(sqrt(distances), crossing1, crossing2);
+            coordinates.y = inUv.y;
             DetectHorizontalCornerPattern(
                 weights.rg,
                 vec4(coordinates.xy, coordinates.zy),
@@ -248,6 +297,7 @@ void main()
         vec2 distances = abs(round(pc.SourceDimensions.yy * coordinates.yz - pixelCoordinate.yy));
         float crossing2 = SampleEdgesOffset(coordinates.xz, ivec2(0, 1)).g;
         weights.ba = Area(sqrt(distances), crossing1, crossing2);
+        coordinates.x = inUv.x;
         DetectVerticalCornerPattern(
             weights.ba,
             vec4(coordinates.xy, coordinates.xz),

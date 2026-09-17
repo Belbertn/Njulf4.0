@@ -205,7 +205,7 @@ namespace Njulf.Rendering.Data
                     _ => SimpleDdgiNearFieldResidualQualityPreset.Balanced
                 };
 
-            // High and Ultra retain their authored bent-normal quality. The
+            // High, DdgiHigh, and Ultra retain their authored bent-normal quality. The
             // receiver-cache variants consume the same normal-dependent
             // environment and compact-directional inputs in the forward path.
             AmbientOcclusion.Mode = preset == RenderQualityPreset.Low
@@ -215,6 +215,8 @@ namespace Njulf.Rendering.Data
             {
                 RenderQualityPreset.High =>
                     AmbientOcclusionBentNormalMode.EnvironmentOnly,
+                RenderQualityPreset.DdgiHigh =>
+                    AmbientOcclusionBentNormalMode.EnvironmentAndDdgi,
                 RenderQualityPreset.Ultra =>
                     AmbientOcclusionBentNormalMode.EnvironmentAndDdgi,
                 _ => AmbientOcclusionBentNormalMode.Off
@@ -461,7 +463,7 @@ namespace Njulf.Rendering.Data
                     Foliage.MaxLocalShadowMeshletDraws = 16384;
                     Foliage.MaxVisibleClusters = 524288;
                     Foliage.MaxVisibleMeshletDraws = 1048576;
-                    AntiAliasing.Mode = AntiAliasingMode.SmaaHigh;
+                    AntiAliasing.Mode = AntiAliasingMode.SmaaUltra;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     Transparency.ReceiveGlobalIllumination = true;
                     Transparency.SampleReflections = true;

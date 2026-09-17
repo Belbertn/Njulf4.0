@@ -65,6 +65,31 @@ bool HybridReflectionFilterTile(float roughness, float variance,
     return missingObservation || (roughness > 0.06 && variance > threshold);
 }
 
+uint HybridReflectionTemporalSparseState(uint rawMetadata)
+{
+    // A classified cache hit is an already validated analytic observation,
+    // not an unobserved ray. Retain its converged age and variance instead of
+    // restarting accumulation whenever classification reaches its reuse age.
+    if (HybridReflectionClassifiedReuse(rawMetadata))
+        return HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
+    uint reason = HybridMetadataReason(rawMetadata);
+    return reason == HYBRID_REFLECTION_REASON_RESOLUTION_SKIP
+        ? HYBRID_REFLECTION_HISTORY_SPARSE_RESOLUTION
+        : reason == HYBRID_REFLECTION_REASON_RAY_BUDGET
+            ? HYBRID_REFLECTION_HISTORY_SPARSE_RAY_BUDGET
+            : HYBRID_REFLECTION_HISTORY_SPARSE_NONE;
+}
+
+bool HybridReflectionCanCacheSource(uint source)
+{
+    // Probe/environment/planar content has explicit invalidation generations.
+    // DDGI radiance continues converging without a topology change, so it must
+    // keep receiving observations even when the receiver and camera are still.
+    return source == HYBRID_REFLECTION_SOURCE_LOCAL_PROBE ||
+        source == HYBRID_REFLECTION_SOURCE_ENVIRONMENT ||
+        source == HYBRID_REFLECTION_SOURCE_PLANAR;
+}
+
 bool HybridReflectionCanBoundHistory(uint observationCount, bool sharp)
 {
     // One stochastic sample cannot bound a broad lobe. Applying that bound

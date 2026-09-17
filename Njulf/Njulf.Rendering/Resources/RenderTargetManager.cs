@@ -1190,24 +1190,7 @@ namespace Njulf.Rendering.Resources
 
         public static Extent2D CalculateAntiAliasingExtent(
             Extent2D sourceExtent,
-            AntiAliasingMode mode) =>
-            CalculateAntiAliasingExtent(
-                sourceExtent,
-                AntiAliasingSettings.GetSmaaResolutionScale(mode));
-
-        public static Extent2D CalculateAntiAliasingExtent(
-            Extent2D sourceExtent,
-            float resolutionScale)
-        {
-            float scale = float.IsFinite(resolutionScale)
-                ? Math.Clamp(resolutionScale, 0.5f, 1.0f)
-                : 1.0f;
-            return new Extent2D
-            {
-                Width = Math.Max(1u, (uint)MathF.Ceiling(sourceExtent.Width * scale)),
-                Height = Math.Max(1u, (uint)MathF.Ceiling(sourceExtent.Height * scale))
-            };
-        }
+            AntiAliasingMode mode) => sourceExtent;
 
         public static Extent2D CalculateVariableRateShadingExtent(
             Extent2D sourceExtent,

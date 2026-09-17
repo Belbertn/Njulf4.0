@@ -64,7 +64,7 @@ void main()
 
     vec2 jitterVelocity = pc.TaaCurrentJitterUv - pc.TaaPreviousJitterUv;
     vec2 physicalVelocity = rawVelocity - jitterVelocity;
-    vec2 historyUv = inUv - rawVelocity;
+    vec2 historyUv = inUv - physicalVelocity;
     bool historyUvValid = all(greaterThanEqual(historyUv, vec2(0.0))) &&
         all(lessThanEqual(historyUv, vec2(1.0)));
     vec4 historySample = textureLod(

@@ -41,6 +41,9 @@ public static class SampleBenchmarkCaptureVariant
         "forward-gi-surface-diagnostics";
     public const string AmbientOcclusionDisabled =
         "ambient-occlusion-disabled";
+    public const string BentNormalsDisabled = "bent-normals-disabled";
+    public const string AntiAliasingDisabled = "anti-aliasing-disabled";
+    public const string AutoExposureDisabled = "auto-exposure-disabled";
     public const string AmbientOcclusionRaw = "ambient-occlusion-raw";
     public const string AmbientOcclusionBlurred =
         "ambient-occlusion-blurred";
@@ -209,6 +212,15 @@ public static class SampleBenchmarkCaptureVariant
             case AmbientOcclusionDisabled:
                 settings.AmbientOcclusion.Enabled = false;
                 return normalized;
+            case BentNormalsDisabled:
+                settings.AmbientOcclusion.BentNormalMode = AmbientOcclusionBentNormalMode.Off;
+                return normalized;
+            case AntiAliasingDisabled:
+                settings.AntiAliasing.Mode = Njulf.Graphics.AntiAliasingMode.None;
+                return normalized;
+            case AutoExposureDisabled:
+                settings.AutoExposure.Enabled = false;
+                return normalized;
             case AmbientOcclusionRaw:
                 settings.AmbientOcclusion.DebugView =
                     AmbientOcclusionDebugView.RawAo;
@@ -313,7 +325,7 @@ public static class SampleBenchmarkCaptureVariant
             ForwardGiExactTailAccelerated or ForwardGiSurfaceTailJacobi or
             ForwardGiSurfaceTailAccelerated or
             ForwardGiSurfaceDiagnostics or ReflectionsDisabled or
-            AmbientOcclusionDisabled or AmbientOcclusionRaw or
+            AmbientOcclusionDisabled or BentNormalsDisabled or AntiAliasingDisabled or AutoExposureDisabled or AmbientOcclusionRaw or
             AmbientOcclusionBlurred or AmbientOcclusionFinal or
             AmbientOcclusionUnblurred or MaterialOcclusion or
             MaterialBaseColor or MaterialWorldNormal or GiFinalIndirect or
@@ -355,7 +367,7 @@ public static class SampleBenchmarkCaptureVariant
             $"{ForwardGiSurfaceTailJacobi}, " +
             $"{ForwardGiSurfaceTailAccelerated}, " +
             $"{ForwardGiSurfaceDiagnostics}, " +
-            $"{AmbientOcclusionDisabled}, {AmbientOcclusionRaw}, " +
+            $"{AmbientOcclusionDisabled}, {BentNormalsDisabled}, {AntiAliasingDisabled}, {AutoExposureDisabled}, {AmbientOcclusionRaw}, " +
             $"{AmbientOcclusionBlurred}, {AmbientOcclusionFinal}, " +
             $"{AmbientOcclusionUnblurred}, {MaterialOcclusion}, " +
             $"{MaterialBaseColor}, {MaterialWorldNormal}, {GiFinalIndirect}, " +
