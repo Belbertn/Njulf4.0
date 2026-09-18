@@ -37,14 +37,6 @@ vec3 EncodeOutput(vec3 color)
     return color;
 }
 
-vec3 SampleCurrent(vec2 uv)
-{
-    return textureLod(
-        BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))],
-        uv,
-        0.0).rgb;
-}
-
 // Evaluates the 4x4 Catmull-Rom kernel with five bilinear fetches
 // (Prowl SampleHistoryCatmullRom). The negative lobes are clamped away so
 // repeated resampling cannot accumulate negative color.
@@ -106,23 +98,22 @@ vec3 ClipToAabb(vec3 history, vec3 aabbMin, vec3 aabbMax)
 
 void main()
 {
-    vec2 sampleUv = inUv + pc.TaaCurrentJitterUv;
-    vec3 current = SampleCurrent(sampleUv);
-
     ivec2 sourceExtent = ivec2(pc.SourceDimensions);
     ivec2 sourceTexel = clamp(
-        ivec2(sampleUv * pc.SourceDimensions),
+        ivec2(inUv * pc.SourceDimensions),
         ivec2(0),
         sourceExtent - ivec2(1));
 
     // One 3x3 pass over the current frame collects the sharpen reference,
     // the YCoCg neighborhood statistics, and the closest depth. Depth is
     // reverse-Z, so the closest sample is the largest value.
+    vec3 current = vec3(0.0);
     vec3 currentSum = vec3(0.0);
     vec3 neighborhoodMinimum = vec3(65504.0);
     vec3 neighborhoodMaximum = vec3(-65504.0);
     vec3 firstMoment = vec3(0.0);
     vec3 secondMoment = vec3(0.0);
+    float neighborDepths[9];
     float closestDepth = -1.0;
     ivec2 closestOffset = ivec2(0);
     for (int y = -1; y <= 1; y++)
@@ -138,6 +129,8 @@ void main()
                 BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))],
                 neighborTexel,
                 0).rgb;
+            if (neighborOffset == ivec2(0))
+                current = neighborColor;
             currentSum += neighborColor;
             vec3 neighborYCoCg = RgbToYCoCg(neighborColor);
             neighborhoodMinimum = min(neighborhoodMinimum, neighborYCoCg);
@@ -148,6 +141,7 @@ void main()
                 BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
                 neighborTexel,
                 0).r;
+            neighborDepths[(y + 1) * 3 + (x + 1)] = neighborDepth;
             if (neighborDepth > closestDepth)
             {
                 closestDepth = neighborDepth;
@@ -215,9 +209,17 @@ void main()
         BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
         historyDepthTexel,
         0).r;
-    float depthRelative = abs(closestDepth - historyDepth) /
-        max(max(closestDepth, historyDepth), 1e-4);
-    float disocclusion = smoothstep(0.02, 0.08, depthRelative);
+    // Flax TAA.shader: the miss test is a MIN over the neighborhood, so a
+    // silhouette - where at least one neighbor still matches the reprojected
+    // surface - is not a disocclusion. Reverse-Z: farther is a SMALLER value,
+    // so "occluded" means the neighbor sits behind the reprojected depth.
+    float minDepthRelative = 1.0;
+    for (int i = 0; i < 9; i++)
+    {
+        float occluded = max(historyDepth - neighborDepths[i], 0.0);
+        minDepthRelative = min(minDepthRelative, occluded / max(historyDepth, 1e-4));
+    }
+    float disocclusion = smoothstep(0.02, 0.08, minDepthRelative);
 
     // History length accumulates in alpha. A rejected or freshly revealed
     // pixel ramps its feedback back up over a few frames instead of popping

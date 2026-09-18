@@ -174,6 +174,9 @@ public sealed class AntiAliasingRepairTests
             Assert.That(shader, Does.Not.Contain("rawVelocity"));
             Assert.That(shader, Does.Not.Contain("jitterVelocity"));
             Assert.That(shader, Does.Not.Contain("historySample.a"));
+            Assert.That(shader, Does.Not.Contain("inUv + pc.TaaCurrentJitterUv"));
+            Assert.That(shader, Does.Not.Contain("sampleUv"));
+            Assert.That(shader, Does.Contain("minDepthRelative"));
             Assert.That(
                 motionVectorMesh,
                 Does.Contain("ClipToUv(currentClip, pc.Push.TemporalJitterNdc.xy)"));
