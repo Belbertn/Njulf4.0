@@ -116,8 +116,11 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SceneInstanceCandidateBufferBase), Is.EqualTo(nameof(BindlessIndex.SceneInstanceCandidateBufferBase)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SceneInstanceCandidateBufferFrame1), Is.EqualTo(nameof(BindlessIndex.SceneInstanceCandidateBufferFrame1)));
             Assert.That(
-                BindlessIndex.FirstDynamicTextureIndex,
+                BindlessIndex.TaaHistoryTextureB,
                 Is.EqualTo(BindlessIndex.GtaoDebugTexture + 1));
+            Assert.That(
+                BindlessIndex.FirstDynamicTextureIndex,
+                Is.EqualTo(BindlessIndex.TaaHistoryTextureB + 1));
             Assert.That(BindlessIndex.GtaoFilteredTexture,
                 Is.EqualTo(BindlessIndex.OpaqueSceneColorSnapshotTexture + 1));
             Assert.That(BindlessIndex.GtaoDebugTexture,
@@ -223,6 +226,8 @@ public sealed class BindlessIndexTests
             ["OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX"] = BindlessIndex.OpaqueSceneColorSnapshotTexture,
             ["GTAO_FILTERED_TEXTURE_INDEX"] = BindlessIndex.GtaoFilteredTexture,
             ["GTAO_DEBUG_TEXTURE_INDEX"] = BindlessIndex.GtaoDebugTexture,
+            ["TAA_HISTORY_TEXTURE_B_INDEX"] = BindlessIndex.TaaHistoryTextureB,
+            ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,
             ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount
         };
 

@@ -30,6 +30,7 @@ layout(push_constant) uniform AntiAliasingPushBlock
     vec2 TaaCurrentJitterUv;
     vec2 TaaPreviousJitterUv;
     float TaaSharpness;
+    uint TaaHistoryTextureIndex;
 } pc;
 
 #endif // NJULF_ANTI_ALIASING_PUSH_GLSL

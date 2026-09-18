@@ -318,11 +318,14 @@ namespace Njulf.Rendering.Pipeline
             RenderTarget historyWrite = _taaWriteHistoryA ? _renderTargets.TaaHistoryA : _renderTargets.TaaHistoryB;
             historyRead.TransitionToShaderRead(cmd);
             historyWrite.TransitionToColorAttachment(cmd);
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.TaaHistoryTexture,
-                historyRead.View,
-                _bindlessHeap.ScreenSampler,
-                ImageLayout.ShaderReadOnlyOptimal);
+            // Both history banks stay permanently registered in the bindless
+            // heap; the read bank is selected through the push constant so the
+            // shared descriptor slot is never mutated while frames are pending.
+            uint historyTextureIndex = _taaWriteHistoryA
+                ? (uint)BindlessIndex.TaaHistoryTextureB
+                : (uint)BindlessIndex.TaaHistoryTexture;
+            sceneData.TaaHistoryValid = historyInputValid ? 1 : 0;
+            sceneData.TaaHistoryReadTextureIndex = (int)historyTextureIndex;
 
             _context.BeginDebugLabel(cmd, "TAA Resolve");
             try
@@ -361,7 +364,8 @@ namespace Njulf.Rendering.Pipeline
                 var pushConstants = CreatePushConstants(
                     taaHistoryValid: historyInputValid ? 1u : 0u,
                     currentJitterUv,
-                    previousJitterUv);
+                    previousJitterUv,
+                    taaHistoryTextureIndex: historyTextureIndex);
                 _context.Api.CmdPushConstants(
                     cmd,
                     _pipelineLayout,
@@ -385,7 +389,7 @@ namespace Njulf.Rendering.Pipeline
                     SType = StructureType.RenderingAttachmentInfo,
                     ImageView = historyWrite.View,
                     ImageLayout = ImageLayout.ColorAttachmentOptimal,
-                    LoadOp = AttachmentLoadOp.Clear,
+                    LoadOp = AttachmentLoadOp.DontCare,
                     StoreOp = AttachmentStoreOp.Store,
                     ClearValue = new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f))
                 };
@@ -422,7 +426,8 @@ namespace Njulf.Rendering.Pipeline
         private GPUAntiAliasingPushConstants CreatePushConstants(
             uint taaHistoryValid = 0u,
             Vector2 currentJitterUv = default,
-            Vector2 previousJitterUv = default)
+            Vector2 previousJitterUv = default,
+            uint taaHistoryTextureIndex = 0u)
         {
             Extent2D sourceExtent = _renderTargets.LdrSceneColor.Extent;
             return new GPUAntiAliasingPushConstants
@@ -453,7 +458,8 @@ namespace Njulf.Rendering.Pipeline
                 TaaHistoryValid = taaHistoryValid,
                 TaaCurrentJitterUv = currentJitterUv,
                 TaaPreviousJitterUv = previousJitterUv,
-                TaaSharpness = _settings.AntiAliasing.TaaSharpness
+                TaaSharpness = _settings.AntiAliasing.TaaSharpness,
+                TaaHistoryTextureIndex = taaHistoryTextureIndex
             };
         }
 

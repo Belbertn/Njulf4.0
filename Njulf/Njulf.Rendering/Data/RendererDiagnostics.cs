@@ -1410,6 +1410,12 @@ namespace Njulf.Rendering.Data
         /// unambiguous without exposing mutable scene-frame state.
         /// </summary>
         public uint TemporalSampleIndex { get; init; }
+        /// <summary>
+        /// Whether the TAA resolve considered its history input valid this
+        /// frame, paired with the bindless index of the history bank it read.
+        /// </summary>
+        public int TaaHistoryValid { get; init; }
+        public int TaaHistoryReadTextureIndex { get; init; }
         public string LastScreenshotPath { get; init; } = string.Empty;
         public string LastScreenshotError { get; init; } = string.Empty;
         public int RenderDocAvailable { get; init; }

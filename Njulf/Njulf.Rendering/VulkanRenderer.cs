@@ -12724,6 +12724,12 @@ namespace Njulf.Rendering
                 _renderTargets.TaaHistoryA.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.TaaHistoryTextureB,
+                _renderTargets.TaaHistoryB.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
         }
 
         public void Dispose()

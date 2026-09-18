@@ -223,7 +223,7 @@ public sealed class GtaoImplementationTests
                 Is.EqualTo(
                     BindlessIndex.OpaqueSceneColorSnapshotTexture + 1));
             Assert.That(BindlessIndex.FirstDynamicTextureIndex,
-                Is.EqualTo(BindlessIndex.GtaoDebugTexture + 1));
+                Is.EqualTo(BindlessIndex.TaaHistoryTextureB + 1));
         });
     }
 

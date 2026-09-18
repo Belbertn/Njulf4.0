@@ -43,7 +43,7 @@ vec3 EncodeOutput(vec3 color)
 vec3 SampleHistoryCatmullRom(vec2 uv)
 {
     vec2 historyDimensions = vec2(textureSize(
-        BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
+        BindlessTextures[nonuniformEXT(int(pc.TaaHistoryTextureIndex))],
         0));
     vec2 samplePosition = uv * historyDimensions;
     vec2 texelCenter = floor(samplePosition - 0.5) + 0.5;
@@ -62,23 +62,23 @@ vec3 SampleHistoryCatmullRom(vec2 uv)
     vec2 tc12 = (texelCenter + offset12) / historyDimensions;
 
     vec3 historyColor = textureLod(
-        BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
+        BindlessTextures[nonuniformEXT(int(pc.TaaHistoryTextureIndex))],
         vec2(tc12.x, tc0.y),
         0.0).rgb * (w12.x * w0.y);
     historyColor += textureLod(
-        BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
+        BindlessTextures[nonuniformEXT(int(pc.TaaHistoryTextureIndex))],
         vec2(tc0.x, tc12.y),
         0.0).rgb * (w0.x * w12.y);
     historyColor += textureLod(
-        BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
+        BindlessTextures[nonuniformEXT(int(pc.TaaHistoryTextureIndex))],
         vec2(tc12.x, tc12.y),
         0.0).rgb * (w12.x * w12.y);
     historyColor += textureLod(
-        BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
+        BindlessTextures[nonuniformEXT(int(pc.TaaHistoryTextureIndex))],
         vec2(tc3.x, tc12.y),
         0.0).rgb * (w3.x * w12.y);
     historyColor += textureLod(
-        BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
+        BindlessTextures[nonuniformEXT(int(pc.TaaHistoryTextureIndex))],
         vec2(tc12.x, tc3.y),
         0.0).rgb * (w12.x * w3.y);
     return max(historyColor, vec3(0.0));
@@ -180,7 +180,7 @@ void main()
     // The history length counter lives in alpha; Catmull-Rom's negative
     // lobes would corrupt a counter, so it is read with a plain tap.
     float historyAlpha = textureLod(
-        BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
+        BindlessTextures[nonuniformEXT(int(pc.TaaHistoryTextureIndex))],
         clampedHistoryUv,
         0.0).a;
 

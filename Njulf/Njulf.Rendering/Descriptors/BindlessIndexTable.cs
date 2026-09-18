@@ -879,9 +879,12 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Selected full-resolution GTAO diagnostic visualization.</summary>
         public const int GtaoDebugTexture = GtaoFilteredTexture + 1;
 
+        /// <summary>Second bank of the TAA history double buffer.</summary>
+        public const int TaaHistoryTextureB = GtaoDebugTexture + 1;
+
         /// <summary>First dynamically allocated material texture index</summary>
         public const int FirstDynamicTextureIndex =
-            GtaoDebugTexture + 1;
+            TaaHistoryTextureB + 1;
 
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;

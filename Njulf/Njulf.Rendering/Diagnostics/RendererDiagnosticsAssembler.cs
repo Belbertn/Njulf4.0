@@ -2690,6 +2690,8 @@ internal sealed class RendererDiagnosticsAssembler
             ScreenshotPendingCount = _screenshotCaptureService.PendingCount,
             ScreenshotCompletedCount = _screenshotCaptureService.CompletedCount,
             TemporalSampleIndex = sceneData.TemporalSampleIndex,
+            TaaHistoryValid = sceneData.TaaHistoryValid,
+            TaaHistoryReadTextureIndex = sceneData.TaaHistoryReadTextureIndex,
             LastScreenshotPath = _screenshotCaptureService.LastScreenshotPath,
             LastScreenshotError = _screenshotCaptureService.LastScreenshotError,
             RenderDocAvailable = _renderDocCaptureService.IsAvailable ? 1 : 0,

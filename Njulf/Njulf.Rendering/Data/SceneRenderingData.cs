@@ -1847,6 +1847,8 @@ namespace Njulf.Rendering.Data
         public int JitterEnabled { get; set; }
         public float JitterX { get; set; }
         public float JitterY { get; set; }
+        public int TaaHistoryValid { get; set; }
+        public int TaaHistoryReadTextureIndex { get; set; }
         public ulong ObjectBufferSize { get; set; }
         public ulong MaterialBufferSize { get; set; }
         public ulong ForwardMaterialBufferSize { get; set; }
@@ -3678,6 +3680,8 @@ namespace Njulf.Rendering.Data
             JitterEnabled = 0;
             JitterX = 0;
             JitterY = 0;
+            TaaHistoryValid = 0;
+            TaaHistoryReadTextureIndex = 0;
             DebugToolingEnabled = false;
             DebugOverlayMode = DebugOverlayMode.None;
             DebugOverlayStatus = default;

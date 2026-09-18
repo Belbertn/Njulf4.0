@@ -3838,6 +3838,8 @@ namespace Njulf.Rendering.Data
         public Vector2 TaaPreviousJitterUv;
         /// <summary>Neighborhood sharpening applied to the TAA current frame (0..1).</summary>
         public float TaaSharpness;
+        /// <summary>Bindless index of the TAA history bank to read this frame.</summary>
+        public uint TaaHistoryTextureIndex;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

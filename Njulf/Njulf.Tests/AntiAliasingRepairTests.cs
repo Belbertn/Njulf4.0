@@ -136,7 +136,7 @@ public sealed class AntiAliasingRepairTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(124));
+            Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(128));
             Assert.That(
                 Marshal.OffsetOf<GPUAntiAliasingPushConstants>(
                     nameof(GPUAntiAliasingPushConstants.SmaaPredicationEnabled)).ToInt32(),
@@ -153,6 +153,10 @@ public sealed class AntiAliasingRepairTests
                 Marshal.OffsetOf<GPUAntiAliasingPushConstants>(
                     nameof(GPUAntiAliasingPushConstants.TaaSharpness)).ToInt32(),
                 Is.EqualTo(120));
+            Assert.That(
+                Marshal.OffsetOf<GPUAntiAliasingPushConstants>(
+                    nameof(GPUAntiAliasingPushConstants.TaaHistoryTextureIndex)).ToInt32(),
+                Is.EqualTo(124));
         });
     }
 
