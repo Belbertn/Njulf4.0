@@ -305,7 +305,7 @@ public sealed class GtaoImplementationTests
                 "SharedGeometricNormal[sharedIndex]"));
             Assert.That(temporal, Does.Contain("barrier();"));
             Assert.That(temporal, Does.Contain(
-                "dot(tapNormal, normal) < pc.NormalThreshold"));
+                "dot(tapNormal, normal) < relaxedNormalThreshold"));
             Assert.That(spatial, Does.Contain(
                 "shared vec4 SharedPayload[GTAO_SHARED_COUNT];"));
             Assert.That(spatial, Does.Contain(
@@ -391,18 +391,24 @@ public sealed class GtaoImplementationTests
                 "PreviousGeometryHistory, tapPixel, 0).xy"));
             Assert.That(temporal, Does.Not.Contain(
                 "textureLod(PreviousHistory"));
-            // Phase B: the bent normal is applied as a bounded rotation of
+            // Phase B: the spatial pass encodes the filtered bent normal in
+            // the reference frame of the normal GTAO measured against, and
+            // the forward pass applies that bounded delta as a rotation of
             // the material shading normal, never a replacement, so
-            // normal-map detail survives the indirect diffuse term.
+            // normal-map detail survives the indirect diffuse term and no
+            // half-resolution reconstruction error enters the lobe.
             Assert.That(forward, Does.Contain(
                 "const float GTAO_BENT_NORMAL_MAX_BEND_ANGLE = 0.7854;"));
             Assert.That(forward, Does.Contain(
-                "vec3 bendAxis = cross(geometricNormal, worldBentNormal);"));
+                "void ResolveGtaoReferenceFrame("));
+            Assert.That(forward, Does.Contain(
+                "vec3 bendAxis = cross(viewShadingNormal, leanTarget);"));
             Assert.That(forward, Does.Contain(
                 "TryResolveIndirectDiffuseNormal(\n" +
                 "        normal,\n" +
-                "        geometricNormal,\n" +
                 "        diffuseIndirectNormal);"));
+            Assert.That(spatial, Does.Contain(
+                "EncodeOctahedral(localBentNormal)"));
             // C2: the spatial radius follows the shared blur-radius setting,
             // capped at the kernel's shared-memory halo.
             Assert.That(passes, Does.Contain("GtaoMaxSpatialRadius"));

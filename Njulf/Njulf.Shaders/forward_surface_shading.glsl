@@ -1400,12 +1400,15 @@ float SampleScreenSpaceAo()
 #if NJULF_GTAO_BENT_NORMAL_LIGHTING
 // The GTAO bent normal is a depth-reconstructed geometric quantity with no
 // normal-map detail, so it must never replace the material shading normal
-// for indirect diffuse. Instead, the occlusion bend is measured as the
-// rotation from the surface geometric normal to the bent normal, and that
-// bounded delta is applied to the fragment's own shading normal: normal-map
-// detail passes straight through while the indirect lobe still leans away
-// from the occluders. Confidence gating alone cannot bound this because
-// confidence reflects horizon sampling quality, not surface identity.
+// for indirect diffuse. The spatial pass encodes the filtered bent normal
+// relative to the half-resolution reference normal it measured against, so
+// the payload carries the occlusion delta itself; this bounded delta is
+// then applied to the fragment's own shading normal: normal-map detail
+// passes straight through while the indirect lobe still leans away from
+// the occluders. Measuring the delta here against the mesh normal instead
+// would feed reconstruction error into the lobe, worst on curved cloth.
+// Confidence gating alone cannot bound this because confidence reflects
+// horizon sampling quality, not surface identity.
 const float GTAO_BENT_NORMAL_MAX_BEND_ANGLE = 0.7854; // ~45 degrees
 vec3 DecodeGtaoOctahedralNormal(vec2 encoded)
 {
@@ -1421,9 +1424,21 @@ vec3 DecodeGtaoOctahedralNormal(vec2 encoded)
         : vec3(0.0, 0.0, 1.0);
 }
 
+// Deterministic tangent frame shared with gtao_spatial.comp's encoder, so
+// the encoded bent-normal delta keeps the same lean direction when it is
+// re-applied around the shading normal. Both sides build the frame in view
+// space, so the lean direction is camera-consistent.
+void ResolveGtaoReferenceFrame(vec3 normal, out vec3 frameX, out vec3 frameY)
+{
+    vec3 auxiliary = abs(normal.y) < 0.99
+        ? vec3(0.0, 1.0, 0.0)
+        : vec3(1.0, 0.0, 0.0);
+    frameX = normalize(cross(auxiliary, normal));
+    frameY = cross(normal, frameX);
+}
+
 bool TryResolveIndirectDiffuseNormal(
     vec3 shadingNormal,
-    vec3 geometricNormal,
     out vec3 resolvedNormal)
 {
     resolvedNormal = shadingNormal;
@@ -1439,25 +1454,41 @@ bool TryResolveIndirectDiffuseNormal(
         0.0);
     if (any(isnan(payload)) || any(isinf(payload)) || payload.w <= 0.0)
         return false;
-    vec3 viewBentNormal = DecodeGtaoOctahedralNormal(payload.xy);
-    vec3 worldBentNormal = MulRowMajor(
-        vec4(viewBentNormal, 0.0),
-        pc.Push.InverseViewMatrix).xyz;
-    float lengthSquared = dot(worldBentNormal, worldBentNormal);
-    if (lengthSquared <= 1.0e-8)
+    // GtaoFiltered.xy holds the bent normal encoded in the reference frame
+    // of the half-resolution geometric normal GTAO measured against, so
+    // the decoded vector is the occlusion delta itself: its angle from the
+    // frame's pole is the true bend, with no reconstruction error.
+    vec3 localBentNormal = DecodeGtaoOctahedralNormal(payload.xy);
+    if (localBentNormal.z <= 0.0)
         return false;
-    worldBentNormal *= inversesqrt(lengthSquared);
 
-    // Occlusion bend: the rotation from the geometric normal to the bent
-    // normal, clamped to a maximum angle and scaled by confidence and
-    // occlusion so unoccluded pixels receive no bend at all. Parallel
-    // normals carry no measurable bend.
-    vec3 bendAxis = cross(geometricNormal, worldBentNormal);
+    // The delta must be re-applied in the encoder's space: bring the
+    // shading normal into view space through the rigid inverse-view
+    // rotation (its transpose maps world directions back to view space).
+    vec3 viewShadingNormal = vec3(
+        dot(pc.Push.InverseViewMatrix[0].xyz, shadingNormal),
+        dot(pc.Push.InverseViewMatrix[1].xyz, shadingNormal),
+        dot(pc.Push.InverseViewMatrix[2].xyz, shadingNormal));
+    float viewLengthSquared = dot(viewShadingNormal, viewShadingNormal);
+    if (viewLengthSquared <= 1.0e-8)
+        return false;
+    viewShadingNormal *= inversesqrt(viewLengthSquared);
+
+    vec3 frameX;
+    vec3 frameY;
+    ResolveGtaoReferenceFrame(viewShadingNormal, frameX, frameY);
+    vec3 leanTarget = frameX * localBentNormal.x +
+        frameY * localBentNormal.y +
+        viewShadingNormal * localBentNormal.z;
+    vec3 bendAxis = cross(viewShadingNormal, leanTarget);
     float bendAxisLength = length(bendAxis);
     if (bendAxisLength < 1.0e-5)
         return false;
+    // Bend magnitude: the delta's own angle from the reference direction,
+    // clamped to a maximum and scaled by confidence and occlusion so
+    // unoccluded pixels receive no bend at all.
     float bendAngle = min(
-        acos(clamp(dot(geometricNormal, worldBentNormal), -1.0, 1.0)),
+        acos(clamp(localBentNormal.z, -1.0, 1.0)),
         GTAO_BENT_NORMAL_MAX_BEND_ANGLE) *
         clamp(payload.w, 0.0, 1.0) *
         clamp(1.0 - payload.z, 0.0, 1.0);
@@ -1465,13 +1496,16 @@ bool TryResolveIndirectDiffuseNormal(
         return false;
 
     // Rodrigues' rotation of the fragment's own shading normal around the
-    // bend axis; the unmodified shading normal is kept on any rejection.
+    // transferred bend axis; the rotation axis is perpendicular to the
+    // shading normal by construction, so the axial term vanishes. The
+    // unmodified shading normal is kept on any rejection.
     vec3 rotationAxis = bendAxis / bendAxisLength;
     float rotationCosine = cos(bendAngle);
-    vec3 rotated = shadingNormal * rotationCosine +
-        cross(rotationAxis, shadingNormal) * sin(bendAngle) +
-        rotationAxis * dot(rotationAxis, shadingNormal) *
-            (1.0 - rotationCosine);
+    vec3 rotatedView = viewShadingNormal * rotationCosine +
+        cross(rotationAxis, viewShadingNormal) * sin(bendAngle);
+    vec3 rotated = MulRowMajor(
+        vec4(rotatedView, 0.0),
+        pc.Push.InverseViewMatrix).xyz;
     float rotatedLengthSquared = dot(rotated, rotated);
     if (rotatedLengthSquared <= 1.0e-8 ||
         dot(rotated, shadingNormal) <= 0.0)

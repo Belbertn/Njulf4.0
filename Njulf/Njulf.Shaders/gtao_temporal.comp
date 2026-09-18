@@ -149,12 +149,41 @@ void NeighborhoodEnvelope(
     vec3 centerBent,
     out float minimumVisibility,
     out float maximumVisibility,
-    out float maximumBendAngle)
+    out float maximumBendAngle,
+    out float relaxedNormalThreshold)
 {
     ivec2 extent = textureSize(GtaoRawInput, 0);
     minimumVisibility = 1.0;
     maximumVisibility = 0.0;
     maximumBendAngle = 0.0;
+    // Curvature-aware normal gate. The depth-compatible neighbourhood's own
+    // normal spread bounds how strict the normal threshold may be: flat
+    // walls keep the full setting while cloth folds relax toward their own
+    // spread so history keeps accumulating instead of being rejected every
+    // frame by half-resolution reconstruction noise.
+    float minimumNormalAgreement = 1.0;
+    for (int y = -1; y <= 1; ++y)
+    {
+        for (int x = -1; x <= 1; ++x)
+        {
+            ivec2 pixel = clamp(centerPixel + ivec2(x, y),
+                ivec2(0), extent - ivec2(1));
+            int sharedIndex =
+                (localPixel.y + GTAO_TEMPORAL_HALO + y) *
+                    GTAO_TEMPORAL_SHARED_STRIDE +
+                localPixel.x + GTAO_TEMPORAL_HALO + x;
+            float depth = SharedViewDepth[sharedIndex];
+            if (depth < 0.0)
+                continue;
+            vec3 normal = SharedGeometricNormal[sharedIndex].xyz;
+            if (abs(depth - centerDepth) >
+                    max(0.02, centerDepth * pc.DepthThresholdScale))
+                continue;
+            minimumNormalAgreement = min(minimumNormalAgreement,
+                clamp(dot(normal, centerNormal), 0.0, 1.0));
+        }
+    }
+    relaxedNormalThreshold = min(pc.NormalThreshold, minimumNormalAgreement);
     bool found = false;
     for (int y = -1; y <= 1; ++y)
     {
@@ -172,7 +201,7 @@ void NeighborhoodEnvelope(
             vec3 normal = SharedGeometricNormal[sharedIndex].xyz;
             if (abs(depth - centerDepth) >
                     max(0.02, centerDepth * pc.DepthThresholdScale) ||
-                dot(normal, centerNormal) < pc.NormalThreshold)
+                dot(normal, centerNormal) < relaxedNormalThreshold)
                 continue;
             vec4 neighbor = texelFetch(GtaoRawInput, pixel, 0);
             if (!Finite(neighbor.z))
@@ -238,6 +267,17 @@ void main()
     bool acceptHistory = pc.HistoryValid != 0u;
     if (!acceptHistory)
         rejection = GTAO_REJECTION_INVALID_EPOCH;
+    // The neighbourhood envelope and its curvature-relaxed normal
+    // threshold are computed before history validation: the same relaxed
+    // threshold decides which reprojected history taps are compatible.
+    vec3 currentBent = DecodeOctahedral(current.xy);
+    float minimumVisibility;
+    float maximumVisibility;
+    float maximumBendAngle;
+    float relaxedNormalThreshold;
+    NeighborhoodEnvelope(pixel, localPixel, viewDepth, normal, currentBent,
+        minimumVisibility, maximumVisibility, maximumBendAngle,
+        relaxedNormalThreshold);
     // Velocity is point-sampled at the corresponding full-resolution
     // pixel: bilinear averaging across a silhouette mis-reprojects, the
     // same reason downsampled depth must never be averaged.
@@ -299,7 +339,7 @@ void main()
                     max(0.02, viewDepth * pc.DepthThresholdScale))
                     continue;
                 anyDepthCompatible = true;
-                if (dot(tapNormal, normal) < pc.NormalThreshold)
+                if (dot(tapNormal, normal) < relaxedNormalThreshold)
                     continue;
                 anyNormalCompatible = true;
                 vec4 tapPayload = texelFetch(PreviousHistory, tapPixel, 0);
@@ -336,12 +376,6 @@ void main()
         rejection = GTAO_REJECTION_NONFINITE;
     }
 
-    float minimumVisibility;
-    float maximumVisibility;
-    float maximumBendAngle;
-    vec3 currentBent = DecodeOctahedral(current.xy);
-    NeighborhoodEnvelope(pixel, localPixel, viewDepth, normal, currentBent,
-        minimumVisibility, maximumVisibility, maximumBendAngle);
     previous.z = clamp(previous.z, minimumVisibility, maximumVisibility);
     vec3 previousBent = DecodeOctahedral(previous.xy);
     if (dot(previousBent, normal) <= 0.0 ||

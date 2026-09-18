@@ -1551,7 +1551,6 @@ void main()
     // shared by environment diffuse and, at Ultra, the exact DDGI lookup.
     bool bentNormalValid = TryResolveIndirectDiffuseNormal(
         normal,
-        geometricNormal,
         diffuseIndirectNormal);
     if (ForwardAmbientOcclusionBentNormalMode() == 2u && bentNormalValid)
         ddgiNormal = diffuseIndirectNormal;

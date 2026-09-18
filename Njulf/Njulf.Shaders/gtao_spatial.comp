@@ -29,15 +29,15 @@ const int GTAO_MAX_RADIUS = 2;
 const int GTAO_SHARED_STRIDE = GTAO_GROUP_SIZE + GTAO_MAX_RADIUS * 2;
 const int GTAO_SHARED_COUNT = GTAO_SHARED_STRIDE * GTAO_SHARED_STRIDE;
 
-// Bilateral stop tuning. Depth agreement gates first with a tight relative
-// scale so the kernel cannot bridge depth edges; normal agreement gates
-// second so a sample from another surface is never accepted merely because
-// its normal matches.
+// Bilateral stop tuning. Depth agreement gates first with a generous hard
+// cutoff so the kernel cannot bridge depth edges; the depth Gaussian does
+// the work inside it. Normal agreement gates second with a smooth falloff
+// so a tap fades out instead of flipping at the half-resolution lattice.
 const float GTAO_DEPTH_SIGMA_FLOOR = 0.03;
-const float GTAO_DEPTH_RELATIVE_SCALE = 0.015;
-const float GTAO_DEPTH_REJECTION_SCALE = 2.0;
-const float GTAO_NORMAL_REJECTION = 0.80;
-const float GTAO_NORMAL_WEIGHT_EXPONENT = 0.25;
+const float GTAO_DEPTH_RELATIVE_SCALE = 0.04;
+const float GTAO_DEPTH_REJECTION_SCALE = 4.0;
+const float GTAO_NORMAL_REJECTION = 0.50;
+const float GTAO_NORMAL_WEIGHT_EXPONENT = 0.125;
 
 shared vec4 SharedPayload[GTAO_SHARED_COUNT];
 shared vec4 SharedGeometry[GTAO_SHARED_COUNT];
@@ -62,6 +62,18 @@ vec2 EncodeOctahedral(vec3 normal)
     if (normal.z < 0.0)
         encoded = (vec2(1.0) - abs(encoded.yx)) * sign(encoded);
     return clamp(encoded, vec2(-1.0), vec2(1.0));
+}
+
+// Deterministic tangent frame shared with the forward pass's decoder, so
+// an encoded bent-normal delta keeps the same lean direction for whichever
+// reference normal it is measured against.
+void ResolveReferenceFrame(vec3 normal, out vec3 tangentX, out vec3 tangentY)
+{
+    vec3 auxiliary = abs(normal.y) < 0.99
+        ? vec3(0.0, 1.0, 0.0)
+        : vec3(1.0, 0.0, 0.0);
+    tangentX = normalize(cross(auxiliary, normal));
+    tangentY = cross(normal, tangentX);
 }
 
 bool UnpackGeometry(uvec2 packed, out vec3 normal, out float viewDepth)
@@ -215,11 +227,19 @@ bool ResolveFootprint(
     ivec2 baseTexel = ivec2(floor(sourcePos));
     vec2 fraction = sourcePos - vec2(baseTexel);
 
-    // Selection pass: depth agreement first. The reference normal comes from
-    // the tap that best agrees with the output pixel's own full-resolution
-    // depth, so a neighboring surface never defines the output's geometry.
+    // Selection pass: depth agreement gates first with a generous hard
+    // cutoff, and the reference normal is the depth-weighted blend of the
+    // surviving taps, so it varies continuously as the bilinear fraction
+    // crosses tap boundaries instead of flipping to an argmax winner. The
+    // nearest valid tap is retained as the payload fallback.
     float bestSelectionWeight = 0.0;
-    vec4 bestPayload = vec4(0.0);
+    float bestBilinear = -1.0;
+    bool anyValidGeometry = false;
+    vec4 bestPayload = vec4(0.0, 0.0, 1.0, 0.0);
+    vec4 nearestPayload = vec4(0.0, 0.0, 1.0, 0.0);
+    vec3 nearestNormal = vec3(0.0, 0.0, 1.0);
+    vec3 referenceNormalSum = vec3(0.0);
+    float referenceWeightSum = 0.0;
     for (int y = 0; y <= 1; ++y)
     {
         for (int x = 0; x <= 1; ++x)
@@ -235,21 +255,46 @@ bool ResolveFootprint(
             if (!UnpackGeometry(texelFetch(GeometryInput, tapTexel, 0).xy,
                     tapNormal, tapDepth))
                 continue;
+            anyValidGeometry = true;
+            if (bilinear > bestBilinear)
+            {
+                bestBilinear = bilinear;
+                nearestPayload = texelFetch(TemporalInput, tapTexel, 0);
+                nearestNormal = tapNormal;
+            }
             float depthDifference = abs(tapDepth - outputViewDepth);
             if (depthDifference > depthSigma * GTAO_DEPTH_REJECTION_SCALE)
                 continue;
             float selectionWeight = bilinear *
                 Gaussian(depthDifference, depthSigma);
+            referenceNormalSum += tapNormal * selectionWeight;
+            referenceWeightSum += selectionWeight;
             if (selectionWeight > bestSelectionWeight)
             {
                 bestSelectionWeight = selectionWeight;
-                footprint.referenceNormal = tapNormal;
                 bestPayload = texelFetch(TemporalInput, tapTexel, 0);
             }
         }
     }
-    if (bestSelectionWeight <= 0.0)
+    if (!anyValidGeometry)
         return false;
+    if (referenceWeightSum <= 1.0e-6)
+    {
+        // No depth-compatible source sample exists for this output pixel:
+        // fall back to the nearest tap's payload with zero confidence. The
+        // confidence gate already disables the bend downstream, so the
+        // fallback must not also punch a fully-white hole into the AO.
+        footprint.referenceNormal = nearestNormal;
+        footprint.bentNormal = DecodeOctahedral(nearestPayload.xy);
+        if (dot(footprint.bentNormal, footprint.referenceNormal) <= 0.0)
+            footprint.bentNormal = footprint.referenceNormal;
+        footprint.visibility = nearestPayload.z;
+        footprint.confidence = 0.0;
+        return true;
+    }
+    footprint.referenceNormal = referenceWeightSum > 1.0e-8
+        ? normalize(referenceNormalSum)
+        : vec3(0.0, 0.0, 1.0);
 
     // Accumulation pass: normal agreement gates second, then the temporal
     // payload is averaged over the surviving depth-compatible taps.
@@ -277,14 +322,17 @@ bool ResolveFootprint(
                 continue;
             float normalAgreement = clamp(dot(tapNormal,
                 footprint.referenceNormal), 0.0, 1.0);
-            if (normalAgreement < GTAO_NORMAL_REJECTION)
-                continue;
+            // Smooth falloff around the rejection floor so a tap fades out
+            // instead of vanishing as its geometry crosses the threshold.
+            float normalGate = smoothstep(GTAO_NORMAL_REJECTION,
+                GTAO_NORMAL_REJECTION + 0.2, normalAgreement);
             vec4 tapPayload = texelFetch(TemporalInput, tapTexel, 0);
             vec3 tapBentNormal = DecodeOctahedral(tapPayload.xy);
-            if (dot(tapBentNormal, footprint.referenceNormal) <= 0.0)
-                continue;
+            float bentGate = smoothstep(0.0, 0.2,
+                dot(tapBentNormal, footprint.referenceNormal));
             float weight = bilinear *
                 Gaussian(depthDifference, depthSigma) *
+                normalGate * bentGate *
                 pow(normalAgreement,
                     max(pc.NormalSigma * GTAO_NORMAL_WEIGHT_EXPONENT, 1.0));
             visibilitySum += tapPayload.z * weight;
@@ -303,9 +351,10 @@ bool ResolveFootprint(
     }
     else
     {
-        // Every compatible tap's bent normal opposes the surface normal;
-        // keep the best tap's visibility with the surface normal as the
-        // bent normal rather than discarding a same-surface payload.
+        // Every depth-compatible tap faded out through the normal or
+        // bent-normal gates; keep the best surviving selection's payload
+        // with the surface normal as the bent normal rather than
+        // discarding a same-surface payload.
         footprint.visibility = bestPayload.z;
         footprint.confidence = bestPayload.w;
         footprint.bentNormal = footprint.referenceNormal;
@@ -332,14 +381,16 @@ void AccumulateSharedSample(
         return;
     float normalAgreement = clamp(dot(
         sampleGeometry.xyz, centerGeometry.xyz), 0.0, 1.0);
-    if (normalAgreement < GTAO_NORMAL_REJECTION)
-        return;
+    float normalGate = smoothstep(GTAO_NORMAL_REJECTION,
+        GTAO_NORMAL_REJECTION + 0.2, normalAgreement);
     float depthWeight = Gaussian(depthDifference, depthSigma);
     float normalWeight = pow(normalAgreement,
-        max(pc.NormalSigma * GTAO_NORMAL_WEIGHT_EXPONENT, 1.0));
-    float weight = spatialWeight * depthWeight * normalWeight;
+        max(pc.NormalSigma * GTAO_NORMAL_WEIGHT_EXPONENT, 1.0)) * normalGate;
     vec3 bentNormal = DecodeOctahedral(samplePayload.xy);
-    if (dot(bentNormal, centerGeometry.xyz) <= 0.0)
+    float bentGate = smoothstep(0.0, 0.2,
+        dot(bentNormal, centerGeometry.xyz));
+    float weight = spatialWeight * depthWeight * normalWeight * bentGate;
+    if (weight <= 0.0)
         return;
     visibilitySum += samplePayload.z * weight;
     bentNormalSum += bentNormal * weight;
@@ -407,8 +458,8 @@ void main()
     if (!ResolveFootprint(pixel, sourceExtent, outputExtent,
             outputViewDepth, ResolveDepthSigma(outputViewDepth), footprint))
     {
-        // No depth-compatible source sample exists for this output pixel:
-        // emit neutral AO with zero bent-normal confidence rather than a
+        // No valid source geometry exists for this output pixel: emit
+        // neutral AO with zero bent-normal confidence rather than a
         // neighboring surface's payload.
         EmitNeutralAo(pixel);
         return;
@@ -502,7 +553,19 @@ void main()
         : footprint.bentNormal;
     if (dot(bentNormal, footprint.referenceNormal) <= 0.0)
         bentNormal = footprint.referenceNormal;
-    vec4 filtered = vec4(EncodeOctahedral(bentNormal),
+    // The filtered bent normal is written relative to the reference normal
+    // GTAO actually measured against, so the forward pass applies a true
+    // occlusion delta instead of the angle between the mesh normal and a
+    // half-resolution depth reconstruction.
+    vec3 referenceTangentX;
+    vec3 referenceTangentY;
+    ResolveReferenceFrame(footprint.referenceNormal,
+        referenceTangentX, referenceTangentY);
+    vec3 localBentNormal = vec3(
+        dot(bentNormal, referenceTangentX),
+        dot(bentNormal, referenceTangentY),
+        dot(bentNormal, footprint.referenceNormal));
+    vec4 filtered = vec4(EncodeOctahedral(localBentNormal),
         clamp(visibility, 0.0, 1.0),
         clamp(confidence, 0.0, 1.0));
     imageStore(GtaoFilteredOutput, pixel, filtered);
