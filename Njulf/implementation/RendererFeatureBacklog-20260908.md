@@ -68,7 +68,7 @@ The production pipeline includes auto exposure, bloom, tone mapping, and anti-al
 
 Relevant source: [ProductionRenderPipelineDeclaration.cs](../Njulf.Rendering/Pipeline/ProductionRenderPipelineDeclaration.cs), [RenderSettings.cs](../Njulf.Rendering/Data/RenderSettings.cs), and [tonemap_composite.frag](../Njulf.Shaders/tonemap_composite.frag).
 
-## 5. Baked lighting backend
+## 5. Baked lighting backend //Nope
 
 A baked lightmap or irradiance-volume backend remains an explicit roadmap item. It would provide another lighting option for static environments and hardware without practical ray-query performance. Its priority depends on whether those are shipping targets.
 

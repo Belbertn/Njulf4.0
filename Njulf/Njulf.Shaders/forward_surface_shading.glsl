@@ -1398,12 +1398,15 @@ float SampleScreenSpaceAo()
 }
 
 #if NJULF_GTAO_BENT_NORMAL_LIGHTING
-// The bent normal refines, but never fully replaces, the material shading
-// normal for indirect diffuse: the mix is capped so the surface's own normal
-// always retains a minimum weight and geometric detail is not discarded
-// wholesale. Confidence gating alone cannot bound this because confidence
-// reflects horizon sampling quality, not surface identity.
-const float GTAO_BENT_NORMAL_MAX_MIX = 0.8;
+// The GTAO bent normal is a depth-reconstructed geometric quantity with no
+// normal-map detail, so it must never replace the material shading normal
+// for indirect diffuse. Instead, the occlusion bend is measured as the
+// rotation from the surface geometric normal to the bent normal, and that
+// bounded delta is applied to the fragment's own shading normal: normal-map
+// detail passes straight through while the indirect lobe still leans away
+// from the occluders. Confidence gating alone cannot bound this because
+// confidence reflects horizon sampling quality, not surface identity.
+const float GTAO_BENT_NORMAL_MAX_BEND_ANGLE = 0.7854; // ~45 degrees
 vec3 DecodeGtaoOctahedralNormal(vec2 encoded)
 {
     vec2 oct = clamp(encoded, vec2(-1.0), vec2(1.0));
@@ -1420,6 +1423,7 @@ vec3 DecodeGtaoOctahedralNormal(vec2 encoded)
 
 bool TryResolveIndirectDiffuseNormal(
     vec3 shadingNormal,
+    vec3 geometricNormal,
     out vec3 resolvedNormal)
 {
     resolvedNormal = shadingNormal;
@@ -1443,11 +1447,36 @@ bool TryResolveIndirectDiffuseNormal(
     if (lengthSquared <= 1.0e-8)
         return false;
     worldBentNormal *= inversesqrt(lengthSquared);
-    float hemisphere = dot(worldBentNormal, shadingNormal);
-    if (hemisphere <= 0.0)
+
+    // Occlusion bend: the rotation from the geometric normal to the bent
+    // normal, clamped to a maximum angle and scaled by confidence and
+    // occlusion so unoccluded pixels receive no bend at all. Parallel
+    // normals carry no measurable bend.
+    vec3 bendAxis = cross(geometricNormal, worldBentNormal);
+    float bendAxisLength = length(bendAxis);
+    if (bendAxisLength < 1.0e-5)
         return false;
-    resolvedNormal = normalize(mix(shadingNormal, worldBentNormal,
-        smoothstep(0.0, 0.25, hemisphere) * GTAO_BENT_NORMAL_MAX_MIX));
+    float bendAngle = min(
+        acos(clamp(dot(geometricNormal, worldBentNormal), -1.0, 1.0)),
+        GTAO_BENT_NORMAL_MAX_BEND_ANGLE) *
+        clamp(payload.w, 0.0, 1.0) *
+        clamp(1.0 - payload.z, 0.0, 1.0);
+    if (bendAngle <= 0.0)
+        return false;
+
+    // Rodrigues' rotation of the fragment's own shading normal around the
+    // bend axis; the unmodified shading normal is kept on any rejection.
+    vec3 rotationAxis = bendAxis / bendAxisLength;
+    float rotationCosine = cos(bendAngle);
+    vec3 rotated = shadingNormal * rotationCosine +
+        cross(rotationAxis, shadingNormal) * sin(bendAngle) +
+        rotationAxis * dot(rotationAxis, shadingNormal) *
+            (1.0 - rotationCosine);
+    float rotatedLengthSquared = dot(rotated, rotated);
+    if (rotatedLengthSquared <= 1.0e-8 ||
+        dot(rotated, shadingNormal) <= 0.0)
+        return false;
+    resolvedNormal = rotated * inversesqrt(rotatedLengthSquared);
     return true;
 }
 #endif

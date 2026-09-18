@@ -391,12 +391,18 @@ public sealed class GtaoImplementationTests
                 "PreviousGeometryHistory, tapPixel, 0).xy"));
             Assert.That(temporal, Does.Not.Contain(
                 "textureLod(PreviousHistory"));
-            // Phase B: the bent-normal mix is bounded so the material
-            // normal always retains a minimum weight.
+            // Phase B: the bent normal is applied as a bounded rotation of
+            // the material shading normal, never a replacement, so
+            // normal-map detail survives the indirect diffuse term.
             Assert.That(forward, Does.Contain(
-                "const float GTAO_BENT_NORMAL_MAX_MIX = 0.8;"));
+                "const float GTAO_BENT_NORMAL_MAX_BEND_ANGLE = 0.7854;"));
             Assert.That(forward, Does.Contain(
-                "smoothstep(0.0, 0.25, hemisphere) * GTAO_BENT_NORMAL_MAX_MIX"));
+                "vec3 bendAxis = cross(geometricNormal, worldBentNormal);"));
+            Assert.That(forward, Does.Contain(
+                "TryResolveIndirectDiffuseNormal(\n" +
+                "        normal,\n" +
+                "        geometricNormal,\n" +
+                "        diffuseIndirectNormal);"));
             // C2: the spatial radius follows the shared blur-radius setting,
             // capped at the kernel's shared-memory halo.
             Assert.That(passes, Does.Contain("GtaoMaxSpatialRadius"));

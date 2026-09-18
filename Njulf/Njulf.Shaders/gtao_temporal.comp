@@ -146,12 +146,15 @@ void NeighborhoodEnvelope(
     ivec2 localPixel,
     float centerDepth,
     vec3 centerNormal,
+    vec3 centerBent,
     out float minimumVisibility,
-    out float maximumVisibility)
+    out float maximumVisibility,
+    out float maximumBendAngle)
 {
     ivec2 extent = textureSize(GtaoRawInput, 0);
     minimumVisibility = 1.0;
     maximumVisibility = 0.0;
+    maximumBendAngle = 0.0;
     bool found = false;
     for (int y = -1; y <= 1; ++y)
     {
@@ -171,11 +174,14 @@ void NeighborhoodEnvelope(
                     max(0.02, centerDepth * pc.DepthThresholdScale) ||
                 dot(normal, centerNormal) < pc.NormalThreshold)
                 continue;
-            float visibility = texelFetch(GtaoRawInput, pixel, 0).z;
-            if (!Finite(visibility))
+            vec4 neighbor = texelFetch(GtaoRawInput, pixel, 0);
+            if (!Finite(neighbor.z))
                 continue;
-            minimumVisibility = min(minimumVisibility, visibility);
-            maximumVisibility = max(maximumVisibility, visibility);
+            minimumVisibility = min(minimumVisibility, neighbor.z);
+            maximumVisibility = max(maximumVisibility, neighbor.z);
+            maximumBendAngle = max(maximumBendAngle, acos(clamp(
+                dot(DecodeOctahedral(neighbor.xy), centerBent),
+                -1.0, 1.0)));
             found = true;
         }
     }
@@ -185,6 +191,9 @@ void NeighborhoodEnvelope(
             GtaoRawInput, centerPixel, 0).z;
         minimumVisibility = centerVisibility;
         maximumVisibility = centerVisibility;
+        // Without a compatible neighbourhood only the standalone dot gate
+        // bounds the accepted bend.
+        maximumBendAngle = acos(0.20);
     }
 }
 
@@ -229,7 +238,14 @@ void main()
     bool acceptHistory = pc.HistoryValid != 0u;
     if (!acceptHistory)
         rejection = GTAO_REJECTION_INVALID_EPOCH;
-    vec2 motion = textureLod(MotionTexture, uv, 0.0).xy;
+    // Velocity is point-sampled at the corresponding full-resolution
+    // pixel: bilinear averaging across a silhouette mis-reprojects, the
+    // same reason downsampled depth must never be averaged.
+    ivec2 motionExtent = textureSize(MotionTexture, 0);
+    ivec2 motionPixel = clamp(ivec2((vec2(pixel) + vec2(0.5)) *
+        vec2(motionExtent) / max(pc.Dimensions, vec2(1.0))),
+        ivec2(0), motionExtent - ivec2(1));
+    vec2 motion = texelFetch(MotionTexture, motionPixel, 0).xy;
     if (!Finite(motion))
     {
         acceptHistory = false;
@@ -322,14 +338,35 @@ void main()
 
     float minimumVisibility;
     float maximumVisibility;
-    NeighborhoodEnvelope(pixel, localPixel, viewDepth, normal,
-        minimumVisibility, maximumVisibility);
-    previous.z = clamp(previous.z, minimumVisibility, maximumVisibility);
+    float maximumBendAngle;
     vec3 currentBent = DecodeOctahedral(current.xy);
+    NeighborhoodEnvelope(pixel, localPixel, viewDepth, normal, currentBent,
+        minimumVisibility, maximumVisibility, maximumBendAngle);
+    previous.z = clamp(previous.z, minimumVisibility, maximumVisibility);
     vec3 previousBent = DecodeOctahedral(previous.xy);
     if (dot(previousBent, normal) <= 0.0 ||
         dot(previousBent, currentBent) < 0.20)
+    {
         previousBent = currentBent;
+    }
+    else
+    {
+        // Clamp the reprojected bend onto the current frame's neighbourhood
+        // envelope, mirroring the visibility clamp: excess deviation is
+        // folded back instead of discarding the history outright.
+        float previousBendAngle = acos(clamp(
+            dot(previousBent, currentBent), -1.0, 1.0));
+        if (previousBendAngle > maximumBendAngle)
+        {
+            vec3 clampAxis = cross(currentBent, previousBent);
+            float clampAxisLength = length(clampAxis);
+            previousBent = clampAxisLength < 1.0e-5
+                ? currentBent
+                : normalize(currentBent * cos(maximumBendAngle) +
+                    cross(clampAxis / clampAxisLength, currentBent) *
+                        sin(maximumBendAngle));
+        }
+    }
     float motionPixels = length(motion * pc.SceneDimensions);
     float historyWeight = acceptHistory
         ? clamp(pc.StableHistoryWeight * previous.w *

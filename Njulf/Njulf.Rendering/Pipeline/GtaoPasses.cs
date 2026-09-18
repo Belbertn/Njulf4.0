@@ -546,7 +546,9 @@ internal sealed unsafe class GtaoTemporalPass : GtaoComputePassBase
             SceneDimensions = new Vector2(sceneData.ScreenWidth,
                 sceneData.ScreenHeight),
             HistoryValid = historyValid ? 1u : 0u,
-            MaximumHistoryAge = 32u,
+            // Bounded so bilinear history resampling compounds over only a
+            // few frames before the age counter saturates.
+            MaximumHistoryAge = 8u,
             FrameIndex = sceneData.TemporalSampleIndex,
             DepthThresholdScale = 0.03f,
             NormalThreshold = 0.85f,
