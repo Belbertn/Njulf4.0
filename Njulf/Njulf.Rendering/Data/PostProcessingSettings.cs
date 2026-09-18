@@ -188,7 +188,8 @@ namespace Njulf.Rendering.Data
         SmaaBlendWeights = 4,
         MotionVectors = 5,
         JitterPattern = 6,
-        TaaHistory = 7
+        TaaHistory = 7,
+        TaaHistoryLength = 8
     }
 
     public sealed class AntiAliasingSettings
@@ -200,6 +201,7 @@ namespace Njulf.Rendering.Data
         private float _taaFeedbackMin = 0.85f;
         private float _taaFeedbackMax = 0.95f;
         private float _taaVelocityRejectionScale = 1.0f;
+        private float _taaSharpness = 0.1f;
 
         public AntiAliasingMode Mode { get; set; } = AntiAliasingMode.SmaaMedium;
         public AntiAliasingDebugView DebugView { get; set; } = AntiAliasingDebugView.None;
@@ -254,6 +256,14 @@ namespace Njulf.Rendering.Data
             set => _taaVelocityRejectionScale = !float.IsFinite(value)
                 ? 1.0f
                 : Clamp(value, 0.0f, 64.0f);
+        }
+
+        public float TaaSharpness
+        {
+            get => _taaSharpness;
+            set => _taaSharpness = !float.IsFinite(value)
+                ? 0.1f
+                : Clamp(value, 0.0f, 1.0f);
         }
 
         public AntiAliasingMode EffectiveMode => Mode;

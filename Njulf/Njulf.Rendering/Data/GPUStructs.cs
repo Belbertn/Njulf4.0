@@ -1877,6 +1877,9 @@ namespace Njulf.Rendering.Data
         /// <summary>Current and previous camera positions used by view-facing foliage.</summary>
         public Vector4 CameraPosition;
         public Vector4 PreviousCameraPosition;
+        /// <summary>NDC projection jitter (xy = current, zw = previous) removed
+        /// from both clip positions so motion vectors carry geometry motion only.</summary>
+        public Vector4 TemporalJitterNdc;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -3833,6 +3836,8 @@ namespace Njulf.Rendering.Data
         public uint SmaaPredicationEnabled;
         public Vector2 TaaCurrentJitterUv;
         public Vector2 TaaPreviousJitterUv;
+        /// <summary>Neighborhood sharpening applied to the TAA current frame (0..1).</summary>
+        public float TaaSharpness;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

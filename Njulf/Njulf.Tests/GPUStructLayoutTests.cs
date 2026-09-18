@@ -191,7 +191,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPULightCullingParams>(), Is.EqualTo(192));
                 Assert.That(Marshal.SizeOf<GPUDepthPushConstants>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUForwardPushConstants>(), Is.EqualTo(256));
-                Assert.That(Marshal.SizeOf<GPUMotionVectorPushConstants>(), Is.EqualTo(208));
+                Assert.That(Marshal.SizeOf<GPUMotionVectorPushConstants>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPULightCullPushConstants>(), Is.EqualTo(208));
                 Assert.That(Marshal.SizeOf<GPUShadowData>(), Is.EqualTo(320));
                 Assert.That(Marshal.SizeOf<GPUDirectionalShadowParameters>(), Is.EqualTo(112));
@@ -212,7 +212,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiEmissiveSurface>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(148));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
-                Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(120));
+                Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(124));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionBlurPushConstants>(), Is.EqualTo(96));
             });

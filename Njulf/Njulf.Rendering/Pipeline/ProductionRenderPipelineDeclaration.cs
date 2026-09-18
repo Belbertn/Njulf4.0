@@ -1080,6 +1080,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             Pass("AntiAliasingPass",
                 ReadFragmentSampled(RenderGraphResourceId.LdrSceneColor),
                 Read(RenderGraphResourceId.MotionVectors),
+                ReadDepth(RenderGraphResourceId.SceneDepth),
                 WriteColorAttachment(RenderGraphResourceId.SmaaEdges),
                 WriteColorAttachment(RenderGraphResourceId.SmaaBlendWeights),
                 ReadWrite(RenderGraphResourceId.TaaHistory),

@@ -592,6 +592,7 @@ Simple-DDGI debug shortcut cycle order includes `DdgiProbeResidency`, `DdgiResid
 | `TaaFeedbackMin` | Minimum TAA feedback. |
 | `TaaFeedbackMax` | Maximum TAA feedback. |
 | `TaaVelocityRejectionScale` | TAA velocity rejection scale. |
+| `TaaSharpness` | Neighborhood sharpening applied to the TAA current frame (0-1, default 0.1). |
 | `EffectiveSmaaSpatialSampleCount` | Resolved SMAA spatial sample count. |
 | `EffectiveSmaaUsesSpatialMultisampling` | Whether resolved SMAA uses spatial multisampling. |
 | `EffectiveSmaaThreshold` | Resolved SMAA threshold. |
@@ -631,6 +632,7 @@ AA debug views:
 - `MotionVectors`
 - `JitterPattern`
 - `TaaHistory`
+- `TaaHistoryLength`
 
 ## Fog
 

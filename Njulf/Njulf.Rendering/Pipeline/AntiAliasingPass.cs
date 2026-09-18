@@ -452,7 +452,8 @@ namespace Njulf.Rendering.Pipeline
                 TaaVelocityRejectionScale = _settings.AntiAliasing.TaaVelocityRejectionScale,
                 TaaHistoryValid = taaHistoryValid,
                 TaaCurrentJitterUv = currentJitterUv,
-                TaaPreviousJitterUv = previousJitterUv
+                TaaPreviousJitterUv = previousJitterUv,
+                TaaSharpness = _settings.AntiAliasing.TaaSharpness
             };
         }
 
@@ -462,6 +463,7 @@ namespace Njulf.Rendering.Pipeline
             _taaPreviousJitterValid = false;
             _taaPreviousJitterUv = Vector2.Zero;
             _taaPreviousSceneContentRevision = ulong.MaxValue;
+            _taaPreviousPostEffectRevision = ulong.MaxValue;
             _taaPreviousCameraCutSerial = ulong.MaxValue;
             if (resetWriteTarget)
                 _taaWriteHistoryA = true;

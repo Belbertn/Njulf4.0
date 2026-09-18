@@ -4129,8 +4129,8 @@ namespace Njulf.Rendering
             Vector2 jitter = AntiAliasingJitter.GetHaltonJitter(
                 checked((int)_temporalSampleIndex),
                 Settings.AntiAliasing.JitterSampleCount,
-                _swapchain.Extent.Width,
-                _swapchain.Extent.Height,
+                _lastSceneRenderExtent.Width,
+                _lastSceneRenderExtent.Height,
                 Settings.AntiAliasing.JitterEnabled && Settings.AntiAliasing.Mode == AntiAliasingMode.Taa);
 
             bool gpuSkinningEnabled = animationAllowed &&

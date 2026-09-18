@@ -50,10 +50,10 @@ vec3 SafeNormalize(vec3 value, vec3 fallback)
     return value * inversesqrt(lengthSquared);
 }
 
-vec2 ClipToUv(vec4 clip)
+vec2 ClipToUv(vec4 clip, vec2 jitterNdc)
 {
     vec2 ndc = clip.xy / max(abs(clip.w), 0.000001);
-    return ndc * 0.5 + vec2(0.5);
+    return (ndc - jitterNdc) * 0.5 + vec2(0.5);
 }
 
 void EmitMotionVertex(
@@ -74,10 +74,10 @@ void EmitMotionVertex(
         vec4(previousPosition, 1.0),
         pc.Push.PreviousViewProjectionMatrix);
     gl_MeshVerticesEXT[vertexIndex].gl_Position = currentClip;
-    meshCurrentUv[vertexIndex] = ClipToUv(currentClip);
+    meshCurrentUv[vertexIndex] = ClipToUv(currentClip, pc.Push.TemporalJitterNdc.xy);
     meshPreviousUv[vertexIndex] =
         (pc.Push.PreviousFrameValid & 1u) != 0u
-            ? ClipToUv(previousClip)
+            ? ClipToUv(previousClip, pc.Push.TemporalJitterNdc.zw)
             : meshCurrentUv[vertexIndex];
     meshTexCoord[vertexIndex] = uv;
     meshMaterialIndex[vertexIndex] = materialIndex;

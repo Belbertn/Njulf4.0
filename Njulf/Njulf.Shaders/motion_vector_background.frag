@@ -12,10 +12,10 @@ layout(push_constant) uniform MotionVectorPushConstantBlock
     GPUMotionVectorPushConstants Push;
 } pc;
 
-vec2 ClipToUv(vec4 clip)
+vec2 ClipToUv(vec4 clip, vec2 jitterNdc)
 {
     vec2 ndc = clip.xy / max(abs(clip.w), 0.000001);
-    return ndc * 0.5 + vec2(0.5);
+    return (ndc - jitterNdc) * 0.5 + vec2(0.5);
 }
 
 void main()
@@ -26,8 +26,12 @@ void main()
         // Reproject the far plane (reversed-Z clip depth 0) covering this
         // pixel so uncovered background carries camera motion instead of the
         // attachment clear-value zeros the TAA resolve would otherwise treat
-        // as valid jitter-inclusive geometry motion.
-        vec4 currentClip = vec4(inUv * 2.0 - vec2(1.0), 0.0, 1.0);
+        // as valid geometry motion. Both clip positions drop the NDC jitter
+        // so the velocity is purely geometric, matching the mesh paths.
+        vec4 currentClip = vec4(
+            inUv * 2.0 - vec2(1.0) + pc.Push.TemporalJitterNdc.xy,
+            0.0,
+            1.0);
         vec4 world = MulRowMajor(
             currentClip,
             inverse(pc.Push.ViewProjectionMatrix));
@@ -36,7 +40,7 @@ void main()
             vec4 previousClip = MulRowMajor(
                 vec4(world.xyz / world.w, 1.0),
                 pc.Push.PreviousViewProjectionMatrix);
-            velocity = inUv - ClipToUv(previousClip);
+            velocity = inUv - ClipToUv(previousClip, pc.Push.TemporalJitterNdc.zw);
         }
     }
     outVelocity = clamp(velocity, vec2(-1.0), vec2(1.0));

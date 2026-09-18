@@ -29,6 +29,7 @@ layout(push_constant) uniform AntiAliasingPushBlock
     uint SmaaPredicationEnabled;
     vec2 TaaCurrentJitterUv;
     vec2 TaaPreviousJitterUv;
+    float TaaSharpness;
 } pc;
 
 #endif // NJULF_ANTI_ALIASING_PUSH_GLSL

@@ -1,3 +1,5 @@
+using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Njulf.Graphics;
@@ -110,15 +112,23 @@ public sealed class AntiAliasingRepairTests
         {
             Assert.That(settings.TaaFeedbackMin, Is.EqualTo(0.85f));
             Assert.That(settings.TaaFeedbackMax, Is.EqualTo(0.95f));
+            Assert.That(settings.TaaSharpness, Is.EqualTo(0.1f));
         });
 
         settings.TaaFeedbackMin = 0.1f;
         settings.TaaVelocityRejectionScale = float.NaN;
+        settings.TaaSharpness = float.NaN;
         Assert.Multiple(() =>
         {
             Assert.That(settings.TaaFeedbackMin, Is.EqualTo(0.5f));
             Assert.That(settings.TaaVelocityRejectionScale, Is.EqualTo(1.0f));
+            Assert.That(settings.TaaSharpness, Is.EqualTo(0.1f));
         });
+
+        settings.TaaSharpness = 5.0f;
+        Assert.That(settings.TaaSharpness, Is.EqualTo(1.0f));
+        settings.TaaSharpness = -1.0f;
+        Assert.That(settings.TaaSharpness, Is.EqualTo(0.0f));
     }
 
     [Test]
@@ -126,7 +136,7 @@ public sealed class AntiAliasingRepairTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(120));
+            Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(124));
             Assert.That(
                 Marshal.OffsetOf<GPUAntiAliasingPushConstants>(
                     nameof(GPUAntiAliasingPushConstants.SmaaPredicationEnabled)).ToInt32(),
@@ -139,10 +149,59 @@ public sealed class AntiAliasingRepairTests
                 Marshal.OffsetOf<GPUAntiAliasingPushConstants>(
                     nameof(GPUAntiAliasingPushConstants.TaaPreviousJitterUv)).ToInt32(),
                 Is.EqualTo(112));
+            Assert.That(
+                Marshal.OffsetOf<GPUAntiAliasingPushConstants>(
+                    nameof(GPUAntiAliasingPushConstants.TaaSharpness)).ToInt32(),
+                Is.EqualTo(120));
+        });
+    }
+
+    [Test]
+    public void TaaResolve_ReprojectsWithJitterFreeVelocityAndRampsHistoryLength()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "taa_resolve.frag");
+        string motionVectorMesh = ReadRepoText("Njulf.Shaders", "motion_vector.mesh");
+        string pass = ReadRepoText(
+            "Njulf.Rendering", "Pipeline", "AntiAliasingPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("vec2 historyUv = inUv - velocity;"));
+            Assert.That(shader, Does.Contain("ClipToAabb("));
+            Assert.That(shader, Does.Contain("SampleHistoryCatmullRom("));
+            Assert.That(shader, Does.Contain("closestOffset"));
+            Assert.That(shader, Does.Contain("outHistory = vec4(resolved, currentLength);"));
+            Assert.That(shader, Does.Not.Contain("rawVelocity"));
+            Assert.That(shader, Does.Not.Contain("jitterVelocity"));
+            Assert.That(shader, Does.Not.Contain("historySample.a"));
+            Assert.That(
+                motionVectorMesh,
+                Does.Contain("ClipToUv(currentClip, pc.Push.TemporalJitterNdc.xy)"));
+            Assert.That(
+                motionVectorMesh,
+                Does.Contain("ClipToUv(previousClip, pc.Push.TemporalJitterNdc.zw)"));
+            Assert.That(pass, Does.Contain("sceneData.MotionVectorsEnabled != 0"));
+            Assert.That(pass, Does.Contain("sceneData.CaptureCameraCutSerial"));
+            Assert.That(pass, Does.Contain("sceneData.SceneContentRevision"));
         });
     }
 
     [Test]
     public void SmaaPredication_IsEnabledByDefault() =>
         Assert.That(new AntiAliasingSettings().SmaaPredicationEnabled, Is.True);
+
+    private static string ReadRepoText(params string[] relativeSegments)
+    {
+        DirectoryInfo? directory = new(TestContext.CurrentContext.TestDirectory);
+        while (directory != null)
+        {
+            string candidate = Path.Combine(
+                new[] { directory.FullName }.Concat(relativeSegments).ToArray());
+            if (File.Exists(candidate))
+                return File.ReadAllText(candidate);
+            directory = directory.Parent;
+        }
+        throw new FileNotFoundException(
+            $"Could not locate repository file '{Path.Combine(relativeSegments)}'.");
+    }
 }

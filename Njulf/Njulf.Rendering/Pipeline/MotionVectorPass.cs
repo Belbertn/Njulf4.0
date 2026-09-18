@@ -34,6 +34,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly Func<SurfaceHistoryConsumer>? _historyConsumers;
         private readonly MotionVectorBackgroundPipeline _backgroundPipeline;
         private Matrix4x4 _previousViewProjectionMatrix = Matrix4x4.Identity;
+        private Vector2 _previousJitterNdc;
         private Vector3 _previousCameraPosition = Vector3.Zero;
         private float _previousTime;
         private bool _hasPreviousViewProjectionMatrix;
@@ -160,6 +161,10 @@ namespace Njulf.Rendering.Pipeline
                 ? _previousViewProjectionMatrix
                 : sceneData.ViewProjectionMatrix;
             float previousTime = previousFrameValid ? _previousTime : sceneData.Time;
+            Vector2 currentJitterNdc = new(sceneData.JitterX, sceneData.JitterY);
+            Vector2 previousJitterNdc = previousFrameValid
+                ? _previousJitterNdc
+                : currentJitterNdc;
 
             if (fused)
                 _renderTargets.SceneDepth.TransitionToDepthAttachment(cmd);
@@ -266,7 +271,12 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 previousViewProjection,
+                previousJitterNdc,
                 previousFrameValid);
+            // The background fill binds descriptor sets through its own
+            // pipeline layout; the mesh buckets below draw without rebinding,
+            // so restore the mesh-pipeline binding first.
+            BindMeshDescriptorSets(cmd);
             if (CanUseSceneCompactedMotionVectors(sceneData))
             {
                 DrawCompactedMotionVectorBucket(
@@ -274,6 +284,7 @@ namespace Njulf.Rendering.Pipeline
                     sceneData,
                     previousViewProjection,
                     previousTime,
+                    previousJitterNdc,
                     previousFrameValid,
                     fused ? _meshPipeline.GetDepthMotionPipeline(false, identityAttachment) : _meshPipeline.CompactedMotionVectorPipeline,
                     SceneOpaqueCompactionPass.ResolveCompactedDrawStreamCapacity(
@@ -292,6 +303,7 @@ namespace Njulf.Rendering.Pipeline
                     sceneData,
                     previousViewProjection,
                     previousTime,
+                    previousJitterNdc,
                     previousFrameValid,
                     fused ? _meshPipeline.GetDepthMotionPipeline(true, identityAttachment) : _meshPipeline.CompactedMaskedMotionVectorPipeline,
                     SceneOpaqueCompactionPass.ResolveCompactedDrawStreamCapacity(
@@ -313,6 +325,7 @@ namespace Njulf.Rendering.Pipeline
                     sceneData,
                     previousViewProjection,
                     previousTime,
+                    previousJitterNdc,
                     previousFrameValid,
                     _meshPipeline.MotionVectorPipeline,
                     sceneData.SolidMeshletCount,
@@ -322,18 +335,26 @@ namespace Njulf.Rendering.Pipeline
                     sceneData,
                     previousViewProjection,
                     previousTime,
+                    previousJitterNdc,
                     previousFrameValid,
                     _meshPipeline.MaskedMotionVectorPipeline,
                     sceneData.MaskedMeshletCount,
                     BindlessIndex.MaskedDepthMeshletDrawBufferBase);
             }
-            DrawFoliageMotionVectors(cmd, sceneData, previousViewProjection, previousTime, previousFrameValid);
+            DrawFoliageMotionVectors(
+                cmd,
+                sceneData,
+                previousViewProjection,
+                previousTime,
+                previousJitterNdc,
+                previousFrameValid);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
 
             if (identityAttachment)
                 CopyReceiverIdentity(cmd, frameIndex);
             _renderTargets.MotionVectors.TransitionToShaderRead(cmd);
             _previousViewProjectionMatrix = sceneData.ViewProjectionMatrix;
+            _previousJitterNdc = new Vector2(sceneData.JitterX, sceneData.JitterY);
             _previousCameraPosition = sceneData.CameraPosition;
             _previousTime = sceneData.Time;
             _previousSceneContentRevision = sceneData.SceneContentRevision;
@@ -350,6 +371,7 @@ namespace Njulf.Rendering.Pipeline
             CommandBuffer cmd,
             SceneRenderingData sceneData,
             Matrix4x4 previousViewProjection,
+            Vector2 previousJitterNdc,
             bool previousFrameValid)
         {
             // Only TAA reprojects the accumulated resolve through uncovered
@@ -393,7 +415,12 @@ namespace Njulf.Rendering.Pipeline
                 Time = sceneData.Time,
                 PreviousTime = sceneData.Time,
                 CameraPosition = new Vector4(sceneData.CameraPosition, 1f),
-                PreviousCameraPosition = new Vector4(sceneData.CameraPosition, 1f)
+                PreviousCameraPosition = new Vector4(sceneData.CameraPosition, 1f),
+                TemporalJitterNdc = new Vector4(
+                    sceneData.JitterX,
+                    sceneData.JitterY,
+                    previousJitterNdc.X,
+                    previousJitterNdc.Y)
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -443,6 +470,7 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData,
             Matrix4x4 previousViewProjection,
             float previousTime,
+            Vector2 previousJitterNdc,
             bool previousFrameValid,
             Silk.NET.Vulkan.Pipeline pipeline,
             int meshletCount,
@@ -469,7 +497,12 @@ namespace Njulf.Rendering.Pipeline
                     previousFrameValid
                         ? _previousCameraPosition
                         : sceneData.CameraPosition,
-                    1f)
+                    1f),
+                TemporalJitterNdc = new Vector4(
+                    sceneData.JitterX,
+                    sceneData.JitterY,
+                    previousJitterNdc.X,
+                    previousJitterNdc.Y)
             };
 
             _context.Api.CmdPushConstants(
@@ -541,6 +574,7 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData,
             Matrix4x4 previousViewProjection,
             float previousTime,
+            Vector2 previousJitterNdc,
             bool previousFrameValid,
             Silk.NET.Vulkan.Pipeline pipeline,
             int meshletCapacity,
@@ -561,6 +595,7 @@ namespace Njulf.Rendering.Pipeline
                     sceneData,
                     previousViewProjection,
                     previousTime,
+                    previousJitterNdc,
                     previousFrameValid,
                     pipeline,
                     meshletCapacity,
@@ -579,6 +614,7 @@ namespace Njulf.Rendering.Pipeline
                         sceneData,
                         previousViewProjection,
                         previousTime,
+                        previousJitterNdc,
                         previousFrameValid,
                         pipeline,
                         doubleSidedMeshletCapacity,
@@ -595,6 +631,7 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData,
             Matrix4x4 previousViewProjection,
             float previousTime,
+            Vector2 previousJitterNdc,
             bool previousFrameValid,
             Silk.NET.Vulkan.Pipeline pipeline,
             int meshletCapacity,
@@ -635,7 +672,12 @@ namespace Njulf.Rendering.Pipeline
                     previousFrameValid
                         ? _previousCameraPosition
                         : sceneData.CameraPosition,
-                    1f)
+                    1f),
+                TemporalJitterNdc = new Vector4(
+                    sceneData.JitterX,
+                    sceneData.JitterY,
+                    previousJitterNdc.X,
+                    previousJitterNdc.Y)
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -662,6 +704,7 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData,
             Matrix4x4 previousViewProjection,
             float previousTime,
+            Vector2 previousJitterNdc,
             bool previousFrameValid)
         {
             if (!sceneData.FoliageMotionVectorsEnabled ||
@@ -696,7 +739,12 @@ namespace Njulf.Rendering.Pipeline
                 Time = sceneData.Time,
                 PreviousTime = previousTime,
                 CameraPosition = new Vector4(sceneData.CameraPosition, 1f),
-                PreviousCameraPosition = new Vector4(previousCameraPosition, 1f)
+                PreviousCameraPosition = new Vector4(previousCameraPosition, 1f),
+                TemporalJitterNdc = new Vector4(
+                    sceneData.JitterX,
+                    sceneData.JitterY,
+                    previousJitterNdc.X,
+                    previousJitterNdc.Y)
             };
 
             VkBuffer indirect = _bufferManager.GetBuffer(
@@ -777,6 +825,30 @@ namespace Njulf.Rendering.Pipeline
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, checked((uint)buffers.MeshletDrawCapacity), 1, 1);
         }
 
+        private void BindMeshDescriptorSets(CommandBuffer cmd)
+        {
+            var storageSet = _bindlessHeap.StorageBufferSet;
+            var textureSet = _bindlessHeap.TextureSamplerSet;
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _meshPipeline.Layout,
+                0,
+                1,
+                &storageSet,
+                0,
+                null);
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _meshPipeline.Layout,
+                1,
+                1,
+                &textureSet,
+                0,
+                null);
+        }
+
         private void BindFoliageDescriptorSets(CommandBuffer cmd)
         {
             var storageSet = _bindlessHeap.StorageBufferSet;
@@ -811,6 +883,7 @@ namespace Njulf.Rendering.Pipeline
         public override void OnSwapchainRecreated()
         {
             _hasPreviousViewProjectionMatrix = false;
+            _previousJitterNdc = Vector2.Zero;
             _previousCameraPosition = Vector3.Zero;
             _previousSceneContentRevision = ulong.MaxValue;
             _previousCameraCutSerial = ulong.MaxValue;
