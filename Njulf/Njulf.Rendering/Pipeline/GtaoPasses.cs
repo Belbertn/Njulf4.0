@@ -18,7 +18,7 @@ internal sealed class GtaoHistoryState
     private bool _valid;
     private Extent2D _extent;
     private GtaoQualityPreset _qualityPreset;
-    private Matrix4x4 _projection;
+    private Matrix4x4 _unjitteredProjection;
     private ulong _sceneContentRevision = ulong.MaxValue;
     private ulong _cameraCutSerial = ulong.MaxValue;
 
@@ -34,7 +34,8 @@ internal sealed class GtaoHistoryState
             _extent.Width == extent.Width &&
             _extent.Height == extent.Height &&
             _qualityPreset == settings.GtaoQualityPreset &&
-            _projection.Equals(sceneData.ProjectionMatrix) &&
+            _unjitteredProjection.Equals(
+                sceneData.UnjitteredProjectionMatrix) &&
             _sceneContentRevision == sceneData.SceneContentRevision &&
             _cameraCutSerial == sceneData.CaptureCameraCutSerial;
     }
@@ -47,7 +48,7 @@ internal sealed class GtaoHistoryState
         _valid = true;
         _extent = extent;
         _qualityPreset = settings.GtaoQualityPreset;
-        _projection = sceneData.ProjectionMatrix;
+        _unjitteredProjection = sceneData.UnjitteredProjectionMatrix;
         _sceneContentRevision = sceneData.SceneContentRevision;
         _cameraCutSerial = sceneData.CaptureCameraCutSerial;
     }
@@ -673,9 +674,10 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
             sceneData.AmbientOcclusionMode == AmbientOcclusionMode.Gtao;
         if (!execute)
             return false;
-        _bindlessHeap.RegisterTexture(BindlessIndex.AmbientOcclusionBlurredTexture,
-            _renderTargets.AmbientOcclusionBlurred.View,
-            _bindlessHeap.ScreenSampler, ImageLayout.ShaderReadOnlyOptimal);
+        // The shared blurred-AO slot has a single owner:
+        // VulkanRenderer.RegisterAmbientOcclusionTextures. Publishing it
+        // here as well would make the slot two-writer and re-point it from
+        // a per-frame ShouldExecute path.
         _bindlessHeap.RegisterTexture(BindlessIndex.GtaoFilteredTexture,
             _renderTargets.GtaoFiltered.View,
             _bindlessHeap.ScreenSampler, ImageLayout.ShaderReadOnlyOptimal);

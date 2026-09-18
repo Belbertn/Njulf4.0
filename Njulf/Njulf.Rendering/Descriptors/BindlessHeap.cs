@@ -38,6 +38,13 @@ namespace Njulf.Rendering.Descriptors
             new DescriptorPublicationSlot<BufferDescriptorIdentity>[MaxStorageBuffers];
         private readonly DescriptorPublicationSlot<ImageDescriptorIdentity>[] _publishedTextures =
             new DescriptorPublicationSlot<ImageDescriptorIdentity>[MaxTextures];
+        // Frame serial of the current publication window (ulong.MaxValue
+        // before the first frame) and, per fixed texture slot, the serial of
+        // its last identity-changing write. Used by the per-frame repoint
+        // detector in RegisterTextureLocked.
+        private ulong _publicationFrameSerial = ulong.MaxValue;
+        private readonly ulong[] _textureChangeFrameSerials =
+            new ulong[MaxTextures];
         private long _descriptorDesiredChangeCount;
         private long _descriptorNoOpRegistrationCount;
         private long _descriptorWriteCount;
@@ -493,6 +500,20 @@ namespace Njulf.Rendering.Descriptors
             }
         }
 
+        /// <summary>
+        /// Opens the per-frame publication window for the fixed-slot repoint
+        /// detector. Call once per CPU frame, before command recording.
+        /// </summary>
+        public void BeginFramePublication(ulong frameSerial)
+        {
+            ThrowIfNotActive();
+            lock (_lock)
+            {
+                ThrowIfNotActive();
+                _publicationFrameSerial = frameSerial;
+            }
+        }
+
         private DescriptorPublicationResult RegisterTextureLocked(
             int index,
             ImageView view,
@@ -519,6 +540,7 @@ namespace Njulf.Rendering.Descriptors
             }
 
             Interlocked.Increment(ref _descriptorDesiredChangeCount);
+            AssertNoPerFrameRepoint(index, descriptorIndex);
 
             var imageInfo = new DescriptorImageInfo
             {
@@ -542,6 +564,36 @@ namespace Njulf.Rendering.Descriptors
             _publishedTextures[descriptorIndex].Commit(identity);
             Interlocked.Increment(ref _descriptorWriteCount);
             return DescriptorPublicationResult.Published;
+        }
+
+        /// <summary>
+        /// UPDATE_AFTER_BIND stops the validation layers tracking
+        /// per-descriptor use by pending submissions, so a fixed slot that is
+        /// re-pointed every frame cannot be caught by validation — only by
+        /// this runtime assertion. A fixed bindless slot must be registered
+        /// once and selected with index data; re-pointing it within the same
+        /// frame (two writers) or on consecutive frames (a per-frame Record
+        /// path) is the exact signature that produced the TAA history and
+        /// opaque-snapshot defects.
+        /// </summary>
+        private void AssertNoPerFrameRepoint(int index, int descriptorIndex)
+        {
+            ulong current = _publicationFrameSerial;
+            ulong lastChange = _textureChangeFrameSerials[descriptorIndex];
+            _textureChangeFrameSerials[descriptorIndex] = current;
+
+            bool repointedWithinFrame =
+                lastChange != ulong.MaxValue &&
+                current != ulong.MaxValue &&
+                (lastChange == current || lastChange + 1UL == current);
+            System.Diagnostics.Debug.Assert(
+                !repointedWithinFrame,
+                $"Bindless texture slot {index} was re-pointed to a new " +
+                $"identity during frame serial {current} but its previous " +
+                $"identity was published in serial {lastChange}. A fixed " +
+                "bindless slot must never be re-pointed per frame: register " +
+                "both banks once and pass the resolved index as data. " +
+                "Validation layers cannot detect this class of defect.");
         }
 
         public DescriptorPublicationMetrics GetPublicationMetrics()
@@ -593,6 +645,7 @@ namespace Njulf.Rendering.Descriptors
                 _textureIndexAllocator.Free(index);
                 int descriptorIndex = index - BindlessIndex.FirstTextureIndex;
                 _publishedTextures[descriptorIndex].Invalidate();
+                _textureChangeFrameSerials[descriptorIndex] = ulong.MaxValue;
             }
         }
 

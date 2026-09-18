@@ -747,6 +747,14 @@ namespace Njulf.Rendering.Data
         public int TransparentReflectionReceiverMeshletCount { get; init; }
         public int TransparentSampleReflections { get; init; }
         public int OpaqueSceneColorSnapshotAvailable { get; init; }
+
+        /// <summary>
+        /// Bindless texture descriptors actually re-pointed during this
+        /// frame. In steady state it should be ~0; any sustained non-zero
+        /// value means a fixed slot is being republished per frame, a defect
+        /// class the Vulkan validation layers cannot detect.
+        /// </summary>
+        public long BindlessDescriptorWrites { get; init; }
         public int TransparentSceneReflectionRayTaskBudget { get; init; }
         public int TransparentSceneReflectionSsrSampleBudget { get; init; }
         public uint TransparentReflectionRayRequestCount { get; init; }

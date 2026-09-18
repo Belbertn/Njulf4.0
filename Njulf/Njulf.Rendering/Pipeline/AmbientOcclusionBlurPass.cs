@@ -30,6 +30,7 @@ namespace Njulf.Rendering.Pipeline
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
         private bool _pipelinePrepared;
+        private ulong _lastPublishedBlurredAoViewHandle;
 
         public AmbientOcclusionBlurPass(
             VulkanContext context,
@@ -161,6 +162,9 @@ namespace Njulf.Rendering.Pipeline
         public override void OnSwapchainRecreated()
         {
             RecreateDescriptorSets();
+            // Target recreation rebuilds every view handle, so the next
+            // publication decision must register again exactly once.
+            _lastPublishedBlurredAoViewHandle = 0;
         }
 
         public override void Cleanup()
@@ -234,11 +238,18 @@ namespace Njulf.Rendering.Pipeline
 
         private void RegisterBlurredAoTexture(ImageView view)
         {
+            // Dirty-gated in the style of ReflectionProbeManager: the
+            // publication decision only flips when settings or targets
+            // change, so the descriptor write happens once per change and
+            // never per frame.
+            if (_lastPublishedBlurredAoViewHandle == view.Handle)
+                return;
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.AmbientOcclusionBlurredTexture,
                 view,
                 _bindlessHeap.ScreenSampler,
                 ImageLayout.ShaderReadOnlyOptimal);
+            _lastPublishedBlurredAoViewHandle = view.Handle;
         }
 
         private void CreateDescriptorSetLayout()

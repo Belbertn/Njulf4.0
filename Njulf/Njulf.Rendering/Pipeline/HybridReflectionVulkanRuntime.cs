@@ -1128,17 +1128,19 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
         DispatchScreen(commandBuffer);
         PublishComputeWrites(commandBuffer);
         snapshot.TransitionToShaderRead(commandBuffer);
-        _bindlessHeap.RegisterTexture(
-            BindlessIndex.OpaqueSceneColorSnapshotTexture,
-            snapshot.View,
-            _bindlessHeap.ScreenSampler,
-            imageLayout: ImageLayout.ShaderReadOnlyOptimal);
         RecordColorMipTail(
             commandBuffer,
             snapshot,
             _transparentColorMipBaseSets[bank],
             "Hybrid Reflection Transparent HDR Mip Build");
         _renderTargets.SceneColor.TransitionToColorAttachment(commandBuffer);
+        // Both snapshot banks stay permanently registered; the resolved
+        // read slot travels to the transparent forward pass as push data.
+        int readBank = 1 - bank;
+        sceneData.OpaqueSceneColorSnapshotTextureIndex =
+            readBank == 0
+                ? BindlessIndex.OpaqueSceneColorSnapshotTexture
+                : BindlessIndex.OpaqueSceneColorSnapshotTextureB;
         sceneData.OpaqueSceneColorSnapshotAvailable = true;
     }
 
@@ -1150,6 +1152,10 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
         try
         {
             EnsureResources();
+            // Target recreation rebuilds every view even when the extent is
+            // unchanged, so the snapshot banks are re-published here rather
+            // than only inside the EnsureResources rebuild branch.
+            RegisterOpaqueSceneColorSnapshotBanks();
         }
         catch (Exception exception)
         {
@@ -1202,9 +1208,30 @@ internal sealed unsafe partial class HybridReflectionVulkanRuntime : IDisposable
         CreateDescriptorPoolAndSets();
         WriteDescriptorSets();
         CreateColorMipDescriptorSets();
+        RegisterOpaqueSceneColorSnapshotBanks();
         _descriptorSignature = ComputeDescriptorSignature();
         _historyValid = false;
         _preparedFrameSerial = ulong.MaxValue;
+    }
+
+    /// <summary>
+    /// Publishes both opaque SceneColor snapshot banks once per resource
+    /// lifetime. The transparent forward pass selects between them with
+    /// push-constant data; the descriptors themselves never change per
+    /// frame while earlier submissions may still be executing.
+    /// </summary>
+    private void RegisterOpaqueSceneColorSnapshotBanks()
+    {
+        _bindlessHeap.RegisterTexture(
+            BindlessIndex.OpaqueSceneColorSnapshotTexture,
+            HistoryTarget(0).View,
+            _bindlessHeap.ScreenSampler,
+            imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+        _bindlessHeap.RegisterTexture(
+            BindlessIndex.OpaqueSceneColorSnapshotTextureB,
+            HistoryTarget(1).View,
+            _bindlessHeap.ScreenSampler,
+            imageLayout: ImageLayout.ShaderReadOnlyOptimal);
     }
 
     private void AllocateBuffers()

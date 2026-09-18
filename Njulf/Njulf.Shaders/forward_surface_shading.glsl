@@ -991,6 +991,16 @@ bool ForwardOpaqueSceneColorSnapshotAvailable()
     return (pc.Push.DiagnosticFlags & (1u << 15u)) != 0u;
 }
 
+// The snapshot banks are permanently registered bindless slots; the frame's
+// resolved read bank arrives as push data (DebugAndAoFlags bit 9) so no
+// descriptor is ever re-pointed while earlier frames still execute.
+int ForwardOpaqueSceneColorSnapshotTextureIndex()
+{
+    return ((pc.Push.DebugAndAoFlags >> 9u) & 1u) != 0u
+        ? OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_B_INDEX
+        : OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX;
+}
+
 bool ForwardMaterialSamplesSceneReflections(
     GPUMaterialData material,
     bool geometryDecal)
@@ -3646,7 +3656,7 @@ vec3 ForwardSampleOpaqueReflectionColorCone(vec2 uv, float logicalLod)
 {
     vec3 fullResolution = textureLod(
         BindlessTextures[nonuniformEXT(
-            OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX)],
+            ForwardOpaqueSceneColorSnapshotTextureIndex())],
         uv,
         0.0).rgb;
     if (logicalLod <= 0.0)

@@ -31,6 +31,14 @@ namespace Njulf.Rendering.Data
         public Vector4 ClearColor { get; set; } = new(0.2f, 0.2f, 0.2f, 1f);
         public Matrix4x4 ViewMatrix { get; set; } = Matrix4x4.Identity;
         public Matrix4x4 ProjectionMatrix { get; set; } = Matrix4x4.Identity;
+
+        /// <summary>
+        /// Camera projection before TAA sub-pixel jitter. Temporal history
+        /// gates must compare this matrix, never <see cref="ProjectionMatrix"/>,
+        /// which changes every frame while jitter is enabled.
+        /// </summary>
+        public Matrix4x4 UnjitteredProjectionMatrix { get; set; } =
+            Matrix4x4.Identity;
         public Matrix4x4 ViewProjectionMatrix { get; set; } = Matrix4x4.Identity;
         public Matrix4x4 InverseViewMatrix { get; set; } = Matrix4x4.Identity;
         public Matrix4x4 InverseProjectionMatrix { get; set; } = Matrix4x4.Identity;
@@ -110,6 +118,23 @@ namespace Njulf.Rendering.Data
         public int TransparentSceneReflectionRayTaskBudget { get; set; }
         public int TransparentSceneReflectionSsrSampleBudget { get; set; }
         public bool OpaqueSceneColorSnapshotAvailable { get; set; }
+
+        /// <summary>
+        /// Bindless slot of the snapshot bank the transparent forward pass
+        /// must sample this frame. Both banks stay permanently registered;
+        /// this index is data, never a descriptor write.
+        /// </summary>
+        public int OpaqueSceneColorSnapshotTextureIndex { get; set; }
+
+        /// <summary>
+        /// One-bit bank selector packed into the forward push block beside
+        /// the availability flag. Zero resolves to the first snapshot bank.
+        /// </summary>
+        public uint OpaqueSceneColorSnapshotTextureBank =>
+            OpaqueSceneColorSnapshotTextureIndex ==
+                Descriptors.BindlessIndex.OpaqueSceneColorSnapshotTextureB
+                ? 1u
+                : 0u;
         public bool HasTransparentReflectionReceivers =>
             TransparentReflectionReceiverObjectCount > 0 &&
             TransparentReflectionReceiverMeshletCount > 0;
@@ -2091,6 +2116,7 @@ namespace Njulf.Rendering.Data
             TransparentSceneReflectionRayTaskBudget = 0;
             TransparentSceneReflectionSsrSampleBudget = 0;
             OpaqueSceneColorSnapshotAvailable = false;
+            OpaqueSceneColorSnapshotTextureIndex = 0;
             TransparentSortCandidateCount = 0;
             TransparentSortMicroseconds = 0;
             TransparentOverflowCount = 0;

@@ -53,7 +53,8 @@ internal readonly record struct RendererDiagnosticsExecutionInput(
     UploadBudgetSnapshot UploadBudget,
     MemoryBudgetSnapshot MemoryBudget,
     RuntimeStallSnapshot RuntimeStalls,
-    string GpuTimingReason);
+    string GpuTimingReason,
+    long BindlessDescriptorWrites);
 
 internal readonly record struct RendererDiagnosticsGiInput(
     SimpleDdgiVolumeManager? SimpleDdgiVolumeManager,

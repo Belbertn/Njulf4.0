@@ -1021,6 +1021,7 @@ namespace Njulf.Rendering.Data
                 sceneData.SceneContentRevision = _sceneContentRevision;
                 sceneData.ViewMatrix = viewMatrix;
                 sceneData.ProjectionMatrix = projectionMatrix;
+                sceneData.UnjitteredProjectionMatrix = camera.ProjectionMatrix;
                 sceneData.ViewProjectionMatrix = viewProjectionMatrix;
                 sceneData.InverseViewMatrix = inverseViewMatrix;
                 sceneData.InverseProjectionMatrix = inverseProjectionMatrix;

@@ -688,6 +688,8 @@ internal sealed class RendererDiagnosticsAssembler
                 sceneData.TransparentSampleReflections ? 1 : 0,
             OpaqueSceneColorSnapshotAvailable =
                 sceneData.OpaqueSceneColorSnapshotAvailable ? 1 : 0,
+            BindlessDescriptorWrites =
+                input.Execution.BindlessDescriptorWrites,
             TransparentSceneReflectionRayTaskBudget =
                 sceneData.TransparentSceneReflectionRayTaskBudget,
             TransparentSceneReflectionSsrSampleBudget =

@@ -882,9 +882,17 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Second bank of the TAA history double buffer.</summary>
         public const int TaaHistoryTextureB = GtaoDebugTexture + 1;
 
+        /// <summary>
+        /// Second bank of the opaque SceneColor snapshot double buffer. Both
+        /// banks are registered once and stay fixed; the transparent forward
+        /// pass receives the resolved read index as push-constant data.
+        /// </summary>
+        public const int OpaqueSceneColorSnapshotTextureB =
+            TaaHistoryTextureB + 1;
+
         /// <summary>First dynamically allocated material texture index</summary>
         public const int FirstDynamicTextureIndex =
-            TaaHistoryTextureB + 1;
+            OpaqueSceneColorSnapshotTextureB + 1;
 
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;

@@ -52,7 +52,10 @@ namespace Njulf.Rendering.Data
                                 .Disabled,
                         globalIlluminationEnabled:
                             sceneData
-                                .TransparentReceiveGlobalIllumination),
+                                .TransparentReceiveGlobalIllumination,
+                        opaqueSceneColorSnapshotBank:
+                            sceneData
+                                .OpaqueSceneColorSnapshotTextureBank),
                 DiagnosticFlags =
                     GPUForwardPushConstants.PackDiagnosticFlags(
                         ddgiForwardEstimateCountersEnabled: false,

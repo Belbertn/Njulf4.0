@@ -1514,6 +1514,12 @@ namespace Njulf.Rendering.Data
         private const uint DebugViewModeMask = 0xFFu;
         private const uint AmbientOcclusionDebugViewMask = 0x3Fu;
         private const int AmbientOcclusionEnabledShift = 8;
+        // Bits 9..15 of DebugAndAoFlags were unallocated. Bit 9 selects the
+        // opaque SceneColor snapshot bank the transparent forward pass
+        // samples; both banks stay permanently registered in the bindless
+        // heap and this bit is the only per-frame publication.
+        private const int OpaqueSceneColorSnapshotBankShift = 9;
+        private const uint OpaqueSceneColorSnapshotBankMask = 0x01u;
         private const int AmbientOcclusionDebugViewShift = 16;
         private const int AmbientOcclusionBentNormalModeShift = 22;
         private const int TransparentReceiveShadowsShift = 24;
@@ -1746,10 +1752,13 @@ namespace Njulf.Rendering.Data
             uint ambientOcclusionForwardSamplingMode = 0u,
             bool globalIlluminationEnabled = false,
             bool screenSpaceGlobalIlluminationEnabled = false,
-            uint ambientOcclusionBentNormalMode = 0u)
+            uint ambientOcclusionBentNormalMode = 0u,
+            uint opaqueSceneColorSnapshotBank = 0u)
         {
             return (debugViewMode & DebugViewModeMask) |
                    (ambientOcclusionEnabled ? 1u << AmbientOcclusionEnabledShift : 0u) |
+                   (((opaqueSceneColorSnapshotBank & OpaqueSceneColorSnapshotBankMask)) <<
+                    OpaqueSceneColorSnapshotBankShift) |
                    ((ambientOcclusionDebugView & AmbientOcclusionDebugViewMask) << AmbientOcclusionDebugViewShift) |
                    ((ambientOcclusionBentNormalMode & 0x03u) <<
                     AmbientOcclusionBentNormalModeShift) |

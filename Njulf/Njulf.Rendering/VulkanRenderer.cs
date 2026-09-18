@@ -4208,6 +4208,9 @@ namespace Njulf.Rendering
             sceneData.FrameIndex = frameRingIndex;
             sceneData.TemporalSampleIndex = _temporalSampleIndex;
             sceneData.DdgiFrameSerial = frameSerial;
+            // Opens the bindless repoint detector's publication window for
+            // this frame; it must precede all per-frame Record paths.
+            _bindlessHeap.BeginFramePublication(frameSerial);
             sceneData.AreaShadowCandidateCount = shadowsAllowed
                 ? localShadowSelection.AreaCandidateCount
                 : 0;
@@ -4539,6 +4542,7 @@ namespace Njulf.Rendering
             sceneData.TransparentSceneReflectionSsrSampleBudget =
                 Settings.Transparency.SceneReflectionSsrSampleBudget;
             sceneData.OpaqueSceneColorSnapshotAvailable = false;
+            sceneData.OpaqueSceneColorSnapshotTextureIndex = 0;
             sceneData.TransparentDdgiReceiverCountersEnabled = false;
             sceneData.DecalDebugView = Settings.Decals.DebugView;
             sceneData.GeometryDecalsEnabled = geometryDecalsEnabled;
@@ -6700,6 +6704,19 @@ namespace Njulf.Rendering
             return _nearFieldResidual.Diagnostics;
         }
 
+        // Cumulative bindless descriptor writes observed by the previous
+        // diagnostics capture; the per-frame delta exposes slots that are
+        // being re-pointed every frame, which validation cannot detect.
+        private long _lastBindlessDescriptorWrites;
+
+        private long BindlessDescriptorWritesThisFrame()
+        {
+            long actualWrites = _bindlessHeap.GetPublicationMetrics().ActualWrites;
+            long delta = actualWrites - _lastBindlessDescriptorWrites;
+            _lastBindlessDescriptorWrites = actualWrites;
+            return delta;
+        }
+
         private RendererDiagnosticsAssemblyInput CaptureDiagnosticsInput(
             SceneRenderingData sceneData,
             AsyncComputeDiagnosticsSnapshot asyncComputeSnapshot)
@@ -6770,7 +6787,8 @@ namespace Njulf.Rendering
                         budgetProfile),
                     BuildMemoryBudgetSnapshot(budgetProfile),
                     _stallTracker.CreateSnapshot(),
-                    BuildGpuTimingReason()),
+                    BuildGpuTimingReason(),
+                    BindlessDescriptorWritesThisFrame()),
                 new RendererDiagnosticsGiInput(
                     _simpleDdgiVolumeManager,
                     _farFieldClipmapManager,
@@ -12588,12 +12606,26 @@ namespace Njulf.Rendering
                 _renderTargets.FoggedSceneColor.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            ImageView opaqueSceneColorSnapshotView =
+            // Both snapshot banks are published here with the same history
+            // views the hybrid reflection runtime registers on its resource
+            // path, so the slot always has one coherent writer. The black
+            // fallback only covers configurations where the hybrid target
+            // group is absent and the snapshot can never be produced.
+            ImageView opaqueSceneColorSnapshotViewA =
+                _renderTargets.HybridReflectionHistory0?.View ??
                 _textureManager.GetTextureView(
                     _textureManager.DefaultBlackTexture);
+            ImageView opaqueSceneColorSnapshotViewB =
+                _renderTargets.HybridReflectionHistory1?.View ??
+                opaqueSceneColorSnapshotViewA;
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.OpaqueSceneColorSnapshotTexture,
-                opaqueSceneColorSnapshotView,
+                opaqueSceneColorSnapshotViewA,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.OpaqueSceneColorSnapshotTextureB,
+                opaqueSceneColorSnapshotViewB,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             RegisterAmbientOcclusionTextures();
@@ -12659,9 +12691,24 @@ namespace Njulf.Rendering
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
 
+            // This registration is the single owner of the shared
+            // blurred-AO slot. When SSAO skips its blur resolve entirely the
+            // raw pass is the effective full-resolution AO, so the slot
+            // follows it; GTAO always publishes through the blurred target.
+            // Runtime settings changes re-run this registration via the
+            // ambient-occlusion target recreation path.
+            bool ssaoResolvesWithoutBlur =
+                Settings.AmbientOcclusion.Mode == AmbientOcclusionMode.Ssao &&
+                Settings.AmbientOcclusion.BlurRadius == 0 &&
+                _renderTargets.AmbientOcclusionRaw.Extent.Width ==
+                    _renderTargets.AmbientOcclusionBlurred.Extent.Width &&
+                _renderTargets.AmbientOcclusionRaw.Extent.Height ==
+                    _renderTargets.AmbientOcclusionBlurred.Extent.Height;
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.AmbientOcclusionBlurredTexture,
-                _renderTargets.AmbientOcclusionBlurred.View,
+                ssaoResolvesWithoutBlur
+                    ? _renderTargets.AmbientOcclusionRaw.View
+                    : _renderTargets.AmbientOcclusionBlurred.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
 

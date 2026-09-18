@@ -369,12 +369,14 @@ namespace Njulf.Tests
                 transparencyDebugView: 7,
                 ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.DepthAwareUpsample,
                 globalIlluminationEnabled: true,
-                screenSpaceGlobalIlluminationEnabled: true);
+                screenSpaceGlobalIlluminationEnabled: true,
+                opaqueSceneColorSnapshotBank: 1u);
 
             Assert.Multiple(() =>
             {
                 Assert.That(flags & 0xffu, Is.EqualTo(3u));
                 Assert.That((flags >> 8) & 1u, Is.EqualTo(1u));
+                Assert.That((flags >> 9) & 1u, Is.EqualTo(1u));
                 Assert.That((flags >> 16) & 0xffu, Is.EqualTo(5u));
                 Assert.That((flags >> 24) & 1u, Is.EqualTo(1u));
                 Assert.That((flags >> 25) & 0x07u, Is.EqualTo(7u));

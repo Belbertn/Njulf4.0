@@ -208,7 +208,9 @@ namespace Njulf.Rendering.Pipeline
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
                     ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled,
                     globalIlluminationEnabled:
-                    sceneData.TransparentReceiveGlobalIllumination),
+                    sceneData.TransparentReceiveGlobalIllumination,
+                    opaqueSceneColorSnapshotBank:
+                    sceneData.OpaqueSceneColorSnapshotTextureBank),
                 DiagnosticFlags = GPUForwardPushConstants.PackDiagnosticFlags(
                     ddgiForwardEstimateCountersEnabled: false,
                     directionalShadowPreviewCascade: (uint)sceneData.DirectionalShadowPreviewCascade,
@@ -490,7 +492,10 @@ namespace Njulf.Rendering.Pipeline
                                 .Disabled,
                         globalIlluminationEnabled:
                             sceneData
-                                .TransparentReceiveGlobalIllumination),
+                                .TransparentReceiveGlobalIllumination,
+                        opaqueSceneColorSnapshotBank:
+                            sceneData
+                                .OpaqueSceneColorSnapshotTextureBank),
                 DiagnosticFlags =
                     GPUForwardPushConstants.PackDiagnosticFlags(
                         ddgiForwardEstimateCountersEnabled: false,
