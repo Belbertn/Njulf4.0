@@ -550,7 +550,7 @@ internal sealed unsafe class GtaoTemporalPass : GtaoComputePassBase
             FrameIndex = sceneData.TemporalSampleIndex,
             DepthThresholdScale = 0.03f,
             NormalThreshold = 0.85f,
-            StableHistoryWeight = 0.92f,
+            StableHistoryWeight = 0.85f,
             MotionRejectionScale = 0.15f
         };
         BindAndPush(cmd, writeIndex, push);
@@ -619,6 +619,10 @@ internal sealed unsafe class GtaoTemporalPass : GtaoComputePassBase
 
 internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
 {
+    // Matches the shared-memory halo constant GTAO_MAX_RADIUS in
+    // gtao_spatial.comp.
+    private const int GtaoMaxSpatialRadius = 2;
+
     private readonly RenderTargetManager _renderTargets;
     private readonly RenderSettings _settings;
 
@@ -648,7 +652,8 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
                 Binding(2, DescriptorType.CombinedImageSampler),
                 Binding(3, DescriptorType.StorageImage),
                 Binding(4, DescriptorType.StorageImage),
-                Binding(5, DescriptorType.StorageImage)
+                Binding(5, DescriptorType.StorageImage),
+                Binding(6, DescriptorType.CombinedImageSampler)
             ],
             2,
             (uint)Marshal.SizeOf<GPUGtaoSpatialPushConstants>(),
@@ -689,9 +694,18 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
                 sourceExtent.Height),
             OutputDimensions = new Vector2(outputExtent.Width,
                 outputExtent.Height),
+            InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
             DepthSigma = _settings.AmbientOcclusion.DepthSigma,
             NormalSigma = _settings.AmbientOcclusion.NormalSigma,
-            Radius = 2u,
+            // The spatial radius follows the shared blur-radius setting,
+            // capped at the GTAO kernel's shared-memory halo
+            // (min(BlurRadius, GTAO_MAX_RADIUS)). SSAO's BlurRadius
+            // semantics are preserved: the setting stays shared and SSAO
+            // consumes it unchanged; GTAO only caps its effective radius.
+            Radius = (uint)Math.Clamp(
+                _settings.AmbientOcclusion.BlurRadius,
+                0,
+                GtaoMaxSpatialRadius),
             DebugView = (uint)_settings.AmbientOcclusion.DebugView
         };
         BindAndPush(cmd, historyIndex, push);
@@ -726,6 +740,11 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
                     _renderTargets.GtaoRaw.View,
                     _bindlessHeap.ScreenSampler,
                     ImageLayout.ShaderReadOnlyOptimal),
+                new GtaoImageDescriptor(6,
+                    DescriptorType.CombinedImageSampler,
+                    _renderTargets.SceneDepth.View,
+                    _bindlessHeap.ScreenSampler,
+                    ImageLayout.DepthStencilReadOnlyOptimal),
                 new GtaoImageDescriptor(3, DescriptorType.StorageImage,
                     _renderTargets.GtaoFiltered.View, default,
                     ImageLayout.General),

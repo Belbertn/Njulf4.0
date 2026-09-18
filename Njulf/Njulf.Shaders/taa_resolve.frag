@@ -52,13 +52,18 @@ vec3 SampleCurrent(vec2 uv)
 
 void main()
 {
-    vec2 px = pc.InvSourceDimensions;
     vec2 sampleUv = inUv + pc.TaaCurrentJitterUv;
     vec3 current = SampleCurrent(sampleUv);
-    vec2 rawVelocity = textureLod(
+
+    ivec2 sourceExtent = ivec2(pc.SourceDimensions);
+    ivec2 sourceTexel = clamp(
+        ivec2(sampleUv * pc.SourceDimensions),
+        ivec2(0),
+        sourceExtent - ivec2(1));
+    vec2 rawVelocity = texelFetch(
         BindlessTextures[nonuniformEXT(MOTION_VECTOR_TEXTURE_INDEX)],
-        sampleUv,
-        0.0).rg;
+        sourceTexel,
+        0).rg;
     bool velocityFinite = !any(isnan(rawVelocity)) && !any(isinf(rawVelocity));
     if (!velocityFinite)
         rawVelocity = vec2(0.0);
@@ -68,10 +73,21 @@ void main()
     vec2 historyUv = inUv - physicalVelocity;
     bool historyUvValid = all(greaterThanEqual(historyUv, vec2(0.0))) &&
         all(lessThanEqual(historyUv, vec2(1.0)));
-    vec4 historySample = textureLod(
+    vec3 historyColor = textureLod(
         BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
         clamp(historyUv, vec2(0.0), vec2(1.0)),
-        0.0);
+        0.0).rgb;
+    ivec2 historyExtent = textureSize(
+        BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
+        0);
+    ivec2 historyTexel = clamp(
+        ivec2(historyUv * vec2(historyExtent)),
+        ivec2(0),
+        historyExtent - ivec2(1));
+    float previousDepth = texelFetch(
+        BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
+        historyTexel,
+        0).a;
 
     vec3 neighborhoodMinimum = vec3(65504.0);
     vec3 neighborhoodMaximum = vec3(-65504.0);
@@ -81,8 +97,14 @@ void main()
     {
         for (int x = -1; x <= 1; x++)
         {
-            vec3 sampleYCoCg = RgbToYCoCg(
-                SampleCurrent(sampleUv + vec2(float(x), float(y)) * px));
+            ivec2 neighborTexel = clamp(
+                sourceTexel + ivec2(x, y),
+                ivec2(0),
+                sourceExtent - ivec2(1));
+            vec3 sampleYCoCg = RgbToYCoCg(texelFetch(
+                BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))],
+                neighborTexel,
+                0).rgb);
             neighborhoodMinimum = min(neighborhoodMinimum, sampleYCoCg);
             neighborhoodMaximum = max(neighborhoodMaximum, sampleYCoCg);
             firstMoment += sampleYCoCg;
@@ -101,17 +123,17 @@ void main()
     vec3 varianceMaximum = min(
         neighborhoodMaximum,
         firstMoment + standardDeviation * 1.25);
+    vec3 historyYCoCg = RgbToYCoCg(historyColor);
     vec3 clippedHistoryYCoCg = clamp(
-        RgbToYCoCg(historySample.rgb),
+        historyYCoCg,
         varianceMinimum,
         varianceMaximum);
     vec3 clippedHistory = YCoCgToRgb(clippedHistoryYCoCg);
 
-    float currentDepth = textureLod(
+    float currentDepth = texelFetch(
         BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
-        sampleUv,
-        0.0).r;
-    float previousDepth = historySample.a;
+        sourceTexel,
+        0).r;
     float depthGradient = abs(dFdx(currentDepth)) + abs(dFdy(currentDepth));
     float depthTolerance = max(
         0.00002,
@@ -119,10 +141,25 @@ void main()
     bool depthConsistent = abs(currentDepth - previousDepth) <= depthTolerance;
 
     float velocityPixels = length(physicalVelocity * pc.SourceDimensions);
+    bool historyInsideClip =
+        all(greaterThanEqual(historyYCoCg, varianceMinimum)) &&
+        all(lessThanEqual(historyYCoCg, varianceMaximum));
+    // Jitter can flip which surface owns a silhouette texel between frames;
+    // that reads as a depth mismatch even though the scene is unchanged. A
+    // static pixel whose history already fits the current neighborhood is a
+    // coverage flip, not a disocclusion. Mismatch under motion stays rejected.
+    bool coverageFlip = !depthConsistent &&
+        historyInsideClip &&
+        velocityPixels < 0.5;
+
     float rejectionEnd = max(0.5, pc.TaaVelocityRejectionScale);
     float motionRejection = smoothstep(0.25, rejectionEnd, velocityPixels);
     float feedback = mix(pc.TaaFeedbackMax, pc.TaaFeedbackMin, motionRejection);
-    float historyDelta = abs(Luma(clippedHistory) - Luma(current));
+    // Frame-stable operands: the current anchor carries jitter-phase noise
+    // that must not collapse the feedback on high-contrast edges. Stale
+    // history still gets clamped hard, so a large clip distance still drops
+    // the feedback here.
+    float historyDelta = abs(Luma(clippedHistory) - Luma(historyColor));
     feedback = mix(
         feedback,
         pc.TaaFeedbackMin,
@@ -131,7 +168,7 @@ void main()
     bool historyValid = pc.TaaHistoryValid != 0u &&
         historyUvValid &&
         velocityFinite &&
-        depthConsistent;
+        (depthConsistent || coverageFlip);
     vec3 resolved = historyValid
         ? mix(current, clippedHistory, clamp(feedback, 0.0, 0.99))
         : current;

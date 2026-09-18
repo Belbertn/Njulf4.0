@@ -245,37 +245,79 @@ void main()
     }
     vec4 previous = vec4(0.0);
     uint previousAge = 0u;
-    vec3 previousNormal = vec3(0.0, 0.0, 1.0);
-    float previousDepth = 0.0;
     if (acceptHistory)
     {
-        previous = textureLod(PreviousHistory, previousUv, 0.0);
-        ivec2 previousPixel = clamp(ivec2(floor(previousUv *
-            pc.Dimensions)), ivec2(0), extent - ivec2(1));
-        uvec2 packedPrevious = texelFetch(
-            PreviousGeometryHistory, previousPixel, 0).xy;
-        if (!UnpackGeometry(packedPrevious, previousNormal,
-                previousDepth, previousAge))
+        // Bilinear history sampling must not blend payloads across a depth
+        // edge: every contributing footprint tap is validated against the
+        // current pixel's depth and normal before it contributes, and the
+        // history sample is clamped to the validated footprint.
+        vec2 previousPos = previousUv * pc.Dimensions - vec2(0.5);
+        ivec2 previousBase = ivec2(floor(previousPos));
+        vec2 previousFraction = previousPos - vec2(previousBase);
+        float historyWeightSum = 0.0;
+        vec4 historySum = vec4(0.0);
+        bool anyUnpacked = false;
+        bool anyDepthCompatible = false;
+        bool anyNormalCompatible = false;
+        float bestTapWeight = 0.0;
+        for (int y = 0; y <= 1; ++y)
+        {
+            for (int x = 0; x <= 1; ++x)
+            {
+                float tapWeight =
+                    (x == 0 ? 1.0 - previousFraction.x : previousFraction.x) *
+                    (y == 0 ? 1.0 - previousFraction.y : previousFraction.y);
+                if (tapWeight <= 0.0)
+                    continue;
+                ivec2 tapPixel = clamp(previousBase + ivec2(x, y),
+                    ivec2(0), extent - ivec2(1));
+                vec3 tapNormal;
+                float tapDepth;
+                uint tapAge;
+                if (!UnpackGeometry(texelFetch(
+                        PreviousGeometryHistory, tapPixel, 0).xy,
+                        tapNormal, tapDepth, tapAge))
+                    continue;
+                anyUnpacked = true;
+                if (abs(tapDepth - viewDepth) >
+                    max(0.02, viewDepth * pc.DepthThresholdScale))
+                    continue;
+                anyDepthCompatible = true;
+                if (dot(tapNormal, normal) < pc.NormalThreshold)
+                    continue;
+                anyNormalCompatible = true;
+                vec4 tapPayload = texelFetch(PreviousHistory, tapPixel, 0);
+                if (!Finite(tapPayload))
+                    continue;
+                historySum += tapPayload * tapWeight;
+                historyWeightSum += tapWeight;
+                if (tapWeight > bestTapWeight)
+                {
+                    bestTapWeight = tapWeight;
+                    previousAge = tapAge;
+                }
+            }
+        }
+        if (historyWeightSum <= 1.0e-6)
         {
             acceptHistory = false;
-            rejection = GTAO_REJECTION_EMPTY_MISMATCH;
+            rejection = !anyUnpacked
+                ? GTAO_REJECTION_EMPTY_MISMATCH
+                : !anyDepthCompatible
+                    ? GTAO_REJECTION_DEPTH
+                    : !anyNormalCompatible
+                        ? GTAO_REJECTION_NORMAL
+                        : GTAO_REJECTION_NONFINITE;
         }
-        else if (abs(previousDepth - viewDepth) >
-            max(0.02, viewDepth * pc.DepthThresholdScale))
+        else
         {
-            acceptHistory = false;
-            rejection = GTAO_REJECTION_DEPTH;
+            previous = historySum / historyWeightSum;
         }
-        else if (dot(previousNormal, normal) < pc.NormalThreshold)
-        {
-            acceptHistory = false;
-            rejection = GTAO_REJECTION_NORMAL;
-        }
-        else if (!Finite(previous) || !Finite(current))
-        {
-            acceptHistory = false;
-            rejection = GTAO_REJECTION_NONFINITE;
-        }
+    }
+    if (acceptHistory && !Finite(current))
+    {
+        acceptHistory = false;
+        rejection = GTAO_REJECTION_NONFINITE;
     }
 
     float minimumVisibility;

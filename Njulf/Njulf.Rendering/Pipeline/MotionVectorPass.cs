@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
+using Njulf.Graphics;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -31,6 +32,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
         private readonly Func<SurfaceHistoryConsumer>? _historyConsumers;
+        private readonly MotionVectorBackgroundPipeline _backgroundPipeline;
         private Matrix4x4 _previousViewProjectionMatrix = Matrix4x4.Identity;
         private Vector3 _previousCameraPosition = Vector3.Zero;
         private float _previousTime;
@@ -88,6 +90,11 @@ namespace Njulf.Rendering.Pipeline
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _historyConsumers = historyConsumers;
             _temporalSurfaceValidityResources = temporalSurfaceValidityResources;
+            _backgroundPipeline = new MotionVectorBackgroundPipeline(
+                context,
+                bindlessHeap,
+                RenderTargetManager.MotionVectorFormat,
+                renderTargets.SceneDepth.Format);
         }
 
         public override void Initialize()
@@ -255,6 +262,11 @@ namespace Njulf.Rendering.Pipeline
             };
 
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
+            DrawBackgroundMotionVectors(
+                cmd,
+                sceneData,
+                previousViewProjection,
+                previousFrameValid);
             if (CanUseSceneCompactedMotionVectors(sceneData))
             {
                 DrawCompactedMotionVectorBucket(
@@ -332,6 +344,65 @@ namespace Njulf.Rendering.Pipeline
             sceneData.MotionVectorsEnabled = previousFrameValid ? 1 : 0;
             // RenderGraph accounts the fused recording under DepthPrePass.
             sceneData.CpuMotionVectorRecordMicroseconds = fused ? 0 : ElapsedMicroseconds(start);
+        }
+
+        private void DrawBackgroundMotionVectors(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            Matrix4x4 previousViewProjection,
+            bool previousFrameValid)
+        {
+            // Only TAA reprojects the accumulated resolve through uncovered
+            // pixels; the remaining motion-vector consumers (AMD denoiser,
+            // directional shadow temporal accumulation, GTAO, DDGI residual
+            // passes) expect the clear-value zeros there.
+            if (_settings.AntiAliasing.EffectiveMode != AntiAliasingMode.Taa)
+                return;
+
+            Silk.NET.Vulkan.Pipeline pipeline = _backgroundPipeline.Pipeline;
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+
+            var storageSet = _bindlessHeap.StorageBufferSet;
+            var textureSet = _bindlessHeap.TextureSamplerSet;
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _backgroundPipeline.Layout,
+                0,
+                1,
+                &storageSet,
+                0,
+                null);
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _backgroundPipeline.Layout,
+                1,
+                1,
+                &textureSet,
+                0,
+                null);
+
+            var pushConstants = new GPUMotionVectorPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                PreviousViewProjectionMatrix = previousViewProjection,
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                PreviousFrameValid = PackHistoryFlags(previousFrameValid, sceneData),
+                Time = sceneData.Time,
+                PreviousTime = sceneData.Time,
+                CameraPosition = new Vector4(sceneData.CameraPosition, 1f),
+                PreviousCameraPosition = new Vector4(sceneData.CameraPosition, 1f)
+            };
+            _context.Api.CmdPushConstants(
+                cmd,
+                _backgroundPipeline.Layout,
+                ShaderStageFlags.FragmentBit,
+                0,
+                (uint)Marshal.SizeOf<GPUMotionVectorPushConstants>(),
+                &pushConstants);
+            _context.Api.CmdDraw(cmd, 3, 1, 0, 0);
         }
 
         private void CopyReceiverIdentity(CommandBuffer cmd, int frameIndex)
@@ -747,6 +818,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Cleanup()
         {
+            _backgroundPipeline.Dispose();
         }
 
         private void TransitionDepthForRead(CommandBuffer cmd)

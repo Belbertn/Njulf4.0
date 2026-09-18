@@ -37,6 +37,58 @@ public sealed unsafe class GtaoTemporalGpuTests
         }
     }
 
+    [Test, Category("GPU")]
+    public void SubpixelReprojectionAcrossDepthEdge_DoesNotBlendFarHistory()
+    {
+        using var gpu = new TemporalGpu();
+        gpu.Initialize();
+
+        // Column 3 reprojects subpixel-straddling the x == 4 depth edge:
+        // previousUv lands exactly at 4 / 8 so production-equivalent linear
+        // sampling of the history blends the near texel at x == 3 and the
+        // far texel at x == 4 with 0.5 / 0.5 weights. The far tap must be
+        // rejected, so the result has to match a control run whose history
+        // is near-side everywhere.
+        byte[] nearHistory = new byte[512];
+        byte[] edgeHistory = new byte[512];
+        byte[] nearGeometry = new byte[512];
+        byte[] edgeGeometry = new byte[512];
+        byte[] motion = new byte[512];
+        for (int pixel = 0; pixel < 64; pixel++)
+        {
+            bool farSide = pixel % 8 >= 4;
+            TemporalGpu.GeometryPixel(0, 1f).CopyTo(nearGeometry, pixel * 8);
+            TemporalGpu.GeometryPixel(0, farSide ? 5f : 1f).CopyTo(edgeGeometry, pixel * 8);
+            TemporalGpu.HalfPixel(-.2f, 0, .1f, 1).CopyTo(nearHistory, pixel * 8);
+            TemporalGpu.HalfPixel(farSide ? .9f : -.2f, 0, .5f, 1).CopyTo(edgeHistory, pixel * 8);
+            if (pixel % 8 == 3)
+                BitConverter.GetBytes(-0.0625f).CopyTo(motion, pixel * 8);
+        }
+
+        var edge = gpu.Run(0,
+            previousPixels: edgeHistory,
+            previousGeometryPixels: edgeGeometry,
+            motionPixels: motion);
+        var control = gpu.Run(0,
+            previousPixels: nearHistory,
+            previousGeometryPixels: nearGeometry,
+            motionPixels: motion);
+
+        for (int y = 0; y < 8; y++)
+        {
+            int offset = (y * 8 + 3) * 8;
+            for (int b = 0; b < 8; b++)
+            {
+                Assert.That(edge.History[offset + b],
+                    Is.EqualTo(control.History[offset + b]),
+                    $"History byte {b} of straddling pixel (3, {y}) must match the near-side-only result.");
+                Assert.That(edge.Geometry[offset + b],
+                    Is.EqualTo(control.Geometry[offset + b]),
+                    $"Geometry byte {b} of straddling pixel (3, {y}) must match the near-side-only result.");
+            }
+        }
+    }
+
     // Dispatches the unmodified production temporal shader with real images.
     private sealed class TemporalGpu : IDisposable
     {
@@ -53,6 +105,7 @@ public sealed unsafe class GtaoTemporalGpuTests
         private PipelineLayout _layout;
         private VkPipeline _pipeline;
         private Sampler _sampler;
+        private Sampler _linearSampler;
 
         public void Initialize()
         {
@@ -130,6 +183,14 @@ public sealed unsafe class GtaoTemporalGpuTests
                 AddressModeW = SamplerAddressMode.ClampToEdge
             };
             Check(_vk.CreateSampler(_device, &samplerInfo, null, out _sampler));
+            var linearSamplerInfo = new SamplerCreateInfo
+            {
+                SType = StructureType.SamplerCreateInfo, MinFilter = Filter.Linear, MagFilter = Filter.Linear,
+                MipmapMode = SamplerMipmapMode.Nearest,
+                AddressModeU = SamplerAddressMode.ClampToEdge, AddressModeV = SamplerAddressMode.ClampToEdge,
+                AddressModeW = SamplerAddressMode.ClampToEdge
+            };
+            Check(_vk.CreateSampler(_device, &linearSamplerInfo, null, out _linearSampler));
             DescriptorSetLayoutBinding* bindings = stackalloc DescriptorSetLayoutBinding[7];
             for (uint i = 0; i < 7; i++)
                 bindings[i] = new(i, i < 5 ? DescriptorType.CombinedImageSampler : DescriptorType.StorageImage, 1, ShaderStageFlags.ComputeBit);
@@ -180,7 +241,13 @@ public sealed unsafe class GtaoTemporalGpuTests
             }
         }
 
-        public (byte[] History, byte[] Geometry) Run(uint age, bool valid = true, float previousDepth = 1f)
+        public (byte[] History, byte[] Geometry) Run(
+            uint age,
+            bool valid = true,
+            float previousDepth = 1f,
+            byte[]? previousPixels = null,
+            byte[]? previousGeometryPixels = null,
+            byte[]? motionPixels = null)
         {
             using var raw = new HostImage(this, Format.R16G16B16A16Sfloat, ImageUsageFlags.SampledBit);
             using var geometry = new HostImage(this, Format.R32G32Uint, ImageUsageFlags.SampledBit);
@@ -190,16 +257,29 @@ public sealed unsafe class GtaoTemporalGpuTests
             using var output = new HostImage(this, Format.R16G16B16A16Sfloat, ImageUsageFlags.StorageBit);
             using var outputGeometry = new HostImage(this, Format.R32G32Uint, ImageUsageFlags.StorageBit);
             raw.Fill(HalfPixel(.2f, 0, .5f, 1));
-            previous.Fill(HalfPixel(-.2f, 0, .5f, 1));
             geometry.Fill(GeometryPixel(0, 1));
-            previousGeometry.Fill(GeometryPixel(age, previousDepth));
-            motion.Fill(new byte[8]);
+            if (previousPixels is null)
+                previous.Fill(HalfPixel(-.2f, 0, .5f, 1));
+            else
+                previous.FillRaw(previousPixels);
+            if (previousGeometryPixels is null)
+                previousGeometry.Fill(GeometryPixel(age, previousDepth));
+            else
+                previousGeometry.FillRaw(previousGeometryPixels);
+            if (motionPixels is null)
+                motion.Fill(new byte[8]);
+            else
+                motion.FillRaw(motionPixels);
             HostImage[] images = [raw, geometry, motion, previous, previousGeometry, output, outputGeometry];
             DescriptorImageInfo* infos = stackalloc DescriptorImageInfo[7];
             WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[7];
             for (uint i = 0; i < 7; i++)
             {
-                infos[i] = new(i < 5 ? _sampler : default, images[i].View, ImageLayout.General);
+                // Binding 3 (PreviousHistory) uses production-equivalent
+                // linear sampling; every other sampled binding is nearest.
+                infos[i] = new(
+                    i == 3 ? _linearSampler : i < 5 ? _sampler : default,
+                    images[i].View, ImageLayout.General);
                 writes[i] = new WriteDescriptorSet
                 { SType = StructureType.WriteDescriptorSet, DstSet = _set, DstBinding = i, DescriptorCount = 1,
                   DescriptorType = i < 5 ? DescriptorType.CombinedImageSampler : DescriptorType.StorageImage, PImageInfo = &infos[i] };
@@ -238,8 +318,8 @@ public sealed unsafe class GtaoTemporalGpuTests
             }
             finally { _vk.FreeCommandBuffers(_device, _pool, 1, &command); }
         }
-        private static byte[] HalfPixel(params float[] values) => values.SelectMany(v => BitConverter.GetBytes(BitConverter.HalfToUInt16Bits((Half)v))).ToArray();
-        private static byte[] GeometryPixel(uint age, float depth)
+        internal static byte[] HalfPixel(params float[] values) => values.SelectMany(v => BitConverter.GetBytes(BitConverter.HalfToUInt16Bits((Half)v))).ToArray();
+        internal static byte[] GeometryPixel(uint age, float depth)
         {
             uint state = BitConverter.HalfToUInt16Bits((Half)MathF.Log2(1 + depth)) | (age << 16) | 0x80000000u;
             return BitConverter.GetBytes(0u).Concat(BitConverter.GetBytes(state)).ToArray();
@@ -264,6 +344,7 @@ public sealed unsafe class GtaoTemporalGpuTests
                 if (_descriptorPool.Handle != 0) _vk.DestroyDescriptorPool(_device, _descriptorPool, null);
                 if (_setLayout.Handle != 0) _vk.DestroyDescriptorSetLayout(_device, _setLayout, null);
                 if (_sampler.Handle != 0) _vk.DestroySampler(_device, _sampler, null);
+                if (_linearSampler.Handle != 0) _vk.DestroySampler(_device, _linearSampler, null);
                 if (_pool.Handle != 0) _vk.DestroyCommandPool(_device, _pool, null);
                 _vk.DestroyDevice(_device, null);
             }
@@ -321,6 +402,7 @@ public sealed unsafe class GtaoTemporalGpuTests
                 for (int i = 0; i < 64; i++) pixel.CopyTo(values, i * 8);
                 Copy(values, true);
             }
+            public void FillRaw(byte[] values) => Copy(values, true);
             public byte[] Read() { var values = new byte[8 * 8 * 8]; Copy(values, false); return values; }
             private void Copy(byte[] values, bool write)
             {

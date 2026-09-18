@@ -3924,6 +3924,7 @@ namespace Njulf.Rendering.Data
         public float NormalSigma;
         public uint Radius;
         public uint DebugView;
+        public Matrix4x4 InverseProjectionMatrix;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

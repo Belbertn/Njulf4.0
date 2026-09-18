@@ -213,7 +213,7 @@ public sealed class GtaoImplementationTests
             Assert.That(Marshal.SizeOf<GPUGtaoTemporalPushConstants>(),
                 Is.EqualTo(48));
             Assert.That(Marshal.SizeOf<GPUGtaoSpatialPushConstants>(),
-                Is.EqualTo(32));
+                Is.EqualTo(96));
             Assert.That((flags >> 16) & 0x3fu, Is.EqualTo(11u));
             Assert.That((flags >> 22) & 0x03u,
                 Is.EqualTo((uint)
@@ -305,7 +305,7 @@ public sealed class GtaoImplementationTests
                 "SharedGeometricNormal[sharedIndex]"));
             Assert.That(temporal, Does.Contain("barrier();"));
             Assert.That(temporal, Does.Contain(
-                "dot(previousNormal, normal) < pc.NormalThreshold"));
+                "dot(tapNormal, normal) < pc.NormalThreshold"));
             Assert.That(spatial, Does.Contain(
                 "shared vec4 SharedPayload[GTAO_SHARED_COUNT];"));
             Assert.That(spatial, Does.Contain(
@@ -337,6 +337,73 @@ public sealed class GtaoImplementationTests
                 "EvaluateDirectLight(diffuseIndirectNormal"));
             Assert.That(forward, Does.Not.Contain(
                 "reflect(-viewDirection, diffuseIndirectNormal)"));
+        });
+    }
+
+    [Test]
+    public void SpatialReconstruction_ConsumesFullResolutionDepthWithNeutralFallbacks()
+    {
+        string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
+        string renderingDirectory = FindRepoDirectory("Njulf.Rendering");
+        string spatial = File.ReadAllText(Path.Combine(shaderDirectory,
+            "gtao_spatial.comp")).ReplaceLineEndings("\n");
+        string temporal = File.ReadAllText(Path.Combine(shaderDirectory,
+            "gtao_temporal.comp")).ReplaceLineEndings("\n");
+        string forward = ForwardShaderSource.Read().ReplaceLineEndings("\n");
+        string passes = File.ReadAllText(Path.Combine(renderingDirectory,
+            "Pipeline", "GtaoPasses.cs"));
+        string graph = File.ReadAllText(Path.Combine(renderingDirectory,
+            "Pipeline", "ProductionRenderPipelineDeclaration.cs"));
+
+        int spatialPassStart = graph.IndexOf(
+            "Pass(\"GtaoSpatialPass\"", StringComparison.Ordinal);
+        int spatialPassEnd = graph.IndexOf(
+            "Pass(\"TiledLightCullingPass\"", StringComparison.Ordinal);
+        Assert.That(spatialPassStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(spatialPassEnd, Is.GreaterThan(spatialPassStart));
+        string spatialPassDeclaration = graph[
+            spatialPassStart..spatialPassEnd];
+
+        Assert.Multiple(() =>
+        {
+            // A1: the output pixel's full-resolution depth, not the nearest
+            // packed texel, drives the reconstruction.
+            Assert.That(spatial, Does.Contain(
+                "uniform sampler2D SceneDepthInput;"));
+            Assert.That(spatial, Does.Contain("ReconstructViewDepth("));
+            Assert.That(spatial, Does.Contain("ResolveFootprint("));
+            Assert.That(spatial, Does.Contain(
+                "vec4 centerGeometry = vec4(footprint.referenceNormal, outputViewDepth);"));
+            // A1: the footprint carries the center tap's Gaussian weight so
+            // the kernel must not count it twice; radius 0 must still
+            // reconstruct per pixel rather than pass a nearest texel
+            // through.
+            Assert.That(spatial, Does.Contain("float weightSum = 1.0;"));
+            Assert.That(spatial, Does.Contain("if (x == 0 && y == 0)"));
+            Assert.That(spatial, Does.Contain(
+                "max(spatialWeight - 1.0, 0.0)"));
+            // A2: rejected pixels emit neutral AO with zero bent-normal
+            // confidence instead of a neighboring surface's payload.
+            Assert.That(spatial, Does.Contain("EmitNeutralAo(pixel);"));
+            // A3: temporal history is validated across its bilinear
+            // footprint instead of a single geometry texel.
+            Assert.That(temporal, Does.Contain(
+                "PreviousGeometryHistory, tapPixel, 0).xy"));
+            Assert.That(temporal, Does.Not.Contain(
+                "textureLod(PreviousHistory"));
+            // Phase B: the bent-normal mix is bounded so the material
+            // normal always retains a minimum weight.
+            Assert.That(forward, Does.Contain(
+                "const float GTAO_BENT_NORMAL_MAX_MIX = 0.8;"));
+            Assert.That(forward, Does.Contain(
+                "smoothstep(0.0, 0.25, hemisphere) * GTAO_BENT_NORMAL_MAX_MIX"));
+            // C2: the spatial radius follows the shared blur-radius setting,
+            // capped at the kernel's shared-memory halo.
+            Assert.That(passes, Does.Contain("GtaoMaxSpatialRadius"));
+            Assert.That(passes, Does.Contain(
+                "_settings.AmbientOcclusion.BlurRadius,"));
+            Assert.That(spatialPassDeclaration, Does.Contain(
+                "ReadComputeDepth(RenderGraphResourceId.SceneDepth)"));
         });
     }
 
@@ -400,6 +467,94 @@ public sealed class GtaoImplementationTests
                     double yWeight = CombinedAxisWeight(sourceY, center.Y,
                         extent.SourceHeight, extent.OutputHeight, radius, sigma);
                     collapsed[(sourceX, sourceY)] = xWeight * yWeight;
+                }
+
+                Assert.That(collapsed.Keys, Is.EquivalentTo(brute.Keys));
+                foreach (var sample in brute)
+                {
+                    Assert.That(collapsed[sample.Key],
+                        Is.EqualTo(sample.Value).Within(1.0e-12),
+                        $"scale={extent.SourceWidth}x{extent.SourceHeight}/" +
+                        $"{extent.OutputWidth}x{extent.OutputHeight}, " +
+                        $"center={center}, radius={radius}, source={sample.Key}");
+                }
+            }
+        }
+    }
+
+    [Test]
+    public void CollapsedSpatialKernel_ExcludesReconstructionCenterTapExactly()
+    {
+        // Mirrors gtao_spatial.comp: the reconstruction already carries the
+        // center offset's Gaussian(0) weight, so the collapsed kernel minus
+        // one at the center source texel must equal the brute-force kernel
+        // evaluated without the (0, 0) offset.
+        var extents = new[]
+        {
+            (OutputWidth: 13, OutputHeight: 9, SourceWidth: 13, SourceHeight: 9),
+            (OutputWidth: 13, OutputHeight: 9, SourceWidth: 7, SourceHeight: 5),
+            (OutputWidth: 13, OutputHeight: 9, SourceWidth: 4, SourceHeight: 3)
+        };
+
+        foreach (var extent in extents)
+        {
+            var centers = new[]
+            {
+                (X: 0, Y: 0),
+                (X: extent.OutputWidth - 1, Y: extent.OutputHeight - 1),
+                (X: extent.OutputWidth / 2, Y: extent.OutputHeight / 2)
+            };
+            foreach (var center in centers)
+            foreach (int radius in new[] { 0, 1, 2 })
+            {
+                double sigma = Math.Max(radius, 1);
+                int centerSourceX = ResolveSourceCoordinate(
+                    center.X, extent.OutputWidth, extent.SourceWidth);
+                int centerSourceY = ResolveSourceCoordinate(
+                    center.Y, extent.OutputHeight, extent.SourceHeight);
+
+                var brute = new Dictionary<(int X, int Y), double>();
+                for (int y = -radius; y <= radius; y++)
+                for (int x = -radius; x <= radius; x++)
+                {
+                    if (x == 0 && y == 0)
+                        continue;
+                    var source = (
+                        ResolveSourceCoordinate(center.X + x,
+                            extent.OutputWidth, extent.SourceWidth),
+                        ResolveSourceCoordinate(center.Y + y,
+                            extent.OutputHeight, extent.SourceHeight));
+                    double coefficient = Math.Exp(
+                        -0.5 * (x * x + y * y) / (sigma * sigma));
+                    brute[source] = brute.GetValueOrDefault(source) +
+                        coefficient;
+                }
+
+                var collapsed = new Dictionary<(int X, int Y), double>();
+                int minimumSourceX = ResolveSourceCoordinate(
+                    center.X - radius, extent.OutputWidth, extent.SourceWidth);
+                int maximumSourceX = ResolveSourceCoordinate(
+                    center.X + radius, extent.OutputWidth, extent.SourceWidth);
+                int minimumSourceY = ResolveSourceCoordinate(
+                    center.Y - radius, extent.OutputHeight, extent.SourceHeight);
+                int maximumSourceY = ResolveSourceCoordinate(
+                    center.Y + radius, extent.OutputHeight, extent.SourceHeight);
+                for (int sourceY = minimumSourceY;
+                     sourceY <= maximumSourceY;
+                     sourceY++)
+                for (int sourceX = minimumSourceX;
+                     sourceX <= maximumSourceX;
+                     sourceX++)
+                {
+                    double xWeight = CombinedAxisWeight(sourceX, center.X,
+                        extent.SourceWidth, extent.OutputWidth, radius, sigma);
+                    double yWeight = CombinedAxisWeight(sourceY, center.Y,
+                        extent.SourceHeight, extent.OutputHeight, radius, sigma);
+                    double spatialWeight = xWeight * yWeight;
+                    if (sourceX == centerSourceX && sourceY == centerSourceY)
+                        spatialWeight = Math.Max(spatialWeight - 1.0, 0.0);
+                    if (spatialWeight > 0.0)
+                        collapsed[(sourceX, sourceY)] = spatialWeight;
                 }
 
                 Assert.That(collapsed.Keys, Is.EquivalentTo(brute.Keys));

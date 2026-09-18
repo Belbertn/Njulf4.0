@@ -382,6 +382,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadComputeSampled(RenderGraphResourceId.GtaoGeometryHistory,
                     RenderGraphHistoryBindingSelection.Current),
                 ReadComputeSampled(RenderGraphResourceId.GtaoRaw),
+                ReadComputeDepth(RenderGraphResourceId.SceneDepth),
                 WriteComputeStorage(RenderGraphResourceId.GtaoFiltered,
                     ImageLayout.ShaderReadOnlyOptimal),
                 WriteComputeStorage(RenderGraphResourceId.GtaoSpatialScratch,

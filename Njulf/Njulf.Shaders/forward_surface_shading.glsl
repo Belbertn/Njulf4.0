@@ -1398,6 +1398,12 @@ float SampleScreenSpaceAo()
 }
 
 #if NJULF_GTAO_BENT_NORMAL_LIGHTING
+// The bent normal refines, but never fully replaces, the material shading
+// normal for indirect diffuse: the mix is capped so the surface's own normal
+// always retains a minimum weight and geometric detail is not discarded
+// wholesale. Confidence gating alone cannot bound this because confidence
+// reflects horizon sampling quality, not surface identity.
+const float GTAO_BENT_NORMAL_MAX_MIX = 0.8;
 vec3 DecodeGtaoOctahedralNormal(vec2 encoded)
 {
     vec2 oct = clamp(encoded, vec2(-1.0), vec2(1.0));
@@ -1441,7 +1447,7 @@ bool TryResolveIndirectDiffuseNormal(
     if (hemisphere <= 0.0)
         return false;
     resolvedNormal = normalize(mix(shadingNormal, worldBentNormal,
-        smoothstep(0.0, 0.25, hemisphere)));
+        smoothstep(0.0, 0.25, hemisphere) * GTAO_BENT_NORMAL_MAX_MIX));
     return true;
 }
 #endif
