@@ -121,9 +121,11 @@ public sealed class BindlessIndexTests
             Assert.That(
                 BindlessIndex.OpaqueSceneColorSnapshotTextureB,
                 Is.EqualTo(BindlessIndex.TaaHistoryTextureB + 1));
+            Assert.That(BindlessIndex.GtaoReferenceNormalTexture,
+                Is.EqualTo(BindlessIndex.OpaqueSceneColorSnapshotTextureB + 1));
             Assert.That(
                 BindlessIndex.FirstDynamicTextureIndex,
-                Is.EqualTo(BindlessIndex.OpaqueSceneColorSnapshotTextureB + 1));
+                Is.EqualTo(BindlessIndex.GtaoReferenceNormalTexture + 1));
             Assert.That(BindlessIndex.GtaoFilteredTexture,
                 Is.EqualTo(BindlessIndex.OpaqueSceneColorSnapshotTexture + 1));
             Assert.That(BindlessIndex.GtaoDebugTexture,
@@ -229,6 +231,7 @@ public sealed class BindlessIndexTests
             ["OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX"] = BindlessIndex.OpaqueSceneColorSnapshotTexture,
             ["GTAO_FILTERED_TEXTURE_INDEX"] = BindlessIndex.GtaoFilteredTexture,
             ["GTAO_DEBUG_TEXTURE_INDEX"] = BindlessIndex.GtaoDebugTexture,
+            ["GTAO_REFERENCE_NORMAL_TEXTURE_INDEX"] = BindlessIndex.GtaoReferenceNormalTexture,
             ["TAA_HISTORY_TEXTURE_B_INDEX"] = BindlessIndex.TaaHistoryTextureB,
             ["OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_B_INDEX"] = BindlessIndex.OpaqueSceneColorSnapshotTextureB,
             ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,

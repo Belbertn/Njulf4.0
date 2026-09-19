@@ -890,9 +890,17 @@ namespace Njulf.Rendering.Descriptors
         public const int OpaqueSceneColorSnapshotTextureB =
             TaaHistoryTextureB + 1;
 
+        /// <summary>
+        /// Full-resolution GTAO reference normal published beside the
+        /// filtered bent-normal payload, so the forward pass can transfer
+        /// the bend as a shortest arc.
+        /// </summary>
+        public const int GtaoReferenceNormalTexture =
+            OpaqueSceneColorSnapshotTextureB + 1;
+
         /// <summary>First dynamically allocated material texture index</summary>
         public const int FirstDynamicTextureIndex =
-            OpaqueSceneColorSnapshotTextureB + 1;
+            GtaoReferenceNormalTexture + 1;
 
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;

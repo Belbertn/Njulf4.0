@@ -12,6 +12,7 @@ layout(set = 0, binding = 6) uniform sampler2D SceneDepthInput;
 layout(rgba16f, set = 0, binding = 3) uniform writeonly image2D GtaoFilteredOutput;
 layout(r8, set = 0, binding = 4) uniform writeonly image2D ScalarAoOutput;
 layout(rgba16f, set = 0, binding = 5) uniform writeonly image2D GtaoDebugOutput;
+layout(rg16f, set = 0, binding = 7) uniform writeonly image2D GtaoReferenceNormalOutput;
 
 layout(push_constant) uniform GtaoSpatialPushBlock
 {
@@ -62,18 +63,6 @@ vec2 EncodeOctahedral(vec3 normal)
     if (normal.z < 0.0)
         encoded = (vec2(1.0) - abs(encoded.yx)) * sign(encoded);
     return clamp(encoded, vec2(-1.0), vec2(1.0));
-}
-
-// Deterministic tangent frame shared with the forward pass's decoder, so
-// an encoded bent-normal delta keeps the same lean direction for whichever
-// reference normal it is measured against.
-void ResolveReferenceFrame(vec3 normal, out vec3 tangentX, out vec3 tangentY)
-{
-    vec3 auxiliary = abs(normal.y) < 0.99
-        ? vec3(0.0, 1.0, 0.0)
-        : vec3(1.0, 0.0, 0.0);
-    tangentX = normalize(cross(auxiliary, normal));
-    tangentY = cross(normal, tangentX);
 }
 
 bool UnpackGeometry(uvec2 packed, out vec3 normal, out float viewDepth)
@@ -195,6 +184,8 @@ float ReconstructViewDepth(vec2 uv, float deviceDepth)
 void EmitNeutralAo(ivec2 pixel)
 {
     imageStore(GtaoFilteredOutput, pixel, vec4(0.0, 0.0, 1.0, 0.0));
+    // (0, 0) decodes to the neutral view-space normal (0, 0, 1).
+    imageStore(GtaoReferenceNormalOutput, pixel, vec4(0.0));
     imageStore(ScalarAoOutput, pixel, vec4(1.0));
     imageStore(GtaoDebugOutput, pixel, vec4(1.0));
 }
@@ -553,22 +544,18 @@ void main()
         : footprint.bentNormal;
     if (dot(bentNormal, footprint.referenceNormal) <= 0.0)
         bentNormal = footprint.referenceNormal;
-    // The filtered bent normal is written relative to the reference normal
-    // GTAO actually measured against, so the forward pass applies a true
-    // occlusion delta instead of the angle between the mesh normal and a
-    // half-resolution depth reconstruction.
-    vec3 referenceTangentX;
-    vec3 referenceTangentY;
-    ResolveReferenceFrame(footprint.referenceNormal,
-        referenceTangentX, referenceTangentY);
-    vec3 localBentNormal = vec3(
-        dot(bentNormal, referenceTangentX),
-        dot(bentNormal, referenceTangentY),
-        dot(bentNormal, footprint.referenceNormal));
-    vec4 filtered = vec4(EncodeOctahedral(localBentNormal),
+    // The filtered bent normal is published in absolute view space, and the
+    // reference normal it was measured against is published beside it: a
+    // tangent-frame transfer is not parallel transport, so the forward pass
+    // recovers the bend as the shortest arc between the two instead of
+    // re-deriving an azimuth whose twist varies per pixel with the shading
+    // normal.
+    vec4 filtered = vec4(EncodeOctahedral(bentNormal),
         clamp(visibility, 0.0, 1.0),
         clamp(confidence, 0.0, 1.0));
     imageStore(GtaoFilteredOutput, pixel, filtered);
+    imageStore(GtaoReferenceNormalOutput, pixel, vec4(
+        EncodeOctahedral(footprint.referenceNormal), 0.0, 0.0));
     imageStore(ScalarAoOutput, pixel, vec4(filtered.z, 0.0, 0.0, 1.0));
 
     vec3 debugColor = vec3(filtered.z);

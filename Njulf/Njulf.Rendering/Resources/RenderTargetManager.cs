@@ -66,6 +66,7 @@ namespace Njulf.Rendering.Resources
         public const Format AmbientOcclusionFormat = Format.R8Unorm;
         public const Format GtaoRadianceFormat = Format.R16G16B16A16Sfloat;
         public const Format GtaoGeometryHistoryFormat = Format.R32G32Uint;
+        public const Format GtaoReferenceNormalFormat = Format.R16G16Sfloat;
         public const Format MaterialTransportProvenanceFormat = Format.R8Unorm;
         public const Format LdrSceneColorFormat = Format.R16G16B16A16Sfloat;
         public const Format SmaaEdgesFormat = Format.R8G8Unorm;
@@ -309,6 +310,12 @@ namespace Njulf.Rendering.Resources
                 GtaoRadianceFormat,
                 gtaoResolvedExtent,
                 StorageSampledDescriptor);
+            GtaoReferenceNormal = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.GtaoReferenceNormal,
+                "GTAO Reference Normal",
+                GtaoReferenceNormalFormat,
+                gtaoResolvedExtent,
+                StorageSampledDescriptor);
             MaterialTransportProvenance = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.MaterialTransportProvenance,
                 "Material Transport Provenance",
@@ -547,6 +554,7 @@ namespace Njulf.Rendering.Resources
         public RenderTarget GtaoGeometryHistory0 { get; }
         public RenderTarget GtaoGeometryHistory1 { get; }
         public RenderTarget GtaoFiltered { get; }
+        public RenderTarget GtaoReferenceNormal { get; }
         public RenderTarget MaterialTransportProvenance { get; }
         public RenderTarget? NearFieldDirectSource { get; private set; }
         public RenderTarget? NearFieldReceiverPayload { get; private set; }
@@ -629,7 +637,8 @@ namespace Njulf.Rendering.Resources
             GtaoHistory1,
             GtaoGeometryHistory0,
             GtaoGeometryHistory1,
-            GtaoFiltered);
+            GtaoFiltered,
+            GtaoReferenceNormal);
         public ulong MaterialTransportProvenanceRenderTargetBytes =>
             SumEnabledBytes(MaterialTransportProvenance);
         public ulong NearFieldResidualSourceRenderTargetBytes => SumEnabledBytes(
@@ -1259,6 +1268,8 @@ namespace Njulf.Rendering.Resources
                 GtaoGeometryHistory1, gtaoWorkingExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoFiltered,
                 GtaoFiltered, gtaoResolvedExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.GtaoReferenceNormal,
+                GtaoReferenceNormal, gtaoResolvedExtent);
         }
 
         private void CreateHybridReflectionTargets(Extent2D extent)
@@ -1741,6 +1752,8 @@ namespace Njulf.Rendering.Resources
                 GtaoGeometryHistory1);
             DisposeIfManagerOwned(RenderGraphResourceId.GtaoFiltered,
                 GtaoFiltered);
+            DisposeIfManagerOwned(RenderGraphResourceId.GtaoReferenceNormal,
+                GtaoReferenceNormal);
             DisposeIfManagerOwned(
                 RenderGraphResourceId.MaterialTransportProvenance,
                 MaterialTransportProvenance);

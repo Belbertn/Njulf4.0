@@ -58,6 +58,8 @@ public sealed class SimpleDdgiSampledAtlasTests
             Assert.That(BindlessIndex.TaaHistoryTextureB + 1,
                 Is.EqualTo(BindlessIndex.OpaqueSceneColorSnapshotTextureB));
             Assert.That(BindlessIndex.OpaqueSceneColorSnapshotTextureB + 1,
+                Is.EqualTo(BindlessIndex.GtaoReferenceNormalTexture));
+            Assert.That(BindlessIndex.GtaoReferenceNormalTexture + 1,
                 Is.EqualTo(BindlessIndex.FirstDynamicTextureIndex));
         });
     }

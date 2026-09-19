@@ -219,7 +219,13 @@ namespace Njulf.Rendering.Pipeline
         OpaqueVisibility,
         OpaqueVisibilityWork,
         SurfaceReceiverIdentity,
-        OpticalLayers
+        OpticalLayers,
+        // The GTAO spatial pass publishes the depth-weighted reference normal
+        // the filtered bent normal was measured against, so the forward pass
+        // can transfer the bend as a shortest arc instead of re-deriving an
+        // azimuth from a tangent frame. Append-only to preserve established
+        // capture IDs.
+        GtaoReferenceNormal
     }
 
     public enum RenderGraphResourceKind

@@ -156,12 +156,16 @@ void NeighborhoodEnvelope(
     minimumVisibility = 1.0;
     maximumVisibility = 0.0;
     maximumBendAngle = 0.0;
-    // Curvature-aware normal gate. The depth-compatible neighbourhood's own
-    // normal spread bounds how strict the normal threshold may be: flat
+    // Curvature-aware normal gate. The depth-compatible neighbourhood's mean
+    // normal agreement bounds how strict the normal threshold may be: flat
     // walls keep the full setting while cloth folds relax toward their own
     // spread so history keeps accumulating instead of being rejected every
-    // frame by half-resolution reconstruction noise.
-    float minimumNormalAgreement = 1.0;
+    // frame by half-resolution reconstruction noise. The mean rather than
+    // the minimum keeps one bad half-res normal from dragging the threshold
+    // to zero, and the floor keeps the relaxation from accepting history
+    // from genuinely different surfaces.
+    float normalAgreementSum = 0.0;
+    int normalAgreementCount = 0;
     for (int y = -1; y <= 1; ++y)
     {
         for (int x = -1; x <= 1; ++x)
@@ -179,11 +183,17 @@ void NeighborhoodEnvelope(
             if (abs(depth - centerDepth) >
                     max(0.02, centerDepth * pc.DepthThresholdScale))
                 continue;
-            minimumNormalAgreement = min(minimumNormalAgreement,
-                clamp(dot(normal, centerNormal), 0.0, 1.0));
+            normalAgreementSum += clamp(dot(normal, centerNormal),
+                0.0, 1.0);
+            normalAgreementCount++;
         }
     }
-    relaxedNormalThreshold = min(pc.NormalThreshold, minimumNormalAgreement);
+    float meanNormalAgreement = normalAgreementCount > 0
+        ? normalAgreementSum / float(normalAgreementCount)
+        : 1.0;
+    relaxedNormalThreshold = clamp(
+        min(pc.NormalThreshold, meanNormalAgreement),
+        0.5, pc.NormalThreshold);
     bool found = false;
     for (int y = -1; y <= 1; ++y)
     {

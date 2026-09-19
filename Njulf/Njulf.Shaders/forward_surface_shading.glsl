@@ -1410,13 +1410,14 @@ float SampleScreenSpaceAo()
 #if NJULF_GTAO_BENT_NORMAL_LIGHTING
 // The GTAO bent normal is a depth-reconstructed geometric quantity with no
 // normal-map detail, so it must never replace the material shading normal
-// for indirect diffuse. The spatial pass encodes the filtered bent normal
-// relative to the half-resolution reference normal it measured against, so
-// the payload carries the occlusion delta itself; this bounded delta is
-// then applied to the fragment's own shading normal: normal-map detail
-// passes straight through while the indirect lobe still leans away from
-// the occluders. Measuring the delta here against the mesh normal instead
-// would feed reconstruction error into the lobe, worst on curved cloth.
+// for indirect diffuse. The spatial pass publishes the filtered bent
+// normal in absolute view space together with the reference normal it
+// measured against; the angle between the two is the true occlusion delta,
+// and this bounded delta is then applied to the fragment's own shading
+// normal: normal-map detail passes straight through while the indirect
+// lobe still leans away from the occluders. The transfer is a shortest arc
+// about the bend's own axis, so it depends on no global pole and no tangent
+// frame whose twist would vary per pixel with the shading normal.
 // Confidence gating alone cannot bound this because confidence reflects
 // horizon sampling quality, not surface identity.
 const float GTAO_BENT_NORMAL_MAX_BEND_ANGLE = 0.7854; // ~45 degrees
@@ -1432,19 +1433,6 @@ vec3 DecodeGtaoOctahedralNormal(vec2 encoded)
     return lengthSquared > 1.0e-8
         ? normal * inversesqrt(lengthSquared)
         : vec3(0.0, 0.0, 1.0);
-}
-
-// Deterministic tangent frame shared with gtao_spatial.comp's encoder, so
-// the encoded bent-normal delta keeps the same lean direction when it is
-// re-applied around the shading normal. Both sides build the frame in view
-// space, so the lean direction is camera-consistent.
-void ResolveGtaoReferenceFrame(vec3 normal, out vec3 frameX, out vec3 frameY)
-{
-    vec3 auxiliary = abs(normal.y) < 0.99
-        ? vec3(0.0, 1.0, 0.0)
-        : vec3(1.0, 0.0, 0.0);
-    frameX = normalize(cross(auxiliary, normal));
-    frameY = cross(normal, frameX);
 }
 
 bool TryResolveIndirectDiffuseNormal(
@@ -1464,13 +1452,18 @@ bool TryResolveIndirectDiffuseNormal(
         0.0);
     if (any(isnan(payload)) || any(isinf(payload)) || payload.w <= 0.0)
         return false;
-    // GtaoFiltered.xy holds the bent normal encoded in the reference frame
-    // of the half-resolution geometric normal GTAO measured against, so
-    // the decoded vector is the occlusion delta itself: its angle from the
-    // frame's pole is the true bend, with no reconstruction error.
-    vec3 localBentNormal = DecodeGtaoOctahedralNormal(payload.xy);
-    if (localBentNormal.z <= 0.0)
+    vec2 referenceEncoded = textureLod(
+        BindlessTextures[nonuniformEXT(GTAO_REFERENCE_NORMAL_TEXTURE_INDEX)],
+        uv,
+        0.0).xy;
+    if (any(isnan(referenceEncoded)) || any(isinf(referenceEncoded)))
         return false;
+    vec3 referenceNormal = DecodeGtaoOctahedralNormal(referenceEncoded);
+    // GtaoFiltered.xy holds the absolute view-space bent normal, and the
+    // reference normal it was measured against is published beside it, so
+    // the angle between the two is the true bend, with no reconstruction
+    // error and no re-derived azimuth.
+    vec3 bentNormal = DecodeGtaoOctahedralNormal(payload.xy);
 
     // The delta must be re-applied in the encoder's space: bring the
     // shading normal into view space through the rigid inverse-view
@@ -1484,21 +1477,18 @@ bool TryResolveIndirectDiffuseNormal(
         return false;
     viewShadingNormal *= inversesqrt(viewLengthSquared);
 
-    vec3 frameX;
-    vec3 frameY;
-    ResolveGtaoReferenceFrame(viewShadingNormal, frameX, frameY);
-    vec3 leanTarget = frameX * localBentNormal.x +
-        frameY * localBentNormal.y +
-        viewShadingNormal * localBentNormal.z;
-    vec3 bendAxis = cross(viewShadingNormal, leanTarget);
+    // The bend's own axis, in view space, independent of any global pole
+    // or tangent frame, so the lean direction does not twist with the
+    // shading normal.
+    vec3 bendAxis = cross(referenceNormal, bentNormal);
     float bendAxisLength = length(bendAxis);
     if (bendAxisLength < 1.0e-5)
         return false;
-    // Bend magnitude: the delta's own angle from the reference direction,
-    // clamped to a maximum and scaled by confidence and occlusion so
-    // unoccluded pixels receive no bend at all.
+    // Bend magnitude: the angle between the published pair, clamped to a
+    // maximum and scaled by confidence and occlusion so unoccluded pixels
+    // receive no bend at all.
     float bendAngle = min(
-        acos(clamp(localBentNormal.z, -1.0, 1.0)),
+        acos(clamp(dot(referenceNormal, bentNormal), -1.0, 1.0)),
         GTAO_BENT_NORMAL_MAX_BEND_ANGLE) *
         clamp(payload.w, 0.0, 1.0) *
         clamp(1.0 - payload.z, 0.0, 1.0);
@@ -1506,13 +1496,15 @@ bool TryResolveIndirectDiffuseNormal(
         return false;
 
     // Rodrigues' rotation of the fragment's own shading normal around the
-    // transferred bend axis; the rotation axis is perpendicular to the
-    // shading normal by construction, so the axial term vanishes. The
+    // transferred bend axis. The axis is perpendicular to the reference
+    // normal, not to the shading normal, so the axial term is kept. The
     // unmodified shading normal is kept on any rejection.
     vec3 rotationAxis = bendAxis / bendAxisLength;
     float rotationCosine = cos(bendAngle);
     vec3 rotatedView = viewShadingNormal * rotationCosine +
-        cross(rotationAxis, viewShadingNormal) * sin(bendAngle);
+        cross(rotationAxis, viewShadingNormal) * sin(bendAngle) +
+        rotationAxis * dot(rotationAxis, viewShadingNormal) *
+            (1.0 - rotationCosine);
     vec3 rotated = MulRowMajor(
         vec4(rotatedView, 0.0),
         pc.Push.InverseViewMatrix).xyz;

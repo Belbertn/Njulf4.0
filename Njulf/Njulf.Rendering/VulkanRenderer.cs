@@ -12682,6 +12682,11 @@ namespace Njulf.Rendering
                     whiteView,
                     _bindlessHeap.ScreenSampler,
                     imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                _bindlessHeap.RegisterTexture(
+                    BindlessIndex.GtaoReferenceNormalTexture,
+                    whiteView,
+                    _bindlessHeap.ScreenSampler,
+                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
                 return;
             }
 
@@ -12721,6 +12726,12 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.GtaoDebugTexture,
                 _renderTargets.GtaoSpatialScratch.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.GtaoReferenceNormalTexture,
+                _renderTargets.GtaoReferenceNormal.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
         }

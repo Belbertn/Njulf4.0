@@ -657,7 +657,8 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
                 Binding(3, DescriptorType.StorageImage),
                 Binding(4, DescriptorType.StorageImage),
                 Binding(5, DescriptorType.StorageImage),
-                Binding(6, DescriptorType.CombinedImageSampler)
+                Binding(6, DescriptorType.CombinedImageSampler),
+                Binding(7, DescriptorType.StorageImage)
             ],
             2,
             (uint)Marshal.SizeOf<GPUGtaoSpatialPushConstants>(),
@@ -683,6 +684,9 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
             _bindlessHeap.ScreenSampler, ImageLayout.ShaderReadOnlyOptimal);
         _bindlessHeap.RegisterTexture(BindlessIndex.GtaoDebugTexture,
             _renderTargets.GtaoSpatialScratch.View,
+            _bindlessHeap.ScreenSampler, ImageLayout.ShaderReadOnlyOptimal);
+        _bindlessHeap.RegisterTexture(BindlessIndex.GtaoReferenceNormalTexture,
+            _renderTargets.GtaoReferenceNormal.View,
             _bindlessHeap.ScreenSampler, ImageLayout.ShaderReadOnlyOptimal);
         return true;
     }
@@ -717,6 +721,7 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
         _context.Api.CmdDispatch(cmd, (outputExtent.Width + 7u) / 8u,
             (outputExtent.Height + 7u) / 8u, 1u);
         _renderTargets.GtaoFiltered.TransitionToShaderRead(cmd);
+        _renderTargets.GtaoReferenceNormal.TransitionToShaderRead(cmd);
         _renderTargets.GtaoSpatialScratch.TransitionToShaderRead(cmd);
         _renderTargets.AmbientOcclusionBlurred.TransitionToShaderRead(cmd);
     }
@@ -758,6 +763,9 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
                     ImageLayout.General),
                 new GtaoImageDescriptor(5, DescriptorType.StorageImage,
                     _renderTargets.GtaoSpatialScratch.View, default,
+                    ImageLayout.General),
+                new GtaoImageDescriptor(7, DescriptorType.StorageImage,
+                    _renderTargets.GtaoReferenceNormal.View, default,
                     ImageLayout.General));
         }
     }

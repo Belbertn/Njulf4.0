@@ -222,8 +222,11 @@ public sealed class GtaoImplementationTests
             Assert.That(BindlessIndex.GtaoFilteredTexture,
                 Is.EqualTo(
                     BindlessIndex.OpaqueSceneColorSnapshotTexture + 1));
+            Assert.That(BindlessIndex.GtaoReferenceNormalTexture,
+                Is.EqualTo(
+                    BindlessIndex.OpaqueSceneColorSnapshotTextureB + 1));
             Assert.That(BindlessIndex.FirstDynamicTextureIndex,
-                Is.EqualTo(BindlessIndex.OpaqueSceneColorSnapshotTextureB + 1));
+                Is.EqualTo(BindlessIndex.GtaoReferenceNormalTexture + 1));
         });
     }
 
@@ -391,24 +394,33 @@ public sealed class GtaoImplementationTests
                 "PreviousGeometryHistory, tapPixel, 0).xy"));
             Assert.That(temporal, Does.Not.Contain(
                 "textureLod(PreviousHistory"));
-            // Phase B: the spatial pass encodes the filtered bent normal in
-            // the reference frame of the normal GTAO measured against, and
-            // the forward pass applies that bounded delta as a rotation of
-            // the material shading normal, never a replacement, so
-            // normal-map detail survives the indirect diffuse term and no
-            // half-resolution reconstruction error enters the lobe.
+            // Phase B: the spatial pass publishes the filtered bent normal in
+            // absolute view space together with the reference normal it
+            // measured against, and the forward pass transfers that bounded
+            // delta as a shortest-arc rotation of the material shading
+            // normal, never a replacement, so normal-map detail survives the
+            // indirect diffuse term and no re-derived azimuth enters the
+            // lobe.
             Assert.That(forward, Does.Contain(
                 "const float GTAO_BENT_NORMAL_MAX_BEND_ANGLE = 0.7854;"));
+            Assert.That(forward, Does.Not.Contain(
+                "ResolveGtaoReferenceFrame"));
             Assert.That(forward, Does.Contain(
-                "void ResolveGtaoReferenceFrame("));
+                "GTAO_REFERENCE_NORMAL_TEXTURE_INDEX"));
             Assert.That(forward, Does.Contain(
-                "vec3 bendAxis = cross(viewShadingNormal, leanTarget);"));
+                "vec3 bendAxis = cross(referenceNormal, bentNormal);"));
             Assert.That(forward, Does.Contain(
                 "TryResolveIndirectDiffuseNormal(\n" +
                 "        normal,\n" +
                 "        diffuseIndirectNormal);"));
             Assert.That(spatial, Does.Contain(
-                "EncodeOctahedral(localBentNormal)"));
+                "EncodeOctahedral(bentNormal)"));
+            Assert.That(spatial, Does.Contain(
+                "EncodeOctahedral(footprint.referenceNormal)"));
+            Assert.That(spatial, Does.Not.Contain(
+                "ResolveReferenceFrame"));
+            Assert.That(spatial, Does.Contain(
+                "GtaoReferenceNormalOutput"));
             // C2: the spatial radius follows the shared blur-radius setting,
             // capped at the kernel's shared-memory halo.
             Assert.That(passes, Does.Contain("GtaoMaxSpatialRadius"));
@@ -709,6 +721,332 @@ public sealed class GtaoImplementationTests
             });
         }
     }
+
+    [Test]
+    public void GtaoDither_IsStratifiedSpatiotemporalAndGuardsTheConstantDitherBug()
+    {
+        // A C# mirror of gtao.comp's dither index arithmetic, asserting what
+        // the review of a1468e0 had to measure by hand. Two failed dither
+        // attempts justify the fixture: the guards must fail against the
+        // superseded IGN scheme and pass against the stratified one.
+        string raw = File.ReadAllText(Path.Combine(
+            FindRepoDirectory("Njulf.Shaders"), "gtao.comp"));
+
+        const int blockSize = 64;
+        const int temporalWindow = 24;
+
+        Assert.Multiple(() =>
+        {
+            // The shader must carry the stratified scheme the mirror
+            // reflects; the superseded gradient-noise dither must be gone.
+            Assert.That(raw, Does.Contain(
+                "(((pixel.x + pixel.y) & 3) << 2) + (pixel.x & 3)"));
+            Assert.That(raw, Does.Contain(
+                "(pixel.y - pixel.x) & 3"));
+            Assert.That(raw, Does.Contain(
+                "uint rotationIndex = pc.FrameIndex % 6u;"));
+            Assert.That(raw, Does.Contain(
+                "uint offsetIndex = (pc.FrameIndex / 6u) % 4u;"));
+            Assert.That(raw, Does.Not.Contain(
+                "InterleavedGradientNoise"));
+            Assert.That(raw, Does.Not.Contain("pc.FrameIndex & 63u"));
+
+            // (b) Every 4x4 tile is a complete direction stratum, so any
+            // 4x4 neighbourhood the spatial filter covers sees all 16
+            // direction indices.
+            Assert.That(EveryTileHasSixteenDirectionIndices(blockSize),
+                Is.True);
+
+            // (a) The direction and offset channels are decorrelated: low
+            // rank correlation, and the circular channel difference takes
+            // several distinct values per frame instead of one locked
+            // constant, with the full window of temporal rotations and
+            // offset shifts spreading it across the unit interval.
+            Assert.That(MaxAbsoluteRankCorrelation(
+                    blockSize, temporalWindow, SampleStratifiedGtaoDither),
+                Is.LessThan(0.5));
+            Assert.That(MinimumDistinctChannelDifferences(
+                    blockSize, temporalWindow, SampleStratifiedGtaoDither),
+                Is.GreaterThanOrEqualTo(4));
+            Assert.That(PooledDistinctChannelDifferences(
+                    blockSize, temporalWindow, SampleStratifiedGtaoDither),
+                Is.GreaterThanOrEqualTo(12));
+
+            // (c) Consecutive frames never advance both channels by the
+            // same delta for every pixel: the rotation and offset
+            // sequences are independent, so the joint pattern is not a
+            // rigid translation of a single number.
+            Assert.That(CountLockedTemporalTransitions(
+                    blockSize, temporalWindow, SampleStratifiedGtaoDither),
+                Is.EqualTo(0));
+        });
+
+        // The same guards have teeth: the superseded IGN dither locks the
+        // offset channel to a near-constant of the direction channel (guard
+        // a, two distinct differences across pixels and the whole window)
+        // and advances both channels identically every frame (guard c),
+        // exactly the two defects the stratified scheme exists to remove.
+        Assert.Multiple(() =>
+        {
+            Assert.That(MinimumDistinctChannelDifferences(
+                    blockSize, temporalWindow,
+                    SampleInterleavedGradientGtaoDither),
+                Is.LessThanOrEqualTo(2));
+            Assert.That(PooledDistinctChannelDifferences(
+                    blockSize, temporalWindow,
+                    SampleInterleavedGradientGtaoDither),
+                Is.LessThanOrEqualTo(2));
+            Assert.That(CountLockedTemporalTransitions(
+                    blockSize, temporalWindow,
+                    SampleInterleavedGradientGtaoDither),
+                Is.EqualTo(temporalWindow - 1));
+        });
+    }
+
+    private delegate (float Direction, float Offset) DitherSampler(
+        int pixelX, int pixelY, uint temporalIndex);
+
+    private static (float Direction, float Offset) SampleStratifiedGtaoDither(
+        int pixelX,
+        int pixelY,
+        uint temporalIndex)
+    {
+        float directionNoise = (1.0f / 16.0f) *
+            ((((pixelX + pixelY) & 3) << 2) + (pixelX & 3));
+        float offsetNoise = (1.0f / 4.0f) * ((pixelY - pixelX) & 3);
+        uint rotationIndex = temporalIndex % 6u;
+        uint offsetIndex = (temporalIndex / 6u) % 4u;
+        directionNoise = Fract(directionNoise +
+            rotationIndex * (1.0f / 6.0f));
+        offsetNoise = Fract(offsetNoise + offsetIndex * 0.25f);
+        return (directionNoise, offsetNoise);
+    }
+
+    private static (float Direction, float Offset)
+        SampleInterleavedGradientGtaoDither(
+            int pixelX,
+            int pixelY,
+            uint temporalIndex)
+    {
+        // The dither a1468e0 shipped: two IGN evaluations over one
+        // position. The temporal phase and the spatial shift both reduce
+        // to constants, so the second channel is a locked function of the
+        // first and every frame advances both identically.
+        float x = pixelX + temporalIndex * 0.61803398875f;
+        float y = pixelY + temporalIndex * 0.30901699437f;
+        return (
+            InterleavedGradientNoise(x, y),
+            InterleavedGradientNoise(x + 5.588238f, y + 5.588238f));
+    }
+
+    private static float InterleavedGradientNoise(float x, float y) =>
+        Fract(52.9829189f * Fract(x * 0.06711056f + y * 0.00583715f));
+
+    private static float Fract(float value) =>
+        value - MathF.Floor(value);
+
+    private static bool EveryTileHasSixteenDirectionIndices(int blockSize)
+    {
+        for (int tileY = 0; tileY < blockSize; tileY += 4)
+        {
+            for (int tileX = 0; tileX < blockSize; tileX += 4)
+            {
+                var distinct = new HashSet<int>();
+                for (int y = tileY; y < tileY + 4; y++)
+                {
+                    for (int x = tileX; x < tileX + 4; x++)
+                        distinct.Add((((x + y) & 3) << 2) + (x & 3));
+                }
+                if (distinct.Count != 16)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private static float MaxAbsoluteRankCorrelation(
+        int blockSize,
+        int temporalWindow,
+        DitherSampler sample)
+    {
+        float maximum = 0.0f;
+        for (uint temporalIndex = 0;
+             temporalIndex < temporalWindow;
+             temporalIndex++)
+        {
+            int pixelCount = blockSize * blockSize;
+            var direction = new float[pixelCount];
+            var offset = new float[pixelCount];
+            int index = 0;
+            for (int y = 0; y < blockSize; y++)
+            {
+                for (int x = 0; x < blockSize; x++)
+                {
+                    (direction[index], offset[index]) =
+                        sample(x, y, temporalIndex);
+                    index++;
+                }
+            }
+            maximum = MathF.Max(maximum, (float)Math.Abs(
+                SpearmanRankCorrelation(direction, offset)));
+        }
+        return maximum;
+    }
+
+    private static double SpearmanRankCorrelation(float[] a, float[] b)
+    {
+        double[] ranksA = AverageRanks(a);
+        double[] ranksB = AverageRanks(b);
+        double meanA = 0.0;
+        double meanB = 0.0;
+        for (int i = 0; i < a.Length; i++)
+        {
+            meanA += ranksA[i];
+            meanB += ranksB[i];
+        }
+        meanA /= a.Length;
+        meanB /= b.Length;
+        double covariance = 0.0;
+        double varianceA = 0.0;
+        double varianceB = 0.0;
+        for (int i = 0; i < a.Length; i++)
+        {
+            double deltaA = ranksA[i] - meanA;
+            double deltaB = ranksB[i] - meanB;
+            covariance += deltaA * deltaB;
+            varianceA += deltaA * deltaA;
+            varianceB += deltaB * deltaB;
+        }
+        return covariance / Math.Sqrt(varianceA * varianceB);
+    }
+
+    private static double[] AverageRanks(float[] values)
+    {
+        var order = new int[values.Length];
+        for (int i = 0; i < order.Length; i++)
+            order[i] = i;
+        Array.Sort(order, (x, y) => values[x].CompareTo(values[y]));
+        var ranks = new double[values.Length];
+        int start = 0;
+        while (start < order.Length)
+        {
+            int end = start;
+            while (end + 1 < order.Length &&
+                values[order[end + 1]] == values[order[start]])
+                end++;
+            double averageRank = (start + end) * 0.5 + 1.0;
+            for (int i = start; i <= end; i++)
+                ranks[order[i]] = averageRank;
+            start = end + 1;
+        }
+        return ranks;
+    }
+
+    private static int MinimumDistinctChannelDifferences(
+        int blockSize,
+        int temporalWindow,
+        DitherSampler sample)
+    {
+        int minimum = int.MaxValue;
+        for (uint temporalIndex = 0;
+             temporalIndex < temporalWindow;
+             temporalIndex++)
+        {
+            var differences = new float[blockSize * blockSize];
+            int index = 0;
+            for (int y = 0; y < blockSize; y++)
+            {
+                for (int x = 0; x < blockSize; x++)
+                {
+                    var (direction, offset) =
+                        sample(x, y, temporalIndex);
+                    differences[index++] = Fract(offset - direction + 1.0f);
+                }
+            }
+            Array.Sort(differences);
+            int distinct = 1;
+            for (int i = 1; i < differences.Length; i++)
+            {
+                if (differences[i] - differences[i - 1] > 2.0e-3f)
+                    distinct++;
+            }
+            minimum = Math.Min(minimum, distinct);
+        }
+        return minimum;
+    }
+
+    private static int PooledDistinctChannelDifferences(
+        int blockSize,
+        int temporalWindow,
+        DitherSampler sample)
+    {
+        var differences = new float[blockSize * blockSize * temporalWindow];
+        int index = 0;
+        for (uint temporalIndex = 0;
+             temporalIndex < temporalWindow;
+             temporalIndex++)
+        {
+            for (int y = 0; y < blockSize; y++)
+            {
+                for (int x = 0; x < blockSize; x++)
+                {
+                    var (direction, offset) =
+                        sample(x, y, temporalIndex);
+                    differences[index++] =
+                        Fract(offset - direction + 1.0f);
+                }
+            }
+        }
+        Array.Sort(differences);
+        int distinct = 1;
+        for (int i = 1; i < differences.Length; i++)
+        {
+            if (differences[i] - differences[i - 1] > 2.0e-3f)
+                distinct++;
+        }
+        return distinct;
+    }
+
+    private static int CountLockedTemporalTransitions(
+        int blockSize,
+        int temporalWindow,
+        DitherSampler sample)
+    {
+        const float lockTolerance = 0.005f;
+        const float lockFraction = 0.8f;
+        int lockedTransitions = 0;
+        for (uint temporalIndex = 0;
+             temporalIndex + 1 < temporalWindow;
+             temporalIndex++)
+        {
+            int lockedPixels = 0;
+            for (int y = 0; y < blockSize; y++)
+            {
+                for (int x = 0; x < blockSize; x++)
+                {
+                    var (direction0, offset0) =
+                        sample(x, y, temporalIndex);
+                    var (direction1, offset1) =
+                        sample(x, y, temporalIndex + 1);
+                    float directionDelta =
+                        CircularDelta(direction1, direction0);
+                    float offsetDelta = CircularDelta(offset1, offset0);
+                    float channelDifference = MathF.Abs(
+                        CircularDelta(directionDelta, offsetDelta));
+                    if (MathF.Min(channelDifference,
+                            1.0f - channelDifference) < lockTolerance)
+                        lockedPixels++;
+                }
+            }
+            if (lockedPixels >=
+                (int)(lockFraction * blockSize * blockSize))
+                lockedTransitions++;
+        }
+        return lockedTransitions;
+    }
+
+    private static float CircularDelta(float next, float current) =>
+        Fract(next - current + 0.5f) - 0.5f;
 
     private static float ApproximateHorizonAngle(float y, float x)
     {
